@@ -1,0 +1,1079 @@
+use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, Stroke, StrokeKind, Ui, Vec2};
+use super::theme;
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Icon {
+    Dashboard,
+    Lightning,
+    Subscription,
+    Gear,
+    Plug,
+    Pin,
+    Radar,
+    Rules,
+    Globe,
+    Cpu,
+    Terminal,
+    ArrowUp,
+    ArrowDown,
+    Play,
+    Stop,
+    Sync,
+    Trash,
+    Clipboard,
+    Export,
+    Rocket,
+    Shield,
+    Check,
+    Alert,
+    Search,
+    Plus,
+    Close,
+    Sort,
+    Lightbulb,
+    Chat,
+    Package,
+}
+
+pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
+    let center = rect.center();
+    let s = rect.width().min(rect.height());
+    let stroke = Stroke::new((s * 0.1).clamp(1.2, 2.4), color);
+    let fine_stroke = Stroke::new((s * 0.08).clamp(1.0, 1.8), color);
+
+    match icon {
+        Icon::Dashboard => {
+            // 4 quadrant modern rounded cards
+            let pad = s * 0.06;
+            let half = s * 0.36;
+            let cr = CornerRadius::same(2);
+            // Top-left
+            painter.rect_filled(
+                Rect::from_min_max(
+                    Pos2::new(center.x - half - pad, center.y - half - pad),
+                    Pos2::new(center.x - pad, center.y - pad),
+                ),
+                cr,
+                color,
+            );
+            // Top-right
+            painter.rect_stroke(
+                Rect::from_min_max(
+                    Pos2::new(center.x + pad, center.y - half - pad),
+                    Pos2::new(center.x + half + pad, center.y - pad),
+                ),
+                cr,
+                fine_stroke,
+                StrokeKind::Middle,
+            );
+            // Bottom-left
+            painter.rect_stroke(
+                Rect::from_min_max(
+                    Pos2::new(center.x - half - pad, center.y + pad),
+                    Pos2::new(center.x - pad, center.y + half + pad),
+                ),
+                cr,
+                fine_stroke,
+                StrokeKind::Middle,
+            );
+            // Bottom-right
+            painter.rect_filled(
+                Rect::from_min_max(
+                    Pos2::new(center.x + pad, center.y + pad),
+                    Pos2::new(center.x + half + pad, center.y + half + pad),
+                ),
+                cr,
+                color.gamma_multiply(0.4),
+            );
+        }
+        Icon::Lightning => {
+            // Dynamic lightning bolt
+            let pts = vec![
+                Pos2::new(center.x + s * 0.06, center.y - s * 0.44),
+                Pos2::new(center.x - s * 0.30, center.y + s * 0.04),
+                Pos2::new(center.x - s * 0.04, center.y + s * 0.04),
+                Pos2::new(center.x - s * 0.12, center.y + s * 0.44),
+                Pos2::new(center.x + s * 0.32, center.y - s * 0.04),
+                Pos2::new(center.x + s * 0.04, center.y - s * 0.04),
+            ];
+            painter.add(egui::epaint::PathShape::convex_polygon(
+                pts,
+                color,
+                Stroke::NONE,
+            ));
+        }
+        Icon::Subscription => {
+            // Tray with downward arrow
+            let bx1 = center.x - s * 0.38;
+            let bx2 = center.x + s * 0.38;
+            let by1 = center.y;
+            let by2 = center.y + s * 0.36;
+            painter.line_segment([Pos2::new(bx1, by1), Pos2::new(bx1, by2)], stroke);
+            painter.line_segment([Pos2::new(bx1, by2), Pos2::new(bx2, by2)], stroke);
+            painter.line_segment([Pos2::new(bx2, by2), Pos2::new(bx2, by1)], stroke);
+
+            // Down arrow
+            let ay1 = center.y - s * 0.40;
+            let ay2 = center.y + s * 0.16;
+            painter.line_segment([Pos2::new(center.x, ay1), Pos2::new(center.x, ay2)], stroke);
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.18, ay2 - s * 0.18),
+                    Pos2::new(center.x, ay2),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x + s * 0.18, ay2 - s * 0.18),
+                    Pos2::new(center.x, ay2),
+                ],
+                stroke,
+            );
+        }
+        Icon::Gear => {
+            // Mechanical cog
+            let r_inner = s * 0.18;
+            let r_outer = s * 0.38;
+            painter.circle_stroke(center, r_inner, stroke);
+            for i in 0..6 {
+                let angle = i as f32 * std::f32::consts::PI / 3.0;
+                let (sin, cos) = angle.sin_cos();
+                let p1 = Pos2::new(
+                    center.x + (r_inner + 1.0) * cos,
+                    center.y + (r_inner + 1.0) * sin,
+                );
+                let p2 = Pos2::new(center.x + r_outer * cos, center.y + r_outer * sin);
+                painter.line_segment([p1, p2], stroke);
+            }
+        }
+        Icon::Plug => {
+            // API Connector plug
+            let body_w = s * 0.50;
+            let body_h = s * 0.40;
+            let body_rect = Rect::from_center_size(
+                Pos2::new(center.x, center.y - s * 0.05),
+                Vec2::new(body_w, body_h),
+            );
+            painter.rect_filled(body_rect, CornerRadius::same(3), color);
+
+            // Top dual prongs
+            let prong_h = s * 0.22;
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.14, body_rect.top()),
+                    Pos2::new(center.x - s * 0.14, body_rect.top() - prong_h),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x + s * 0.14, body_rect.top()),
+                    Pos2::new(center.x + s * 0.14, body_rect.top() - prong_h),
+                ],
+                stroke,
+            );
+
+            // Bottom cable
+            painter.line_segment(
+                [
+                    Pos2::new(center.x, body_rect.bottom()),
+                    Pos2::new(center.x, body_rect.bottom() + s * 0.25),
+                ],
+                stroke,
+            );
+        }
+        Icon::Pin => {
+            // Location map marker
+            let top_c = Pos2::new(center.x, center.y - s * 0.14);
+            let r = s * 0.26;
+            painter.circle_stroke(top_c, r, stroke);
+            painter.circle_filled(top_c, r * 0.38, color);
+
+            let bottom_tip = Pos2::new(center.x, center.y + s * 0.42);
+            let left_pt = Pos2::new(top_c.x - r * 0.85, top_c.y + r * 0.5);
+            let right_pt = Pos2::new(top_c.x + r * 0.85, top_c.y + r * 0.5);
+            painter.line_segment([left_pt, bottom_tip], stroke);
+            painter.line_segment([right_pt, bottom_tip], stroke);
+        }
+        Icon::Radar => {
+            // Signal broadcast emitter
+            let origin = Pos2::new(center.x, center.y + s * 0.22);
+            painter.circle_filled(origin, s * 0.10, color);
+
+            // 1st arc
+            let r1 = s * 0.28;
+            for i in -2..=2 {
+                let a1 = -std::f32::consts::FRAC_PI_2 + (i as f32) * 0.35;
+                let a2 = -std::f32::consts::FRAC_PI_2 + ((i + 1) as f32) * 0.35;
+                painter.line_segment(
+                    [
+                        Pos2::new(origin.x + r1 * a1.cos(), origin.y + r1 * a1.sin()),
+                        Pos2::new(origin.x + r1 * a2.cos(), origin.y + r1 * a2.sin()),
+                    ],
+                    fine_stroke,
+                );
+            }
+            // 2nd outer arc
+            let r2 = s * 0.52;
+            for i in -2..=2 {
+                let a1 = -std::f32::consts::FRAC_PI_2 + (i as f32) * 0.32;
+                let a2 = -std::f32::consts::FRAC_PI_2 + ((i + 1) as f32) * 0.32;
+                painter.line_segment(
+                    [
+                        Pos2::new(origin.x + r2 * a1.cos(), origin.y + r2 * a1.sin()),
+                        Pos2::new(origin.x + r2 * a2.cos(), origin.y + r2 * a2.sin()),
+                    ],
+                    stroke,
+                );
+            }
+        }
+        Icon::Rules => {
+            // Splitting highway branches
+            let base = Pos2::new(center.x, center.y + s * 0.40);
+            let fork = Pos2::new(center.x, center.y + s * 0.05);
+            let left_top = Pos2::new(center.x - s * 0.32, center.y - s * 0.35);
+            let right_top = Pos2::new(center.x + s * 0.32, center.y - s * 0.35);
+
+            painter.line_segment([base, fork], stroke);
+            painter.line_segment([fork, left_top], stroke);
+            painter.line_segment([fork, right_top], stroke);
+
+            // Arrowheads on branches
+            painter.line_segment(
+                [Pos2::new(left_top.x, left_top.y + s * 0.16), left_top],
+                stroke,
+            );
+            painter.line_segment(
+                [Pos2::new(left_top.x + s * 0.16, left_top.y), left_top],
+                stroke,
+            );
+
+            painter.line_segment(
+                [Pos2::new(right_top.x, right_top.y + s * 0.16), right_top],
+                stroke,
+            );
+            painter.line_segment(
+                [Pos2::new(right_top.x - s * 0.16, right_top.y), right_top],
+                stroke,
+            );
+        }
+        Icon::Globe => {
+            // Globe sphere
+            let r = s * 0.40;
+            painter.circle_stroke(center, r, stroke);
+            // Equator horizontal line
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - r, center.y),
+                    Pos2::new(center.x + r, center.y),
+                ],
+                fine_stroke,
+            );
+            // Meridian vertical ellipse line
+            painter.line_segment(
+                [
+                    Pos2::new(center.x, center.y - r),
+                    Pos2::new(center.x, center.y + r),
+                ],
+                fine_stroke,
+            );
+        }
+        Icon::Cpu => {
+            // Microprocessor chip
+            let body_size = s * 0.52;
+            let chip_rect = Rect::from_center_size(center, Vec2::splat(body_size));
+            painter.rect_stroke(chip_rect, CornerRadius::same(2), stroke, StrokeKind::Middle);
+            painter.rect_filled(
+                Rect::from_center_size(center, Vec2::splat(body_size * 0.45)),
+                CornerRadius::same(1),
+                color,
+            );
+
+            // Pins (2 on each of the 4 sides)
+            let pin_len = s * 0.14;
+            let offset = body_size * 0.22;
+            for sign in [-1.0, 1.0] {
+                // Top pins
+                let px = center.x + sign * offset;
+                painter.line_segment(
+                    [
+                        Pos2::new(px, chip_rect.top()),
+                        Pos2::new(px, chip_rect.top() - pin_len),
+                    ],
+                    fine_stroke,
+                );
+                // Bottom pins
+                painter.line_segment(
+                    [
+                        Pos2::new(px, chip_rect.bottom()),
+                        Pos2::new(px, chip_rect.bottom() + pin_len),
+                    ],
+                    fine_stroke,
+                );
+                // Left pins
+                let py = center.y + sign * offset;
+                painter.line_segment(
+                    [
+                        Pos2::new(chip_rect.left(), py),
+                        Pos2::new(chip_rect.left() - pin_len, py),
+                    ],
+                    fine_stroke,
+                );
+                // Right pins
+                painter.line_segment(
+                    [
+                        Pos2::new(chip_rect.right(), py),
+                        Pos2::new(chip_rect.right() + pin_len, py),
+                    ],
+                    fine_stroke,
+                );
+            }
+        }
+        Icon::Terminal => {
+            // Terminal prompt frame
+            let win_rect = Rect::from_center_size(center, Vec2::new(s * 0.82, s * 0.68));
+            painter.rect_stroke(win_rect, CornerRadius::same(3), stroke, StrokeKind::Middle);
+
+            // Prompt chevron '>'
+            let cx1 = win_rect.left() + s * 0.16;
+            let cy = center.y;
+            let arm = s * 0.12;
+            painter.line_segment([Pos2::new(cx1, cy - arm), Pos2::new(cx1 + arm, cy)], stroke);
+            painter.line_segment([Pos2::new(cx1 + arm, cy), Pos2::new(cx1, cy + arm)], stroke);
+
+            // Cursor line '_'
+            let lx1 = cx1 + arm * 2.0;
+            let lx2 = lx1 + s * 0.16;
+            painter.line_segment([Pos2::new(lx1, cy + arm), Pos2::new(lx2, cy + arm)], stroke);
+        }
+        Icon::ArrowUp => {
+            // Upward arrow
+            let y_top = center.y - s * 0.38;
+            let y_bot = center.y + s * 0.38;
+            painter.line_segment(
+                [Pos2::new(center.x, y_bot), Pos2::new(center.x, y_top)],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.28, y_top + s * 0.28),
+                    Pos2::new(center.x, y_top),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x + s * 0.28, y_top + s * 0.28),
+                    Pos2::new(center.x, y_top),
+                ],
+                stroke,
+            );
+        }
+        Icon::ArrowDown => {
+            // Downward arrow
+            let y_top = center.y - s * 0.38;
+            let y_bot = center.y + s * 0.38;
+            painter.line_segment(
+                [Pos2::new(center.x, y_top), Pos2::new(center.x, y_bot)],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.28, y_bot - s * 0.28),
+                    Pos2::new(center.x, y_bot),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x + s * 0.28, y_bot - s * 0.28),
+                    Pos2::new(center.x, y_bot),
+                ],
+                stroke,
+            );
+        }
+        Icon::Play => {
+            // Equilateral triangle pointing right
+            let pts = vec![
+                Pos2::new(center.x - s * 0.26, center.y - s * 0.36),
+                Pos2::new(center.x - s * 0.26, center.y + s * 0.36),
+                Pos2::new(center.x + s * 0.36, center.y),
+            ];
+            painter.add(egui::epaint::PathShape::convex_polygon(
+                pts,
+                color,
+                Stroke::NONE,
+            ));
+        }
+        Icon::Stop => {
+            // Rounded stop square
+            let sq = Rect::from_center_size(center, Vec2::splat(s * 0.60));
+            painter.rect_filled(sq, CornerRadius::same(2), color);
+        }
+        Icon::Sync => {
+            // Rotating twin arrows
+            let r = s * 0.34;
+            // Top arc
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - r, center.y),
+                    Pos2::new(center.x, center.y - r),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x, center.y - r),
+                    Pos2::new(center.x + r, center.y),
+                ],
+                stroke,
+            );
+            // Top arrowhead
+            painter.line_segment(
+                [
+                    Pos2::new(center.x + r, center.y - s * 0.18),
+                    Pos2::new(center.x + r, center.y),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x + r + s * 0.16, center.y),
+                    Pos2::new(center.x + r, center.y),
+                ],
+                stroke,
+            );
+
+            // Bottom arc
+            painter.line_segment(
+                [
+                    Pos2::new(center.x + r, center.y),
+                    Pos2::new(center.x, center.y + r),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x, center.y + r),
+                    Pos2::new(center.x - r, center.y),
+                ],
+                stroke,
+            );
+            // Bottom arrowhead
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - r, center.y + s * 0.18),
+                    Pos2::new(center.x - r, center.y),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - r - s * 0.16, center.y),
+                    Pos2::new(center.x - r, center.y),
+                ],
+                stroke,
+            );
+        }
+        Icon::Trash => {
+            // Wastebasket
+            let top_bar_y = center.y - s * 0.28;
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.38, top_bar_y),
+                    Pos2::new(center.x + s * 0.38, top_bar_y),
+                ],
+                stroke,
+            );
+            // Handle
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.14, top_bar_y),
+                    Pos2::new(center.x - s * 0.14, top_bar_y - s * 0.12),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.14, top_bar_y - s * 0.12),
+                    Pos2::new(center.x + s * 0.14, top_bar_y - s * 0.12),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x + s * 0.14, top_bar_y - s * 0.12),
+                    Pos2::new(center.x + s * 0.14, top_bar_y),
+                ],
+                stroke,
+            );
+            // Body bucket
+            let by = center.y + s * 0.38;
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.28, top_bar_y),
+                    Pos2::new(center.x - s * 0.22, by),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.22, by),
+                    Pos2::new(center.x + s * 0.22, by),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x + s * 0.22, by),
+                    Pos2::new(center.x + s * 0.28, top_bar_y),
+                ],
+                stroke,
+            );
+        }
+        Icon::Clipboard => {
+            // Clipboard frame
+            let board = Rect::from_center_size(
+                Pos2::new(center.x, center.y + s * 0.05),
+                Vec2::new(s * 0.58, s * 0.68),
+            );
+            painter.rect_stroke(board, CornerRadius::same(2), stroke, StrokeKind::Middle);
+            // Top clamp clip
+            let clip = Rect::from_center_size(
+                Pos2::new(center.x, board.top()),
+                Vec2::new(s * 0.26, s * 0.12),
+            );
+            painter.rect_filled(clip, CornerRadius::same(1), color);
+        }
+        Icon::Export => {
+            // Tray box with upward arrow
+            let bx1 = center.x - s * 0.38;
+            let bx2 = center.x + s * 0.38;
+            let by1 = center.y + s * 0.04;
+            let by2 = center.y + s * 0.40;
+            painter.line_segment([Pos2::new(bx1, by1), Pos2::new(bx1, by2)], stroke);
+            painter.line_segment([Pos2::new(bx1, by2), Pos2::new(bx2, by2)], stroke);
+            painter.line_segment([Pos2::new(bx2, by2), Pos2::new(bx2, by1)], stroke);
+
+            // Upward arrow
+            let ay1 = center.y + s * 0.16;
+            let ay2 = center.y - s * 0.38;
+            painter.line_segment([Pos2::new(center.x, ay1), Pos2::new(center.x, ay2)], stroke);
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.20, ay2 + s * 0.20),
+                    Pos2::new(center.x, ay2),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x + s * 0.20, ay2 + s * 0.20),
+                    Pos2::new(center.x, ay2),
+                ],
+                stroke,
+            );
+        }
+        Icon::Rocket => {
+            // Angled rocket
+            let nose = Pos2::new(center.x + s * 0.34, center.y - s * 0.34);
+            let body1 = Pos2::new(center.x - s * 0.08, center.y - s * 0.28);
+            let tail = Pos2::new(center.x - s * 0.28, center.y + s * 0.28);
+            let body2 = Pos2::new(center.x + s * 0.28, center.y + s * 0.08);
+
+            painter.line_segment([nose, body1], stroke);
+            painter.line_segment([body1, tail], stroke);
+            painter.line_segment([tail, body2], stroke);
+            painter.line_segment([body2, nose], stroke);
+
+            // Left fin
+            painter.line_segment(
+                [body1, Pos2::new(center.x - s * 0.32, center.y - s * 0.06)],
+                stroke,
+            );
+            // Right fin
+            painter.line_segment(
+                [body2, Pos2::new(center.x + s * 0.06, center.y + s * 0.32)],
+                stroke,
+            );
+        }
+        Icon::Shield => {
+            // Shield outline
+            let p_top = Pos2::new(center.x, center.y - s * 0.40);
+            let p_tr = Pos2::new(center.x + s * 0.36, center.y - s * 0.24);
+            let p_bot = Pos2::new(center.x, center.y + s * 0.42);
+            let p_tl = Pos2::new(center.x - s * 0.36, center.y - s * 0.24);
+
+            let pts = vec![
+                p_top,
+                p_tr,
+                Pos2::new(center.x + s * 0.30, center.y + s * 0.16),
+                p_bot,
+                Pos2::new(center.x - s * 0.30, center.y + s * 0.16),
+                p_tl,
+            ];
+            painter.add(egui::epaint::PathShape::line(pts, stroke));
+        }
+        Icon::Check => {
+            // Bold clean checkmark
+            let p1 = Pos2::new(center.x - s * 0.36, center.y);
+            let p2 = Pos2::new(center.x - s * 0.08, center.y + s * 0.28);
+            let p3 = Pos2::new(center.x + s * 0.38, center.y - s * 0.28);
+            painter.line_segment([p1, p2], stroke);
+            painter.line_segment([p2, p3], stroke);
+        }
+        Icon::Alert => {
+            // Alert triangle
+            let p1 = Pos2::new(center.x, center.y - s * 0.40);
+            let p2 = Pos2::new(center.x + s * 0.40, center.y + s * 0.36);
+            let p3 = Pos2::new(center.x - s * 0.40, center.y + s * 0.36);
+            painter.add(egui::epaint::PathShape::line(vec![p1, p2, p3, p1], stroke));
+            // Exclamation mark line & dot
+            painter.line_segment(
+                [
+                    Pos2::new(center.x, center.y - s * 0.14),
+                    Pos2::new(center.x, center.y + s * 0.12),
+                ],
+                stroke,
+            );
+            painter.circle_filled(Pos2::new(center.x, center.y + s * 0.24), s * 0.04, color);
+        }
+        Icon::Search => {
+            // Magnifying glass: circle + angled handle
+            let r = s * 0.26;
+            let c = Pos2::new(center.x - s * 0.08, center.y - s * 0.08);
+            painter.circle_stroke(c, r, stroke);
+            let handle_start = Pos2::new(c.x + r * 0.707, c.y + r * 0.707);
+            let handle_end = Pos2::new(center.x + s * 0.38, center.y + s * 0.38);
+            painter.line_segment(
+                [handle_start, handle_end],
+                Stroke::new((s * 0.12).clamp(1.5, 2.8), color),
+            );
+        }
+        Icon::Plus => {
+            // Plus sign
+            let len = s * 0.30;
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - len, center.y),
+                    Pos2::new(center.x + len, center.y),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x, center.y - len),
+                    Pos2::new(center.x, center.y + len),
+                ],
+                stroke,
+            );
+        }
+        Icon::Close => {
+            // X mark
+            let d = s * 0.24;
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - d, center.y - d),
+                    Pos2::new(center.x + d, center.y + d),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x + d, center.y - d),
+                    Pos2::new(center.x - d, center.y + d),
+                ],
+                stroke,
+            );
+        }
+        Icon::Sort => {
+            // 3 horizontal bars with decreasing width
+            let y1 = center.y - s * 0.26;
+            let y2 = center.y;
+            let y3 = center.y + s * 0.26;
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.36, y1),
+                    Pos2::new(center.x + s * 0.36, y1),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.24, y2),
+                    Pos2::new(center.x + s * 0.24, y2),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.12, y3),
+                    Pos2::new(center.x + s * 0.12, y3),
+                ],
+                stroke,
+            );
+        }
+        Icon::Lightbulb => {
+            // Lightbulb bulb & filament base
+            let bulb_c = Pos2::new(center.x, center.y - s * 0.10);
+            painter.circle_stroke(bulb_c, s * 0.25, stroke);
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.12, center.y + s * 0.18),
+                    Pos2::new(center.x + s * 0.12, center.y + s * 0.18),
+                ],
+                fine_stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.08, center.y + s * 0.28),
+                    Pos2::new(center.x + s * 0.08, center.y + s * 0.28),
+                ],
+                fine_stroke,
+            );
+        }
+        Icon::Chat => {
+            // Chat bubble
+            let b_rect = Rect::from_center_size(
+                Pos2::new(center.x, center.y - s * 0.06),
+                Vec2::new(s * 0.72, s * 0.52),
+            );
+            painter.rect_stroke(b_rect, CornerRadius::same(3), stroke, StrokeKind::Inside);
+            let tail = vec![
+                Pos2::new(center.x - s * 0.22, b_rect.bottom()),
+                Pos2::new(center.x - s * 0.28, center.y + s * 0.36),
+                Pos2::new(center.x - s * 0.06, b_rect.bottom()),
+            ];
+            painter.add(egui::epaint::PathShape::convex_polygon(
+                tail,
+                color,
+                Stroke::NONE,
+            ));
+        }
+        Icon::Package => {
+            // Isometric box / package
+            let top_pts = vec![
+                Pos2::new(center.x, center.y - s * 0.36),
+                Pos2::new(center.x + s * 0.32, center.y - s * 0.16),
+                Pos2::new(center.x, center.y + s * 0.04),
+                Pos2::new(center.x - s * 0.32, center.y - s * 0.16),
+            ];
+            painter.add(egui::epaint::PathShape::line(top_pts.clone(), stroke));
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.32, center.y - s * 0.16),
+                    Pos2::new(center.x - s * 0.32, center.y + s * 0.20),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x + s * 0.32, center.y - s * 0.16),
+                    Pos2::new(center.x + s * 0.32, center.y + s * 0.20),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x, center.y + s * 0.04),
+                    Pos2::new(center.x, center.y + s * 0.40),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - s * 0.32, center.y + s * 0.20),
+                    Pos2::new(center.x, center.y + s * 0.40),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x + s * 0.32, center.y + s * 0.20),
+                    Pos2::new(center.x, center.y + s * 0.40),
+                ],
+                stroke,
+            );
+        }
+    }
+}
+
+pub fn icon_label(ui: &mut Ui, icon: Icon, size: f32, color: Color32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        draw_icon(ui.painter(), rect, icon, color);
+    }
+    resp
+}
+
+#[allow(dead_code)]
+pub fn button_with_icon<'a>(icon: Icon, text: &'a str, color: Color32) -> impl egui::Widget + 'a {
+    move |ui: &mut Ui| {
+        let padding = Vec2::new(10.0, 6.0);
+        let icon_size = 14.0;
+        let icon_gap = 6.0;
+
+        let galley =
+            ui.painter()
+                .layout_no_wrap(text.to_string(), egui::FontId::proportional(13.0), color);
+
+        let desired_size = Vec2::new(
+            padding.x * 2.0 + icon_size + icon_gap + galley.size().x,
+            padding.y * 2.0 + galley.size().y.max(icon_size),
+        );
+
+        let (rect, resp) = ui.allocate_exact_size(desired_size, egui::Sense::click());
+        if ui.is_rect_visible(rect) {
+            let (bg_fill, border_stroke) = if resp.is_pointer_button_down_on() {
+                (
+                    theme::panel_hover(),
+                    Stroke::new(1.0_f32, theme::accent()),
+                )
+            } else if resp.hovered() {
+                (
+                    theme::panel_hover(),
+                    Stroke::new(1.0_f32, theme::border()),
+                )
+            } else {
+                (
+                    theme::panel(),
+                    Stroke::new(1.0_f32, theme::border()),
+                )
+            };
+
+            ui.painter().rect(
+                rect,
+                CornerRadius::same(6),
+                bg_fill,
+                border_stroke,
+                StrokeKind::Inside,
+            );
+
+            let icon_rect = Rect::from_min_size(
+                Pos2::new(rect.min.x + padding.x, rect.center().y - icon_size / 2.0),
+                Vec2::splat(icon_size),
+            );
+            let cur_color = if resp.hovered() {
+                theme::text_primary()
+            } else {
+                color
+            };
+            draw_icon(ui.painter(), icon_rect, icon, cur_color);
+
+            let text_pos = Pos2::new(
+                icon_rect.max.x + icon_gap,
+                rect.center().y - galley.size().y / 2.0,
+            );
+            ui.painter().galley(text_pos, galley, cur_color);
+        }
+        resp
+    }
+}
+
+#[allow(dead_code)]
+pub fn primary_icon_btn<'a>(icon: Icon, text: &'a str) -> impl egui::Widget + 'a {
+    move |ui: &mut Ui| {
+        let padding = Vec2::new(12.0, 6.0);
+        let icon_size = 14.0;
+        let icon_gap = 6.0;
+
+        let galley = ui.painter().layout_no_wrap(
+            text.to_string(),
+            egui::FontId::proportional(13.0),
+            theme::on_primary(),
+        );
+
+        let desired_size = Vec2::new(
+            padding.x * 2.0 + icon_size + icon_gap + galley.size().x,
+            padding.y * 2.0 + galley.size().y.max(icon_size),
+        );
+
+        let (rect, resp) = ui.allocate_exact_size(desired_size, egui::Sense::click());
+        if ui.is_rect_visible(rect) {
+            let bg_fill = if resp.is_pointer_button_down_on() {
+                theme::primary_btn_press()
+            } else if resp.hovered() {
+                theme::primary_btn_hover()
+            } else {
+                theme::primary_btn()
+            };
+
+            ui.painter().rect(
+                rect,
+                CornerRadius::same(6),
+                bg_fill,
+                Stroke::NONE,
+                StrokeKind::Inside,
+            );
+
+            let icon_rect = Rect::from_min_size(
+                Pos2::new(rect.min.x + padding.x, rect.center().y - icon_size / 2.0),
+                Vec2::splat(icon_size),
+            );
+            draw_icon(ui.painter(), icon_rect, icon, theme::on_primary());
+
+            let text_pos = Pos2::new(
+                icon_rect.max.x + icon_gap,
+                rect.center().y - galley.size().y / 2.0,
+            );
+            ui.painter().galley(text_pos, galley, theme::on_primary());
+        }
+        resp
+    }
+}
+
+#[allow(dead_code)]
+pub fn danger_icon_btn<'a>(icon: Icon, text: &'a str) -> impl egui::Widget + 'a {
+    move |ui: &mut Ui| {
+        let padding = Vec2::new(11.0, 6.0);
+        let icon_size = 14.0;
+        let icon_gap = 6.0;
+
+        let galley = ui.painter().layout_no_wrap(
+            text.to_string(),
+            egui::FontId::proportional(13.0),
+            theme::danger(),
+        );
+
+        let desired_size = Vec2::new(
+            padding.x * 2.0 + icon_size + icon_gap + galley.size().x,
+            padding.y * 2.0 + galley.size().y.max(icon_size),
+        );
+
+        let (rect, resp) = ui.allocate_exact_size(desired_size, egui::Sense::click());
+        if ui.is_rect_visible(rect) {
+            let (bg_fill, stroke_color) = if resp.hovered() {
+                (theme::danger_bg(), theme::danger())
+            } else {
+                (
+                    theme::danger_bg(),
+                    theme::danger_stroke(),
+                )
+            };
+
+            ui.painter().rect(
+                rect,
+                CornerRadius::same(6),
+                bg_fill,
+                Stroke::new(1.0_f32, stroke_color),
+                StrokeKind::Inside,
+            );
+
+            let icon_rect = Rect::from_min_size(
+                Pos2::new(rect.min.x + padding.x, rect.center().y - icon_size / 2.0),
+                Vec2::splat(icon_size),
+            );
+            draw_icon(ui.painter(), icon_rect, icon, theme::danger());
+
+            let text_pos = Pos2::new(
+                icon_rect.max.x + icon_gap,
+                rect.center().y - galley.size().y / 2.0,
+            );
+            ui.painter()
+                .galley(text_pos, galley, theme::danger());
+        }
+        resp
+    }
+}
+
+#[allow(dead_code)]
+pub fn selectable_icon_btn<'a>(
+    icon: Icon,
+    text: &'a str,
+    selected: bool,
+) -> impl egui::Widget + 'a {
+    move |ui: &mut Ui| {
+        let padding = Vec2::new(9.0, 5.0);
+        let icon_size = 13.0;
+        let icon_gap = 5.0;
+
+        let text_color = if selected {
+            theme::accent()
+        } else {
+            theme::muted()
+        };
+
+        let galley = ui.painter().layout_no_wrap(
+            text.to_string(),
+            egui::FontId::proportional(12.5),
+            text_color,
+        );
+
+        let desired_size = Vec2::new(
+            padding.x * 2.0 + icon_size + icon_gap + galley.size().x,
+            padding.y * 2.0 + galley.size().y.max(icon_size),
+        );
+
+        let (rect, resp) = ui.allocate_exact_size(desired_size, egui::Sense::click());
+        if ui.is_rect_visible(rect) {
+            let (bg_fill, stroke) = if selected {
+                (
+                    theme::accent_bg(),
+                    Stroke::new(1.0_f32, theme::accent()),
+                )
+            } else if resp.hovered() {
+                (
+                    theme::panel_hover(),
+                    Stroke::new(1.0_f32, theme::border()),
+                )
+            } else {
+                (
+                    theme::panel(),
+                    Stroke::new(1.0_f32, theme::border()),
+                )
+            };
+
+            ui.painter().rect(
+                rect,
+                CornerRadius::same(6),
+                bg_fill,
+                stroke,
+                StrokeKind::Inside,
+            );
+
+            let icon_rect = Rect::from_min_size(
+                Pos2::new(rect.min.x + padding.x, rect.center().y - icon_size / 2.0),
+                Vec2::splat(icon_size),
+            );
+            draw_icon(ui.painter(), icon_rect, icon, text_color);
+
+            let text_pos = Pos2::new(
+                icon_rect.max.x + icon_gap,
+                rect.center().y - galley.size().y / 2.0,
+            );
+            ui.painter().galley(text_pos, galley, text_color);
+        }
+        resp
+    }
+}
+
+#[allow(dead_code)]
+pub fn icon_btn_square(icon: Icon, size: f32) -> impl egui::Widget {
+    move |ui: &mut Ui| {
+        let box_size = size + 8.0;
+        let (rect, resp) = ui.allocate_exact_size(Vec2::splat(box_size), egui::Sense::click());
+        if ui.is_rect_visible(rect) {
+            let (bg, border, color) = if resp.hovered() {
+                (
+                    theme::accent_bg(),
+                    Stroke::new(1.0_f32, theme::accent()),
+                    theme::accent(),
+                )
+            } else {
+                (
+                    theme::panel(),
+                    Stroke::new(1.0_f32, theme::border()),
+                    theme::muted(),
+                )
+            };
+            ui.painter()
+                .rect(rect, CornerRadius::same(4), bg, border, StrokeKind::Inside);
+            let icon_rect = Rect::from_center_size(rect.center(), Vec2::splat(size));
+            draw_icon(ui.painter(), icon_rect, icon, color);
+        }
+        resp
+    }
+}
+

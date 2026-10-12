@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>清爽浅白 · 强调色候选</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:26px 24px 60px; font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+         background:#E4E6EA; color:#16181C; }
+  h1 { font-size:21px; margin:0 0 6px; }
+  .lede { font-size:13px; color:#5c616b; margin:0 0 8px; max-width:1180px; line-height:1.75; }
+  .lede b { color:#16181C; }
+  .rule { font-size:12px; color:#5c616b; margin:0 0 20px; max-width:1180px; line-height:1.7; }
+  .board { display:grid; grid-template-columns:repeat(auto-fit,minmax(560px,1fr)); gap:22px; }
+  .cap { margin:0 0 8px; }
+  .cap h2 { font-size:15px; margin:0 0 4px; display:flex; align-items:center; gap:8px; }
+  .cap h2 i { width:14px; height:14px; border-radius:50%; display:inline-block; }
+  .cap h2 em { font-style:normal; margin-left:auto; font-size:11px; color:#5c616b; font-variant-numeric:tabular-nums; }
+  .cap p { margin:0; font-size:11.8px; color:#5c616b; line-height:1.7; }
+  .cap code { background:#fff; border:1px solid #d8dbe0; border-radius:5px; padding:0 4px; font-size:11px; }
+
+  .mock { font-size:14px; color:var(--text); background:var(--page); border:1px solid #D8DBE1;
+          border-radius:23px; overflow:hidden; box-shadow:0 16px 36px rgba(20,22,28,.14); }
+  .win { display:grid; grid-template-columns:168px 1fr; min-height:548px; }
+  .side { background:var(--sidebar); padding:18px 12px; display:flex; flex-direction:column; gap:5px;
+          border-right:1px solid var(--line); }
+  .brand { display:flex; align-items:center; gap:9px; padding:4px 8px 16px; }
+  .brand i { width:24px; height:24px; border-radius:8px; background:var(--accent); flex:none; }
+  .brand b { font-size:15.5px; letter-spacing:-.2px; }
+  .brand em { font-style:normal; font-size:10.5px; color:var(--muted); display:block; margin-top:1px; }
+  .nav { position:relative; display:flex; align-items:center; gap:9px; padding:10px 12px; border-radius:12px;
+         color:var(--sub); font-size:13.5px; }
+  .nav svg { width:15px; height:15px; opacity:.7; }
+  .nav.on { background:var(--accent-bg); color:var(--text); font-weight:600; }
+  .nav.on svg { opacity:1; color:var(--accent-strong); }
+  .nav.on::before { content:""; position:absolute; left:-12px; top:50%; transform:translateY(-50%);
+                    width:3px; height:18px; border-radius:2px; background:var(--accent); }
+  .side .note { margin-top:auto; font-size:11px; color:var(--muted); padding:10px 4px 0; line-height:1.8;
+                border-top:1px solid var(--line); }
+  .main { padding:24px; display:flex; flex-direction:column; gap:16px; }
+  .chips { display:flex; gap:9px; flex-wrap:wrap; }
+  .chip { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:8px 13px;
+          font-size:12.5px; color:var(--sub); display:flex; gap:7px; align-items:baseline; }
+  .chip b { font-size:19px; color:var(--text); font-weight:700; letter-spacing:-.4px; font-variant-numeric:tabular-nums; }
+  .chip.hot { background:var(--accent-bg); border-color:var(--accent-line); }
+  .chip.hot b { color:var(--accent-strong); }
+  .head { display:flex; align-items:baseline; gap:9px; }
+  .head h3 { margin:0; font-size:20px; letter-spacing:-.25px; font-weight:650; }
+  .head .hint { font-size:12px; color:var(--muted); }
+  .card { background:var(--card); border-radius:18px; padding:20px;
+          box-shadow:0 1px 2px rgba(16,24,40,.04), 0 10px 26px rgba(16,24,40,.07); }
+  .row { display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid #F2F3F6; }
+  .row:last-child { border-bottom:0; }
+  .row .nm { width:104px; font-weight:600; }
+  .row .url { flex:1; font-size:12.5px; color:var(--accent-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .st { width:58px; font-size:12.5px; }
+  .ok{color:#0E6B4C} .warn{color:#A8580B} .bad{color:#C6393B}
+  .btn { border:1px solid #E3E6EA; background:var(--card); color:var(--text); border-radius:14px;
+         padding:7px 14px; font-size:12.5px; }
+  .btn.pri { background:var(--btn); border-color:transparent; color:#fff; font-weight:600; }
+  .btn.dgr { color:#C6393B; border-color:#F3C9CA; background:#FCECEC; }
+  .badge { display:inline-flex; align-items:center; gap:5px; border-radius:14px; padding:4px 11px;
+           font-size:11.5px; background:#E4F5EE; color:#0E6B4C; font-weight:600; }
+  .badge i { width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .kv { display:flex; justify-content:space-between; font-size:13px; color:var(--sub); padding:5px 0; }
+  .kv b { color:var(--text); font-weight:600; font-variant-numeric:tabular-nums; }
+  .spark { width:100%; height:56px; margin-top:6px; }
+  .foot { display:flex; align-items:center; gap:12px; padding:11px 24px; background:var(--sidebar);
+          font-size:12px; color:var(--muted); border-top:1px solid var(--line); }
+  .foot .sp { margin-left:auto; }
+  .dlg { background:var(--card); border-radius:18px; padding:20px;
+         box-shadow:0 1px 2px rgba(16,24,40,.04), 0 10px 26px rgba(16,24,40,.07); }
+  .dlg h4 { margin:0 0 4px; font-size:15px; }
+  .dlg .sub { font-size:12px; color:var(--muted); margin:0 0 12px; }
+  .opt { display:flex; gap:10px; padding:11px 12px; border-radius:14px; border:1px solid transparent; background:#F7F8FA; }
+  .opt + .opt { margin-top:6px; }
+  .opt .dot { width:15px; height:15px; border-radius:50%; border:1.5px solid var(--muted); margin-top:3px; flex:none; }
+  .opt.on { background:var(--accent-bg); border-color:var(--accent-line); }
+  .opt.on .dot { border-color:var(--accent); box-shadow:inset 0 0 0 3.5px var(--accent); }
+  .opt b { font-size:14.5px; font-weight:600; }
+  .opt.on b { color:var(--accent-strong); }
+  .opt p { margin:3px 0 0; font-size:12px; color:var(--sub); line-height:1.6; }
+  .dlg .bar { display:flex; gap:8px; margin-top:14px; padding-top:12px; border-top:1px solid #EEF0F3; }
+  .dlg .bar .sp { margin-left:auto; }
+</style>
+</head>
+<body>
+<h1>清爽浅白 · 强调色候选（结构完全一致，只换色）</h1>
+<p class="lede">
+  底色/圆角/间距/阴影六块<b>一模一样</b>（页面 <code>#F5F6F8</code>、卡片纯白无描边 + 淡投影、圆角 18/14/12、正文 14px），
+  只有强调色不同。状态三色（成功绿 / 警告橙 / 危险红）也全部固定，免得和强调色混在一起比较。
+</p>
+<p class="rule">
+  每块标题右边标了<b>实测对比度</b>：白字压在按钮底色上、以及淡彩底上的强调色文字。
+  按钮底色不是我手挑的，是<b>把强调色自动压深到 ≥4.5:1</b> 的结果（Raycast 红那版就是因为压不深才显脏）——
+  Rust 里我会用同一套算法（<code>accent_strong</code> = 逐步压深直到达标），这样以后换色不会又踩可读性。
+</p>
+<div class="board" id="board"></div>
+
+<script>
+const CANDIDATES = [
+  { hex:'#5B5BD6', name:'靛蓝紫 Indigo', note:'Linear / Notion 那一挂，冷静、不幼稚，深色文字压深后仍偏蓝紫。' },
+  { hex:'#00A78D', name:'青绿 Teal', note:'最"清爽"的一档，跟白底贴得近，成功色也是绿，注意两者会不会撞。' },
+  { hex:'#2F6FEB', name:'钴蓝 Cobalt', note:'最保险、也最容易和别的软件撞色（默认蓝）。' },
+  { hex:'#7C5CFF', name:'紫罗兰 Violet', note:'最"年轻"，做选中态和图标很好看，压深后偏靛。' },
+  { hex:'#D9772E', name:'陶土橙 Terracotta', note:'暖调、有辨识度，和警告橙要拉开距离（这里警告色压暗了一档）。' },
+  { hex:'#2B2F36', name:'石墨黑 Graphite', note:'强调色就是近黑，唯一有彩色的是状态。最耐看、最不像模板。' },
+];
+
+const hex2rgb = (h) => { h=h.replace('#',''); return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)]; };
+const rgb2hex = (p) => '#'+p.map(v=>Math.round(Math.max(0,Math.min(255,v))).toString(16).padStart(2,'0')).join('').toUpperCase();
+const mix = (a,b,t) => { const x=hex2rgb(a),y=hex2rgb(b); return rgb2hex(x.map((v,i)=>v+(y[i]-v)*t)); };
+const lum = (h) => { const f=(v)=>{const s=v/255;return s<=0.03928?s/12.92:Math.pow((s+0.055)/1.055,2.4);}; const p=hex2rgb(h); return 0.2126*f(p[0])+0.7152*f(p[1])+0.0722*f(p[2]); };
+const cr = (a,b) => { const x=lum(a),y=lum(b),hi=Math.max(x,y),lo=Math.min(x,y); return (hi+0.05)/(lo+0.05); };
+// 逐步压深，直到白字达到 4.5:1（WCAG AA 正文）
+const darkenUntil = (hex, on, target) => { let v=mix(hex,'#000000',0.06), i=0.06;
+  while (cr(on,v) < target && i < 0.9) { i += 0.04; v = mix(hex,'#000000',i); } return v; };
+
+const PAGE = '#F5F6F8';
+function tokens(hex) {
+  const strong = darkenUntil(hex, '#FFFFFF', 4.6);
+  return {
+    '--page': PAGE, '--sidebar':'#FFFFFF', '--card':'#FFFFFF', '--line':'#EEF0F3',
+    '--text':'#16181C', '--sub':'#5B616B', '--muted':'#6E7581',
+    '--accent': hex.toUpperCase(), '--accent-strong': strong, '--btn': strong,
+    '--accent-bg': mix(PAGE, hex, 0.12).toUpperCase(),
+    '--accent-line': mix(PAGE, hex, 0.42).toUpperCase(),
+  };
+}
+
+const ICON = {
+  dash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>',
+  bolt:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></svg>',
+  down:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 20h16"/></svg>',
+  gear:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7"/></svg>',
+  plug:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 3v6M15 3v6M6 9h12v3a6 6 0 0 1-12 0V9ZM12 18v3"/></svg>'
+};
+
+function body() {
+  return `<div class="win">
+    <aside class="side">
+      <div class="brand"><i></i><div><b>VPN Parser</b><em>网络代理控制台</em></div></div>
+      <div class="nav">${ICON.dash}控制台</div>
+      <div class="nav">${ICON.bolt}节点池</div>
+      <div class="nav on">${ICON.down}订阅源</div>
+      <div class="nav">${ICON.gear}系统设置</div>
+      <div class="nav">${ICON.plug}外部接口</div>
+      <div class="note">源 35 · 节点 19295 · 可用 24<br>代理运行中 · 127.0.0.1:9980</div>
+    </aside>
+    <div class="main">
+      <div class="chips">
+        <div class="chip hot">订阅源 <b>35</b></div>
+        <div class="chip">节点 <b>19295</b></div>
+        <div class="chip">可用 <b>24</b></div>
+        <div class="chip">vless <b>11384</b></div>
+        <div class="chip">ss <b>2624</b></div>
+      </div>
+      <div class="head"><h3>订阅源</h3><span class="hint">增删改查 · 单源 / 全部拉取</span><span class="badge" style="margin-left:auto"><i></i>代理运行中</span></div>
+      <div class="card">
+        <div class="row"><div class="nm">shadowmere</div><div class="url">https://shadowmere.xyz/api/b64sub/</div><div class="st ok">启用</div>
+          <button class="btn">拉取</button><button class="btn">编辑</button><button class="btn dgr">删除</button></div>
+        <div class="row"><div class="nm">gist-laohan9</div><div class="url">https://gist.githubusercontent.com/laohan9/ca8d1834…/raw</div><div class="st ok">启用</div>
+          <button class="btn">拉取</button><button class="btn">编辑</button><button class="btn dgr">删除</button></div>
+        <div class="row"><div class="nm">cfnew</div><div class="url">https://cfnew-6a8.pages.dev/ed9d81fc-2808…/sub?target=v2</div><div class="st warn">不推送</div>
+          <button class="btn">拉取</button><button class="btn pri">代理拉取</button><button class="btn dgr">删除</button></div>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <div class="head"><h3 style="font-size:15px">流量</h3></div>
+          <div class="kv"><span>下行</span><b>1.84 MB/s</b></div>
+          <div class="kv"><span>当前出口</span><b>电信-10 · 日本 JP</b></div>
+          <svg class="spark" viewBox="0 0 200 56" preserveAspectRatio="none">
+            <polyline fill="none" stroke="var(--accent)" stroke-width="2" points="0,42 18,36 36,39 54,24 72,30 90,14 108,22 126,10 144,20 162,12 180,18 200,8"/>
+            <polyline fill="var(--accent-bg)" stroke="none" points="0,56 0,42 18,36 36,39 54,24 72,30 90,14 108,22 126,10 144,20 162,12 180,18 200,8 200,56"/>
+          </svg>
+        </div>
+        <div class="dlg">
+          <h4>下载内核 · sing-box</h4>
+          <p class="sub">一次只走一条连接，失败就报错</p>
+          <div class="opt on"><span class="dot"></span><div><b>gh-proxy 镜像</b><p>只连 gh-proxy.com 前缀（实测 4.87 MB/s）</p></div></div>
+          <div class="opt"><span class="dot"></span><div><b>ghfast 镜像</b><p>只连 ghfast.top 前缀（实测 8.13 MB/s）</p></div></div>
+          <div class="opt"><span class="dot"></span><div><b>官方直连</b><p>只用 GitHub 原链（实测 0.12 MB/s）</p></div></div>
+          <div class="bar"><button class="btn">关闭</button><button class="btn pri sp">开始下载</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>状态</span><b style="color:var(--text)">就绪</b><span class="sp">0 B/s ↓ · 0 B/s ↑</span><span>会话总计 55.0 KB | 863.6 KB</span></div>`;
+}
+
+document.getElementById('board').innerHTML = CANDIDATES.map(c => {
+  const t = tokens(c.hex);
+  const btn = cr('#FFFFFF', t['--btn']);
+  const onTint = cr(t['--accent-strong'], t['--accent-bg']);
+  const style = Object.entries(t).map(([k,v])=>`${k}:${v}`).join(';');
+  return `<div>
+    <div class="cap">
+      <h2><i style="background:${c.hex}"></i>${c.name} <em>按钮 ${btn.toFixed(2)}:1 · 淡底文字 ${onTint.toFixed(2)}:1 · 压深后 ${t['--btn']}</em></h2>
+      <p>${c.note}</p>
+    </div>
+    <div class="mock" style="${style}">${body()}</div>
+  </div>`;
+}).join('');
+</script>
+</body>
+</html>

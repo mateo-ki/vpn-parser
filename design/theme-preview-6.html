@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>不老气 · 四种结构</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:26px 24px 70px; font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+         background:#DDE1E6; color:#16181C; }
+  h1 { font-size:21px; margin:0 0 6px; }
+  .lede { font-size:13px; color:#525863; margin:0 0 12px; max-width:1280px; line-height:1.8; }
+  .lede b { color:#16181C; }
+  .why { font-size:12.5px; color:#4E5560; background:#fff; border-left:3px solid #00A78D; border-radius:0 10px 10px 0;
+         padding:12px 15px; margin:0 0 22px; max-width:1280px; line-height:1.85; }
+  .why code { background:#F1F4F6; border-radius:4px; padding:0 4px; }
+  .board { display:grid; grid-template-columns:repeat(auto-fit,minmax(620px,1fr)); gap:28px; }
+  .cap { margin:0 0 9px; }
+  .cap h2 { font-size:15.5px; margin:0 0 4px; }
+  .cap p { margin:0; font-size:11.8px; color:#525863; line-height:1.75; }
+  .mock { border:1px solid #CFD4DA; border-radius:22px; overflow:hidden; box-shadow:0 18px 40px rgba(18,22,28,.16);
+          font-size:14px; color:var(--text); background:var(--page); }
+  .win { display:grid; min-height:520px; }
+  .badge { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:4px 12px;
+           font-size:11.5px; font-weight:650; background:#E1F3EE; color:#0B6B57; white-space:nowrap; }
+  .badge i { width:7px; height:7px; border-radius:50%; background:currentColor; }
+  .spark { width:100%; height:46px; display:block; }
+  .num { font-weight:750; letter-spacing:-1.2px; font-variant-numeric:tabular-nums; }
+  .lab { font-size:10.5px; color:var(--muted); font-weight:600; }
+
+  /* G 呼吸感：没有框，靠留白 + 字号落差 */
+  .g { --page:#F4F8F7; --text:#152020; --muted:#7C8A8A; --line:#E4EBEA; --accent:#00A78D; }
+  .g .win { grid-template-columns:186px 1fr; }
+  .g .side { background:#FFFFFF; padding:26px 20px; }
+  .g .brand b { font-size:17px; letter-spacing:-.5px; }
+  .g .brand { margin-bottom:24px; }
+  .g .nav { padding:9px 0; color:#8E9B9B; font-size:14.5px; }
+  .g .nav.on { color:var(--text); font-weight:700; }
+  .g .nav.on::after { content:""; display:block; width:26px; height:3px; border-radius:3px; background:var(--accent); margin-top:6px; }
+  .g .main { padding:30px 34px; }
+  .g .hero { display:flex; align-items:flex-end; gap:16px; }
+  .g .hero .big { font-size:26px; font-weight:750; letter-spacing:-.9px; line-height:1.15; flex:1; }
+  .g .hair { height:1px; background:var(--line); margin:20px 0; }
+  .g .stats { display:flex; gap:42px; }
+  .g .stats .num { font-size:23px; }
+  .g .tabs { display:flex; gap:26px; margin-top:22px; }
+  .g .tab { padding:0 0 9px; color:#8E9B9B; font-size:14px; border-bottom:2px solid transparent; }
+  .g .tab.on { color:var(--text); font-weight:700; border-bottom-color:var(--accent); }
+  .g .item { display:flex; align-items:center; gap:14px; padding:14px 0; border-bottom:1px solid var(--line); }
+  .g .item:last-child { border-bottom:0; }
+  .g .item .nm { flex:1; font-weight:600; }
+  .g .item .ms { font-variant-numeric:tabular-nums; color:#54666A; font-size:13.5px; }
+  .g .item.on { background:linear-gradient(90deg,#E9F6F2,rgba(233,246,242,0)); margin:0 -14px; padding:14px; border-radius:12px; }
+  .g .item.on .nm { color:#0A6B57; }
+  .g .go { font-size:13px; color:var(--accent); font-weight:700; }
+
+  /* H 仪表台：顶部一条深色状态带 + 大数字 */
+  .h { --page:#F3F6F6; --text:#161F22; --muted:#78868A; --line:#E3E9EA; --accent:#00A78D; }
+  .h .win { grid-template-columns:1fr; }
+  .h .band { background:#0E3B36; color:#EAF7F4; padding:20px 26px 22px; display:flex; align-items:center; gap:20px; }
+  .h .band .ttl { font-size:15px; font-weight:700; letter-spacing:-.2px; }
+  .h .band .sub { font-size:11.5px; color:#9FC7C0; margin-top:3px; }
+  .h .band .grow { margin-left:auto; display:flex; gap:28px; align-items:center; }
+  .h .band .lab { color:#8FBDB6; }
+  .h .band .num { font-size:22px; color:#fff; }
+  .h .band .badge { background:rgba(255,255,255,.15); color:#E3F5F1; }
+  .h .navs { display:flex; gap:4px; background:#fff; padding:8px 18px; border-bottom:1px solid var(--line); }
+  .h .nv { padding:8px 15px; border-radius:11px; font-size:13.5px; color:#6D7B7E; }
+  .h .nv.on { background:#E7F5F1; color:#0A6B57; font-weight:700; }
+  .h .bod { padding:22px 26px; display:grid; grid-template-columns:1fr 268px; gap:20px; }
+  .h .panel { background:#fff; border-radius:18px; padding:16px 20px; }
+  .h .row { display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--line); }
+  .h .row:last-child { border-bottom:0; }
+  .h .row .nm { flex:1; font-weight:600; font-size:14px; }
+  .h .row .ms { font-size:13px; color:#5A6A6D; font-variant-numeric:tabular-nums; }
+  .h .row.on { outline:2px solid var(--accent); outline-offset:-4px; border-radius:12px; }
+  .h .kpi { display:flex; flex-direction:column; gap:14px; }
+  .h .kpi .card { background:#fff; border-radius:18px; padding:16px 18px; }
+  .h .kpi .num { font-size:29px; }
+  .h .btn { border:0; background:#E7F5F1; color:#0A6B57; font-weight:700; border-radius:12px; padding:10px 16px; font-size:13.5px; }
+  .h .btn.stop { background:#F0E7E6; color:#8A4A44; }
+
+  /* I 色块卡片：图标栏 + 不等宽卡片 + 选中整块反白 */
+  .i { --page:#F2F7F6; --text:#152022; --muted:#7B8A8B; --line:#E1EAE9; --accent:#00A78D; }
+  .i .win { grid-template-columns:74px 1fr; }
+  .i .rail { background:#fff; display:flex; flex-direction:column; align-items:center; gap:8px; padding:18px 0; }
+  .i .rd { width:42px; height:42px; border-radius:15px; display:grid; place-items:center; font-size:16px; color:#93A1A2; }
+  .i .rd.on { background:var(--accent); color:#fff; }
+  .i .main { padding:24px 26px; }
+  .i .top { display:flex; align-items:center; gap:16px; background:#fff; border-radius:26px; padding:18px 22px; }
+  .i .top .nm { font-size:19px; font-weight:750; letter-spacing:-.5px; flex:1; }
+  .i .top .spark { width:200px; }
+  .i .cards { display:grid; grid-template-columns:1.4fr 1fr 1fr; gap:14px; margin-top:16px; }
+  .i .c { background:#fff; border-radius:22px; padding:18px; }
+  .i .c.on { background:var(--accent); color:#fff; }
+  .i .c.on .lab { color:rgba(255,255,255,.75); }
+  .i .c .nm { font-weight:700; margin-top:6px; }
+  .i .c .num { font-size:25px; }
+  .i .c.on .num { color:#fff; }
+  .i .chips { display:flex; gap:9px; margin-top:16px; flex-wrap:wrap; }
+  .i .chip { background:#fff; border-radius:999px; padding:9px 15px; font-size:13px; color:#5D6C6E; }
+  .i .chip.on { background:#0E3B36; color:#fff; font-weight:650; }
+
+  /* J 一屏到底：没有侧栏，横导航 + 分栏读数 + 斑马纹列表 */
+  .j { --page:#FFFFFF; --text:#151E22; --muted:#7D8B8E; --line:#EDF1F2; --accent:#00A78D; }
+  .j .win { grid-template-columns:1fr; }
+  .j .bar { display:flex; align-items:center; gap:22px; padding:16px 24px; border-bottom:1px solid var(--line); }
+  .j .bar b { font-size:16px; letter-spacing:-.3px; }
+  .j .jv { font-size:13.5px; color:#8B989A; }
+  .j .jv.on { color:var(--text); font-weight:700; box-shadow:inset 0 -2px 0 var(--accent); padding-bottom:3px; }
+  .j .grow { margin-left:auto; }
+  .j .strip { display:flex; padding:0 24px; border-bottom:1px solid var(--line); }
+  .j .cell { padding:18px 26px 18px 0; margin-right:26px; border-right:1px solid var(--line); }
+  .j .cell:last-child { border-right:0; }
+  .j .cell .num { font-size:26px; }
+  .j .wrap { padding:20px 24px; }
+  .j .ln { display:flex; align-items:center; gap:14px; padding:14px 14px; border-radius:14px; }
+  .j .ln:nth-child(odd) { background:#F6FAFA; }
+  .j .ln.on { background:#E7F5F1; box-shadow:inset 3px 0 0 var(--accent); }
+  .j .ln .nm { flex:1; font-weight:600; }
+  .j .ln .ms { font-size:13px; color:#5C6B6E; font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+<h1>不老气 · 四种结构（颜色统一用你说舒服的青绿）</h1>
+<p class="lede">"太古板"我理解不是配色的事，是<b>版式</b>的事：现在所有东西都是同一种圆角矩形、字号差不
+多、等宽堆叠、每块都有边框 —— 那就是一板一眼的后台脸。这四套各自换一种"骨架"，颜色一律青绿
+<code>#00A78D</code>，这样比的是结构。</p>
+<div class="why">共同点（都是冲"古板"去的）：<b>字号落差拉大</b>（数字 23–29px、标签 10.5px，现在只差 2px）、
+<b>砍掉边框</b>（分层改靠留白或整块染色）、<b>选中态从"描个边"变成"整块有颜色"</b>、
+<b>不再等分</b>（有主有次）。每套右下角都留了原来的功能：地区筛选、动作按钮、节点列表，只是换了组织方式。
+注意：egui 做不到模糊/渐变阴影/字距，所以这几套都只用它做得出的东西（圆角矩形、纯色块、下划线、字号）。</div>
+<div class="board">
+
+  <div>
+    <div class="cap"><h2>G 呼吸感 · 无框</h2><p>完全没有卡片框和阴影，靠留白 + 字号分层；列表用一条细线分隔，选中项整条淡染并渐隐到右边。最"轻"的一套。</p></div>
+    <div class="mock g">
+      <div class="win">
+        <div class="side">
+          <div class="brand"><b>VPN Parser</b></div>
+          <div class="nav on">控制台</div><div class="nav">节点池</div><div class="nav">订阅源</div>
+          <div class="nav">系统设置</div><div class="nav">外部接口</div>
+        </div>
+        <div class="main">
+          <div class="hero"><span class="badge"><i></i>运行中</span>
+            <span class="big">🇸🇬 SG²_2｜广播机房</span><span class="lab">149.22.86.1:443</span></div>
+          <div class="hair"></div>
+          <div class="stats">
+            <div><div class="lab">下行</div><div class="num">339.5 <span style="font-size:13px;font-weight:600">KB/s</span></div></div>
+            <div><div class="lab">上行</div><div class="num">2.0 <span style="font-size:13px;font-weight:600">KB/s</span></div></div>
+            <div><div class="lab">延迟</div><div class="num">1536 <span style="font-size:13px;font-weight:600">ms</span></div></div>
+            <div><div class="lab">活跃连接</div><div class="num">10</div></div>
+            <div style="flex:1"><div class="lab">近 3 分钟</div>
+              <svg class="spark" viewBox="0 0 200 40" preserveAspectRatio="none">
+                <polyline fill="none" stroke="#0E6B4C" stroke-width="1.8" points="0,30 20,26 40,29 60,16 80,22 100,9 120,18 140,6 160,14 180,9 200,12"/>
+                <polyline fill="none" stroke="#00A78D" stroke-width="1.5" stroke-dasharray="3 2.5" points="0,36 20,35 40,36 60,33 80,35 100,32 120,34 140,31 160,34 180,32 200,33"/>
+              </svg></div>
+          </div>
+          <div class="tabs"><span class="tab on">可用节点</span><span class="tab">活跃连接 10</span><span class="tab">分流规则</span>
+            <span class="tab">DNS / TUN</span><span class="tab">内核管理</span><span class="tab">运行日志</span></div>
+          <div style="margin-top:14px">
+            <div class="item on"><span class="nm">🇸 SG²_2｜1.6MB/s｜广播机房</span><span class="ms">HTTP · 新加坡</span><span class="ms">1536 ms</span><span class="go">当前出口</span></div>
+            <div class="item"><span class="nm">🇸🇬 SG²_8｜2.6MB/s</span><span class="ms">HTTP · 新加坡</span><span class="ms">1143 ms</span><span class="go">切过去</span></div>
+            <div class="item"><span class="nm">SG [高速 by Jz 20M]</span><span class="ms">VLESS · 新加坡</span><span class="ms">480 ms</span><span class="go">切过去</span></div>
+            <div class="item"><span class="nm">电信-09</span><span class="ms">VLESS · 美国</span><span class="ms">761 ms</span><span class="go">切过去</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="cap"><h2>H 仪表台 · 一条深色状态带</h2><p>顶部一整条深色带子把"当前出口 + 关键读数"包住，信息密度最高、最有产品脸；下面才是白卡片。代价：顶部有一块深色（你之前说过不要深色，这条要不要看你）。</p></div>
+    <div class="mock h">
+      <div class="win">
+        <div class="band">
+          <span class="badge"><i></i>运行中</span>
+          <div><div class="ttl">🇸🇬 SG²_2｜1.6MB/s｜[广播|机房]</div><div class="sub">新加坡 · 149.22.86.1:443 · Mixed 9980 · Controller 9090</div></div>
+          <div class="grow">
+            <div><div class="lab">下行</div><div class="num">339.5 KB/s</div></div>
+            <div><div class="lab">上行</div><div class="num">2.0 KB/s</div></div>
+            <div><div class="lab">延迟</div><div class="num">1536 ms</div></div>
+          </div>
+        </div>
+        <div class="navs"><span class="nv on">控制台</span><span class="nv">节点池</span><span class="nv">订阅源</span>
+          <span class="nv">系统设置</span><span class="nv">外部接口</span></div>
+        <div class="bod">
+          <div class="panel">
+            <div class="row on"><span class="nm">🇸 SG²_2｜广播机房</span><span class="ms">HTTP · 1536 ms</span><span class="badge"><i></i>当前</span></div>
+            <div class="row"><span class="nm">🇸🇬 SG²_8｜2.6MB/s</span><span class="ms">HTTP · 1143 ms</span><button class="btn">切过去</button></div>
+            <div class="row"><span class="nm">SG [高速 by Jz 20M]</span><span class="ms">VLESS · 480 ms</span><button class="btn">切过去</button></div>
+            <div class="row"><span class="nm">电信-09</span><span class="ms">VLESS · 761 ms</span><button class="btn">切过去</button></div>
+            <div class="row"><span class="nm">🇺🇸 US²_4｜1.0MB/s</span><span class="ms">SS · 538 ms</span><button class="btn">切过去</button></div>
+          </div>
+          <div class="kpi">
+            <div class="card"><div class="lab">近 3 分钟流量</div>
+              <svg class="spark" viewBox="0 0 240 52" preserveAspectRatio="none">
+                <polyline fill="none" stroke="#7FD9C6" stroke-width="1.8" points="0,40 24,34 48,38 72,20 96,28 120,10 144,22 168,8 192,18 216,12 240,16"/>
+                <polyline fill="none" stroke="#3E9C8C" stroke-width="1.5" stroke-dasharray="3 2.5" points="0,47 24,46 48,47 72,44 96,46 120,43 144,45 168,42 192,45 216,43 240,44"/>
+              </svg></div>
+            <div class="card"><div class="lab">节点</div><div class="num">16180</div><div class="lab" style="margin-top:4px">可用 290 · 源 29</div></div>
+            <div style="display:flex;gap:10px"><button class="btn stop">停止代理</button><button class="btn">IP 检测</button><button class="btn">系统代理</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="cap"><h2>I 色块卡片 · 图标栏 + 不等宽</h2><p>侧栏收成 74px 图标条，内容区不等宽分块，选中那张<b>整块涂成强调色反白</b>（最"敢用色"的一套），地区筛选做成深色胶囊。年轻感最强，但色块面积大。</p></div>
+    <div class="mock i">
+      <div class="win">
+        <div class="rail"><div class="rd on">◧</div><div class="rd">⚡</div><div class="rd">⇩</div><div class="rd">⚙</div><div class="rd">⇄</div></div>
+        <div class="main">
+          <div class="top"><span class="badge"><i></i>运行中</span>
+            <span class="nm">🇸🇬 SG²_2｜1.6MB/s｜[广播|机房]</span>
+            <svg class="spark" viewBox="0 0 200 44" preserveAspectRatio="none">
+              <polyline fill="none" stroke="#0E6B4C" stroke-width="1.8" points="0,34 20,30 40,32 60,20 80,26 100,12 120,20 140,8 160,16 180,10 200,14"/>
+              <polyline fill="none" stroke="#00A78D" stroke-width="1.5" stroke-dasharray="3 2.5" points="0,40 20,39 40,40 60,37 80,39 100,36 120,38 140,35 160,38 180,36 200,37"/>
+            </svg></div>
+          <div class="cards">
+            <div class="c on"><div class="lab">当前出口 · 下行</div><div class="num">339.5 KB/s</div><div class="nm">🇸🇬 SG²_2｜广播机房</div><div class="lab" style="margin-top:6px">上行 2.0 KB/s · 延迟 1536 ms</div></div>
+            <div class="c"><div class="lab">可用节点</div><div class="num">290</div><div class="lab" style="margin-top:6px">总 16180 · 源 29</div></div>
+            <div class="c"><div class="lab">活跃连接</div><div class="num">10</div><div class="lab" style="margin-top:6px">会话 ↓ 764 KB · ↑ 8.0 MB</div></div>
+          </div>
+          <div class="chips"><span class="chip on">新加坡</span><span class="chip">全部</span><span class="chip">香港</span><span class="chip">日本</span>
+            <span class="chip">美国</span><span class="chip">台湾</span><span class="chip">韩国</span><span class="chip">其它</span>
+            <span class="chip">⊕ 系统代理</span><span class="chip">IP 检测</span><span class="chip">重启</span><span class="chip">停止代理</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="cap"><h2>J 一屏到底 · 没有侧栏</h2><p>侧栏整个砍掉，导航横在顶上；读数排成一条"分栏表"（竖线分隔），列表用斑马纹 + 左侧 3px 色条表示选中。屏幕利用率最高，最不像传统后台。</p></div>
+    <div class="mock j">
+      <div class="win">
+        <div class="bar"><b>VPN Parser</b><span class="jv on">控制台</span><span class="jv">节点池</span><span class="jv">订阅源</span>
+          <span class="jv">系统设置</span><span class="jv">外部接口</span><span class="grow"></span>
+          <span class="badge"><i></i>运行中</span></div>
+        <div class="strip">
+          <div class="cell"><div class="lab">当前出口</div><div style="font-weight:700;font-size:16px;letter-spacing:-.3px">🇸 SG²_2｜广播机房</div>
+            <div class="lab" style="margin-top:3px">新加坡 · 149.22.86.1:443</div></div>
+          <div class="cell"><div class="lab">下行</div><div class="num">339.5</div><div class="lab">KB/s</div></div>
+          <div class="cell"><div class="lab">上行</div><div class="num">2.0</div><div class="lab">KB/s</div></div>
+          <div class="cell"><div class="lab">延迟</div><div class="num">1536</div><div class="lab">ms</div></div>
+          <div class="cell"><div class="lab">活跃</div><div class="num">10</div><div class="lab">连接</div></div>
+          <div class="cell" style="flex:1;border-right:0"><div class="lab">近 3 分钟</div>
+            <svg class="spark" viewBox="0 0 260 40" preserveAspectRatio="none">
+              <polyline fill="none" stroke="#0E6B4C" stroke-width="1.8" points="0,30 26,26 52,29 78,16 104,22 130,9 156,18 182,6 208,14 234,9 260,12"/>
+              <polyline fill="none" stroke="#00A78D" stroke-width="1.5" stroke-dasharray="3 2.5" points="0,36 26,35 52,36 78,33 104,35 130,32 156,34 182,31 208,34 234,32 260,33"/>
+            </svg></div>
+        </div>
+        <div class="wrap">
+          <div class="ln on"><span class="nm">🇸🇬 SG²_2｜1.6MB/s｜[广播|机房]</span><span class="ms">HTTP</span><span class="ms">新加坡</span><span class="ms">1536 ms</span><span class="badge"><i></i>当前</span></div>
+          <div class="ln"><span class="nm">🇸 SG²_8｜2.6MB/s｜0%</span><span class="ms">HTTP</span><span class="ms">新加坡</span><span class="ms">1143 ms</span></div>
+          <div class="ln"><span class="nm">SG [高速 by Jz 20M]</span><span class="ms">VLESS</span><span class="ms">新加坡</span><span class="ms">480 ms</span></div>
+          <div class="ln"><span class="nm">电信-09</span><span class="ms">VLESS</span><span class="ms">美国</span><span class="ms">761 ms</span></div>
+          <div class="ln"><span class="nm">🇺🇸 US²_4｜1.0MB/s</span><span class="ms">SS</span><span class="ms">美国</span><span class="ms">538 ms</span></div>
+          <div style="display:flex;gap:10px;margin-top:18px"><span class="badge"><i></i>系统代理</span><span class="jv">IP 检测</span><span class="jv">重启</span><span class="jv" style="color:#8A4A44">停止代理</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

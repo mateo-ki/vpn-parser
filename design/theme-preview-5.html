@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>简单青春 · 七套底色与强调色对照</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:26px 24px 70px; font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+         background:#DFE2E7; color:#16181C; }
+  h1 { font-size:21px; margin:0 0 6px; }
+  .lede { font-size:13px; color:#555b66; margin:0 0 14px; max-width:1240px; line-height:1.75; }
+  .lede b { color:#16181C; }
+  .swatches { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 22px;
+              background:#fff; border:1px solid #d5d9df; border-radius:12px; padding:10px 14px; }
+  .swatches span { font-size:12px; color:#555b66; margin-right:4px; }
+  .sw { width:26px; height:26px; border-radius:50%; border:2px solid #fff; cursor:pointer;
+        box-shadow:0 0 0 1px #c9ced6; padding:0; }
+  .sw.on { box-shadow:0 0 0 2px #16181C; }
+  .sw.reset { width:auto; height:26px; border-radius:8px; padding:0 10px; font-size:11.5px; background:#F2F3F5; }
+  .board { display:grid; grid-template-columns:repeat(auto-fit,minmax(560px,1fr)); gap:26px; }
+  .cap { margin:0 0 8px; }
+  .cap h2 { font-size:15px; margin:0 0 4px; }
+  .cap p { margin:0; font-size:11.8px; color:#555b66; line-height:1.7; }
+  .cap code { background:#fff; border:1px solid #d5d9df; border-radius:5px; padding:0 4px; font-size:11px; }
+  .wcag { margin-top:5px; font-size:11px; color:#3d434c; font-variant-numeric:tabular-nums; }
+  .wcag i { font-style:normal; padding:1px 6px; border-radius:6px; margin-right:5px; background:#E9ECEF; }
+  .wcag i.bad { background:#FCE7E7; color:#9B2C2C; }
+  .wcag i.mid { background:#FFF3DC; color:#8A5A00; }
+  .wcag i.good { background:#E4F5EE; color:#0E6B4C; }
+
+  .mock { font-size:var(--fs); color:var(--text); background:var(--page); border:1px solid #D6DAE0;
+          border-radius:calc(var(--r-card) + 5px); overflow:hidden; box-shadow:0 16px 36px rgba(20,22,28,.14); }
+  .win { display:grid; grid-template-columns:172px 1fr; min-height:520px; }
+  .side { background:var(--sidebar); padding:var(--pad) 12px; display:flex; flex-direction:column; gap:6px;
+          border-right:var(--side-line); }
+  .brand { display:flex; align-items:center; gap:9px; padding:4px 8px 16px; }
+  .brand b { font-size:calc(var(--fs) + 1.5px); letter-spacing:-.2px; }
+  .brand em { font-style:normal; font-size:10.5px; color:var(--muted); display:block; margin-top:1px; }
+  .nav { position:relative; display:flex; align-items:center; gap:9px; padding:var(--navpad); border-radius:var(--r-nav);
+         color:var(--sub); font-size:calc(var(--fs) - .5px); }
+  .nav.on { background:var(--accent-bg); color:var(--text); font-weight:600; }
+  .nav.on::before { content:""; position:absolute; left:-12px; top:50%; transform:translateY(-50%);
+                    width:3px; height:18px; border-radius:2px; background:var(--accent); }
+  .side .note { margin-top:auto; font-size:11px; color:var(--muted); padding:10px 4px 0; line-height:1.8;
+                border-top:1px solid var(--line); }
+  .side .box { background:var(--inset); border-radius:12px; padding:10px 11px; font-size:11.5px; color:var(--sub); }
+  .main { padding:var(--pad); display:flex; flex-direction:column; gap:var(--gap); }
+  .chips { display:flex; gap:10px; flex-wrap:wrap; }
+  .chip { background:var(--chip-bg); border:var(--chip-border); border-radius:var(--r-chip); padding:var(--chip-pad);
+          font-size:calc(var(--fs) - 1.5px); color:var(--sub); display:flex; gap:7px; align-items:baseline; }
+  .chip b { font-size:calc(var(--fs) + var(--numgrow)); color:var(--text); font-weight:700; letter-spacing:-.4px;
+            font-variant-numeric:tabular-nums; }
+  .chip.hot { background:var(--accent-bg); border-color:transparent; }
+  .chip.hot b { color:var(--accent-strong); }
+  .head { display:flex; align-items:baseline; gap:9px; }
+  .head h3 { margin:0; font-size:calc(var(--fs) + var(--titlegrow)); letter-spacing:-.2px; font-weight:var(--titlew); }
+  .head .hint { font-size:calc(var(--fs) - 2px); color:var(--muted); }
+  .card { background:var(--card); border-radius:var(--r-card); padding:var(--cardpad);
+          box-shadow:var(--shadow); border:var(--card-border); }
+  .headcard { display:flex; align-items:center; gap:14px; }
+  .headcard .nm { flex:1; font-weight:700; font-size:calc(var(--fs) + 3px); letter-spacing:-.3px;
+                  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .spark { width:190px; height:44px; flex:none; }
+  .tabs { display:flex; gap:9px; flex-wrap:wrap; }
+  .tab { border:var(--tab-border); background:var(--tab-bg); color:var(--sub); border-radius:var(--r-chip);
+         padding:8px 14px; font-size:calc(var(--fs) - 1.5px); }
+  .tab.on { background:var(--accent-bg); border-color:var(--accent-line); color:var(--accent-strong); font-weight:600; }
+  .row { display:flex; align-items:center; gap:12px; padding:var(--rowpad) 0; border-bottom:var(--rowline); }
+  .row:last-child { border-bottom:0; }
+  .row .nm2 { width:118px; font-weight:600; }
+  .row .url { flex:1; font-size:calc(var(--fs) - 1.5px); color:var(--accent-strong);
+              overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .st { width:66px; font-size:calc(var(--fs) - 1.5px); }
+  .ok{color:#0E6B4C}
+  .btn { border:var(--btn-border); background:var(--btn-ghost); color:var(--text); border-radius:var(--r-btn);
+         padding:var(--btn-pad); font-size:calc(var(--fs) - 1.5px); }
+  .btn.pri { background:var(--btn); border-color:transparent; color:var(--btn-text); font-weight:600; }
+  .badge { display:inline-flex; align-items:center; gap:5px; border-radius:var(--r-chip); padding:4px 11px;
+           font-size:calc(var(--fs) - 2.5px); background:#E4F5EE; color:#0E6B4C; font-weight:600; }
+  .badge i { width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .foot { display:flex; align-items:center; gap:12px; padding:11px var(--pad); background:var(--sidebar);
+          font-size:calc(var(--fs) - 2px); color:var(--muted); border-top:1px solid var(--line); }
+  .foot .sp { margin-left:auto; }
+</style>
+</head>
+<body>
+<h1>简单青春 · 七套对照</h1>
+<p class="lede">
+  左边那列是<b>现状</b>（钴蓝 <code>#2F6FEB</code> 压在带蓝味的 <code>#E8EEF7</code> 上，你说难看）。
+  其余六套都在同一条路上：<b>底色几乎不带灰、卡片纯白、强调色偏深或偏清透、颜色只出现在"选中/可点"这一件事上</b>。
+  顶上那排圆点可以<b>把任意强调色套到全部七套上</b>，看同一支色在不同底色上的差别；下面每套都算了 WCAG 对比度（红=不合格，黄=勉强，绿=稳）。
+</p>
+<div class="swatches"><span>统一换强调色：</span></div>
+<div class="board" id="board"></div>
+
+<script>
+const PANELS = [
+  { name:'现状 · 钴蓝（你说难看）', cls:'now', note:'页面带蓝味 + 强调色又亮又饱和 → 整片糊成一团蓝。' },
+  { name:'A 薄荷苏打', cls:'mint', note:'底色掺一点点绿而不是蓝，卡片纯白；强调色 #12B886 清亮不刺眼。' },
+  { name:'B 海盐青', cls:'sea', note:'接近中性、只留一丝冷意；强调色 #0E9DAE 偏水感，比青绿更亮一点。' },
+  { name:'C 青柠汽水', cls:'lime', note:'暖白底 + 草绿 #3FA96A，最"年轻"的一套，但要注意它和"成功"绿容易撞。' },
+  { name:'D 蜜桃苏打', cls:'peach', note:'奶油白底 + 珊瑚 #EF7A4E。不是红也不是黄，走温暖路线；怕热的话跳过。' },
+  { name:'E 晴空', cls:'sky', note:'想要蓝色就用这个：底色几乎中性、强调色 #38A3F5 比钴蓝清透得多，不再糊。' },
+  { name:'F 你现在用的青绿', cls:'teal', note:'你说"舒服一点"的那套，放在这里当基准：#00A78D + 中性一点的底。' },
+];
+
+const TOKENS = {
+  now:   { page:'#E8EEF7', sidebar:'#FFFFFF', card:'#FFFFFF', inset:'#E8EEF7', line:'#E3EAF5', accent:'#2F6FEB',
+           text:'#1A2028', sub:'#3F4A57', muted:'#64707E' },
+  mint:  { page:'#F1F9F5', sidebar:'#FFFFFF', card:'#FFFFFF', inset:'#F1F9F5', line:'#E1EFE8', accent:'#12B886',
+           text:'#15211D', sub:'#3D4E48', muted:'#677872' },
+  sea:   { page:'#F0F6F8', sidebar:'#FFFFFF', card:'#FFFFFF', inset:'#F0F6F8', line:'#E0EBEE', accent:'#0E9DAE',
+           text:'#162024', sub:'#3E4D52', muted:'#68787D' },
+  lime:  { page:'#F4F8F0', sidebar:'#FFFFFF', card:'#FFFFFF', inset:'#F4F8F0', line:'#E6EFE0', accent:'#3FA96A',
+           text:'#1A211A', sub:'#425044', muted:'#6C7A6E' },
+  peach: { page:'#FBF4EF', sidebar:'#FFFFFF', card:'#FFFFFF', inset:'#FBF4EF', line:'#F0E4DC', accent:'#EF7A4E',
+           text:'#221A16', sub:'#54463F', muted:'#82716A' },
+  sky:   { page:'#F1F6FB', sidebar:'#FFFFFF', card:'#FFFFFF', inset:'#F1F6FB', line:'#E2EAF3', accent:'#38A3F5',
+           text:'#18202A', sub:'#3F4B5A', muted:'#687586' },
+  teal:  { page:'#EFF5F3', sidebar:'#FFFFFF', card:'#FFFFFF', inset:'#EFF5F3', line:'#E1EDE9', accent:'#00A78D',
+           text:'#17211F', sub:'#3F4C49', muted:'#687674' },
+};
+
+const hex = (c) => [1,3,5].map(i => parseInt(c.slice(i, i+2), 16));
+const toHex = (a) => '#' + a.map(v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2,'0')).join('').toUpperCase();
+const mix = (a, b, t) => { const x = hex(a), y = hex(b); return toHex(x.map((v,i) => v + (y[i]-v)*t)); };
+const lum = (c) => { const v = hex(c).map(n => { n/=255; return n <= .03928 ? n/12.92 : Math.pow((n+.055)/1.055, 2.4); });
+                     return .2126*v[0] + .7152*v[1] + .0722*v[2]; };
+const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x,y)+.05) / (Math.min(x,y)+.05); };
+// 压在淡色块上的强调文字必须单独取深一档，否则浅色主题上必然不够（和 Rust 侧 readable_on 同一件事）
+const readable = (fg, bg, target) => { let c = fg, guard = 0;
+  while (ratio(c, bg) < target && guard++ < 40) { c = mix(c, '#000000', 0.03); } return c; };
+// 卡片/页面分层地板：1.12 以下你上次就说过"快分不开了"，不够就自动把底色压深
+const deepen = (page, card, floor) => { let c = page, guard = 0;
+  while (ratio(card, c) < floor && guard++ < 40) { c = mix(c, '#000000', 0.02); } return c; };
+
+function applyAccent(cls, accent) {
+  const t = TOKENS[cls];
+  const page = deepen(t.page, t.card, 1.14);
+  const bg = mix(page, accent, 0.10);
+  const strong = readable(accent, bg, 4.5);
+  // 主按钮 = 强调色的淡染底 + 压深的强调色文字（和 Rust 侧 soft_btn / readable_on 一致），
+  // 不是"实心强调色 + 白字"——那种在浅色主题上白字只有 2.2:1，糊成一片。
+  const btn = mix(page, accent, 0.22);
+  const btnText = readable(accent, btn, 4.6);
+  return {
+    '--page': page, '--sidebar': t.sidebar, '--card': t.card, '--inset': page, '--line': t.line,
+    '--side-line': '0', '--card-border': '0',
+    '--shadow': '0 1px 1px rgba(24,44,78,.04), 0 12px 26px rgba(24,44,78,.07)',
+    '--text': t.text, '--sub': t.sub, '--muted': t.muted,
+    '--accent': accent, '--accent-strong': strong, '--accent-bg': bg, '--accent-line': mix(page, accent, 0.26),
+    '--btn': btn, '--btn-text': btnText, '--btn-ghost': t.card, '--btn-border': '1px solid ' + t.line,
+    '--btn-pad': '8px 15px',
+    '--chip-bg': t.card, '--chip-border': '1px solid ' + t.line, '--r-chip':'16px', '--chip-pad':'8px 13px', '--numgrow':'5px',
+    '--tab-bg': t.card, '--tab-border': '1px solid ' + t.line,
+    '--r-card':'20px', '--r-btn':'16px', '--r-nav':'14px',
+    '--pad':'22px', '--gap':'14px', '--cardpad':'18px', '--navpad':'11px 13px',
+    '--rowpad':'11px', '--rowline':'1px solid ' + t.line,
+    '--titlegrow':'3px', '--titlew':'600', '--fs':'14px',
+  };
+}
+
+function body() {
+  return `
+  <div class="win">
+    <div class="side">
+      <div class="brand"><div><b>VPN Parser</b><em>网络代理控制台</em></div></div>
+      <div class="nav on">控制台</div><div class="nav">节点池</div><div class="nav">订阅源</div>
+      <div class="nav">系统设置</div><div class="nav">外部接口</div>
+      <div class="box">代理运行中<br>源 29 · 节点 16180</div>
+      <div class="note">侧栏纯白，内容页压深一档，卡片再回到纯白。</div>
+    </div>
+    <div class="main">
+      <div class="card headcard">
+        <span class="badge"><i></i>运行中</span>
+        <span class="nm">🇸SG²_2|1.6MB/s|0%|GPT⁺|GM-PT|History|[广播|机房]</span>
+        <svg class="spark" viewBox="0 0 190 44" preserveAspectRatio="none">
+          <polyline fill="none" stroke="#0E6B4C" stroke-width="1.6" points="0,34 20,30 40,32 60,20 80,26 100,12 120,20 140,8 160,16 180,10"/>
+          <polyline fill="none" stroke="var(--accent)" stroke-width="1.4" stroke-dasharray="3 2.5" points="0,40 20,39 40,40 60,37 80,39 100,36 120,38 140,35 160,38 180,36"/>
+        </svg>
+      </div>
+      <div class="tabs"><span class="tab on">可用节点</span><span class="tab">活跃连接 (10)</span><span class="tab">分流规则</span><span class="tab">DNS / TUN</span><span class="tab">内核管理</span></div>
+      <div class="chips">
+        <span class="chip hot">新加坡</span><span class="chip">香港</span><span class="chip">日本</span>
+        <span class="chip">美国</span><span class="chip">台湾</span><span class="chip">韩国</span>
+        <span class="chip">其它</span><span class="chip">⊕ 系统代理</span><span class="chip">IP 检测</span>
+        <span class="chip">重启</span><span class="chip"><b style="color:#C0403F">停止代理</b></span>
+      </div>
+      <div class="chips">
+        <div class="chip">延迟 <b>1536 ms</b></div>
+        <div class="chip">活跃 <b>10</b></div>
+        <div class="chip">节点 <b>16180</b></div>
+        <div class="chip">可用 <b>290</b></div>
+        <div class="chip">下行 <b>339.5 KB/s</b></div>
+      </div>
+      <div class="card">
+        <div class="row"><div class="nm2">SG [高速 by Jz]</div><div class="url">vless://76.164.193.18:443</div><div class="st ok">480 ms</div><button class="btn">测速</button></div>
+        <div class="row"><div class="nm2">SG²_8|2.6MB/s</div><div class="url">ss://149.22.86.1:443</div><div class="st ok">1143 ms</div><button class="btn">测速</button></div>
+        <div class="row"><div class="nm2">电信-09</div><div class="url">http://134.195.101.119:2709</div><div class="st ok">761 ms</div><button class="btn pri">启动代理</button></div>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>状态</span><b style="color:var(--text)">就绪</b><span class="sp">339 KB/s ↓ · 2.0 KB/s ↑</span><span>会话总计 ↑ 8.0 MB ↓ 764 KB</span></div>`;
+}
+
+const board = document.getElementById('board');
+let override = null;
+
+function render() {
+  board.innerHTML = PANELS.map(p => {
+    const t = TOKENS[p.cls];
+    const accent = override || t.accent;
+    const vars = applyAccent(p.cls, accent);
+    const stat = (label, a, b, want) => {
+      const r = ratio(a, b);
+      const cls = r < want * 0.75 ? 'bad' : (r < want ? 'mid' : 'good');
+      return `<i class="${cls}">${label} ${r.toFixed(2)}</i>`;
+    };
+    const wcag = stat('正文/卡', vars['--text'], vars['--card'], 7)
+      + stat('次要/卡', vars['--sub'], vars['--card'], 4.5)
+      + stat('强调文字/淡底', vars['--accent-strong'], vars['--accent-bg'], 4.5)
+      + stat('按钮文字/按钮', vars['--btn-text'], vars['--btn'], 4.5)
+      + stat('卡片/页面分层', vars['--card'], vars['--page'], 1.12);
+    const css = Object.entries(vars).map(([k,v]) => `${k}:${v}`).join(';');
+    return `<div>
+      <div class="cap"><h2>${p.name}</h2><p>${p.note} 页面 <code>${vars['--page']}</code> · 强调色 <code>${accent}</code> · 淡底 <code>${vars['--accent-bg']}</code> · 淡底上的文字 <code>${vars['--accent-strong']}</code> · 按钮 <code>${vars['--btn']}</code> + <code>${vars['--btn-text']}</code></p>
+      <div class="wcag">${wcag}</div></div>
+      <div class="mock" style="${css}">${body()}</div>
+    </div>`;
+  }).join('');
+}
+
+const bar = document.querySelector('.swatches');
+const SWATCHES = [['还原各套原色', null], ['#2F6FEB 钴蓝','#2F6FEB'], ['#12B886 薄荷','#12B886'],
+  ['#0E9DAE 海盐','#0E9DAE'], ['#3FA96A 青柠','#3FA96A'], ['#EF7A4E 蜜桃','#EF7A4E'],
+  ['#38A3F5 晴空','#38A3F5'], ['#00A78D 青绿','#00A78D'], ['#5B5BD6 靛蓝紫','#5B5BD6']];
+SWATCHES.forEach(([label, value], index) => {
+  const b = document.createElement('button');
+  b.className = 'sw' + (value ? '' : ' reset') + (index === 0 ? '' : '');
+  b.textContent = value ? '' : label;
+  if (value) { b.style.background = value; b.title = label; }
+  b.onclick = () => { override = value; render(); };
+  bar.appendChild(b);
+});
+render();
+</script>
+</body>
+</html>

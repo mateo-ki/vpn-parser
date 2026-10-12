@@ -1,0 +1,71 @@
+name: Release
+
+# 打 tag（v1.0.0 这种）就在 GitHub Actions 的 Windows runner 上：
+# 跑全部测试 → cargo build --release → Inno Setup 编安装包 → 算 SHA-256 → 发 GitHub Release。
+# 手动跑（workflow_dispatch）只产出"工作流产物"，不会发布 Release。
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  installer:
+    name: 打包 Windows 安装包并发布
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 stable 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 cargo 依赖和 target
+        uses: Swatinem/rust-cache@v2
+
+      - name: 装 Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: 跑测试（和 CI 同一套，不过就不打包）
+        run: cargo test --release
+
+      - name: 编译 release 版
+        run: cargo build --release
+
+      - name: 编译安装包
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer/vpn-parser.iss'
+
+      - name: 算 SHA-256
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -Filter *-setup.exe | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding ascii dist/sha256.txt
+          Get-Content dist/sha256.txt
+
+      - name: 上传为工作流产物（任何一次运行都留一份）
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            dist/*-setup.exe
+            dist/sha256.txt
+          if-no-files-found: error
+
+      # 只有 push tag 才真的发 Release。
+      - name: 发布到 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $exe = (Get-ChildItem dist -Filter *-setup.exe | Select-Object -First 1).FullName
+          gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG" --generate-notes

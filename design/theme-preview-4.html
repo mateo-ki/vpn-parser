@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>清爽浅白 · 三档"轻松"力度</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:26px 24px 60px; font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+         background:#DFE2E7; color:#16181C; }
+  h1 { font-size:21px; margin:0 0 6px; }
+  .lede { font-size:13px; color:#555b66; margin:0 0 18px; max-width:1200px; line-height:1.75; }
+  .lede b { color:#16181C; }
+  .board { display:grid; grid-template-columns:repeat(auto-fit,minmax(560px,1fr)); gap:24px; }
+  .cap { margin:0 0 8px; }
+  .cap h2 { font-size:15px; margin:0 0 4px; }
+  .cap p { margin:0; font-size:11.8px; color:#555b66; line-height:1.7; }
+  .cap code { background:#fff; border:1px solid #d5d9df; border-radius:5px; padding:0 4px; font-size:11px; }
+
+  .mock { font-size:var(--fs); color:var(--text); background:var(--page); border:1px solid #D6DAE0;
+          border-radius:calc(var(--r-card) + 5px); overflow:hidden; box-shadow:0 16px 36px rgba(20,22,28,.14); }
+  .win { display:grid; grid-template-columns:172px 1fr; min-height:552px; }
+  .side { background:var(--sidebar); padding:var(--pad) 12px; display:flex; flex-direction:column; gap:6px;
+          border-right:var(--side-line); }
+  .brand { display:flex; align-items:center; gap:9px; padding:4px 8px 16px; }
+  .brand img { width:26px; height:26px; border-radius:8px; }
+  .brand b { font-size:calc(var(--fs) + 1.5px); letter-spacing:-.2px; }
+  .brand em { font-style:normal; font-size:10.5px; color:var(--muted); display:block; margin-top:1px; }
+  .nav { position:relative; display:flex; align-items:center; gap:9px; padding:var(--navpad); border-radius:var(--r-nav);
+         color:var(--sub); font-size:calc(var(--fs) - .5px); }
+  .nav svg { width:15px; height:15px; opacity:.7; }
+  .nav.on { background:var(--accent-bg); color:var(--text); font-weight:600; }
+  .nav.on svg { opacity:1; color:var(--accent-strong); }
+  .nav.on::before { content:""; position:absolute; left:-12px; top:50%; transform:translateY(-50%);
+                    width:3px; height:18px; border-radius:2px; background:var(--accent); }
+  .side .note { margin-top:auto; font-size:11px; color:var(--muted); padding:10px 4px 0; line-height:1.8;
+                border-top:1px solid var(--line); }
+  .main { padding:var(--pad); display:flex; flex-direction:column; gap:var(--gap); }
+  .chips { display:flex; gap:10px; flex-wrap:wrap; }
+  .chip { background:var(--chip-bg); border:var(--chip-border); border-radius:var(--r-chip); padding:var(--chip-pad);
+          font-size:calc(var(--fs) - 1.5px); color:var(--sub); display:flex; gap:7px; align-items:baseline; }
+  .chip b { font-size:calc(var(--fs) + var(--numgrow)); color:var(--text); font-weight:700; letter-spacing:-.4px;
+            font-variant-numeric:tabular-nums; }
+  .chip.hot { background:var(--accent-bg); border-color:transparent; }
+  .chip.hot b { color:var(--accent-strong); }
+  .head { display:flex; align-items:baseline; gap:9px; }
+  .head h3 { margin:0; font-size:calc(var(--fs) + var(--titlegrow)); letter-spacing:-.2px; font-weight:var(--titlew); }
+  .head .hint { font-size:calc(var(--fs) - 2px); color:var(--muted); }
+  .card { background:var(--card); border-radius:var(--r-card); padding:var(--cardpad);
+          box-shadow:var(--shadow); border:var(--card-border); }
+  .row { display:flex; align-items:center; gap:12px; padding:var(--rowpad) 0; border-bottom:var(--rowline);
+         border-radius:10px; }
+  .row:last-child { border-bottom:0; }
+  .row:hover { background:var(--row-hover); }
+  .row .nm { width:104px; font-weight:600; }
+  .row .url { flex:1; font-size:calc(var(--fs) - 1.5px); color:var(--accent-strong);
+              overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .st { width:56px; font-size:calc(var(--fs) - 1.5px); }
+  .ok{color:#0E6B4C} .warn{color:#96600F} .bad{color:#C6393B}
+  .btn { border:var(--btn-border); background:var(--btn-ghost); color:var(--text); border-radius:var(--r-btn);
+         padding:var(--btn-pad); font-size:calc(var(--fs) - 1.5px); }
+  .btn.pri { background:var(--btn); border-color:transparent; color:#fff; font-weight:600; }
+  .btn.dgr { color:#C6393B; background:#FCECEC; border-color:transparent; }
+  .badge { display:inline-flex; align-items:center; gap:5px; border-radius:var(--r-chip); padding:4px 11px;
+           font-size:calc(var(--fs) - 2.5px); background:#E4F5EE; color:#0E6B4C; font-weight:600; }
+  .badge i { width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:var(--gap); }
+  .kv { display:flex; justify-content:space-between; font-size:calc(var(--fs) - 1px); color:var(--sub); padding:6px 0; }
+  .kv b { color:var(--text); font-weight:600; font-variant-numeric:tabular-nums; }
+  .spark { width:100%; height:56px; margin-top:6px; }
+  .foot { display:flex; align-items:center; gap:12px; padding:11px var(--pad); background:var(--sidebar);
+          font-size:calc(var(--fs) - 2px); color:var(--muted); border-top:1px solid var(--line); }
+  .foot .sp { margin-left:auto; }
+  .dlg { background:var(--card); border-radius:var(--r-card); padding:var(--cardpad); box-shadow:var(--shadow);
+         border:var(--card-border); }
+  .dlg h4 { margin:0 0 4px; font-size:calc(var(--fs) + 1px); }
+  .dlg .sub { font-size:calc(var(--fs) - 2px); color:var(--muted); margin:0 0 12px; }
+  .opt { display:flex; gap:10px; padding:var(--opt-pad); border-radius:var(--r-btn); border:1px solid transparent;
+         background:var(--opt-bg); }
+  .opt + .opt { margin-top:7px; }
+  .opt .dot { width:15px; height:15px; border-radius:50%; border:1.5px solid var(--muted); margin-top:3px; flex:none; }
+  .opt.on { background:var(--accent-bg); border-color:var(--accent-line); }
+  .opt.on .dot { border-color:var(--accent); box-shadow:inset 0 0 0 3.5px var(--accent); }
+  .opt b { font-size:calc(var(--fs) + .5px); font-weight:600; }
+  .opt.on b { color:var(--accent-strong); }
+  .opt p { margin:3px 0 0; font-size:calc(var(--fs) - 2px); color:var(--sub); line-height:1.6; }
+  .dlg .bar { display:flex; gap:9px; margin-top:15px; padding-top:13px; border-top:1px solid var(--line); }
+  .dlg .bar .sp { margin-left:auto; }
+
+  /* ---------- L0 现状（已装进代码的那版） ---------- */
+  .l0 {
+    --page:#F5F6F8; --sidebar:#FFFFFF; --card:#FFFFFF; --line:#EEF0F3; --side-line:1px solid #EEF0F3;
+    --shadow:0 1px 2px rgba(16,24,40,.05), 0 10px 26px rgba(16,24,40,.07);
+    --text:#16181C; --sub:#5B616B; --muted:#6E7581;
+    --accent:#2F6FEB; --accent-strong:#2C68DD; --accent-bg:#EAF0FD; --accent-line:#C9DAF8;
+    --btn:#2C68DD; --btn-ghost:#FFFFFF; --btn-border:1px solid #E3E6EA; --btn-pad:7px 14px;
+    --chip-bg:#FFFFFF; --chip-border:1px solid #EEF0F3; --r-chip:14px; --chip-pad:8px 13px; --numgrow:5px;
+    --opt-bg:#F7F8FA; --opt-pad:11px 12px;
+    --r-card:18px; --r-btn:14px; --r-nav:12px;
+    --pad:24px; --gap:16px; --cardpad:20px; --navpad:10px 12px;
+    --rowpad:12px; --rowline:1px solid #F2F3F6; --row-hover:transparent;
+    --titlegrow:6px; --titlew:650; --fs:14px;
+  }
+  /* ---------- L1 已落地：去灰 + 去描边按钮 + 无行分隔线 ---------- */
+  .l1 {
+    --page:#F8FAFD; --sidebar:#FFFFFF; --card:#FFFFFF; --line:#E9F0FA; --side-line:0;
+    --shadow:0 1px 1px rgba(24,44,78,.04), 0 12px 26px rgba(24,44,78,.06);
+    --text:#1A2028; --sub:#3F4A57; --muted:#64707E;
+    --accent:#2F6FEB; --accent-strong:#2C68DD; --accent-bg:#EDF3FE; --accent-line:#D3E2FB;
+    --btn:#2C68DD; --btn-ghost:#FFFFFF; --btn-border:1px solid #E9F0FA; --btn-pad:8px 15px;
+    --chip-bg:#EDF3FE; --chip-border:0; --r-chip:16px; --chip-pad:9px 14px; --numgrow:6px;
+    --opt-bg:#FFFFFF; --opt-pad:12px 13px;
+    --r-card:20px; --r-btn:16px; --r-nav:14px;
+    --pad:24px; --gap:17px; --cardpad:22px; --navpad:11px 13px;
+    --rowpad:13px; --rowline:0; --row-hover:#F1F6FD;
+    --titlegrow:3px; --titlew:600; --fs:14.5px;
+  }
+  .l1 .opt { border-color:var(--line); }
+  .l1 .opt.on { border-color:var(--accent-line); }
+  /* ---------- L2 轻两档：卡片退化成留白分组，字号再放大 ---------- */
+  .l2 {
+    --page:#FAFBFC; --sidebar:#FFFFFF; --card:#FFFFFF; --line:#F1F3F6; --side-line:0;
+    --shadow:none;
+    --text:#2A2E35; --sub:#656B75; --muted:#808790;
+    --accent:#2F6FEB; --accent-strong:#2C68DD; --accent-bg:#EFF4FE; --accent-line:#DBE7FC;
+    --btn:#2C68DD; --btn-ghost:#F4F6F9; --btn-border:0; --btn-pad:9px 16px;
+    --chip-bg:#F4F6F9; --chip-border:0; --r-chip:18px; --chip-pad:10px 15px; --numgrow:7px;
+    --opt-bg:#F6F8FA; --opt-pad:13px 14px;
+    --r-card:24px; --r-btn:18px; --r-nav:16px;
+    --pad:30px; --gap:22px; --cardpad:22px; --navpad:12px 14px;
+    --rowpad:14px; --rowline:0; --row-hover:#F6F8FB;
+    --titlegrow:2px; --titlew:600; --fs:15px;
+  }
+  .l2 .card, .l2 .dlg { border:1px solid #F1F3F6; }
+</style>
+</head>
+<body>
+<h1>三档"轻松"力度（强调色统一用新的默认钴蓝，图标已换成浅底盾标）</h1>
+<p class="lede">
+  <b>L0 = 现在代码里的样子</b>。<b>L1</b> 做了四件事：次要按钮去描边改浅灰底（页面上少一圈圈线）、表格行去掉分隔线只留行距和悬浮、
+  侧栏与内容之间那条竖线拿掉、标题从 20px 降到 17.5px 并把字重从 650 收到 600，圆角/间距整体放大一档。<b>L2</b> 再往前一步：
+  卡片不打阴影、只留一条极淡的边（分组靠留白），正文升到 15px、内边距 30。
+  三档都不改信息结构，纯"用力程度"。<b>我的建议是 L1</b>：L2 的卡片边界弱到长表格会看不出分组。
+</p>
+<div class="board" id="board"></div>
+<script>
+const PANELS = [
+  { cls:'l0', name:'L0 现状（已写进代码）', note:'圆角 18/14、按钮有 1px 描边、行有分隔线、标题 20px/650、正文 14px。' },
+  { cls:'l1', name:'L1 已落地（去灰版）', note:'页面底从灰 #F5F6F8 换成掺了一丝蓝的白 #F8FAFD；次级文字从灰 #5B616B 提到近黑的 #3F4A57；灰底胶囊/灰底行全部换成白底+冷调细边或淡蓝底；无行分隔线、无侧栏竖线、次要按钮去描边；标题 17.5px/600；圆角 20/16/14；正文 14.5px。' },
+  { cls:'l2', name:'L2 轻两档（最空气）', note:'卡片无阴影只留极淡边、圆角 24/18、正文 15px、内边距 30、分组主要靠留白。' },
+];
+const ICON = {
+  dash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>',
+  bolt:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></svg>',
+  down:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 20h16"/></svg>',
+  gear:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7"/></svg>',
+  plug:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 3v6M15 3v6M6 9h12v3a6 6 0 0 1-12 0V9ZM12 18v3"/></svg>'
+};
+function body() {
+  return `<div class="win">
+    <aside class="side">
+      <div class="brand"><img src="../assets/app-icon-48.png"><div><b>VPN Parser</b><em>网络代理控制台</em></div></div>
+      <div class="nav">${ICON.dash}控制台</div>
+      <div class="nav">${ICON.bolt}节点池</div>
+      <div class="nav on">${ICON.down}订阅源</div>
+      <div class="nav">${ICON.gear}系统设置</div>
+      <div class="nav">${ICON.plug}外部接口</div>
+      <div class="note">源 35 · 节点 19295 · 可用 24<br>代理运行中 · 127.0.0.1:9980</div>
+    </aside>
+    <div class="main">
+      <div class="chips">
+        <div class="chip hot">订阅源 <b>35</b></div>
+        <div class="chip">节点 <b>19295</b></div>
+        <div class="chip">可用 <b>24</b></div>
+        <div class="chip">vless <b>11384</b></div>
+        <div class="chip">ss <b>2624</b></div>
+      </div>
+      <div class="head"><h3>订阅源</h3><span class="hint">增删改查 · 单源 / 全部拉取</span><span class="badge" style="margin-left:auto"><i></i>代理运行中</span></div>
+      <div class="card">
+        <div class="row"><div class="nm">shadowmere</div><div class="url">https://shadowmere.xyz/api/b64sub/</div><div class="st ok">启用</div>
+          <button class="btn">拉取</button><button class="btn">编辑</button><button class="btn dgr">删除</button></div>
+        <div class="row"><div class="nm">gist-laohan9</div><div class="url">https://gist.githubusercontent.com/laohan9/ca8d1834…/raw</div><div class="st ok">启用</div>
+          <button class="btn">拉取</button><button class="btn">编辑</button><button class="btn dgr">删除</button></div>
+        <div class="row"><div class="nm">cfnew</div><div class="url">https://cfnew-6a8.pages.dev/ed9d81fc-2808…/sub?target=v2</div><div class="st warn">不推送</div>
+          <button class="btn">拉取</button><button class="btn pri">代理拉取</button><button class="btn dgr">删除</button></div>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <div class="head"><h3 style="font-size:inherit">流量</h3></div>
+          <div class="kv"><span>下行</span><b>1.84 MB/s</b></div>
+          <div class="kv"><span>当前出口</span><b>电信-10 · 日本 JP</b></div>
+          <svg class="spark" viewBox="0 0 200 56" preserveAspectRatio="none">
+            <polyline fill="none" stroke="var(--accent)" stroke-width="2" points="0,42 18,36 36,39 54,24 72,30 90,14 108,22 126,10 144,20 162,12 180,18 200,8"/>
+            <polyline fill="var(--accent-bg)" stroke="none" points="0,56 0,42 18,36 36,39 54,24 72,30 90,14 108,22 126,10 144,20 162,12 180,18 200,8 200,56"/>
+          </svg>
+        </div>
+        <div class="dlg">
+          <h4>下载内核 · sing-box</h4>
+          <p class="sub">一次只走一条连接，失败就报错</p>
+          <div class="opt on"><span class="dot"></span><div><b>gh-proxy 镜像</b><p>只连 gh-proxy.com 前缀（实测 4.87 MB/s）</p></div></div>
+          <div class="opt"><span class="dot"></span><div><b>ghfast 镜像</b><p>只连 ghfast.top 前缀（实测 8.13 MB/s）</p></div></div>
+          <div class="opt"><span class="dot"></span><div><b>本地文件导入</b><p>从已有 zip 安装，不联网</p></div></div>
+          <div class="bar"><button class="btn">关闭</button><button class="btn pri sp">开始下载</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>状态</span><b style="color:var(--text)">就绪</b><span class="sp">0 B/s ↓ · 0 B/s ↑</span><span>强调色 · 钴蓝（默认）</span></div>`;
+}
+document.getElementById('board').innerHTML = PANELS.map(p => `
+  <div>
+    <div class="cap"><h2>${p.name}</h2><p>${p.note}</p></div>
+    <div class="mock ${p.cls}">${body()}</div>
+  </div>`).join('');
+</script>
+</body>
+</html>

@@ -1,0 +1,950 @@
+use super::icons::{icon_label, Icon};
+use super::types::{ProxyPanel, Tab};
+use crate::models::{NodeGroupSummary, NodeSummary, GOOGLE_PROXY_TEST_KIND};
+use crate::proxy::{
+    DnsEnhancedMode, NetworkProtocol, ProxyMode, ProxyState, RoutingMode, RuleAction, RuleMatcher,
+    TunStack,
+};
+use crate::speedtest::{SpeedTestPhase, SpeedTestProgress};
+use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, Vec2};
+use super::theme;
+
+/// 全局 Ctrl+V / Ctrl+K 的"这次该不该让路" —— 只有焦点真的落在文本输入框里才让。
+///
+/// 为什么不能用 `memory().focused().is_none()`：egui 的 DragValue 点一下也会
+/// `request_focus`（`egui-0.31.1/src/widgets/drag_value.rs:622`）。界面里"候选数 /
+/// 延迟阈值 / 端口 / 并发数"全是 DragValue —— 用户拖完一个数字再按 Ctrl+V，
+/// 就一声不响地什么都不做（2026-10-13 他连报两次"没识别"的根因）。
+/// 所以让文本框在画的时候自己登记"焦点在我这"，读侧只认登记过的那个 id。
+/// 新加文本框时记得调 `note_text_field`，漏了的后果是"在那个框里按 Ctrl+V 也会走识别"，
+/// 是吵，不是哑 —— 挑这一侧是因为另一侧用户完全看不出来。
+fn text_field_slot() -> egui::Id {
+    egui::Id::new("vpn-parser:text-field-focus")
+}
+
+/// 每个文本输入框画完之后调一次；只有它真的有焦点时才写。
+pub fn note_text_field(ui: &Ui, response: &egui::Response) {
+    if response.has_focus() {
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(text_field_slot(), response.id));
+    }
+}
+
+/// 焦点现在在不在文本输入框里。
+pub fn focus_is_text_field(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<egui::Id>(text_field_slot()))
+        .is_some_and(|known| ctx.memory(|m| m.focused()) == Some(known))
+}
+
+pub fn normalize_api_base(value: &str) -> String {
+    let trimmed = value.trim().trim_end_matches('/');
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_owned()
+    } else {
+        // 发布服务器是远端机器，裸主机名默认按 https 处理，避免节点凭据明文上网。
+        format!("https://{trimmed}")
+    }
+}
+
+
+pub fn card_frame() -> Frame {
+    Frame::NONE
+        .fill(theme::panel())
+        .stroke(theme::card_stroke())
+        .shadow(theme::card_shadow())
+        .corner_radius(CornerRadius::same(theme::RADIUS_CARD))
+        .inner_margin(Margin::same(theme::PAD_CARD))
+}
+
+pub fn panel_frame() -> Frame {
+    Frame::NONE
+        .fill(theme::panel())
+        .stroke(theme::card_stroke())
+        .shadow(theme::card_shadow())
+        .corner_radius(CornerRadius::same(theme::RADIUS_CARD))
+        .inner_margin(Margin::symmetric(theme::PAD_CARD, theme::PAD_CARD - 2))
+}
+
+pub fn primary_btn(text: &str) -> egui::Button<'_> {
+    egui::Button::new(
+        RichText::new(text)
+            .strong()
+            .color(theme::on_primary()),
+    )
+    .fill(theme::primary_btn())
+    .stroke(Stroke::NONE)
+    .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
+}
+
+pub fn danger_btn(text: &str) -> egui::Button<'_> {
+    egui::Button::new(RichText::new(text).strong().color(theme::danger()))
+        .fill(theme::danger_bg())
+        .stroke(Stroke::new(1.0_f32, theme::danger_stroke()))
+        .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
+}
+
+pub fn section_title(ui: &mut Ui, title: &str, subtitle: &str) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title).strong().size(17.0).color(theme::text_primary()));
+        ui.add_space(4.0);
+        ui.label(RichText::new(subtitle).small().color(theme::text_secondary()));
+    });
+    ui.add_space(6.0);
+}
+
+pub fn nav_item(ui: &mut Ui, current: &mut Tab, tab: Tab, icon: Icon, label: &str) {
+    let selected = *current == tab;
+    let (fill, stroke, text_color, icon_color) = if selected {
+        (
+            theme::accent_bg(),
+            Stroke::NONE,
+            theme::text_primary(),
+            theme::accent(),
+        )
+    } else {
+        (
+            Color32::TRANSPARENT,
+            Stroke::NONE,
+            theme::text_secondary(),
+            theme::sidebar_muted(),
+        )
+    };
+
+    let resp = Frame::NONE
+        .fill(fill)
+        .stroke(stroke)
+        .corner_radius(CornerRadius::same(theme::RADIUS_NAV))
+        .inner_margin(Margin::symmetric(theme::PAD_NAV_X, 10))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                if selected {
+                    let (indicator, _) =
+                        ui.allocate_exact_size(Vec2::new(3.0, 16.0), Sense::hover());
+                    ui.painter()
+                        .rect_filled(indicator, CornerRadius::same(2), theme::accent());
+                    ui.add_space(4.0);
+                } else {
+                    ui.add_space(7.0);
+                }
+                icon_label(ui, icon, 17.0, icon_color);
+                ui.add_space(8.0);
+                ui.label(RichText::new(label).strong().color(text_color).size(13.5));
+            });
+        })
+        .response
+        .interact(Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+
+    if resp.clicked() {
+        *current = tab;
+    }
+    ui.add_space(3.0);
+}
+
+pub fn proxy_panel_tab(
+    ui: &mut Ui,
+    current: &mut ProxyPanel,
+    panel: ProxyPanel,
+    icon: Icon,
+    label: &str,
+) {
+    let selected = *current == panel;
+    let (fill, text_color, icon_color) = if selected {
+        (theme::accent_bg(), theme::accent_strong(), theme::accent())
+    } else {
+        (theme::panel(), theme::text_secondary(), theme::muted())
+    };
+    // 未选中不给灰底，给白底 + 一条冷调细边：页面上少一块块灰斑。
+    let stroke = if selected {
+        Stroke::new(1.0_f32, theme::accent())
+    } else {
+        Stroke::new(1.0_f32, theme::border())
+    };
+    let resp = Frame::NONE
+        .fill(fill)
+        .stroke(stroke)
+        .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
+        .inner_margin(Margin::symmetric(14, 8))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                icon_label(ui, icon, 14.0, icon_color);
+                ui.add_space(5.0);
+                ui.label(RichText::new(label).strong().color(text_color).size(12.5));
+            });
+        })
+        .response
+        .interact(Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    if resp.clicked() {
+        *current = panel;
+    }
+}
+
+/// 状态徽章。返回整块的 `Response`，让调用方还能挂 hover —— 徽章自己要说清
+/// "为什么是这个状态"，不该让人去翻状态栏。
+pub fn status_badge(ui: &mut Ui, text: &str, color: Color32) -> egui::Response {
+    Frame::NONE
+        .fill(color.gamma_multiply(0.12))
+        .stroke(Stroke::new(1.0_f32, color.gamma_multiply(0.40)))
+        .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
+        .inner_margin(Margin::symmetric(12, 7))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+                ui.painter()
+                    .circle_filled(rect.center(), 4.0, color.gamma_multiply(0.35));
+                ui.painter().circle_filled(rect.center(), 2.5, color);
+                ui.label(RichText::new(text).strong().color(color).size(13.0));
+            });
+        })
+        .response
+}
+
+/// 协议小胶囊。**不再按协议分色**（用户 2026-10-06：页面上不要红/黄，颜色太乱）——
+/// 协议名本身就是信息，色相留给"状态"用。
+pub fn protocol_pill(ui: &mut Ui, protocol: &str) {
+    Frame::NONE
+        .fill(theme::page_bg())
+        .stroke(Stroke::new(1.0_f32, theme::border()))
+        .corner_radius(CornerRadius::same(10))
+        .inner_margin(Margin::symmetric(8, 3))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(protocol)
+                    .strong()
+                    .small()
+                    .color(theme::text_secondary()),
+            );
+        });
+}
+
+pub fn compact_node_card(
+    ui: &mut Ui,
+    node: &NodeSummary,
+    is_selected: bool,
+    is_switching: bool,
+) -> egui::Response {
+    let (fill, stroke) = if is_switching {
+        (theme::warning_bg(), Stroke::new(1.5_f32, theme::warning()))
+    } else if is_selected {
+        (theme::accent_bg(), Stroke::new(1.5_f32, theme::accent()))
+    } else {
+        (theme::panel(), Stroke::new(1.0_f32, theme::border_subtle()))
+    };
+    Frame::NONE
+        .fill(fill)
+        .stroke(stroke)
+        .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
+        .inner_margin(Margin::symmetric(14, 11))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.set_min_height(58.0);
+            ui.vertical(|ui| {
+                let name_color = if is_switching {
+                    theme::warning()
+                } else if is_selected {
+                    theme::accent_strong()
+                } else {
+                    theme::text_primary()
+                };
+                let name_response = ui.add_sized(
+                    [ui.available_width(), 20.0],
+                    egui::Label::new(RichText::new(&node.name).strong().color(name_color))
+                        .truncate(),
+                );
+                name_response.on_hover_text(&node.name);
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    protocol_pill(ui, &node.protocol.to_uppercase());
+
+                    if let Some(country) = &node.country {
+                        let (flag, name) = country_flag_and_name(country);
+                        ui.label(RichText::new(format!("{flag} {name}")).small().color(theme::text_secondary()));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if is_switching {
+                            ui.horizontal(|ui| {
+                                icon_label(ui, Icon::Lightning, 12.0, theme::warning());
+                                ui.label(
+                                    RichText::new("切换中...").small().strong().color(theme::warning()),
+                                );
+                            });
+                        } else {
+                            ui.label(latency_text(node).small().strong());
+                        }
+                    });
+                });
+            });
+        })
+        .response
+        .interact(Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+
+pub fn header_cell(ui: &mut Ui, text: &str) {
+    ui.label(RichText::new(text).strong().color(theme::text_secondary()).small());
+}
+
+pub fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+pub fn format_speed(bytes_per_sec: u64) -> String {
+    if bytes_per_sec >= 1024 * 1024 {
+        format!("{:.2} MB/s", bytes_per_sec as f64 / (1024.0 * 1024.0))
+    } else if bytes_per_sec >= 1024 {
+        format!("{:.1} KB/s", bytes_per_sec as f64 / 1024.0)
+    } else {
+        format!("{bytes_per_sec} B/s")
+    }
+}
+
+/// Catmull-Rom 平滑：把折点采样成曲线，避免心电图式的硬折角。
+fn smooth_polyline(points: &[egui::Pos2], steps: usize) -> Vec<egui::Pos2> {
+    if points.len() < 3 {
+        return points.to_vec();
+    }
+    let mut out = Vec::with_capacity((points.len() - 1) * steps + 1);
+    for i in 0..points.len() - 1 {
+        let p0 = points[i.saturating_sub(1)];
+        let p1 = points[i];
+        let p2 = points[i + 1];
+        let p3 = points[(i + 2).min(points.len() - 1)];
+        for s in 0..steps {
+            let t = s as f32 / steps as f32;
+            let t2 = t * t;
+            let t3 = t2 * t;
+            let mix = |a: f32, b: f32, c: f32, d: f32| {
+                0.5 * ((2.0 * b)
+                    + (c - a) * t
+                    + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2
+                    + (-a + 3.0 * b - 3.0 * c + d) * t3)
+            };
+            out.push(egui::pos2(
+                mix(p0.x, p1.x, p2.x, p3.x),
+                mix(p0.y, p1.y, p2.y, p3.y),
+            ));
+        }
+    }
+    out.push(*points.last().expect("non-empty"));
+    out
+}
+
+/// 单路流量的自动量程：取窗口内 92 分位再留 25% 余量，避免一次突发峰值把整条
+/// 曲线长期压成贴底的小锯齿；突发会随 150 点窗口自然滑出。
+fn chart_scale(values: &[f32]) -> f32 {
+    if values.is_empty() {
+        return 64.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let percentile = sorted[(sorted.len() * 92 / 100).min(sorted.len() - 1)];
+    (percentile * 1.25).max(64.0)
+}
+
+/// 订阅源"最近 7 次拉取"色条：新的在左边。绿=成功（含 304/内容未变），深墨=失败，
+/// 浅描边=没有记录。不用红黄（用户 2026-10-06）。
+pub fn render_fetch_ticks(ui: &mut Ui, rows: Option<&Vec<crate::db::telemetry::FetchHistoryRow>>) {
+    const SLOTS: usize = 7;
+    const BOX: f32 = 9.0;
+    let size = Vec2::new(SLOTS as f32 * (BOX + 2.0), BOX);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    let mut rows: Vec<&crate::db::telemetry::FetchHistoryRow> =
+        rows.map(|list| list.iter().collect()).unwrap_or_default();
+    rows.reverse();
+    let mut ok_count = 0usize;
+    let mut fail_count = 0usize;
+    let painter = ui.painter();
+    for slot in 0..SLOTS {
+        let x = rect.min.x + slot as f32 * (BOX + 2.0);
+        let cell = egui::Rect::from_min_max(
+            egui::pos2(x, rect.min.y),
+            egui::pos2(x + BOX, rect.min.y + BOX),
+        );
+        let fill = match rows.get(slot) {
+            Some(row) if row.ok == 1 => {
+                ok_count += 1;
+                theme::success()
+            }
+            Some(_) => {
+                fail_count += 1;
+                theme::text_primary()
+            }
+            None => theme::border(),
+        };
+        painter.rect_filled(cell, 2.0, fill);
+    }
+    let latest = rows
+        .first()
+        .map(|row| format!("{} · {}", clock_of(&row.at), row.status))
+        .unwrap_or_else(|| "没有拉取记录".into());
+    response.on_hover_text(format!(
+        "最近 {} 次：{ok_count} 次成功 · {fail_count} 次失败（左新右旧）。最近一次：{latest}",
+        ok_count + fail_count
+    ));
+}
+
+/// 把 RFC3339 时间压成表头/日志里放得下的 `HH:MM`。解析不了就原样截五个字符，
+/// 好过显示成看不懂的错误。
+pub fn clock_of(at_rfc3339: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(at_rfc3339)
+        .map(|at| {
+            at.with_timezone(&chrono::Local)
+                .format("%H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|_| at_rfc3339.chars().take(5).collect())
+}
+
+/// 表头里的迷你流量图：下载实线、上传虚线，两条共用一个量程 —— 各用各的量程会让
+/// 300 B/s 的上传画得和 30 KB/s 的下载一样高，那是假象。32px 高塞不下坐标和文字，
+/// 读数走 hover；累计值在窗口底部状态栏本来就有。
+pub fn render_traffic_sparkline(
+    ui: &mut Ui,
+    history: &std::collections::VecDeque<(f32, f32)>,
+    active: bool,
+) {
+    const HEIGHT: f32 = 32.0;
+    let width = ui.available_width().max(120.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, HEIGHT), egui::Sense::hover());
+    let hovered = response.hovered();
+    let painter = ui.painter_at(rect);
+    let baseline = rect.max.y - 2.0;
+    let usable_h = HEIGHT - 9.0;
+    painter.line_segment(
+        [
+            egui::pos2(rect.min.x, baseline),
+            egui::pos2(rect.max.x, baseline),
+        ],
+        Stroke::new(1.0_f32, theme::border()),
+    );
+
+    if !active || history.len() < 2 {
+        response.on_hover_text(if active {
+            "等待流量统计…"
+        } else {
+            "代理未运行 · 启动后这里画实时上下行"
+        });
+        return;
+    }
+
+    let downs: Vec<f32> = history.iter().map(|&(down, _)| down).collect();
+    let ups: Vec<f32> = history.iter().map(|&(_, up)| up).collect();
+    let scale = chart_scale(&history.iter().flat_map(|&(d, u)| [d, u]).collect::<Vec<f32>>());
+    let last = history.len() - 1;
+    let dx = (rect.width() - 6.0) / last as f32;
+    let at = |index: usize, value: f32| {
+        let ratio = (value / scale).clamp(0.0, 1.0);
+        egui::pos2(
+            rect.min.x + 3.0 + index as f32 * dx,
+            baseline - ratio * usable_h,
+        )
+    };
+    let curve = |values: &[f32]| -> Vec<egui::Pos2> {
+        let raw: Vec<egui::Pos2> = values
+            .iter()
+            .enumerate()
+            .map(|(index, &value)| at(index, value))
+            .collect();
+        smooth_polyline(&raw, 4)
+    };
+
+    // 上传先画、下载压在它上面：下载通常大一个量级，反过来画上传会被盖住。
+    let up_color = theme::accent();
+    for dash in egui::Shape::dashed_line(&curve(&ups), Stroke::new(1.3_f32, up_color), 3.0, 2.5) {
+        painter.add(dash);
+    }
+    let down_color = theme::success();
+    painter.add(egui::Shape::line(
+        curve(&downs),
+        Stroke::new(1.6_f32, down_color),
+    ));
+    painter.circle_filled(at(last, ups[last]), 1.8, up_color);
+    painter.circle_filled(at(last, downs[last]), 2.2, down_color);
+
+    if hovered {
+        if let Some(point) = ui.input(|i| i.pointer.hover_pos()) {
+            if point.x >= rect.min.x && point.x <= rect.max.x {
+                let index = (((point.x - rect.min.x - 3.0) / dx).round() as usize).min(last);
+                let x = at(index, 0.0).x;
+                painter.line_segment(
+                    [
+                        egui::pos2(x, rect.min.y + 1.0),
+                        egui::pos2(x, baseline),
+                    ],
+                    Stroke::new(1.0_f32, theme::border()),
+                );
+                let ago = (last - index) as u64;
+                response.on_hover_text(format!(
+                    "{ago} 秒前 · ↓ {} · ↑ {}",
+                    format_speed((downs[index] * 1024.0) as u64),
+                    format_speed((ups[index] * 1024.0) as u64),
+                ));
+            }
+        }
+    }
+}
+
+/// 24 小时出口健康条：一小时一格，最右是"现在"。
+/// 绿=那一小时全部实测通过，深墨=那一小时里至少有一次不通，浅描边=那一小时没测到。
+/// 不用红也不用黄（用户 2026-10-06：页面上不要红色和黄色），"坏"靠深色 + hover 文字表达。
+/// 把实测行归进最近 24 个小时的桶：0 = 那一小时没有实测；1 = 全通；-1 = 至少一次不通
+/// （失败优先，一次失败就够看）。
+///
+/// 只在**数据到达时**算：`egress_health` 24 小时内有几百行，每帧重解析一遍时间戳、
+/// 每行再调一次 `Utc::now()` 是纯浪费（探测本来就是一分钟一次）。
+pub fn health_hour_buckets(rows: &[crate::db::telemetry::HealthRow]) -> [i8; 24] {
+    const CELLS: usize = 24;
+    let mut buckets = [0i8; CELLS];
+    let now = chrono::Utc::now();
+    for row in rows {
+        let Ok(at) = chrono::DateTime::parse_from_rfc3339(&row.at) else {
+            continue;
+        };
+        let hours_ago = (now - at.with_timezone(&chrono::Utc)).num_hours();
+        if hours_ago < 0 || hours_ago >= CELLS as i64 {
+            continue;
+        }
+        let index = hours_ago as usize;
+        let flag = if row.ok == 0 { -1 } else { 1 };
+        if buckets[index] != -1 {
+            buckets[index] = flag;
+        }
+    }
+    buckets
+}
+
+pub fn render_health_strip(ui: &mut Ui, buckets: &[i8; 24]) {
+    const GAP: f32 = 2.0;
+    const CELL_H: f32 = 18.0;
+    const CELLS: usize = 24;
+
+    // 2026-10-08 他要放大：高度直接给到 18（原来是 12，和旁边 13px 的图标差不多高，
+    // 一眼扫不出哪几小时红过）。宽度按这一行还剩多少伸缩 —— 宽窗口每条 10px，
+    // 窄窗口退回 6px，宁可挤小也别让整条健康条折到第二行去顶高卡片。
+    let cell_w = ((ui.available_width() - 16.0) / CELLS as f32 - GAP).clamp(6.0, 10.0);
+    let size = Vec2::new(CELLS as f32 * (cell_w + GAP), CELL_H);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+
+    let painter = ui.painter();
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    for (index, state) in buckets.iter().enumerate() {
+        let x = rect.max.x - (index as f32 + 1.0) * (cell_w + GAP);
+        let cell = egui::Rect::from_min_max(
+            egui::pos2(x, rect.min.y),
+            egui::pos2(x + cell_w, rect.min.y + CELL_H),
+        );
+        let fill = match state {
+            -1 => {
+                failed += 1;
+                theme::text_primary()
+            }
+            1 => {
+                passed += 1;
+                theme::success()
+            }
+            _ => theme::border(),
+        };
+        painter.rect_filled(cell, 1.0, fill);
+    }
+    let silent = CELLS - passed - failed;
+    response.on_hover_text(format!(
+        "最近 24 小时出口实测：{passed} 小时正常 · {failed} 小时有不通 · {silent} 小时没有实测"
+    ));
+}
+
+pub fn format_duration_ms(value: Option<u64>) -> String {
+    value
+        .map(|ms| format!("{ms} ms"))
+        .unwrap_or_else(|| "-".into())
+}
+
+pub fn stat_chip(ui: &mut Ui, label: &str, value: &str, color: Color32) {
+    Frame::NONE
+        .fill(theme::accent_bg())
+        .stroke(Stroke::NONE)
+        .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
+        .inner_margin(Margin::symmetric(13, 8))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(label).small().color(theme::muted()));
+                ui.label(RichText::new(value).strong().color(color).size(13.5));
+            });
+        });
+}
+
+pub fn latency_text(n: &NodeSummary) -> RichText {
+    match (n.latency_ok, n.latency_test_kind.as_deref()) {
+        (Some(true), Some(GOOGLE_PROXY_TEST_KIND)) => {
+            let ms = n.latency_ms.unwrap_or(0);
+            // 延迟不再用红/黄分级：快 = 绿，其余只是"更深的墨"，慢不慢看数字。
+            let color = if ms < 200 {
+                theme::success()
+            } else if ms < 800 {
+                theme::text_secondary()
+            } else {
+                theme::text_primary()
+            };
+            let kernel = match n.latency_kernel.as_deref() {
+                Some("mihomo") => "Mihomo",
+                Some("sing_box") => "Sing-box",
+                Some(other) => other,
+                None => "代理",
+            };
+            RichText::new(format!("{ms} ms {kernel}")).color(color)
+        }
+        (Some(false), Some(GOOGLE_PROXY_TEST_KIND)) => RichText::new("代理失败").color(theme::danger()),
+        (Some(true), _) => {
+            let ms = n.latency_ms.unwrap_or(0);
+            RichText::new(format!("{ms} ms TCP")).color(theme::text_secondary())
+        }
+        (Some(false), _) => RichText::new("TCP失败 · 未验证").color(theme::text_secondary()),
+        (None, _) => RichText::new("未测速").color(theme::text_secondary()),
+    }
+}
+
+pub fn routing_mode_description(mode: RoutingMode) -> &'static str {
+    match mode {
+        RoutingMode::Rule => "按本地自定义规则依次匹配",
+        RoutingMode::ChinaDirect => "在线 Geo 规则 · 国内直连 · 其余代理",
+        RoutingMode::GfwList => "在线 GFW 规则 · 命中代理 · 其余直连",
+        RoutingMode::Global => "所有流量使用当前代理节点",
+        RoutingMode::Direct => "所有流量绕过代理直接连接",
+    }
+}
+
+pub fn routing_mode_detail(mode: RoutingMode) -> &'static str {
+    match mode {
+        RoutingMode::Rule => "保留并使用下方有序规则；没有命中的流量使用代理。",
+        RoutingMode::ChinaDirect => {
+            "自动使用广告、GeoSite CN 与 GeoIP CN 规则；在线数据由对应内核更新。"
+        }
+        RoutingMode::GfwList => "仅 GFW 规则集命中的站点使用代理，其他流量直接连接。",
+        RoutingMode::Global => "忽略自定义规则，所有可代理流量都使用当前节点。",
+        RoutingMode::Direct => "忽略自定义规则，代理内核保持运行但流量全部直连。",
+    }
+}
+
+pub fn source_status_failed(status: &str) -> bool {
+    let status = status.trim().to_ascii_lowercase();
+    !status.is_empty()
+        && status != "ok"
+        && status != "not modified"
+        && status != "content unchanged"
+}
+
+pub fn latency_label(v: &str) -> &'static str {
+    match v {
+        "alive" => "可用",
+        "dead" => "不可用",
+        "untested" => "未测速",
+        _ => "全部",
+    }
+}
+
+pub fn region_label(code: &str) -> &'static str {
+    match code {
+        "all" => "全部地区",
+        "HK" => "香港",
+        "JP" => "日本",
+        "US" => "美国",
+        "SG" => "新加坡",
+        "TW" => "台湾",
+        "KR" => "韩国",
+        "OTHER" => "其它",
+        _ => "全部地区",
+    }
+}
+
+pub fn country_flag_and_name(code: &str) -> (&'static str, &'static str) {
+    match code.to_ascii_uppercase().as_str() {
+        "HK" => ("🇭🇰", "香港"),
+        "JP" => ("🇯🇵", "日本"),
+        "US" => ("🇺🇸", "美国"),
+        "SG" => ("🇸🇬", "新加坡"),
+        "TW" => ("🇨🇳", "台湾"),
+        "KR" => ("🇰🇷", "韩国"),
+        "GB" | "UK" => ("🇬🇧", "英国"),
+        "DE" => ("🇩🇪", "德国"),
+        "FR" => ("🇫🇷", "法国"),
+        "CA" => ("🇨🇦", "加拿大"),
+        "AU" => ("🇦🇺", "澳大利亚"),
+        "RU" => ("🇷🇺", "俄罗斯"),
+        "IN" => ("🇮🇳", "印度"),
+        "NL" => ("🇳🇱", "荷兰"),
+        "MY" => ("🇲🇾", "马来西亚"),
+        "TH" => ("🇹🇭", "泰国"),
+        "PH" => ("🇵🇭", "菲律宾"),
+        "VN" => ("🇻🇳", "越南"),
+        "TR" => ("🇹🇷", "土耳其"),
+        _ => ("🌐", "其它"),
+    }
+}
+
+pub fn proxy_state_label(state: ProxyState) -> (&'static str, Color32) {
+    match state {
+        ProxyState::Stopped => ("已停止", theme::muted()),
+        ProxyState::Starting => ("启动中", theme::warning()),
+        ProxyState::Running => ("运行中", theme::success()),
+        ProxyState::Degraded => ("降级", theme::warning()),
+        ProxyState::Stopping => ("停止中", theme::warning()),
+        ProxyState::Failed => ("失败", theme::danger()),
+    }
+}
+
+pub fn tun_stack_label(stack: TunStack) -> &'static str {
+    match stack {
+        TunStack::System => "System",
+        TunStack::Gvisor => "gVisor",
+        TunStack::Mixed => "Mixed",
+    }
+}
+
+pub fn dns_mode_label(mode: DnsEnhancedMode) -> &'static str {
+    match mode {
+        DnsEnhancedMode::FakeIp => "Fake-IP",
+        DnsEnhancedMode::RedirHost => "Redir-Host",
+    }
+}
+
+pub fn rule_action_label(action: RuleAction) -> &'static str {
+    match action {
+        RuleAction::Direct => "直连",
+        RuleAction::Proxy => "代理",
+        RuleAction::Reject => "拒绝",
+    }
+}
+
+pub fn rule_matcher_label(matcher: &RuleMatcher) -> String {
+    match matcher {
+        RuleMatcher::Domain(value) => format!("DOMAIN · {value}"),
+        RuleMatcher::DomainSuffix(value) => format!("DOMAIN-SUFFIX · {value}"),
+        RuleMatcher::GeoSite(value) => format!("GEOSITE · {value}"),
+        RuleMatcher::GeoIp(value) => format!("GEOIP · {value}"),
+        RuleMatcher::IpCidr(value) => format!("IP-CIDR · {value}"),
+        RuleMatcher::DestinationPort(value) => format!("DST-PORT · {value}"),
+        RuleMatcher::ProcessName(value) => format!("PROCESS-NAME · {value}"),
+        RuleMatcher::Network(NetworkProtocol::Tcp) => "NETWORK · tcp".into(),
+        RuleMatcher::Network(NetworkProtocol::Udp) => "NETWORK · udp".into(),
+        RuleMatcher::Quic => "QUIC · udp/443".into(),
+    }
+}
+
+pub fn sort_label(v: &str) -> &'static str {
+    match v {
+        "latency" => "延迟",
+        "download" => "下载速度",
+        "name" => "名称",
+        _ => "更新时间",
+    }
+}
+
+pub fn format_speedtest_progress(progress: &SpeedTestProgress) -> String {
+    let phase = match progress.phase {
+        SpeedTestPhase::TcpPrefilter => "TCP预筛",
+        SpeedTestPhase::RealProxy => "真实代理验证",
+    };
+    let percent = if progress.total == 0 {
+        100.0
+    } else {
+        progress.done as f64 * 100.0 / progress.total as f64
+    };
+    let detail = match (progress.kernel, progress.batch_index, progress.batch_total) {
+        (Some(kernel), Some(batch), Some(total)) => {
+            format!(" · {} 批次 {batch}/{total}", kernel.display_name())
+        }
+        (Some(kernel), _, _) => format!(" · {}", kernel.display_name()),
+        _ => String::new(),
+    };
+    format!(
+        "{phase}{detail} {}/{}（{percent:.1}%） 成功 {} / 失败 {}，耗时 {:.1}s",
+        progress.done,
+        progress.total,
+        progress.ok,
+        progress.fail,
+        progress.elapsed.as_secs_f64()
+    )
+}
+
+pub fn nonempty_opt(s: &str) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+pub fn node_group_key(group: &NodeGroupSummary) -> String {
+    group
+        .source_id
+        .clone()
+        .unwrap_or_else(|| crate::db::UNGROUPED_SOURCE_ID.into())
+}
+
+pub fn requires_tun_elevation(mode: ProxyMode, elevated: bool) -> bool {
+    mode == ProxyMode::Tun && !elevated
+}
+
+#[cfg(test)]
+mod sparkline_tests {
+    use super::{health_hour_buckets, render_health_strip, render_traffic_sparkline};
+    use eframe::egui::{self, CentralPanel, RawInput, Rect, Vec2};
+    use std::collections::VecDeque;
+
+    fn history(points: usize) -> VecDeque<(f32, f32)> {
+        (0..points)
+            .map(|index| (10.0 + (index % 7) as f32, 1.0 + (index % 3) as f32))
+            .collect()
+    }
+
+    /// 照表头第二行的写法跑一遍：读数排在前，迷你图吃掉剩下的宽度。
+    /// 返回 (图拿到的宽度, 整行占掉的高度, 这一行之后还剩多少高度)。
+    fn probe(window_w: f32, samples: usize, active: bool) -> (f32, f32, f32) {
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(Rect::from_min_size(
+            egui::Pos2::ZERO,
+            Vec2::new(window_w, 800.0),
+        ));
+        let mut room = -1.0_f32;
+        let mut row = (-1.0_f32, -1.0_f32);
+        ctx.run(input, |ctx| {
+            CentralPanel::default().show(ctx, |ui| {
+                let before = ui.available_height();
+                let response = ui.horizontal(|ui| {
+                    ui.label("延迟: 386 ms");
+                    ui.separator();
+                    ui.label("端口: Mixed 9980 · Controller 9090");
+                    ui.separator();
+                    ui.label("↓ 2.5 KB/s · ↑ 387 B/s");
+                    room = ui.available_width();
+                    render_traffic_sparkline(ui, &history(samples), active);
+                });
+                row = (response.response.rect.height(), before - ui.available_height());
+            });
+        });
+        (room, row.0, row.1)
+    }
+
+    #[test]
+    fn sparkline_takes_the_rest_of_the_header_row() {
+        let (room, height, used) = probe(1280.0, 60, true);
+        assert!(room > 300.0, "1280 宽的窗口里图还应该剩 {room:.0}px 可画");
+        assert!(
+            (height - 32.0).abs() < 6.0,
+            "这一行应该只占 ~32 高，实测 {height:.1}"
+        );
+        assert!(used < 40.0, "整行吃掉的页高 {used:.1}，多了就是又被 with_layout 吃页了");
+    }
+
+    #[test]
+    fn sparkline_still_has_room_at_the_minimum_window_width() {
+        let (room, height, used) = probe(960.0, 60, true);
+        assert!(room > 120.0, "960 最小宽度下图仍应有 {room:.0}px");
+        assert!(used < 40.0, "窄窗口也不能吃页，实测 {used:.1}");
+        assert!(height < 40.0, "行高 {height:.1}");
+    }
+
+    #[test]
+    fn sparkline_survives_no_samples_and_a_stopped_proxy() {
+        // 采样点不足两个时那条 dx 会除零，未运行时也不该 panic。
+        for (samples, active) in [(0usize, true), (1, true), (60, false)] {
+            let (room, _, _) = probe(1280.0, samples, active);
+            assert!(room > 0.0, "samples={samples} active={active}");
+        }
+    }
+
+    /// 健康条的尺寸：宽窗口要真的"看得见"（>=220 宽、18 高），窄窗口不许溢出可用宽度
+    /// （溢出的话 egui 会把整条折到第二行，卡片被顶高 —— 那是他否过的表现）。
+    #[test]
+    fn health_strip_scales_with_the_room_it_has() {
+        fn probe(window_width: f32) -> (f32, f32, f32) {
+            let ctx = egui::Context::default();
+            let mut input = RawInput::default();
+            input.screen_rect = Some(Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(window_width, 200.0),
+            ));
+            let mut drawn = (0.0, 0.0, 0.0);
+            let _ = ctx.run(input, |ctx| {
+                CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("实测 12:30 ✓ 262ms");
+                        let before = ui.available_width();
+                        render_health_strip(ui, &[1i8; 24]);
+                        drawn = (before, ui.available_width(), ui.cursor().height());
+                    });
+                });
+            });
+            drawn
+        }
+
+        let (before, after, _) = probe(1280.0);
+        let used = before - after;
+        // 24 格 × (10 + 2) + 8 的格间距 = 296；放大前是 24×(5+1)+8 = 152。
+        assert!(
+            (280.0..=310.0).contains(&used),
+            "1280 宽时健康条应该占 {used:.0}px（放大过，不该还是原来那 152）"
+        );
+        // 窄一点时格子缩到 6px，但绝不能吃满再溢出（溢出=折行=顶高卡片）。
+        let (narrow_before, narrow_after, _) = probe(560.0);
+        assert!(
+            narrow_before - narrow_after <= narrow_before,
+            "560 宽时健康条溢出：占 {:.0} / 可用 {:.0}",
+            narrow_before - narrow_after,
+            narrow_before
+        );
+    }
+
+    fn health_row(minutes_ago: i64, ok: bool) -> crate::db::telemetry::HealthRow {
+        crate::db::telemetry::HealthRow {
+            at: (chrono::Utc::now() - chrono::Duration::minutes(minutes_ago)).to_rfc3339(),
+            ok: ok as i64,
+            latency_ms: Some(120),
+            error: None,
+            node_id: None,
+            node_name: None,
+            kind: "periodic".into(),
+        }
+    }
+
+    /// 健康条的桶改成"数据到达时算一次"之后，这条把语义钉住：小时槽、失败优先、
+    /// 24 小时之外和未来的行都不许进来。
+    #[test]
+    fn health_buckets_are_hourly_failure_wins_and_window_bound() {
+        let empty = health_hour_buckets(&[]);
+        assert_eq!(empty, [0i8; 24], "没数据就是 24 格全空");
+
+        let one = health_hour_buckets(&[health_row(10, true)]);
+        assert_eq!(one[0], 1, "十分钟前的实测落在当前这一格");
+        assert_eq!(one[1], 0);
+
+        let fail = health_hour_buckets(&[health_row(90, false)]);
+        assert_eq!(fail[1], -1, "一个半小时前是上一格");
+
+        let mixed = health_hour_buckets(&[health_row(5, true), health_row(20, false)]);
+        assert_eq!(mixed[0], -1, "同一小时里失败优先，绿不能把红盖掉");
+
+        let stale = health_hour_buckets(&[health_row(24 * 60 + 5, false)]);
+        assert_eq!(stale, [0i8; 24], "超出 24 小时的行不该挤进最老那一格");
+
+        // `num_hours()` 是**向零截断**的：一小时以内的时钟漂移会算进当前这格（改之前
+        // 就是这个语义，这次纯性能重构不动它），超过一小时才落到负数被丢掉。
+        let near_future = health_hour_buckets(&[health_row(-30, false)]);
+        assert_eq!(near_future[0], -1, "半小时内飘到未来的行落在当前格，不是越界");
+        let future = health_hour_buckets(&[health_row(-90, false)]);
+        assert_eq!(future, [0i8; 24], "一小时以上的未来行必须丢，否则索引是负数");
+    }
+}

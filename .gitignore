@@ -1,0 +1,28 @@
+# Build artifacts
+/target
+/dist
+
+# 开发期在这台机器上跑出来的真实运行数据 —— 295MB、37 个库、2.6 万条节点，
+# 里面是别人的节点凭据（uuid / password / reality public-key）和这台机器自己的
+# 订阅地址（带 token）。这一条是整个仓库最要命的一行：以前只忽略了 journal 文件，
+# `data/*.db` 本体是会被 `git add .` 带走的。
+/data/
+
+# 一次性取证脚本：里面写死了这台机器的用户名、装机路径和临时抓取的数据样本。
+# 要进版本库的话，先把绝对路径换成 `scripts/local_paths.py` 里读（那个文件也别提交）。
+/scripts/
+
+# Logs
+*.log
+logs/
+
+# IDE / Editor configuration
+.idea/
+.vscode/
+*.swp
+*.swo
+.superpowers/
+
+# Temporary / Scratch files
+*.tmp
+*.bak

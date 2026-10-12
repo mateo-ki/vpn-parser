@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VPN Parser 界面配色对照 · 现状 / 方案一清爽浅白 / 方案三马卡龙</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px 26px 60px;
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: #ECEDEF; color: #1B1D21;
+  }
+  h1 { font-size: 22px; margin: 0 0 6px; letter-spacing: .2px; }
+  .lede { font-size: 13.5px; color: #5c616b; margin: 0 0 18px; max-width: 1100px; line-height: 1.7; }
+  .lede b { color: #1B1D21; }
+  .board { display: flex; flex-wrap: wrap; gap: 22px; align-items: flex-start; }
+  .col { flex: 1 1 560px; min-width: 420px; }
+  .colhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; }
+  .colhead h2 { font-size: 15.5px; margin: 0; }
+  .colhead span { font-size: 12px; color: #6a6f79; }
+  .swatches { display: flex; gap: 6px; margin-left: auto; }
+  .sw { width: 20px; height: 20px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px #c9ccd2; cursor: pointer; padding: 0; }
+  .sw[aria-pressed="true"] { box-shadow: 0 0 0 2px #1B1D21; }
+  .tokens { font-size: 11.5px; color: #6a6f79; margin: 0 0 8px; line-height: 1.9; }
+  .tokens code { background:#fff; border:1px solid #dcdfe4; border-radius:5px; padding:1px 5px; font-size:11px; }
+
+  /* ---------- 共用结构：三块面板只有 token 不同 ---------- */
+  .mock { font-size: var(--fs); color: var(--text); background: var(--page);
+          border-radius: calc(var(--r-card) + 4px); overflow: hidden; border: 1px solid var(--line);
+          box-shadow: 0 18px 40px rgba(20,22,28,.13); }
+  .win { display: grid; grid-template-columns: 168px 1fr; min-height: 520px; }
+  .side { background: var(--sidebar); padding: 16px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .brand { display: flex; align-items: center; gap: 8px; padding: 4px 8px 14px; }
+  .brand i { width: 22px; height: 22px; border-radius: 7px; background: var(--accent); display: block; }
+  .brand b { font-size: calc(var(--fs) + 1.5px); }
+  .brand em { font-style: normal; font-size: 10.5px; color: var(--sub); display: block; margin-top: 1px; }
+  .nav { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border-radius: var(--r-btn);
+         color: var(--sub); font-size: calc(var(--fs) - .5px); }
+  .nav svg { width: 15px; height: 15px; opacity: .75; }
+  .nav.on { background: var(--chip-on); color: var(--text); font-weight: 600; }
+  .nav.on svg { opacity: 1; color: var(--accent); }
+  .side .note { margin-top: auto; font-size: 11px; color: var(--muted); padding: 10px; border-top: 1px solid var(--line); line-height: 1.7; }
+  .main { padding: var(--pad); display: flex; flex-direction: column; gap: var(--gap); }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-btn);
+          padding: 7px 11px; font-size: calc(var(--fs) - 1.5px); color: var(--sub); display: flex; gap: 6px; align-items: baseline; }
+  .chip b { font-size: calc(var(--fs) + 3px); color: var(--accent); font-weight: 700; letter-spacing: -.3px; }
+  .head { display: flex; align-items: baseline; gap: 9px; }
+  .head h3 { margin: 0; font-size: calc(var(--fs) + 5px); letter-spacing: -.2px; }
+  .head span { font-size: calc(var(--fs) - 2px); color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card);
+          padding: var(--cardpad); box-shadow: var(--shadow); }
+  .row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px dashed var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row .nm { width: 108px; font-weight: 600; }
+  .row .url { flex: 1; font-size: calc(var(--fs) - 1.5px); color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .st { width: 62px; font-size: calc(var(--fs) - 1.5px); }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  .btn { border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: var(--r-btn);
+         padding: 6px 11px; font-size: calc(var(--fs) - 1.5px); cursor: default; }
+  .btn.pri { background: var(--btn); border-color: transparent; color: var(--btn-text); font-weight: 600; }
+  .btn.dgr { color: var(--bad); border-color: var(--bad-line); background: var(--bad-bg); }
+  .badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 3px 9px;
+           font-size: calc(var(--fs) - 2.5px); background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+  .badge i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: block; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
+  .kv { display: flex; justify-content: space-between; font-size: calc(var(--fs) - 1px); color: var(--sub); padding: 5px 0; }
+  .kv b { color: var(--text); font-weight: 600; }
+  .spark { width: 100%; height: 54px; display: block; margin-top: 6px; }
+  .foot { display: flex; align-items: center; gap: 12px; padding: 10px var(--pad); background: var(--sidebar);
+          font-size: calc(var(--fs) - 2px); color: var(--muted); border-top: 1px solid var(--line); }
+  .foot .sp { margin-left: auto; }
+
+  /* 弹框复刻 */
+  .dlg { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card);
+         box-shadow: var(--shadow); padding: var(--cardpad); }
+  .dlg h4 { margin: 0 0 4px; font-size: calc(var(--fs) + 1px); }
+  .dlg .sub { font-size: calc(var(--fs) - 2px); color: var(--muted); margin: 0 0 12px; }
+  .opt { display: flex; gap: 10px; padding: 11px 12px; border-radius: var(--r-btn); border: 1px solid transparent; }
+  .opt + .opt { margin-top: 6px; }
+  .opt .dot { width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--muted); margin-top: 3px; flex: none; }
+  .opt.on { background: var(--accent-bg); border-color: var(--accent-line); }
+  .opt.on .dot { border-color: var(--accent); box-shadow: inset 0 0 0 3.5px var(--accent); }
+  .opt b { font-size: calc(var(--fs) + .5px); font-weight: 600; color: var(--text); }
+  .opt.on b { color: var(--accent-strong); }
+  .opt p { margin: 3px 0 0; font-size: calc(var(--fs) - 2px); color: var(--sub); line-height: 1.6; }
+  .dlg .bar { display: flex; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .dlg .bar .sp { margin-left: auto; }
+
+  /* ---------- token 集 ---------- */
+  /* 现状：Catppuccin Latte，就是他现在用的那套 */
+  .now {
+    --page:#EFF1F5; --sidebar:#E6E9EF; --card:#FFFFFF; --line:#BCC0CC; --shadow:none;
+    --text:#4C4F69; --sub:#6C6F85; --muted:#9CA0B0;
+    --accent:#1E66F5; --accent-strong:#1E66F5; --on-accent:#FFFFFF;
+    --btn:#1E66F5; --btn-text:#FFFFFF;
+    --accent-bg:#E3ECFE; --accent-line:#1E66F5; --chip-on:#DCE0EA;
+    --ok:#40A02B; --ok-bg:#E7F3E2; --warn:#B96B0A; --bad:#D20F39; --bad-bg:#FAE5E9; --bad-line:#E9A0AE;
+    --r-card:8px; --r-btn:6px; --pad:12px; --gap:8px; --cardpad:12px;
+    --fs:12.5px;
+  }
+  /* 方案一 清爽浅白 · Notion / Raycast */
+  .one {
+    --page:#FBFBFD; --sidebar:#F4F5F8; --card:#FFFFFF; --line:#EDEEF2;
+    --shadow:0 1px 2px rgba(16,24,40,.05), 0 6px 20px rgba(16,24,40,.06);
+    --text:#191B1F; --sub:#5E646E; --muted:#7E8590;
+    --accent:#FF615E; --accent-strong:#D8332F; --on-accent:#FFFFFF;
+    --btn:#D8332F; --btn-text:#FFFFFF;
+    --accent-bg:#FFF1F0; --accent-line:#FFCDCB; --chip-on:#EAECF1;
+    --ok:#0E6B4C; --ok-bg:#E4F5EE; --warn:#B25E09; --bad:#C6393B; --bad-bg:#FCECEC; --bad-line:#F0BFC0;
+    --r-card:14px; --r-btn:10px; --pad:20px; --gap:14px; --cardpad:18px;
+    --fs:14px;
+  }
+  /* 方案三 马卡龙 / 莫兰迪 */
+  .three {
+    --page:#F4F1EC; --sidebar:#EAE4DB; --card:#FFFDFB; --line:#E3DACD;
+    --shadow:0 1px 1px rgba(90,74,58,.05), 0 8px 22px rgba(90,74,58,.07);
+    --text:#3B372F; --sub:#6E6659; --muted:#8B8375;
+    --accent:#7FA98E; --accent-strong:#4F7A62; --on-accent:#FFFFFF;
+    --btn:#4F7A62; --btn-text:#FFFFFF;
+    --accent-bg:#EAF2EC; --accent-line:#C3DCCB; --chip-on:#E0D8CC;
+    --ok:#4F7A62; --ok-bg:#EAF2EC; --warn:#98691F; --bad:#B0565C; --bad-bg:#F7E9E8; --bad-line:#E4BCBC;
+    --r-card:18px; --r-btn:12px; --pad:20px; --gap:14px; --cardpad:18px;
+    --fs:14px;
+  }
+</style>
+</head>
+<body>
+<h1>VPN Parser · 配色与结构对照</h1>
+<p class="lede">
+  三块面板是<b>同一份结构</b>，只有 token 不同（色值 / 圆角 / 间距 / 字号），所以差异一眼可比。
+  第一块是<b>你现在用的</b> latte（深灰描边 + 12.5px 小字 + 6~8px 圆角）。方案一和方案三右上角的圆点可以<b>点着换强调色</b>。
+  本轮已确认的方向是「配色 + 结构一起重做」：卡片圆角 14~18、按钮 10~12、正文 14px、卡片内边距 18、栅格间距 14，描边基本去掉、改用极淡阴影分层。
+</p>
+
+<div class="board">
+  <div class="col">
+    <div class="colhead"><h2>现状 · latte（对照基准）</h2><span>1px 描边 / 圆角 8 / 正文 12.5px</span></div>
+    <div class="mock now" id="m-now"></div>
+  </div>
+
+  <div class="col">
+    <div class="colhead">
+      <h2>方案一 · 清爽浅白（Notion / Raycast）</h2>
+      <div class="swatches" data-for="one">
+        <button class="sw" style="background:#FF615E" data-a="#FF615E" data-s="#D8332F" data-b="#D8332F" data-bg="#FFF1F0" data-line="#FFCDCB" aria-pressed="true" title="Raycast 红"></button>
+        <button class="sw" style="background:#00C2A8" data-a="#00C2A8" data-s="#00806F" data-b="#00806F" data-bg="#E4F6F2" data-line="#A9E2D6" aria-pressed="false" title="蓝绿"></button>
+        <button class="sw" style="background:#5B5BD6" data-a="#5B5BD6" data-s="#4444B8" data-b="#4444B8" data-bg="#EDEDFC" data-line="#C6C6F2" aria-pressed="false" title="紫蓝"></button>
+      </div>
+    </div>
+    <p class="tokens">底色 <code>#FBFBFD</code> 侧栏 <code>#F4F5F8</code> 卡片纯白无描边 · 阴影 <code>0 6px 20px rgba(16,24,40,.06)</code> · 文字 <code>#191B1F / #5E646E</code></p>
+    <div class="mock one" id="m-one"></div>
+  </div>
+
+  <div class="col">
+    <div class="colhead">
+      <h2>方案三 · 马卡龙 / 莫兰迪柔和</h2>
+      <div class="swatches" data-for="three">
+        <button class="sw" style="background:#7FA98E" data-a="#7FA98E" data-s="#4F7A62" data-b="#4F7A62" data-bg="#EAF2EC" data-line="#C3DCCB" aria-pressed="true" title="抹茶"></button>
+        <button class="sw" style="background:#8AA3C8" data-a="#8AA3C8" data-s="#4C6689" data-b="#4C6689" data-bg="#EAF0F7" data-line="#C6D5E7" aria-pressed="false" title="雾蓝"></button>
+        <button class="sw" style="background:#D9A0A6" data-a="#D9A0A6" data-s="#975C64" data-b="#975C64" data-bg="#F9ECEE" data-line="#EFCBD0" aria-pressed="false" title="藕粉"></button>
+      </div>
+    </div>
+    <p class="tokens">底色 <code>#F4F1EC</code> 侧栏 <code>#EAE4DB</code> 卡片 <code>#FFFDFB</code> · 描边转成暖米色 <code>#E3DACD</code> · 圆角最大 18</p>
+    <div class="mock three" id="m-three"></div>
+  </div>
+</div>
+
+<script>
+const ICON = {
+  dash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>',
+  bolt:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></svg>',
+  down:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 20h16"/></svg>',
+  gear:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7"/></svg>',
+  plug:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 3v6M15 3v6M6 9h12v3a6 6 0 0 1-12 0V9ZM12 18v3"/></svg>'
+};
+
+function panel(seed) {
+  return `
+  <div class="win">
+    <aside class="side">
+      <div class="brand"><i></i><div><b>VPN Parser</b><em>网络代理控制台</em></div></div>
+      <div class="nav">${ICON.dash}控制台</div>
+      <div class="nav">${ICON.bolt}节点池</div>
+      <div class="nav on">${ICON.down}订阅源</div>
+      <div class="nav">${ICON.gear}系统设置</div>
+      <div class="nav">${ICON.plug}外部接口</div>
+      <div class="note">源 35 · 节点 19295 · 可用 24<br>代理运行中 · 127.0.0.1:9980</div>
+    </aside>
+    <div class="main">
+      <div class="chips">
+        <div class="chip">订阅源 <b>35</b></div>
+        <div class="chip">节点 <b>19295</b></div>
+        <div class="chip">已测 <b>35</b></div>
+        <div class="chip">可用 <b>24</b></div>
+        <div class="chip">vless <b>11384</b></div>
+        <div class="chip">shadowsocks <b>2624</b></div>
+        <div class="chip">vmess <b>2623</b></div>
+      </div>
+      <div class="head"><h3>订阅源</h3><span>增删改查 · 单源 / 全部拉取</span><span style="margin-left:auto" class="badge"><i></i>代理运行中</span></div>
+      <div class="card">
+        <div class="row"><div class="nm">shadowmere</div><div class="url">https://shadowmere.xyz/api/b64sub/</div><div class="st ok">启用</div>
+          <button class="btn">拉取</button><button class="btn">编辑</button><button class="btn dgr">删除</button></div>
+        <div class="row"><div class="nm">gist-laohan9</div><div class="url">https://gist.githubusercontent.com/laohan9/ca8d1834…/raw</div><div class="st ok">启用</div>
+          <button class="btn">拉取</button><button class="btn">编辑</button><button class="btn dgr">删除</button></div>
+        <div class="row"><div class="nm">cfnew</div><div class="url">https://cfnew-6a8.pages.dev/ed9d81fc-2808…/sub?target=v2</div><div class="st warn">不推送</div>
+          <button class="btn">拉取</button><button class="btn">编辑</button><button class="btn dgr">删除</button></div>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <div class="head"><h3 style="font-size:inherit">流量</h3></div>
+          <div class="kv"><span>下行</span><b>1.84 MB/s</b></div>
+          <div class="kv"><span>上行</span><b>226 KB/s</b></div>
+          <div class="kv"><span>当前出口</span><b>电信-10 · 日本 JP</b></div>
+          <svg class="spark" viewBox="0 0 200 54" preserveAspectRatio="none">
+            <polyline fill="none" stroke="var(--accent)" stroke-width="2" points="0,40 18,34 36,37 54,22 72,28 90,12 108,20 126,8 144,18 162,10 180,16 200,6"/>
+            <polyline fill="var(--accent-bg)" stroke="none" points="0,54 0,40 18,34 36,37 54,22 72,28 90,12 108,20 126,8 144,18 162,10 180,16 200,6 200,54"/>
+          </svg>
+        </div>
+        <div class="dlg">
+          <h4>下载内核 · sing-box</h4>
+          <p class="sub">一次只走一条连接，失败就报错，不会偷偷换路</p>
+          <div class="opt on"><span class="dot"></span><div><b>gh-proxy 镜像</b><p>只连 gh-proxy.com 前缀，一条连接下到底（实测 4.87 MB/s）</p></div></div>
+          <div class="opt"><span class="dot"></span><div><b>ghfast 镜像</b><p>只连 ghfast.top 前缀（实测 8.13 MB/s）</p></div></div>
+          <div class="opt"><span class="dot"></span><div><b>官方直连</b><p>只用 GitHub 原链（实测 0.12 MB/s，22MB 会被 90 秒超时掐断）</p></div></div>
+          <div class="opt"><span class="dot"></span><div><b>走代理</b><p>应用内代理 → 系统代理 依次试，只连官方原链</p></div></div>
+          <div class="opt"><span class="dot"></span><div><b>本地文件导入</b><p>从已有 zip 安装，完全不联网</p></div></div>
+          <div class="bar"><button class="btn">关闭</button><button class="btn pri sp">开始下载</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>状态</span><b style="color:var(--text)">就绪</b><span class="sp">0 B/s ↓ · 0 B/s ↑</span><span>会话总计 55.0 KB | 863.6 KB</span></div>`;
+}
+['m-now','m-one','m-three'].forEach(id => document.getElementById(id).innerHTML = panel(id));
+
+document.querySelectorAll('.swatches').forEach(group => {
+  const mock = document.getElementById(group.dataset.for === 'one' ? 'm-one' : 'm-three');
+  group.addEventListener('click', e => {
+    const btn = e.target.closest('.sw'); if (!btn) return;
+    group.querySelectorAll('.sw').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+    mock.style.setProperty('--accent', btn.dataset.a);
+    mock.style.setProperty('--accent-strong', btn.dataset.s);
+    mock.style.setProperty('--btn', btn.dataset.b);
+    mock.style.setProperty('--accent-bg', btn.dataset.bg);
+    mock.style.setProperty('--accent-line', btn.dataset.line);
+  });
+});
+</script>
+</body>
+</html>

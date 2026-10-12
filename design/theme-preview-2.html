@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方案一 · 四个美化方向对照</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 26px 24px 60px; font-family: "Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+         background:#E8E9EC; color:#1B1D21; }
+  h1 { font-size: 21px; margin: 0 0 6px; }
+  .lede { font-size: 13px; color:#5c616b; margin:0 0 20px; max-width:1180px; line-height:1.75; }
+  .lede b { color:#1B1D21; }
+  .board { display:flex; flex-wrap:wrap; gap:22px; align-items:flex-start; }
+  .col { flex:1 1 600px; min-width:520px; }
+  .cap { margin:0 0 8px; }
+  .cap h2 { font-size:15px; margin:0 0 4px; display:flex; align-items:center; gap:8px; }
+  .cap h2 em { font-style:normal; font-size:10.5px; font-weight:600; letter-spacing:.6px; text-transform:uppercase;
+               color:#5c616b; background:#fff; border:1px solid #d7dade; border-radius:999px; padding:2px 8px; }
+  .cap p { margin:0; font-size:11.8px; color:#5c616b; line-height:1.75; }
+  .cap code { background:#fff; border:1px solid #dcdfe4; border-radius:5px; padding:0 4px; font-size:11px; }
+
+  /* ============ 共用结构，差异全在 token ============ */
+  .mock { font-size:var(--fs); color:var(--text); background:var(--page);
+          border:1px solid var(--outer-line); border-radius:calc(var(--r-card) + 5px); overflow:hidden;
+          box-shadow:0 16px 36px rgba(20,22,28,.14); }
+  .win { display:grid; grid-template-columns:172px 1fr; min-height:556px; }
+  .side { background:var(--sidebar); padding:var(--sidepad) 12px; display:flex; flex-direction:column; gap:var(--navgap); }
+  .brand { display:flex; align-items:center; gap:9px; padding:4px 8px calc(var(--sidepad) - 2px); }
+  .brand i { width:24px; height:24px; border-radius:8px; background:var(--accent); flex:none; }
+  .brand b { font-size:calc(var(--fs) + 1.5px); letter-spacing:-.2px; }
+  .brand em { font-style:normal; font-size:10.5px; color:var(--muted); display:block; margin-top:1px;
+              letter-spacing:var(--brandls); }
+  .nav { position:relative; display:flex; align-items:center; gap:9px; padding:var(--navpad);
+         border-radius:var(--r-nav); color:var(--sub); font-size:calc(var(--fs) - .5px); }
+  .nav svg { width:15px; height:15px; opacity:.7; }
+  .nav.on { background:var(--chip-on); color:var(--text); font-weight:600; }
+  .nav.on svg { opacity:1; color:var(--accent); }
+  .nav.on::before { content:""; position:absolute; left:-12px; top:50%; transform:translateY(-50%);
+                    width:var(--navbar-w); height:var(--navbar-h); border-radius:2px; background:var(--accent);
+                    display:var(--navbar); }
+  .side .note { margin-top:auto; font-size:11px; color:var(--muted); padding:10px 4px 0; line-height:1.8;
+                border-top:1px solid var(--line); }
+  .main { padding:var(--pad); display:flex; flex-direction:column; gap:var(--gap); }
+  .chips { display:flex; gap:var(--chipgap); flex-wrap:wrap; }
+  .chip { background:var(--chip-bg); border:1px solid var(--chip-line); border-radius:var(--r-chip);
+          padding:var(--chip-pad); font-size:calc(var(--fs) - 1.5px); color:var(--sub);
+          display:flex; gap:7px; align-items:baseline; }
+  .chip b { font-size:calc(var(--fs) + var(--numgrow)); color:var(--num); font-weight:700; letter-spacing:-.4px;
+            font-variant-numeric:tabular-nums; }
+  .chip.c1 b { color:var(--c1); } .chip.c2 b { color:var(--c2); } .chip.c3 b { color:var(--c3); }
+  .chip.c1 { background:var(--c1-bg); border-color:var(--c1-line); }
+  .chip.c2 { background:var(--c2-bg); border-color:var(--c2-line); }
+  .chip.c3 { background:var(--c3-bg); border-color:var(--c3-line); }
+  .head { display:flex; align-items:baseline; gap:9px; }
+  .head h3 { margin:0; font-size:calc(var(--fs) + var(--titlegrow)); letter-spacing:-.25px; font-weight:var(--titlew); }
+  .head .hint { font-size:calc(var(--fs) - 2px); color:var(--muted); letter-spacing:var(--brandls); }
+  .card { position:relative; background:var(--card); border:var(--card-border); border-radius:var(--r-card);
+          padding:var(--cardpad); box-shadow:var(--shadow); overflow:hidden; }
+  .card.band::before { content:""; position:absolute; inset:0 0 auto; height:var(--band); background:var(--accent); display:var(--bandshow); }
+  .row { display:flex; align-items:center; gap:12px; padding:var(--rowpad); border-bottom:var(--rowline);
+         border-radius:8px; margin:0 calc(var(--rowpad) * -1); }
+  .row:hover { background:var(--row-hover); }
+  .row .nm { width:104px; font-weight:600; }
+  .row .url { flex:1; font-size:calc(var(--fs) - 1.5px); color:var(--link); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .st { width:60px; font-size:calc(var(--fs) - 1.5px); }
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+  .btn { border:1px solid var(--line); background:var(--card); color:var(--text); border-radius:var(--r-btn);
+         padding:var(--btn-pad); font-size:calc(var(--fs) - 1.5px); }
+  .btn.pri { background:var(--btn); border-color:transparent; color:var(--btn-text); font-weight:600; }
+  .btn.dgr { color:var(--bad); border-color:var(--bad-line); background:var(--bad-bg); }
+  .badge { display:inline-flex; align-items:center; gap:5px; border-radius:999px; padding:3px 9px;
+           font-size:calc(var(--fs) - 2.5px); background:var(--ok-bg); color:var(--ok); font-weight:600; }
+  .badge i { width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:var(--gap); }
+  .kv { display:flex; justify-content:space-between; font-size:calc(var(--fs) - 1px); color:var(--sub); padding:5px 0; }
+  .kv b { color:var(--text); font-weight:600; font-variant-numeric:tabular-nums; }
+  .spark { width:100%; height:56px; margin-top:6px; }
+  .foot { display:flex; align-items:center; gap:12px; padding:10px var(--pad); background:var(--sidebar);
+          font-size:calc(var(--fs) - 2px); color:var(--muted); border-top:1px solid var(--line); }
+  .foot .sp { margin-left:auto; }
+  .dlg { background:var(--card); border:var(--card-border); border-radius:var(--r-card); box-shadow:var(--shadow); padding:var(--cardpad); }
+  .dlg h4 { margin:0 0 4px; font-size:calc(var(--fs) + 1px); }
+  .dlg .sub { font-size:calc(var(--fs) - 2px); color:var(--muted); margin:0 0 12px; }
+  .opt { display:flex; gap:10px; padding:11px 12px; border-radius:var(--r-opt); border:1px solid transparent; }
+  .opt + .opt { margin-top:6px; }
+  .opt .dot { width:15px; height:15px; border-radius:50%; border:1.5px solid var(--muted); margin-top:3px; flex:none; }
+  .opt.on { background:var(--accent-bg); border-color:var(--accent-line); }
+  .opt.on .dot { border-color:var(--accent); box-shadow:inset 0 0 0 3.5px var(--accent); }
+  .opt b { font-size:calc(var(--fs) + .5px); font-weight:600; }
+  .opt.on b { color:var(--accent-strong); }
+  .opt p { margin:3px 0 0; font-size:calc(var(--fs) - 2px); color:var(--sub); line-height:1.6; }
+  .dlg .bar { display:flex; gap:8px; margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+  .dlg .bar .sp { margin-left:auto; }
+
+  /* ---------- 基线：上一轮的方案一 ---------- */
+  .base {
+    --page:#FBFBFD; --sidebar:#F4F5F8; --card:#FFFFFF; --line:#EDEEF2; --outer-line:#E3E5EA;
+    --shadow:0 1px 2px rgba(16,24,40,.05), 0 6px 20px rgba(16,24,40,.06);
+    --text:#191B1F; --sub:#5E646E; --muted:#6E7581; --link:#D8332F;
+    --accent:#FF615E; --accent-strong:#D8332F; --accent-bg:#FFF1F0; --accent-line:#FFCDCB;
+    --btn:#D8332F; --btn-text:#fff; --chip-on:#EAECF1; --num:#D8332F;
+    --chip-bg:#FFFFFF; --chip-line:#EDEEF2; --r-chip:10px; --chip-pad:7px 11px; --chipgap:8px; --numgrow:3px;
+    --c1:#D8332F; --c1-bg:#FFF1F0; --c1-line:#FFCDCB; --c2:#5E646E; --c2-bg:#FFFFFF; --c2-line:#EDEEF2;
+    --c3:#5E646E; --c3-bg:#FFFFFF; --c3-line:#EDEEF2;
+    --ok:#0E6B4C; --ok-bg:#E4F5EE; --warn:#B25E09; --bad:#C6393B; --bad-bg:#FCECEC; --bad-line:#F0BFC0;
+    --r-card:14px; --r-btn:10px; --r-nav:10px; --r-opt:10px;
+    --pad:20px; --gap:14px; --cardpad:18px; --sidepad:16px; --navpad:9px 10px; --navgap:4px;
+    --rowpad:11px; --rowline:1px dashed #EDEEF2; --row-hover:transparent; --btn-pad:6px 11px;
+    --card-border:1px solid #EDEEF2; --band:0; --bandshow:none; --navbar:none; --navbar-w:0; --navbar-h:0;
+    --titlegrow:5px; --titlew:600; --brandls:0; --fs:14px; --linkw:1;
+  }
+  /* ---------- A 更圆润 · 去描边靠底色分层 ---------- */
+  .a {
+    --page:#F5F6F8; --sidebar:#FFFFFF; --card:#FFFFFF; --line:#EEF0F3; --outer-line:#E3E5EA;
+    --shadow:0 1px 2px rgba(16,24,40,.04), 0 10px 26px rgba(16,24,40,.07);
+    --text:#16181C; --sub:#5B616B; --muted:#6E7581; --link:#C24D4A;
+    --accent:#F0534F; --accent-strong:#C4332F; --accent-bg:#FFF2F1; --accent-line:#FFD6D4;
+    --btn:#C4332F; --btn-text:#fff; --chip-on:#FFF2F1; --num:#16181C;
+    --chip-bg:#F7F8FA; --chip-line:transparent; --r-chip:999px; --chip-pad:8px 13px; --chipgap:9px; --numgrow:5px;
+    --c1:#C4332F; --c1-bg:#FFF2F1; --c1-line:transparent; --c2:#5B616B; --c2-bg:#F7F8FA; --c2-line:transparent;
+    --c3:#5B616B; --c3-bg:#F7F8FA; --c3-line:transparent;
+    --ok:#0E6B4C; --ok-bg:#E4F5EE; --warn:#A8580B; --bad:#C6393B; --bad-bg:#FCECEC; --bad-line:#F3C9CA;
+    --r-card:18px; --r-btn:999px; --r-nav:12px; --r-opt:14px;
+    --pad:24px; --gap:16px; --cardpad:20px; --sidepad:18px; --navpad:10px 12px; --navgap:5px;
+    --rowpad:12px; --rowline:1px solid #F2F3F6; --row-hover:#FAFBFC; --btn-pad:7px 14px;
+    --card-border:0; --band:0; --bandshow:none; --navbar:block; --navbar-w:3px; --navbar-h:18px;
+    --titlegrow:6px; --titlew:650; --brandls:0; --fs:14px;
+  }
+  /* ---------- B 彩色状态体系（柔和胶囊 + 悬浮行） ---------- */
+  .b {
+    --page:#FBFBFD; --sidebar:#F5F6FA; --card:#FFFFFF; --line:#ECEEF3; --outer-line:#E1E4EA;
+    --shadow:0 1px 2px rgba(23,26,40,.05), 0 8px 22px rgba(23,26,40,.07);
+    --text:#1A1C22; --sub:#5C6270; --muted:#737A85; --link:#3F5FD0;
+    --accent:#4B6BEB; --accent-strong:#3450C8; --accent-bg:#EEF2FE; --accent-line:#CBD8FB;
+    --btn:#3450C8; --btn-text:#fff; --chip-on:#EEF2FE; --num:#3450C8;
+    --chip-bg:#FFFFFF; --chip-line:#ECEEF3; --r-chip:13px; --chip-pad:9px 12px; --chipgap:9px; --numgrow:5px;
+    --c1:#3450C8; --c1-bg:#EEF2FE; --c1-line:#CBD8FB;
+    --c2:#0E7C66; --c2-bg:#E6F5F1; --c2-line:#B9E2D8;
+    --c3:#8A4BB5; --c3-bg:#F5EEFB; --c3-line:#DDC6EF;
+    --ok:#0E7C4C; --ok-bg:#E6F5EC; --warn:#9A5B08; --bad:#BE3A45; --bad-bg:#FCECEE; --bad-line:#F1C4C9;
+    --r-card:16px; --r-btn:11px; --r-nav:11px; --r-opt:12px;
+    --pad:22px; --gap:15px; --cardpad:18px; --sidepad:16px; --navpad:10px 11px; --navgap:4px;
+    --rowpad:12px; --rowline:0; --row-hover:#F7F8FC; --btn-pad:7px 12px;
+    --card-border:1px solid #ECEEF3; --band:0; --bandshow:none; --navbar:block; --navbar-w:3px; --navbar-h:16px;
+    --titlegrow:6px; --titlew:650; --brandls:0; --fs:14px;
+  }
+  /* ---------- C 高对比极简（灰阶为主，强调色只给可点项） ---------- */
+  .c {
+    --page:#FFFFFF; --sidebar:#FAFAFB; --card:#FFFFFF; --line:#E9EAEC; --outer-line:#DCDEE2;
+    --shadow:none;
+    --text:#111214; --sub:#585C63; --muted:#6B6F78; --link:#111214;
+    --accent:#111214; --accent-strong:#111214; --accent-bg:#F2F3F5; --accent-line:#111214;
+    --btn:#111214; --btn-text:#fff; --chip-on:#F2F3F5; --num:#111214;
+    --chip-bg:#FFFFFF; --chip-line:#E9EAEC; --r-chip:8px; --chip-pad:7px 10px; --chipgap:7px; --numgrow:4px;
+    --c1:#111214; --c1-bg:#FFFFFF; --c1-line:#E9EAEC; --c2:#585C63; --c2-bg:#FFFFFF; --c2-line:#E9EAEC;
+    --c3:#585C63; --c3-bg:#FFFFFF; --c3-line:#E9EAEC;
+    --ok:#146C43; --ok-bg:#EDF6F1; --warn:#8A5300; --bad:#B3261E; --bad-bg:#FBEEED; --bad-line:#E7BDB9;
+    --r-card:10px; --r-btn:8px; --r-nav:8px; --r-opt:8px;
+    --pad:22px; --gap:18px; --cardpad:16px; --sidepad:16px; --navpad:9px 10px; --navgap:3px;
+    --rowpad:11px; --rowline:1px solid #EFEFF1; --row-hover:#FAFAFB; --btn-pad:6px 12px;
+    --card-border:1px solid #E9EAEC; --band:0; --bandshow:none; --navbar:none; --navbar-w:0; --navbar-h:0;
+    --titlegrow:4px; --titlew:700; --brandls:.4px; --fs:13.5px;
+  }
+  /* ---------- D 柔和暖白 + 色带卡片（带一点设计感） ---------- */
+  .d {
+    --page:#FCFAF8; --sidebar:#F6F1EC; --card:#FFFFFF; --line:#EFE7DE; --outer-line:#E4DBD1;
+    --shadow:0 1px 2px rgba(74,58,44,.05), 0 10px 24px rgba(74,58,44,.07);
+    --text:#2A2521; --sub:#6A6058; --muted:#6E6A63; --link:#B4552F;
+    --accent:#E0662F; --accent-strong:#B4552F; --accent-bg:#FDF0E8; --accent-line:#F6CDB2;
+    --btn:#B4552F; --btn-text:#fff; --chip-on:#FDF0E8; --num:#B4552F;
+    --chip-bg:#FFFFFF; --chip-line:#EFE7DE; --r-chip:12px; --chip-pad:8px 12px; --chipgap:9px; --numgrow:5px;
+    --c1:#B4552F; --c1-bg:#FDF0E8; --c1-line:#F6CDB2;
+    --c2:#2F6B57; --c2-bg:#E9F3EF; --c2-line:#C0DED4;
+    --c3:#7A5AA8; --c3-bg:#F2EDF9; --c3-line:#D8CCEE;
+    --ok:#2F6B57; --ok-bg:#E9F3EF; --warn:#96601B; --bad:#B3392F; --bad-bg:#FBEDEB; --bad-line:#EFC0BA;
+    --r-card:16px; --r-btn:12px; --r-nav:12px; --r-opt:13px;
+    --pad:22px; --gap:15px; --cardpad:19px; --sidepad:18px; --navpad:10px 11px; --navgap:4px;
+    --rowpad:12px; --rowline:1px solid #F4EDE6; --row-hover:#FDFAF7; --btn-pad:7px 13px;
+    --card-border:1px solid #EFE7DE; --band:3px; --bandshow:block; --navbar:block; --navbar-w:3px; --navbar-h:17px;
+    --titlegrow:6px; --titlew:650; --brandls:0; --fs:14px;
+  }
+</style>
+</head>
+<body>
+<h1>方案一 · 四个美化方向（同一份结构，只换配方）</h1>
+<p class="lede">
+  基线就是上一轮的方案一（<b>清爽浅白 Notion/Raycast</b>）。下面四套都是在它之上动"配方"，
+  每套都标了改了什么、以及<b>在 egui 里怎么落地</b>（全部可做到，没有依赖 CSS 渐变/模糊这类 egui 没有的东西）。
+  强调色我按方向配了不同的（红 / 蓝 / 墨黑 / 陶土橙）——如果某套你只喜欢它的版式不喜欢色，说一声，色和版式是两套独立 token，随便换。
+</p>
+<div class="board" id="board"></div>
+
+<script>
+const VARIANTS = [
+  { cls:'base', name:'基线 · 方案一', tag:'BASE',
+    recipe:'圆角 14/10、卡片 1px 淡描边 + 淡阴影、正文 14px、栅格 14。就是上一轮那张。',
+    egui:'已可实现：`theme::apply` 的 Visuals + `widgets.rs` 的 `CornerRadius`。' },
+  { cls:'a', name:'A 更圆润 · 去描边靠底色', tag:'ROUND',
+    recipe:'页面底转成浅灰 <code>#F5F6F8</code>、侧栏和卡片都改纯白 → 分层不再靠描边；圆角升到 18/12、按钮和统计胶囊改<b>药丸</b>；间距再松一档（padding 24 / gap 16）；导航选中项加 3px 强调指示条；大数字改回正文黑、只让强调色出现在能点的地方。',
+    egui:'全部可实现：`Frame` 无描边 + `popup_shadow`；`CornerRadius::same(999)` 就是药丸；指示条我们在 <code>nav_item</code> 里已经在画。' },
+  { cls:'b', name:'B 彩色状态体系', tag:'COLOR',
+    recipe:'强调色换蓝 <code>#4B6BEB</code>；统计胶囊按协议分色（蓝/青绿/紫，淡底 + 同系深字）；表格<b>去掉分隔线</b>改成整行悬浮高亮；卡片保留细描边 + 阴影；导航选中淡蓝底 + 指示条。信息密度最高、最"产品"。',
+    egui:'可实现：每行一个 <code>Frame</code> + <code>response.hovered()</code> 换底色；胶囊颜色从主题 token 派生（新增 3 个 tint 语义色）。' },
+  { cls:'c', name:'C 高对比极简', tag:'MINIMAL',
+    recipe:'纯白底、<b>零阴影</b>、只留细灰线；强调色就是墨黑 <code>#111</code>，唯一有彩色的是状态（成功/警告/危险）；标题更短更重（700）、小标签加字距；正文降到 13.5px 换信息量。最耐看、最不像"后台模板"。',
+    egui:'可实现：`Visuals::window_shadow = NONE`、`override_text_style` 或 `TextFormat.extra_letter_spacing` 加字距。' },
+  { cls:'d', name:'D 柔和暖白 + 色带卡片', tag:'WARM',
+    recipe:'底色转暖（<code>#FCFAF8</code> / 侧栏 <code>#F6F1EC</code>），强调色陶土橙 <code>#E0662F</code>；每张卡片顶部一条 3px 色带做视觉锚点；胶囊按类别分暖/青/紫三色；圆角 16/12、行分隔线转暖米色。最有"设计感"，也最容易显花。',
+    egui:'色带 = 卡片顶部画一个 3px 实心 <code>rect_filled</code>（纯色，不是渐变，egui 画不了 CSS 那种渐变）；其余同 A/B。' },
+];
+
+const ICON = {
+  dash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>',
+  bolt:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></svg>',
+  down:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 20h16"/></svg>',
+  gear:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7"/></svg>',
+  plug:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 3v6M15 3v6M6 9h12v3a6 6 0 0 1-12 0V9ZM12 18v3"/></svg>'
+};
+
+function mock(cls) {
+  return `<div class="mock ${cls}">
+  <div class="win">
+    <aside class="side">
+      <div class="brand"><i></i><div><b>VPN Parser</b><em>网络代理控制台</em></div></div>
+      <div class="nav">${ICON.dash}控制台</div>
+      <div class="nav">${ICON.bolt}节点池</div>
+      <div class="nav on">${ICON.down}订阅源</div>
+      <div class="nav">${ICON.gear}系统设置</div>
+      <div class="nav">${ICON.plug}外部接口</div>
+      <div class="note">源 35 · 节点 19295 · 可用 24<br>代理运行中 · 127.0.0.1:9980</div>
+    </aside>
+    <div class="main">
+      <div class="chips">
+        <div class="chip c1">订阅源 <b>35</b></div>
+        <div class="chip">节点 <b>19295</b></div>
+        <div class="chip c2">可用 <b>24</b></div>
+        <div class="chip c3">vless <b>11384</b></div>
+        <div class="chip">ss <b>2624</b></div>
+        <div class="chip">vmess <b>2623</b></div>
+        <div class="chip">trojan <b>1210</b></div>
+      </div>
+      <div class="head"><h3>订阅源</h3><span class="hint">增删改查 · 单源 / 全部拉取</span><span class="badge" style="margin-left:auto"><i></i>代理运行中</span></div>
+      <div class="card band">
+        <div class="row"><div class="nm">shadowmere</div><div class="url">https://shadowmere.xyz/api/b64sub/</div><div class="st ok">启用</div>
+          <button class="btn">拉取</button><button class="btn">编辑</button><button class="btn dgr">删除</button></div>
+        <div class="row"><div class="nm">gist-laohan9</div><div class="url">https://gist.githubusercontent.com/laohan9/ca8d1834…/raw</div><div class="st ok">启用</div>
+          <button class="btn">拉取</button><button class="btn">编辑</button><button class="btn dgr">删除</button></div>
+        <div class="row"><div class="nm">cfnew</div><div class="url">https://cfnew-6a8.pages.dev/ed9d81fc-2808…/sub?target=v2</div><div class="st warn">不推送</div>
+          <button class="btn">拉取</button><button class="btn">编辑</button><button class="btn dgr">删除</button></div>
+      </div>
+      <div class="grid2">
+        <div class="card band">
+          <div class="head"><h3 style="font-size:inherit">流量</h3></div>
+          <div class="kv"><span>下行</span><b>1.84 MB/s</b></div>
+          <div class="kv"><span>上行</span><b>226 KB/s</b></div>
+          <div class="kv"><span>当前出口</span><b>电信-10 · 日本 JP</b></div>
+          <svg class="spark" viewBox="0 0 200 56" preserveAspectRatio="none">
+            <polyline fill="none" stroke="var(--accent)" stroke-width="2" points="0,42 18,36 36,39 54,24 72,30 90,14 108,22 126,10 144,20 162,12 180,18 200,8"/>
+            <polyline fill="var(--accent-bg)" stroke="none" points="0,56 0,42 18,36 36,39 54,24 72,30 90,14 108,22 126,10 144,20 162,12 180,18 200,8 200,56"/>
+          </svg>
+        </div>
+        <div class="dlg">
+          <h4>下载内核 · sing-box</h4>
+          <p class="sub">一次只走一条连接，失败就报错</p>
+          <div class="opt on"><span class="dot"></span><div><b>gh-proxy 镜像</b><p>只连 gh-proxy.com 前缀（实测 4.87 MB/s）</p></div></div>
+          <div class="opt"><span class="dot"></span><div><b>ghfast 镜像</b><p>只连 ghfast.top 前缀（实测 8.13 MB/s）</p></div></div>
+          <div class="opt"><span class="dot"></span><div><b>官方直连</b><p>只用 GitHub 原链（实测 0.12 MB/s）</p></div></div>
+          <div class="opt"><span class="dot"></span><div><b>本地文件导入</b><p>从已有 zip 安装，不联网</p></div></div>
+          <div class="bar"><button class="btn">关闭</button><button class="btn pri sp">开始下载</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>状态</span><b style="color:var(--text)">就绪</b><span class="sp">0 B/s ↓ · 0 B/s ↑</span><span>会话总计 55.0 KB | 863.6 KB</span></div>
+  </div>`;
+}
+
+document.getElementById('board').innerHTML = VARIANTS.map(v => `
+  <div class="col">
+    <div class="cap">
+      <h2>${v.name} <em>${v.tag}</em></h2>
+      <p>配方：${v.recipe}<br><b>egui 落地</b>：${v.egui}</p>
+    </div>
+    ${mock(v.cls)}
+  </div>`).join('');
+</script>
+</body>
+</html>
