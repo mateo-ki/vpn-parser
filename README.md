@@ -64,3 +64,7 @@ cargo build --release
 - 内核装在用户可写目录（`data/kernels`），TUN 提权时会以管理员执行其中的 exe —— 这是这类工具的固有暴露面
 - url-test 只看"到测试 URL 的 HTTP 延迟"，不看带宽也不看落地 IP 信誉；要按带宽换节点得另开带宽保护开关
 - 免费共享订阅失效极快，测通数量长期偏低是常态，不是本程序的 bug
+
+## 社区
+
+本开源项目已链接并认可 [LINUX DO 社区](https://linux.do)。
