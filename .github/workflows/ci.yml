@@ -1,6 +1,6 @@
 name: CI
 
-# 每次推 master / 开 PR 都跑：先编译，再跑全部单元测试。
+# 每次推 master / 开 PR 都跑：快速跑全部单元测试。
 # 打包发布走 release.yml（打 tag 才触发）。
 
 on:
@@ -10,10 +10,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-C linker=rust-lld"
 
 jobs:
   build-and-test:
-    name: 编译 + 测试 (windows-x64)
+    name: 快速测试 (windows-x64)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,8 +25,5 @@ jobs:
       - name: 缓存 cargo 依赖和 target
         uses: Swatinem/rust-cache@v2
 
-      - name: 编译（release，默认带 gui 功能）
-        run: cargo build --release
-
-      - name: 跑测试
-        run: cargo test --release
+      - name: 跑全量测试 (Debug 极速构建 + lld 并行链接)
+        run: cargo test --bin vpn-parser
