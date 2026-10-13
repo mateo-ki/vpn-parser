@@ -121,6 +121,10 @@ pub struct VpnApp {
     pub(crate) diag_trace: Option<String>,
     /// 窗口是不是被「停放到屏幕外」（= 用户所说的收进托盘）。不再用 Visible(false)。
     pub(crate) parked: bool,
+    /// 跟踪上一帧是否处于最小化状态，用于捕获任务栏还原动作
+    pub(crate) was_minimized: bool,
+    /// 从最小化或托盘恢复后，连续强刷渲染的冷却帧数
+    pub(crate) restore_cooldown_frames: u32,
     /// 停放前记下的位置与大小，还原时用。
     pub(crate) park_spot: Option<crate::platform::window_park::Spot>,
     /// 什么时候停放的（诊断壳的自动往返自测用它计时）。
@@ -374,6 +378,8 @@ impl VpnApp {
             paste_outcome: None,
             diag_trace: None,
             parked: false,
+            was_minimized: false,
+            restore_cooldown_frames: 0,
             park_spot: None,
             parked_at: None,
             proxy_drift: None,
@@ -3430,9 +3436,27 @@ impl eframe::App for VpnApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             // 无边框窗口的圆角只认一次：窗口这时候已经建好了，DWM 这条属性是粘性的。
             static ROUND_CORNERS: std::sync::Once = std::sync::Once::new();
-            ROUND_CORNERS.call_once(crate::platform::round_window_corners);
+            ROUND_CORNERS.call_once(|| {
+                crate::platform::round_window_corners();
+                crate::platform::ensure_window_sysmenu_and_minimizebox();
+            });
         }
         self.frame_count = self.frame_count.saturating_add(1);
+
+        // 侦测最小化 -> 恢复窗口事件（无论是通过任务栏点击还原，还是托盘唤醒）
+        let is_minimized = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
+        if self.was_minimized && !is_minimized {
+            crate::startup_log("Window state changed: minimized -> restored, triggering repaint sequence");
+            crate::platform::restore_and_repaint_main_window();
+            self.restore_cooldown_frames = 12;
+        }
+        self.was_minimized = is_minimized;
+
+        // 恢复窗口后的前若干帧持续请求重绘，确保 OpenGL/DirectX surface 与 DWM 顺利交换
+        if self.restore_cooldown_frames > 0 {
+            self.restore_cooldown_frames -= 1;
+            ctx.request_repaint();
+        }
 
         // Register or refresh GUI event loop waker on tray handle
         let ctx_waker = ctx.clone();

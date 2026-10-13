@@ -166,6 +166,7 @@ impl VpnApp {
             });
 
         if action_minimize {
+            self.was_minimized = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         }
         if action_toggle_max {
@@ -249,9 +250,12 @@ impl VpnApp {
         }
         self.parked = false;
         self.parked_at = None;
+        self.was_minimized = false;
+        self.restore_cooldown_frames = 12;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        ctx.request_repaint();
     }
 
     pub(crate) fn request_window_close(&mut self, ctx: &egui::Context) {

@@ -41,11 +41,16 @@ pub fn can_paint(is_visible: bool, iconic: bool, parked: bool) -> bool {
 mod imp {
     use super::{is_parked_rect, Spot, PARKED_X, PARKED_Y};
     use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+    use windows_sys::Win32::Graphics::Gdi::{
+        RedrawWindow, RDW_ALLCHILDREN, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
+    };
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClassNameW, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
-        SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_SHOWWINDOW,
-        WS_EX_TOOLWINDOW,
+        BringWindowToTop, EnumWindows, GetClassNameW, GetWindowLongPtrW, GetWindowRect,
+        GetWindowThreadProcessId, IsIconic, PostMessageW, SetForegroundWindow, SetWindowLongPtrW,
+        SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE, SW_SHOW, WM_PAINT, WS_EX_TOOLWINDOW,
+        WS_MINIMIZEBOX, WS_SYSMENU,
     };
 
     /// winit 给真实窗口用的类名；事件窗口 / IME 助手窗口都另有其名，必须排掉。
@@ -159,26 +164,93 @@ pub fn parked() -> bool {
         unsafe {
             let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex & !(WS_EX_TOOLWINDOW as isize));
+            if IsIconic(hwnd) != 0 {
+                ShowWindow(hwnd, SW_RESTORE);
+            } else {
+                ShowWindow(hwnd, SW_SHOW);
+            }
             SetWindowPos(
                 hwnd,
-                std::ptr::null_mut(),
+                HWND_TOP,
                 spot.x,
                 spot.y,
                 spot.w,
                 spot.h,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                SWP_SHOWWINDOW,
             );
+            BringWindowToTop(hwnd);
+            SetForegroundWindow(hwnd);
+            RedrawWindow(
+                hwnd,
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN | RDW_FRAME,
+            );
+            PostMessageW(hwnd, WM_PAINT, 0, 0);
         }
         crate::startup_log(&format!(
-            "[托盘] 窗口已还原到 {} , {}（{}x{}，摘掉 WS_EX_TOOLWINDOW）",
+            "[托盘] 窗口已还原到 {} , {}（{}x{}，摘掉 WS_EX_TOOLWINDOW 并强制重绘）",
             spot.x, spot.y, spot.w, spot.h
         ));
         true
     }
+
+    /// 确保主窗口具备 WS_MINIMIZEBOX 和 WS_SYSMENU 样式，以便 Windows DWM 和任务栏
+    /// 在最小化与还原该无边框窗口时走标准的系统还原通道并产生重绘通知。
+    pub fn ensure_window_sysmenu_and_minimizebox() {
+        if let Some(hwnd) = find_main() {
+            unsafe {
+                let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+                let needed = (WS_MINIMIZEBOX | WS_SYSMENU) as isize;
+                if (style & needed) != needed {
+                    SetWindowLongPtrW(hwnd, GWL_STYLE, style | needed);
+                    crate::startup_log(&format!(
+                        "[窗口] 已为 hwnd={:?} 补齐 WS_MINIMIZEBOX | WS_SYSMENU 样式",
+                        hwnd
+                    ));
+                }
+            }
+        }
+    }
+
+    /// 强制唤醒、还原并重绘主窗口。用于从最小化恢复、托盘唤回或失活唤醒。
+    pub fn restore_and_repaint_main_window() {
+        if let Some(hwnd) = find_main() {
+            unsafe {
+                if IsIconic(hwnd) != 0 {
+                    ShowWindow(hwnd, SW_RESTORE);
+                } else {
+                    ShowWindow(hwnd, SW_SHOW);
+                }
+                BringWindowToTop(hwnd);
+                SetForegroundWindow(hwnd);
+                SetWindowPos(
+                    hwnd,
+                    HWND_TOP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                );
+                RedrawWindow(
+                    hwnd,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN | RDW_FRAME,
+                );
+                PostMessageW(hwnd, WM_PAINT, 0, 0);
+            }
+            crate::startup_log(&format!(
+                "[窗口] 已触发 restore_and_repaint_main_window hwnd={:?}",
+                hwnd
+            ));
+        }
+    }
 }
 
 #[cfg(windows)]
-pub use imp::{park, unpark};
+pub use imp::{ensure_window_sysmenu_and_minimizebox, park, restore_and_repaint_main_window, unpark};
 
 #[cfg(not(windows))]
 pub fn parked() -> bool {
@@ -194,6 +266,12 @@ pub fn park() -> Option<Spot> {
 pub fn unpark(_spot: Spot) -> bool {
     false
 }
+
+#[cfg(not(windows))]
+pub fn ensure_window_sysmenu_and_minimizebox() {}
+
+#[cfg(not(windows))]
+pub fn restore_and_repaint_main_window() {}
 
 #[cfg(test)]
 mod tests {

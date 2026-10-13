@@ -8,7 +8,8 @@ pub use tray::{
     TrayHandle,
 };
 pub use window_park::{
-    park as park_main_window, unpark as unpark_main_window,
+    ensure_window_sysmenu_and_minimizebox, park as park_main_window,
+    restore_and_repaint_main_window, unpark as unpark_main_window,
 };
 
 const SINGLE_INSTANCE_MUTEX_NAME: &str = "Local\\VPNParser-7F61E55C-DB54-49C6-AB9E-986AEBFDD56B";
