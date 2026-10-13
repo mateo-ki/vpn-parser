@@ -229,6 +229,7 @@ impl Database {
             "speedtest_conditional_isolation",
             "speedtest_download_top_n",
             "speedtest_dedup_egress",
+            "speedtest_tcp_ping_only",
             "bandwidth_guard",
             "bandwidth_min_kbps",
         ] {

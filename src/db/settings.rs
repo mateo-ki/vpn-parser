@@ -57,7 +57,7 @@ impl Database {
                        exclude_keywords, failover_latency_ms,
                        speedtest_parallel_kernels, speedtest_persistent_kernel,
                        speedtest_reuse_minutes, speedtest_conditional_isolation,
-                       speedtest_download_top_n, speedtest_dedup_egress, bandwidth_guard, bandwidth_min_kbps,
+                       speedtest_download_top_n, speedtest_dedup_egress, speedtest_tcp_ping_only, bandwidth_guard, bandwidth_min_kbps,
                        publisher_api, publisher_token, ui_theme, kernel_source, firewall_auto_allow,
                        auto_failover, speedtest_auto_refill,
                        auto_prepare_kernel, speedtest_added_source,
@@ -118,6 +118,8 @@ impl Database {
                 .unwrap_or(0) as u32,
             speedtest_dedup_egress: sqlx::Row::try_get::<i64, _>(&row, "speedtest_dedup_egress")
                 .unwrap_or(1) != 0,
+            speedtest_tcp_ping_only: sqlx::Row::try_get::<i64, _>(&row, "speedtest_tcp_ping_only")
+                .unwrap_or(0) != 0,
             bandwidth_guard: sqlx::Row::try_get::<i64, _>(&row, "bandwidth_guard").unwrap_or(0)
                 != 0,
             bandwidth_min_kbps: sqlx::Row::try_get::<i64, _>(&row, "bandwidth_min_kbps")
@@ -216,6 +218,9 @@ impl Database {
         if let Some(v) = input.speedtest_dedup_egress {
             s.speedtest_dedup_egress = v;
         }
+        if let Some(v) = input.speedtest_tcp_ping_only {
+            s.speedtest_tcp_ping_only = v;
+        }
         if let Some(v) = input.bandwidth_guard {
             s.bandwidth_guard = v;
         }
@@ -279,6 +284,7 @@ impl Database {
                  speedtest_conditional_isolation=?,
                  speedtest_download_top_n=?,
                  speedtest_dedup_egress=?,
+                 speedtest_tcp_ping_only=?,
                  bandwidth_guard=?,
                  bandwidth_min_kbps=?,
                  publisher_api=?,
@@ -312,6 +318,7 @@ impl Database {
         .bind(s.speedtest_conditional_isolation as i64)
         .bind(s.speedtest_download_top_n as i64)
         .bind(s.speedtest_dedup_egress as i64)
+        .bind(s.speedtest_tcp_ping_only as i64)
         .bind(s.bandwidth_guard as i64)
         .bind(s.bandwidth_min_kbps as i64)
         .bind(&s.publisher_api)

@@ -372,6 +372,7 @@ pub struct SettingsEditState {
     pub speedtest_conditional_isolation: bool,
     pub speedtest_download_top_n: u32,
     pub speedtest_dedup_egress: bool,
+    pub speedtest_tcp_ping_only: bool,
     pub speedtest_auto_refill: bool,
     pub auto_rearm_system_proxy: bool,
     pub auto_prepare_kernel: bool,
@@ -405,6 +406,7 @@ impl SettingsEditState {
             speedtest_conditional_isolation: s.speedtest_conditional_isolation,
             speedtest_download_top_n: s.speedtest_download_top_n,
             speedtest_dedup_egress: s.speedtest_dedup_egress,
+            speedtest_tcp_ping_only: s.speedtest_tcp_ping_only,
             speedtest_auto_refill: s.speedtest_auto_refill,
             auto_rearm_system_proxy: s.auto_rearm_system_proxy,
             auto_prepare_kernel: s.auto_prepare_kernel,
@@ -437,6 +439,7 @@ impl SettingsEditState {
             || self.speedtest_conditional_isolation != s.speedtest_conditional_isolation
             || self.speedtest_download_top_n != s.speedtest_download_top_n
             || self.speedtest_dedup_egress != s.speedtest_dedup_egress
+            || self.speedtest_tcp_ping_only != s.speedtest_tcp_ping_only
             || self.bandwidth_guard != s.bandwidth_guard
             || self.bandwidth_min_kbps != s.bandwidth_min_kbps
             || self.speedtest_auto_refill != s.speedtest_auto_refill

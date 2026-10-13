@@ -645,6 +645,12 @@ impl VpnApp {
             .on_hover_text("多源或同源多个节点解析到相同目标 IP:Port 时，只对 1 个物理代表节点进行真实内核握手并共享结果，大幅提速并防止打死 VPS");
 
             ui.checkbox(
+                &mut self.edit_speedtest_tcp_ping_only,
+                "⚡ 仅 TCP Ping 快速粗筛（跳过内核真实代理握手）",
+            )
+            .on_hover_text("仅测试节点 TCP 端口的往返时延，数千个节点可在 2~3 秒内完成粗筛。不启动内核也不向目标发真实请求。选定主力节点前建议取消此项进行深度校验。");
+
+            ui.checkbox(
                 &mut self.edit_speedtest_conditional_isolation,
                 "只对可疑的失败节点做 mihomo -t 隔离复测（默认全部复测）",
             );
@@ -1175,7 +1181,7 @@ mod layout_tests {
         let mut input = RawInput::default();
         input.screen_rect = Some(Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1200.0, 800.0)));
         let mut left = -1.0;
-        ctx.run(input, |ctx| {
+        let _ = ctx.run(input, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 header(ui);
                 left = ui.available_height();
@@ -1191,8 +1197,8 @@ mod layout_tests {
         // 写成断言而不是注释，是因为它会"编译通过、只是页面空掉"。
         let eaten = height_left_after(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.button("保存设置");
-                ui.button("重置修改");
+                let _ = ui.button("保存设置");
+                let _ = ui.button("重置修改");
             });
         });
         assert!(eaten < 1.0, "这个坑应该已经把整页吃光，实测剩 {eaten:.1}");
@@ -1215,8 +1221,8 @@ mod layout_tests {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.button("保存设置");
-                    ui.button("重置修改");
+                    let _ = ui.button("保存设置");
+                    let _ = ui.button("重置修改");
                     ui.label("✓ 已同步");
                 });
             });

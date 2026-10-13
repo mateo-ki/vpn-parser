@@ -6,6 +6,7 @@ use crate::gui::VpnApp;
 use crate::speedtest::SpeedtestIntensity;
 use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
 use crate::gui::theme;
+use crate::gui::view_models::nodes_vm::NodesViewModel;
 
 impl VpnApp {
     pub(crate) fn ui_nodes(&mut self, ui: &mut Ui) {
@@ -355,9 +356,7 @@ impl VpnApp {
         ui.add_space(4.0);
 
         ui.horizontal(|ui| {
-            let pages = ((self.node_total as f32) / (self.page_size as f32))
-                .ceil()
-                .max(1.0) as u32;
+            let pages = NodesViewModel::total_pages(self.node_total, self.page_size);
             ui.label(format!(
                 "第 {} / {} 页 · 共 {} 条",
                 self.page, pages, self.node_total
@@ -387,15 +386,8 @@ impl VpnApp {
         }
 
         panel_frame().show(ui, |ui| {
-                    let nodes = self.nodes.clone();
-                    let columns = if ui.available_width() >= 920.0 {
-                        4
-                    } else if ui.available_width() >= 660.0 {
-                        3
-                    } else {
-                        2
-                    };
-                    let total_card_rows = (nodes.len() + columns - 1) / columns;
+            let (columns, total_card_rows) = NodesViewModel::grid_layout(ui.available_width(), self.nodes.len());
+            let nodes = self.nodes.clone();
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show_rows(ui, 84.0, total_card_rows, |ui, row_range| {

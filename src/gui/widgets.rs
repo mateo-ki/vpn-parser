@@ -821,7 +821,7 @@ mod sparkline_tests {
         ));
         let mut room = -1.0_f32;
         let mut row = (-1.0_f32, -1.0_f32);
-        ctx.run(input, |ctx| {
+        let _ = ctx.run(input, |ctx| {
             CentralPanel::default().show(ctx, |ui| {
                 let before = ui.available_height();
                 let response = ui.horizontal(|ui| {

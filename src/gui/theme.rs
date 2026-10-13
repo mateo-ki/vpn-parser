@@ -402,30 +402,6 @@ pub fn apply(ctx: &egui::Context, id: &str) {
 mod tests {
     use super::*;
 
-    const WHITE: Color32 = Color32::from_rgb(255, 255, 255);
-
-    /// HSV 的色相角（0-360），用来把"不许往紫调跑"说成一个可判定的区间。
-    fn hue_degrees(c: Color32) -> f32 {
-        let (r, g, b) = (c.r() as f32 / 255.0, c.g() as f32 / 255.0, c.b() as f32 / 255.0);
-        let max = r.max(g).max(b);
-        let min = r.min(g).min(b);
-        let delta = max - min;
-        if delta <= 0.0 {
-            return 0.0;
-        }
-        let raw = if (max - r).abs() < f32::EPSILON {
-            (g - b) / delta
-        } else if (max - g).abs() < f32::EPSILON {
-            2.0 + (b - r) / delta
-        } else {
-            4.0 + (r - g) / delta
-        };
-        let mut hue = raw * 60.0;
-        if hue < 0.0 {
-            hue += 360.0;
-        }
-        hue
-    }
 
     #[test]
     fn every_theme_keeps_button_and_banner_text_readable() {

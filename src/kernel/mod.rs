@@ -42,6 +42,14 @@ impl KernelPreference {
 }
 
 impl KernelKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Mihomo => "mihomo",
+            Self::Xray => "xray",
+            Self::SingBox => "sing_box",
+        }
+    }
+
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Mihomo => "Mihomo",

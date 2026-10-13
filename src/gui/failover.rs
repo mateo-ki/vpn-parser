@@ -56,9 +56,22 @@ impl VpnApp {
         let Some(node_id) = self.selected_proxy_node_id.clone() else {
             return;
         };
+        // 动态自适应保活频率：
+        // 1. 若开启了 auto_failover 且当前有失败累积（streak > 0），以 5 秒高频快速复核；
+        // 2. 若开启了 auto_failover 且正常，以 15 秒心跳保活；
+        // 3. 若未开启 auto_failover（仅表头展示），以 45 秒低频运行节约资源。
+        let probe_interval = if self.auto_failover {
+            if self.health_fail_streak > 0 {
+                std::time::Duration::from_secs(5)
+            } else {
+                std::time::Duration::from_secs(15)
+            }
+        } else {
+            std::time::Duration::from_secs(45)
+        };
         if self
             .failover_probe_at
-            .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(60))
+            .is_some_and(|at| at.elapsed() < probe_interval)
         {
             return;
         }

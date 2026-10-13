@@ -33,6 +33,7 @@ pub mod widgets;
 pub mod failover;
 pub mod telemetry_view;
 pub mod command_palette;
+pub mod view_models;
 pub mod window;
 
 pub use types::*;
@@ -209,6 +210,7 @@ pub struct VpnApp {
     pub(crate) edit_speedtest_conditional_isolation: bool,
     pub(crate) edit_speedtest_download_top_n: u32,
     pub(crate) edit_speedtest_dedup_egress: bool,
+    pub(crate) edit_speedtest_tcp_ping_only: bool,
     /// 本次运行内自动切换的次数与最近一次原因，显示在控制台状态卡上。
     pub(crate) failover_switches: usize,
     pub(crate) failover_last_reason: Option<String>,
@@ -442,6 +444,7 @@ impl VpnApp {
             edit_speedtest_conditional_isolation: false,
             edit_speedtest_download_top_n: 0,
             edit_speedtest_dedup_egress: true,
+            edit_speedtest_tcp_ping_only: false,
             failover_switches: 0,
             failover_last_reason: None,
             failover_probe_at: None,
@@ -522,6 +525,7 @@ impl VpnApp {
             conditional_isolation: self.settings.speedtest_conditional_isolation,
             download_top_n: self.settings.speedtest_download_top_n,
             dedup_egress: self.settings.speedtest_dedup_egress,
+            tcp_ping_only: self.settings.speedtest_tcp_ping_only,
         }
     }
 
@@ -3221,6 +3225,7 @@ impl VpnApp {
             speedtest_conditional_isolation: self.edit_speedtest_conditional_isolation,
             speedtest_download_top_n: self.edit_speedtest_download_top_n,
             speedtest_dedup_egress: self.edit_speedtest_dedup_egress,
+            speedtest_tcp_ping_only: self.edit_speedtest_tcp_ping_only,
             bandwidth_guard: self.edit_bandwidth_guard,
             bandwidth_min_kbps: self.edit_bandwidth_min_kbps,
         }
@@ -3255,6 +3260,7 @@ impl VpnApp {
         self.edit_speedtest_conditional_isolation = state.speedtest_conditional_isolation;
         self.edit_speedtest_download_top_n = state.speedtest_download_top_n;
         self.edit_speedtest_dedup_egress = state.speedtest_dedup_egress;
+        self.edit_speedtest_tcp_ping_only = state.speedtest_tcp_ping_only;
         self.edit_bandwidth_guard = state.bandwidth_guard;
         self.edit_bandwidth_min_kbps = state.bandwidth_min_kbps;
         self.edit_ui_theme = state.ui_theme.clone();
@@ -3287,6 +3293,7 @@ impl VpnApp {
             speedtest_conditional_isolation: Some(self.edit_speedtest_conditional_isolation),
             speedtest_download_top_n: Some(self.edit_speedtest_download_top_n),
             speedtest_dedup_egress: Some(self.edit_speedtest_dedup_egress),
+            speedtest_tcp_ping_only: Some(self.edit_speedtest_tcp_ping_only),
             bandwidth_guard: Some(self.edit_bandwidth_guard),
             bandwidth_min_kbps: Some(self.edit_bandwidth_min_kbps),
             ui_theme: Some(self.edit_ui_theme.clone()),
@@ -3963,7 +3970,7 @@ mod tests {
         ));
 
         let mut allocated = 0.0_f32;
-        ctx.run(input, |ctx| {
+        let _ = ctx.run(input, |ctx| {
             let response = egui::TopBottomPanel::top("title_bar_probe")
                 .exact_height(BAR_H)
                 // 出问题的那版用的就是上下 5px：格子只剩 24 高，比按钮想要的 32 矮。
