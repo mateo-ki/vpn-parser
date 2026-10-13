@@ -782,6 +782,28 @@ impl Database {
         Ok(deleted)
     }
 
+    
+    /// 淘汰长期失效节点（例如：连续测试失败且更新时间超过 days_old 天）
+    pub async fn prune_stale_dead_nodes(&self, days_old: i64) -> Result<usize> {
+        let cutoff = (Utc::now() - chrono::Duration::days(days_old)).to_rfc3339();
+        let mut deleted_total = 0;
+        for scope in self.node_scopes(None).await? {
+            if !self.node_db_path(scope.as_deref()).exists() {
+                continue;
+            }
+            let pool = self.open_node_pool(scope.as_deref()).await?;
+            let res = sqlx::query("DELETE FROM nodes WHERE latency_ok = 0 AND updated_at < ?1")
+                .bind(&cutoff)
+                .execute(&pool)
+                .await?;
+            deleted_total += res.rows_affected() as usize;
+        }
+        if deleted_total > 0 {
+            self.invalidate_node_index().await;
+        }
+        Ok(deleted_total)
+    }
+
     pub async fn delete_dead_nodes(&self) -> Result<u64> {
         let mut deleted = 0;
         for scope in self.node_scopes(None).await? {

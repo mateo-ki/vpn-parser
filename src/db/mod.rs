@@ -46,7 +46,9 @@ impl Database {
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(Duration::from_secs(10))
-            .pragma("cache_size", "-2000");
+            .pragma("cache_size", "-64000")
+            .pragma("temp_store", "2")
+            .pragma("mmap_size", "268435456");
         let pool = SqlitePoolOptions::new()
             .max_connections(4)
             .idle_timeout(Some(Duration::from_secs(60)))
@@ -128,7 +130,9 @@ impl Database {
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(Duration::from_secs(10))
-            .pragma("cache_size", "-2000");
+            .pragma("cache_size", "-64000")
+            .pragma("temp_store", "2")
+            .pragma("mmap_size", "268435456");
         let pool = SqlitePoolOptions::new()
             .max_connections(2)
             .idle_timeout(Some(Duration::from_secs(30)))
@@ -409,6 +413,7 @@ mod tests {
                 speedtest_reuse_minutes: Some(45),
                 speedtest_conditional_isolation: Some(true),
                 speedtest_download_top_n: Some(60),
+                speedtest_dedup_egress: Some(true),
                 bandwidth_guard: Some(true),
                 bandwidth_min_kbps: Some(256),
                 publisher_api: None,
@@ -1418,6 +1423,7 @@ mod tests {
             speedtest_reuse_minutes: None,
             speedtest_conditional_isolation: None,
             speedtest_download_top_n: None,
+            speedtest_dedup_egress: None,
             bandwidth_guard: None,
             bandwidth_min_kbps: None,
             publisher_api: None,

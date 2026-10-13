@@ -669,9 +669,10 @@ impl VpnApp {
             2
         };
 
+        let total_card_rows = (view.rows.len() + columns - 1) / columns;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_rows(ui, 84.0, total_card_rows, |ui, row_range| {
                 if view.rows.is_empty() {
                     card_frame().show(ui, |ui| {
                         ui.label(
@@ -681,7 +682,10 @@ impl VpnApp {
                     });
                     return;
                 }
-                for row in view.rows.chunks(columns) {
+                for row_idx in row_range {
+                    let start = row_idx * columns;
+                    let end = (start + columns).min(view.rows.len());
+                    let row = &view.rows[start..end];
                     ui.columns(columns, |column_uis| {
                         for (column_index, column_ui) in column_uis.iter_mut().enumerate() {
                             let Some(entry) = row.get(column_index) else {
@@ -1443,6 +1447,26 @@ impl VpnApp {
                                     );
                                 });
                             add_rule = ui.button("添加规则").clicked();
+                            ui.menu_button("⚡ 嗅探活动进程 ▼", |ui| {
+                                ui.set_min_width(220.0);
+                                ui.label(RichText::new("当前系统运行的应用进程").strong().color(theme::text_secondary()));
+                                ui.separator();
+                                let procs = crate::platform::list_running_processes();
+                                if procs.is_empty() {
+                                    ui.label(RichText::new("未检测到活跃进程").small().color(theme::muted()));
+                                } else {
+                                    egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                                        for proc in procs {
+                                            if ui.button(&proc).clicked() {
+                                                self.new_rule_kind = RuleDraftKind::ProcessName;
+                                                self.new_rule_value = proc.clone();
+                                                ui.close_menu();
+                                            }
+                                        }
+                                    });
+                                }
+                            });
+
                             add_recommended = ui
                                 .button("推荐分流")
                                 .on_hover_text("覆盖为国内直连、广告拒绝、其余代理")

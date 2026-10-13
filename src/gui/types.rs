@@ -66,13 +66,14 @@ pub enum RuleDraftKind {
     IpCidr,
     DestinationPort,
     ProcessName,
+    RuleSet,
     Tcp,
     Udp,
     Quic,
 }
 
 impl RuleDraftKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Domain,
         Self::DomainSuffix,
         Self::GeoSite,
@@ -80,6 +81,7 @@ impl RuleDraftKind {
         Self::IpCidr,
         Self::DestinationPort,
         Self::ProcessName,
+        Self::RuleSet,
         Self::Tcp,
         Self::Udp,
         Self::Quic,
@@ -94,6 +96,7 @@ impl RuleDraftKind {
             Self::IpCidr => "IP-CIDR",
             Self::DestinationPort => "目标端口",
             Self::ProcessName => "进程名",
+            Self::RuleSet => "规则集",
             Self::Tcp => "TCP",
             Self::Udp => "UDP",
             Self::Quic => "QUIC",
@@ -113,6 +116,7 @@ impl RuleDraftKind {
             Self::IpCidr => RuleMatcher::IpCidr(value.trim().into()),
             Self::DestinationPort => RuleMatcher::DestinationPort(value.trim().into()),
             Self::ProcessName => RuleMatcher::ProcessName(value.trim().into()),
+            Self::RuleSet => RuleMatcher::RuleSet(value.trim().into()),
             Self::Tcp => RuleMatcher::Network(NetworkProtocol::Tcp),
             Self::Udp => RuleMatcher::Network(NetworkProtocol::Udp),
             Self::Quic => RuleMatcher::Quic,
@@ -365,6 +369,7 @@ pub struct SettingsEditState {
     pub speedtest_reuse_minutes: u32,
     pub speedtest_conditional_isolation: bool,
     pub speedtest_download_top_n: u32,
+    pub speedtest_dedup_egress: bool,
     pub speedtest_auto_refill: bool,
     pub auto_rearm_system_proxy: bool,
     pub auto_prepare_kernel: bool,
@@ -397,6 +402,7 @@ impl SettingsEditState {
             speedtest_reuse_minutes: s.speedtest_reuse_minutes,
             speedtest_conditional_isolation: s.speedtest_conditional_isolation,
             speedtest_download_top_n: s.speedtest_download_top_n,
+            speedtest_dedup_egress: s.speedtest_dedup_egress,
             speedtest_auto_refill: s.speedtest_auto_refill,
             auto_rearm_system_proxy: s.auto_rearm_system_proxy,
             auto_prepare_kernel: s.auto_prepare_kernel,
@@ -428,6 +434,7 @@ impl SettingsEditState {
             || self.speedtest_reuse_minutes != s.speedtest_reuse_minutes
             || self.speedtest_conditional_isolation != s.speedtest_conditional_isolation
             || self.speedtest_download_top_n != s.speedtest_download_top_n
+            || self.speedtest_dedup_egress != s.speedtest_dedup_egress
             || self.bandwidth_guard != s.bandwidth_guard
             || self.bandwidth_min_kbps != s.bandwidth_min_kbps
             || self.speedtest_auto_refill != s.speedtest_auto_refill

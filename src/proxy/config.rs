@@ -186,6 +186,7 @@ pub enum RuleMatcher {
     IpCidr(String),
     DestinationPort(String),
     ProcessName(String),
+    RuleSet(String),
     Network(NetworkProtocol),
     Quic,
 }
@@ -223,6 +224,7 @@ fn shadows(earlier: &TrafficRule, later: &TrafficRule) -> bool {
         (GeoIp(a), GeoIp(b)) => a.eq_ignore_ascii_case(b),
         (DestinationPort(a), DestinationPort(b)) => a == b,
         (ProcessName(a), ProcessName(b)) => a == b,
+        (RuleSet(a), RuleSet(b)) => a == b,
         (Quic, Quic) => true,
         (Network(a), Network(b)) => a == b,
         _ => false,
@@ -246,6 +248,7 @@ impl TrafficRule {
             RuleMatcher::IpCidr(value) => render_value_rule("IP-CIDR", value, target)?,
             RuleMatcher::DestinationPort(value) => render_value_rule("DST-PORT", value, target)?,
             RuleMatcher::ProcessName(value) => render_value_rule("PROCESS-NAME", value, target)?,
+            RuleMatcher::RuleSet(value) => render_value_rule("RULE-SET", value, target)?,
             RuleMatcher::Network(protocol) => {
                 format!("NETWORK,{},{}", protocol.as_mihomo_value(), target)
             }

@@ -151,6 +151,7 @@ impl VpnApp {
         }
         ui.add_space(4.0);
         let mut delete_dead = false;
+        let mut prune_stale = false;
         let mut delete_invalid = false;
         let mut physical_dedupe = false;
         let mut clean_names = false;
@@ -216,6 +217,7 @@ impl VpnApp {
             ui.add_enabled_ui(!self.busy, |ui| {
                 ui.menu_button("节点清理 ▼", |ui| {
                     delete_dead = ui.button("删除超时/失败节点").clicked();
+                    prune_stale = ui.button("🍂 淘汰过期失效节点").on_hover_text("清理 7 天以上持续不可用的僵尸节点").clicked();
                     delete_invalid = ui
                         .button("删除无效主机")
                         .on_hover_text("删除 127.0.0.1 / 内网 / localhost 等无效节点")
@@ -301,7 +303,9 @@ impl VpnApp {
                 self.reload_node_view();
             }
         });
-        if delete_dead {
+        if prune_stale {
+            self.prune_stale_nodes();
+        } else if delete_dead {
             self.delete_dead_nodes();
         } else if delete_invalid {
             self.delete_invalid_hosts();
@@ -383,9 +387,6 @@ impl VpnApp {
         }
 
         panel_frame().show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
                     let nodes = self.nodes.clone();
                     let columns = if ui.available_width() >= 920.0 {
                         4
@@ -394,7 +395,14 @@ impl VpnApp {
                     } else {
                         2
                     };
-                    for row in nodes.chunks(columns) {
+                    let total_card_rows = (nodes.len() + columns - 1) / columns;
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show_rows(ui, 84.0, total_card_rows, |ui, row_range| {
+                    for row_idx in row_range {
+                            let start = row_idx * columns;
+                            let end = (start + columns).min(nodes.len());
+                            let row = &nodes[start..end];
                         ui.columns(columns, |column_uis| {
                             for (column_index, column_ui) in column_uis.iter_mut().enumerate() {
                                 let Some(node) = row.get(column_index) else {

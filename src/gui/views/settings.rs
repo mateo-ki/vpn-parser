@@ -639,6 +639,12 @@ impl VpnApp {
                 ui.label(RichText::new("0 = 每轮全部重测").small().color(theme::muted()));
             });
             ui.checkbox(
+                &mut self.edit_speedtest_dedup_egress,
+                "同物理落地剪枝 (落地去重)",
+            )
+            .on_hover_text("多源或同源多个节点解析到相同目标 IP:Port 时，只对 1 个物理代表节点进行真实内核握手并共享结果，大幅提速并防止打死 VPS");
+
+            ui.checkbox(
                 &mut self.edit_speedtest_conditional_isolation,
                 "只对可疑的失败节点做 mihomo -t 隔离复测（默认全部复测）",
             );

@@ -57,7 +57,7 @@ impl Database {
                        exclude_keywords, failover_latency_ms,
                        speedtest_parallel_kernels, speedtest_persistent_kernel,
                        speedtest_reuse_minutes, speedtest_conditional_isolation,
-                       speedtest_download_top_n, bandwidth_guard, bandwidth_min_kbps,
+                       speedtest_download_top_n, speedtest_dedup_egress, bandwidth_guard, bandwidth_min_kbps,
                        publisher_api, publisher_token, ui_theme, kernel_source, firewall_auto_allow,
                        auto_failover, speedtest_auto_refill,
                        auto_prepare_kernel, speedtest_added_source,
@@ -116,6 +116,8 @@ impl Database {
                 != 0,
             speedtest_download_top_n: sqlx::Row::try_get::<i64, _>(&row, "speedtest_download_top_n")
                 .unwrap_or(0) as u32,
+            speedtest_dedup_egress: sqlx::Row::try_get::<i64, _>(&row, "speedtest_dedup_egress")
+                .unwrap_or(1) != 0,
             bandwidth_guard: sqlx::Row::try_get::<i64, _>(&row, "bandwidth_guard").unwrap_or(0)
                 != 0,
             bandwidth_min_kbps: sqlx::Row::try_get::<i64, _>(&row, "bandwidth_min_kbps")
@@ -273,6 +275,7 @@ impl Database {
                  speedtest_reuse_minutes=?,
                  speedtest_conditional_isolation=?,
                  speedtest_download_top_n=?,
+                 speedtest_dedup_egress=?,
                  bandwidth_guard=?,
                  bandwidth_min_kbps=?,
                  publisher_api=?,
@@ -305,6 +308,7 @@ impl Database {
         .bind(s.speedtest_reuse_minutes as i64)
         .bind(s.speedtest_conditional_isolation as i64)
         .bind(s.speedtest_download_top_n as i64)
+        .bind(s.speedtest_dedup_egress as i64)
         .bind(s.bandwidth_guard as i64)
         .bind(s.bandwidth_min_kbps as i64)
         .bind(&s.publisher_api)

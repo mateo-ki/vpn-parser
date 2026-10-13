@@ -41,6 +41,7 @@ fn refill_opts(settings: &AppSettings) -> SpeedTestOptions {
         reuse_verified_minutes: settings.speedtest_reuse_minutes,
         conditional_isolation: settings.speedtest_conditional_isolation,
         download_top_n: settings.speedtest_download_top_n,
+        dedup_egress: settings.speedtest_dedup_egress,
     }
 }
 
@@ -176,6 +177,7 @@ impl Scheduler {
                             reuse_verified_minutes: settings.speedtest_reuse_minutes,
                             conditional_isolation: settings.speedtest_conditional_isolation,
                             download_top_n: settings.speedtest_download_top_n,
+                            dedup_egress: settings.speedtest_dedup_egress,
                         };
                         match self.speedtester.test_all_sources(opts).await {
                             Ok(sum) => {

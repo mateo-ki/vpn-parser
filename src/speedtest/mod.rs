@@ -66,6 +66,7 @@ pub struct SpeedTestOptions {
     pub reuse_verified_minutes: u32,
     pub conditional_isolation: bool,
     pub download_top_n: u32,
+    pub dedup_egress: bool,
 }
 
 /// The TCP prefilter is only a coarse gate before the real proxy handshake, so it
@@ -108,6 +109,7 @@ impl Default for SpeedTestOptions {
             reuse_verified_minutes: 0,
             conditional_isolation: false,
             download_top_n: 0,
+            dedup_egress: true,
         }
     }
 }
@@ -734,12 +736,46 @@ impl SpeedTester {
         };
         let conditional_isolation = opts.conditional_isolation;
         let proxy_total = proxy_candidates.len();
+        let (actual_candidates, physical_mirrors) = if opts.dedup_egress {
+            let mut groups: std::collections::HashMap<String, Vec<Node>> = std::collections::HashMap::new();
+            for node in proxy_candidates {
+                let physical_key = if let Some(Ok(addrs)) = resolved.get(&(node.server.clone(), node.port)) {
+                    if let Some(first) = addrs.first() {
+                        format!("{}:{}:{}", first.ip(), node.port, node.protocol.to_ascii_lowercase())
+                    } else {
+                        format!("{}:{}:{}", node.server.to_ascii_lowercase(), node.port, node.protocol.to_ascii_lowercase())
+                    }
+                } else {
+                    format!("{}:{}:{}", node.server.to_ascii_lowercase(), node.port, node.protocol.to_ascii_lowercase())
+                };
+                groups.entry(physical_key).or_default().push(node);
+            }
+
+            let mut representatives = Vec::with_capacity(groups.len());
+            let mut mirrors: std::collections::HashMap<String, Vec<Node>> = std::collections::HashMap::new();
+            for (_key, mut group) in groups {
+                let rep = group.remove(0);
+                if !group.is_empty() {
+                    mirrors.insert(rep.id.clone(), group);
+                }
+                representatives.push(rep);
+            }
+            info!(
+                representatives = representatives.len(),
+                mirrors = mirrors.values().map(|v| v.len()).sum::<usize>(),
+                "同物理落地剪枝生效：过滤镜像重复握手"
+            );
+            (representatives, mirrors)
+        } else {
+            (proxy_candidates, std::collections::HashMap::new())
+        };
+
         let mut mihomo_nodes = Vec::new();
         let mut sing_box_nodes = Vec::new();
         let mut xray_nodes = Vec::new();
         let mut proxy_results = Vec::new();
         let mut result_kernels = HashMap::new();
-        for node in proxy_candidates {
+        for node in actual_candidates {
             match select_proxy_kernel(&node.protocol) {
                 Ok(KernelKind::Mihomo) => {
                     result_kernels.insert(node.id.clone(), KernelKind::Mihomo);
@@ -935,6 +971,22 @@ impl SpeedTester {
                 batch_total: None,
             });
         }
+        for (rep_id, mirror_nodes) in &physical_mirrors {
+            if let Some(rep_res) = proxy_results.iter().find(|r| r.id == *rep_id).cloned() {
+                for mirror in mirror_nodes {
+                    proxy_results.push(ProxyProbeResult {
+                        id: mirror.id.clone(),
+                        ok: rep_res.ok,
+                        latency_ms: rep_res.latency_ms,
+                        message: format!("{} (同落地复用)", rep_res.message),
+                    });
+                    if let Some(k) = result_kernels.get(rep_id) {
+                        result_kernels.insert(mirror.id.clone(), *k);
+                    }
+                }
+            }
+        }
+
         let mut proxy_results: HashMap<String, ProxyProbeResult> = proxy_results
             .into_iter()
             .map(|result| (result.id.clone(), result))

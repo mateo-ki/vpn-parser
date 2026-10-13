@@ -735,6 +735,7 @@ pub fn rule_matcher_label(matcher: &RuleMatcher) -> String {
         RuleMatcher::IpCidr(value) => format!("IP-CIDR · {value}"),
         RuleMatcher::DestinationPort(value) => format!("DST-PORT · {value}"),
         RuleMatcher::ProcessName(value) => format!("PROCESS-NAME · {value}"),
+        RuleMatcher::RuleSet(value) => format!("RULE-SET · {value}"),
         RuleMatcher::Network(NetworkProtocol::Tcp) => "NETWORK · tcp".into(),
         RuleMatcher::Network(NetworkProtocol::Udp) => "NETWORK · udp".into(),
         RuleMatcher::Quic => "QUIC · udp/443".into(),

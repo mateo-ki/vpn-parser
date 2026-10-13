@@ -207,6 +207,7 @@ pub struct VpnApp {
     pub(crate) edit_speedtest_reuse_minutes: u32,
     pub(crate) edit_speedtest_conditional_isolation: bool,
     pub(crate) edit_speedtest_download_top_n: u32,
+    pub(crate) edit_speedtest_dedup_egress: bool,
     /// 本次运行内自动切换的次数与最近一次原因，显示在控制台状态卡上。
     pub(crate) failover_switches: usize,
     pub(crate) failover_last_reason: Option<String>,
@@ -439,6 +440,7 @@ impl VpnApp {
             edit_speedtest_reuse_minutes: 0,
             edit_speedtest_conditional_isolation: false,
             edit_speedtest_download_top_n: 0,
+            edit_speedtest_dedup_egress: true,
             failover_switches: 0,
             failover_last_reason: None,
             failover_probe_at: None,
@@ -518,6 +520,7 @@ impl VpnApp {
             reuse_verified_minutes: self.settings.speedtest_reuse_minutes,
             conditional_isolation: self.settings.speedtest_conditional_isolation,
             download_top_n: self.settings.speedtest_download_top_n,
+            dedup_egress: self.settings.speedtest_dedup_egress,
         }
     }
 
@@ -3879,6 +3882,21 @@ impl VpnApp {
         });
     }
 
+    pub(crate) fn prune_stale_nodes(&mut self) {
+        let db = self.db.clone();
+        let tx = self.tx.clone();
+        self.busy = true;
+        self.status = "正在淘汰 7 天以上持续失效的节点...".into();
+        self.rt.spawn(async move {
+            let res = db
+                .prune_stale_dead_nodes(7)
+                .await
+                .map(|n| format!("已清理淘汰 {n} 个长期失效节点"))
+                .map_err(|e| e.to_string());
+            let _ = tx.send(BgMsg::OpDone { result: res, unlock: true });
+        });
+    }
+
     pub(crate) fn delete_dead_nodes(&mut self) {
         let db = self.db.clone();
         let tx = self.tx.clone();
@@ -4009,6 +4027,7 @@ impl VpnApp {
             speedtest_reuse_minutes: self.edit_speedtest_reuse_minutes,
             speedtest_conditional_isolation: self.edit_speedtest_conditional_isolation,
             speedtest_download_top_n: self.edit_speedtest_download_top_n,
+            speedtest_dedup_egress: self.edit_speedtest_dedup_egress,
             bandwidth_guard: self.edit_bandwidth_guard,
             bandwidth_min_kbps: self.edit_bandwidth_min_kbps,
         }
@@ -4042,6 +4061,7 @@ impl VpnApp {
         self.edit_speedtest_reuse_minutes = state.speedtest_reuse_minutes;
         self.edit_speedtest_conditional_isolation = state.speedtest_conditional_isolation;
         self.edit_speedtest_download_top_n = state.speedtest_download_top_n;
+        self.edit_speedtest_dedup_egress = state.speedtest_dedup_egress;
         self.edit_bandwidth_guard = state.bandwidth_guard;
         self.edit_bandwidth_min_kbps = state.bandwidth_min_kbps;
         self.edit_ui_theme = state.ui_theme.clone();
@@ -4073,6 +4093,7 @@ impl VpnApp {
             speedtest_reuse_minutes: Some(self.edit_speedtest_reuse_minutes),
             speedtest_conditional_isolation: Some(self.edit_speedtest_conditional_isolation),
             speedtest_download_top_n: Some(self.edit_speedtest_download_top_n),
+            speedtest_dedup_egress: Some(self.edit_speedtest_dedup_egress),
             bandwidth_guard: Some(self.edit_bandwidth_guard),
             bandwidth_min_kbps: Some(self.edit_bandwidth_min_kbps),
             ui_theme: Some(self.edit_ui_theme.clone()),

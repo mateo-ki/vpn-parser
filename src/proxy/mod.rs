@@ -325,6 +325,51 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
         config["dns"]["proxy-server-nameserver"] = json!(options.dns.proxy_server_nameserver);
     }
 
+    let mut rule_sets = std::collections::HashSet::new();
+    for r in &selected_rules {
+        if let crate::proxy::RuleMatcher::RuleSet(name) = &r.matcher {
+            rule_sets.insert(name.clone());
+        }
+    }
+    if !rule_sets.is_empty() {
+        let mut providers = serde_json::Map::new();
+        for name in rule_sets {
+            let (url, behavior) = match name.as_str() {
+                "reject" | "reject-list" => (
+                    "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/reject-list.txt",
+                    "domain",
+                ),
+                "direct" | "direct-list" => (
+                    "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt",
+                    "domain",
+                ),
+                "proxy" | "proxy-list" => (
+                    "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt",
+                    "domain",
+                ),
+                "gfw" => (
+                    "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt",
+                    "domain",
+                ),
+                _ => (
+                    "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt",
+                    "domain",
+                ),
+            };
+            providers.insert(
+                name.clone(),
+                json!({
+                    "type": "http",
+                    "behavior": behavior,
+                    "url": url,
+                    "path": format!("./ruleset/{name}.yaml"),
+                    "interval": 86400
+                }),
+            );
+        }
+        config["rule-providers"] = serde_json::Value::Object(providers);
+    }
+
     if selected_rules.iter().any(TrafficRule::uses_geo) {
         config["geodata-mode"] = json!(true);
         // 关死内核侧自动更新：它只会直连 GitHub（实测 0.116 MB/s），在启动窗口内下不完就

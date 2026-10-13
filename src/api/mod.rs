@@ -676,6 +676,7 @@ async fn speedtest_one(
             reuse_verified_minutes: s.speedtest_reuse_minutes,
             conditional_isolation: s.speedtest_conditional_isolation,
             download_top_n: s.speedtest_download_top_n,
+            dedup_egress: s.speedtest_dedup_egress,
         },
         Err(_) => SpeedTestOptions::default(),
     };
@@ -711,6 +712,7 @@ async fn speedtest_all(
         reuse_verified_minutes: settings.speedtest_reuse_minutes,
         conditional_isolation: settings.speedtest_conditional_isolation,
         download_top_n: settings.speedtest_download_top_n,
+        dedup_egress: settings.speedtest_dedup_egress,
     };
     match st.speedtester.test_many(ids, opts).await {
         Ok(r) => Json(ApiResponse::ok(r)).into_response(),

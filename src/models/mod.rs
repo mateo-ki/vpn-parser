@@ -239,6 +239,9 @@ pub struct AppSettings {
     /// 测速优化⑤：下载测速只对延迟前 N 名做（0 = 所有通过节点都测）。
     #[serde(default)]
     pub speedtest_download_top_n: u32,
+    /// 测速优化⑥：同物理落地节点剪枝与复用（默认开启）。
+    #[serde(default = "default_true")]
+    pub speedtest_dedup_egress: bool,
     /// 带宽保护（#5）：当前节点持续低于阈值 KB/s 时，交给选路调度器按劣化处理。
     #[serde(default)]
     pub bandwidth_guard: bool,
@@ -329,6 +332,7 @@ impl Default for AppSettings {
             speedtest_reuse_minutes: 0,
             speedtest_conditional_isolation: false,
             speedtest_download_top_n: 0,
+            speedtest_dedup_egress: true,
             bandwidth_guard: false,
             bandwidth_min_kbps: 0,
             publisher_api: String::new(),
@@ -368,6 +372,7 @@ pub struct UpdateSettings {
     pub speedtest_reuse_minutes: Option<u32>,
     pub speedtest_conditional_isolation: Option<bool>,
     pub speedtest_download_top_n: Option<u32>,
+    pub speedtest_dedup_egress: Option<bool>,
     pub bandwidth_guard: Option<bool>,
     pub bandwidth_min_kbps: Option<u32>,
     pub publisher_api: Option<String>,

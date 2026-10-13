@@ -336,6 +336,9 @@ fn build_routing_rules(options: &MihomoConfigOptions) -> Result<Vec<Value>> {
                 value.insert("network".into(), json!("udp"));
                 value.insert("port".into(), json!("443"));
             }
+            RuleMatcher::RuleSet(tag) => {
+                value.insert("domain".into(), json!([format!("geosite:{tag}")]));
+            }
         }
         rules.push(Value::Object(value));
     }

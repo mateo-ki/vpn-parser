@@ -679,6 +679,9 @@ fn build_route_rules(options: &MihomoConfigOptions) -> Result<(Vec<Value>, Vec<V
                     GEOIP_CN_URL,
                 );
                 json!({ "rule_set": ["geoip-cn"], "action": "route", "outbound": action })
+            },
+            RuleMatcher::RuleSet(tag) => {
+                json!({ "rule_set": [tag], "action": "route", "outbound": action })
             }
         };
         rules.push(if rule.action == RuleAction::Reject {

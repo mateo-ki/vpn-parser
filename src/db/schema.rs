@@ -228,6 +228,7 @@ impl Database {
             "speedtest_reuse_minutes",
             "speedtest_conditional_isolation",
             "speedtest_download_top_n",
+            "speedtest_dedup_egress",
             "bandwidth_guard",
             "bandwidth_min_kbps",
         ] {
@@ -403,7 +404,16 @@ impl Database {
         for ddl in [
             // 每一次连通性实测都落一行。表头那句「Google: 已连通」以前只看 state，
             // 内核日志里全是 dial i/o timeout 它照样画绿勾（2026-10-06 实测）。
-            r#"CREATE TABLE IF NOT EXISTS egress_health (
+            r#"CREATE TABLE IF NOT EXISTS egress_health_daily (
+                day TEXT PRIMARY KEY NOT NULL,
+                total_checks INTEGER NOT NULL DEFAULT 0,
+                ok_count INTEGER NOT NULL DEFAULT 0,
+                fail_count INTEGER NOT NULL DEFAULT 0,
+                avg_latency_ms REAL,
+                max_latency_ms INTEGER
+            );
+
+            CREATE TABLE IF NOT EXISTS egress_health (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 at TEXT NOT NULL,
                 ok INTEGER NOT NULL,

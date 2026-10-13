@@ -1,0 +1,247 @@
+<!doctype html>
+<!--
+  对照页：把"截图那套样式"拆成可点的三栏比较，用 vpn-parser 首页（控制台）的真实结构与真实数字。
+  A = 现状（2026-10-06 你定的浅白家族）
+  B = 只改版式（4 个统计 tile + 两张等宽大卡 + 侧栏药丸），配色仍是浅白
+  C = 整套照搬截图（近黑三层底 + emerald 主强调 + amber 进度）
+  上面那条工具条换强调色，B / C 会一起跟着变；对比度数字是实时算的（WCAG 2.1）。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>VPN Parser · 控制台样式对照</title>
+<style>
+  :root { --scale: 0.86; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #1b1e24; color: #e8edf2;
+         font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; }
+  .bar { position: sticky; top: 0; z-index: 9; display: flex; gap: 14px; align-items: center;
+         padding: 12px 20px; background: #12151a; border-bottom: 1px solid #262b33; flex-wrap: wrap; }
+  .bar b { font-size: 14px; }
+  .sw { width: 26px; height: 26px; border-radius: 8px; border: 2px solid #3a4048; cursor: pointer; padding: 0; }
+  .sw[aria-pressed="true"] { border-color: #fff; }
+  .note { font-size: 12px; color: #97a1ad; max-width: 640px; line-height: 1.6; }
+  h2.cap { font-size: 15px; margin: 26px 20px 10px; color: #cfd7e0; }
+  h2.cap span { font-size: 12px; color: #8a93a0; font-weight: 400; margin-left: 8px; }
+  .stage { margin: 0 20px 8px; border-radius: 18px; overflow: hidden;
+           box-shadow: 0 10px 30px rgba(0,0,0,.35); width: calc(100% ); }
+  .a11y { margin: 6px 20px 0; font-size: 11.5px; color: #97a1ad; display: flex; gap: 16px; flex-wrap: wrap; }
+  .a11y i { font-style: normal; padding: 2px 7px; border-radius: 6px; background: #232830; }
+  .pass::before { content: "AA "; color: #57d9a3; } .fail::before { content: "低 "; color: #f2b8b8; }
+
+  /* ---- 一套版式，三套 token：只有下面这些变量不同 ---- */
+  .mock { --page:#E8EEF7; --nav:#FFFFFF; --pill:#E7EEF9; --card:#FFFFFF; --line:#E9F0FA;
+          --ink:#1A2028; --ink2:#3F4A57; --muted:#64707E; --ok:#0E6B4C; --warn:#6B7480;
+          --accent:#2F6FEB; --on:#FFFFFF; --track:rgba(0,0,0,.08); }
+  .mock.dark { --page:#0B0D11; --nav:#0F1218; --pill:#212429; --card:#13161F; --line:#20242E;
+          --ink:#E8EDF2; --ink2:#C3CBD5; --muted:#8A93A0; --ok:#34D399; --warn:#8A93A0;
+          --track:rgba(255,255,255,.10); }
+  .mock { background: var(--page); color: var(--ink); font-size: 13px; line-height: 1.5; }
+  .win { display: grid; grid-template-columns: 208px 1fr; height: 620px; }
+  .side { background: var(--nav); padding: 16px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .brand { display: flex; gap: 9px; align-items: center; padding: 4px 8px 16px; }
+  .logo { width: 30px; height: 30px; border-radius: 9px; background: var(--accent); opacity: .9; }
+  .brand b { font-size: 14px; display: block; } .brand s { display: block; font-size: 11px; color: var(--muted); text-decoration: none; }
+  .nav { display: flex; align-items: center; gap: 9px; padding: 9px 11px; border-radius: 10px; color: var(--ink2); }
+  .nav.on { background: var(--pill); color: var(--ink); font-weight: 600; }
+  .nav u { width: 15px; height: 15px; border: 1.6px solid currentColor; border-radius: 4px; text-decoration: none; opacity: .75; }
+  .main { padding: 18px 22px; overflow: hidden; }
+  .top { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .top h1 { font-size: 26px; margin: 0; letter-spacing: -.5px; }
+  .top .sub { font-size: 12px; color: var(--muted); }
+  .top .sp { flex: 1; }
+  .btn { font: inherit; font-size: 12.5px; padding: 7px 13px; border-radius: 9px; border: 1px solid var(--line);
+         background: var(--card); color: var(--ink2); cursor: default; }
+  .btn.primary { border-color: transparent; background: var(--accent); color: var(--on); font-weight: 600; }
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 14px; }
+  .tile, .big { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 15px 16px; }
+  .tile h3 { margin: 0 0 8px; font-size: 12.5px; font-weight: 500; color: var(--muted); }
+  .tile .n { font-size: 32px; font-weight: 700; letter-spacing: -1px; line-height: 1.05; }
+  .tile .n em { font-size: 15px; font-weight: 500; font-style: normal; color: var(--muted); margin-left: 2px; }
+  .tile .g { height: 2px; background: var(--track); border-radius: 2px; margin: 10px 0 8px; overflow: hidden; }
+  .tile .g i { display: block; height: 100%; background: var(--accent); }
+  .tile .f { font-size: 11.5px; color: var(--muted); }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .big h3 { margin: 0 0 3px; font-size: 15px; } .big .hint { font-size: 11.5px; color: var(--muted); margin-bottom: 12px; }
+  .kv { display: grid; grid-template-columns: 84px 1fr; gap: 7px 10px; font-size: 12.5px; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; font-weight: 600; }
+  .kv dd.mono { font-family: ui-monospace, Consolas, monospace; font-weight: 500; }
+  .live { color: var(--ok); font-weight: 700; } .live::before { content: "● "; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .bars { display: flex; gap: 3px; align-items: flex-end; height: 46px; margin-top: 10px; }
+  .bars i { flex: 1; background: var(--accent); opacity: .85; border-radius: 2px 2px 0 0; }
+  .bars i.off { background: var(--track); opacity: 1; }
+  .rule { display: flex; justify-content: space-between; font-size: 12px; padding: 6px 0; border-top: 1px solid var(--line); }
+  .rule b { font-weight: 600; } .rule span { color: var(--muted); }
+  .foot { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 9px; font-size: 11.5px; color: var(--muted); }
+  /* 现状那一栏：没有 tile 行，只有 chip 串 + 单列卡片 */
+  .mock.legacy .tiles { display: none; }
+  .mock.legacy .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .mock.legacy .chip { background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; font-size: 12px; }
+  .mock.legacy .chip b { color: var(--accent); }
+  .mock:not(.legacy) .chips { display: none; }
+  .mock:not(.legacy) .pair { grid-template-columns: 1fr 1fr; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <b>强调色</b>
+  <button class="sw" data-a="#2F6FEB" style="background:#2F6FEB" aria-pressed="true"></button>
+  <button class="sw" data-a="#00A78D" style="background:#00A78D"></button>
+  <button class="sw" data-a="#34D399" style="background:#34D399"></button>
+  <button class="sw" data-a="#D9772E" style="background:#D9772E"></button>
+  <button class="sw" data-a="#5B5BD6" style="background:#5B5BD6"></button>
+  <button class="sw" data-a="#7C5CFF" style="background:#7C5CFF"></button>
+  <p class="note">三栏<b>版式与内容完全相同</b>，只有 CSS 变量不同 —— 数字取自你库里的真实现状（31 源 / 14,424 节点 / 90 测通）。
+     注意 C 栏的 amber 进度条与"近黑底"和你 2026-10-06 的两条决定冲突（深色全删、页面上不要红黄），要选 C 就是推翻那两条。</p>
+</div>
+
+<h2 class="cap">A · 现状<span>浅白家族 + 一行 chip，没有统计 tile</span></h2>
+<div class="stage" id="sA"></div>
+<div class="a11y" id="mA"></div>
+
+<h2 class="cap">B · 只改版式<span>统计 tile 行 + 两张等宽大卡 + 侧栏药丸，配色仍是现在的浅白</span></h2>
+<div class="stage" id="sB"></div>
+<div class="a11y" id="mB"></div>
+
+<h2 class="cap">C · 整套照搬截图<span>近黑三层底 + emerald 主强调 + amber 进度</span></h2>
+<div class="stage" id="sC"></div>
+<div class="a11y" id="mC"></div>
+
+<script>
+const html = `
+<div class="win">
+  <aside class="side">
+    <div class="brand"><div class="logo"></div><div><b>VPN Parser</b><s>订阅与代理控制台</s></div></div>
+    <div class="nav on"><u></u>控制台</div>
+    <div class="nav"><u></u>节点池</div>
+    <div class="nav"><u></u>订阅源</div>
+    <div class="nav"><u></u>系统设置</div>
+    <div class="nav"><u></u>外部接口</div>
+  </aside>
+  <main class="main">
+    <div class="top">
+      <h1>控制台</h1><div class="sub">最近 24 小时</div><div class="sp"></div>
+      <button class="btn">出口健康</button><button class="btn primary">启动代理</button>
+    </div>
+    <div class="chips">
+      <div class="chip">订阅源 <b>31</b></div><div class="chip">启用 <b>31</b></div>
+      <div class="chip">节点 <b>14,424</b></div><div class="chip">已测 <b>90</b></div>
+      <div class="chip">可用 <b>90</b></div><div class="chip">vless <b>6,120</b></div>
+    </div>
+    <div class="tiles">
+      <div class="tile"><h3>订阅源</h3><div class="n">31</div><div class="g"><i style="width:100%"></i></div><div class="f">全部启用 · 今天 3 个源 404</div></div>
+      <div class="tile"><h3>节点</h3><div class="n">14,424</div><div class="g"><i style="width:62%"></i></div><div class="f">36 个分片库 · 已去重</div></div>
+      <div class="tile"><h3>测通</h3><div class="n">90<em>/14,424</em></div><div class="g"><i style="width:.6%"></i></div><div class="f">generate_204 实测 · 1.7%</div></div>
+      <div class="tile"><h3>出口延迟</h3><div class="n">1054<em>ms</em></div><div class="g"><i style="width:70%"></i></div><div class="f">电信-10 · 阈值 1500ms</div></div>
+    </div>
+    <div class="pair">
+      <section class="big">
+        <h3>运行控制</h3><div class="hint">内核 mihomo · 系统代理模式</div>
+        <dl class="kv">
+          <dt>代理状态</dt><dd class="live">运行中</dd>
+          <dt>监听端口</dt><dd class="mono">mixed 9980 / api 9090</dd>
+          <dt>当前出口</dt><dd>电信-10 <span style="color:var(--muted);font-weight:400">· 1054ms</span></dd>
+          <dt>候选池</dt><dd>url-test 12 条 · 已导出 12</dd>
+          <dt>系统代理</dt><dd class="mono">127.0.0.1:9980</dd>
+        </dl>
+        <div class="bars">
+          ${Array.from({length:24},(_,i)=>{const h=[42,38,44,30,46,41,0,0,22,35,40,44,33,46,44,40,41,0,0,28,36,44,42,39][i];
+            return `<i class="${h?'':'off'}" style="height:${h||12}%"></i>`}).join('')}
+        </div>
+        <div class="foot">上行/下行 24 小时 · 采样 1s · 空白段是内核没在跑</div>
+      </section>
+      <section class="big">
+        <h3>分流与命中</h3><div class="hint">规则 1,286 条 · 今天实际走的路</div>
+        <div class="rule"><b>GEOSITE,cn → DIRECT</b><span>4,182 次</span></div>
+        <div class="rule"><b>Google → PROXY</b><span>917 次</span></div>
+        <div class="rule"><b>兜底 MATCH → PROXY</b><span>203 次</span></div>
+        <div class="rule"><b>GEOIP,lan → DIRECT</b><span>64 次</span></div>
+        <div class="row" style="margin-top:12px"><button class="btn">查看切换记录</button><button class="btn">规则编辑</button></div>
+        <div class="foot">兜底命中 203 次里 41 个域名反复出现 —— 可以一键提成规则</div>
+      </section>
+    </div>
+  </main>
+</div>`;
+
+const variants = { sA: ["legacy", ""], sB: ["", ""], sC: ["", "dark"] };
+let accent = "#2F6FEB";
+
+function lum(hex) {
+  const c = [1,3,5].map(i => parseInt(hex.slice(i,i+2),16)/255)
+    .map(v => v <= .03928 ? v/12.92 : Math.pow((v+.055)/1.055, 2.4));
+  return .2126*c[0] + .7152*c[1] + .0722*c[2];
+}
+function ratio(a, b) { const [x,y] = [lum(a), lum(b)].sort((p,q)=>q-p); return (x+.05)/(y+.05); }
+function mix(a, b, t) {
+  const p = h => [1,3,5].map(i=>parseInt(h.slice(i,i+2),16));
+  const m = p(a).map((v,i)=>Math.round(v+(p(b)[i]-v)*t));
+  return "#" + m.map(v=>v.toString(16).padStart(2,"0")).join("");
+}
+// 往某个方向（黑或白）逐步压，直到和背景的对比度达标 —— 强调色不能拿来做正文/按钮底。
+function readable(color, bg, target, dir) {
+  let c = color;
+  for (let t = 0; t <= 1.001; t += 0.02) {
+    c = mix(color, dir, t);
+    if (ratio(c, bg) >= target) return c;
+  }
+  return c;
+}
+function bestOn(bg) {
+  return ratio("#FFFFFF", bg) >= ratio("#0B0D11", bg) ? "#FFFFFF" : "#0B0D11";
+}
+// 按钮的一对颜色：底色先按背景压到能读，再检查"字 vs 底"够不够 4.5；
+// 不够就继续把底色压深（紫罗兰 #7C5CFF 配白字只有 4.47，就是这里会被推深一点）。
+function buttonPair(accent, card, dark) {
+  const base = dark ? accent : readable(accent, card, 4.5, "#000000");
+  let bg = base, fg = bestOn(bg);
+  for (let t = 0.02; ratio(fg, bg) < 4.5 && t <= 0.6; t += 0.02) {
+    bg = mix(base, dark ? "#0B0D11" : "#000000", t);
+    fg = bestOn(bg);
+  }
+  return [bg, fg];
+}
+
+function render() {
+  for (const [id, [cls, mode]] of Object.entries(variants)) {
+    const box = document.getElementById(id);
+    box.innerHTML = `<div class="mock ${cls} ${mode}" style="--accent:${accent}">${html}</div>`;
+    const mock = box.querySelector(".mock");
+    const cs = getComputedStyle(mock);
+    const g = n => cs.getPropertyValue(n).trim();
+    const dark = mode === "dark";
+    // 强调色不能直接用：浅色底上要压暗到能读，深色底上按钮文字得改用深色
+    // （emerald 这类亮色压白字只有 1.9，压近黑才有 9+）。
+    const card = g("--card");
+    const [btnBg, btnFg] = buttonPair(g("--accent"), card, dark);
+    const strong = dark ? g("--accent") : btnBg;
+    mock.style.setProperty("--on", btnFg);
+    mock.querySelectorAll(".live,.tile .n em").forEach(e => { e.style.color = dark ? g("--accent") : ""; });
+    mock.querySelectorAll(".btn.primary").forEach(e => {
+      e.style.background = btnBg;
+      e.style.color = btnFg;
+    });
+    mock.querySelectorAll(".tile .n").forEach(e => e.style.color = g("--ink"));
+    const marks = document.getElementById(id.replace("s","m"));
+    const pairs = [
+      ["正文/页面", g("--ink"), g("--page"), 4.5],
+      ["次要说明/卡片", g("--muted"), card, 4.5],
+      ["大数字/卡片", g("--ink"), card, 3],
+      ["强调色/卡片", strong, card, 3],
+      ["按钮字/按钮底", btnFg, btnBg, 4.5],
+    ];
+    marks.innerHTML = pairs.map(([n,a,b,min]) => {
+      const r = ratio(a,b), ok = r >= min;
+      return `<i class="${ok?"pass":"fail"}">${n} ${r.toFixed(2)}${ok?"":" ⚠ 需 ≥"+min}</i>`;
+    }).join("") + `<i>底 ${g("--page")} · 卡 ${g("--card")} · 描边 ${g("--line")}</i>`;
+  }
+}
+document.querySelectorAll(".sw").forEach(b => b.onclick = () => {
+  accent = b.dataset.a;
+  document.querySelectorAll(".sw").forEach(x => x.setAttribute("aria-pressed", String(x===b)));
+  render();
+});
+render();
+</script>
+</body>
+</html>
