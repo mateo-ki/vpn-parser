@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::kernel::{managed_kernel_root, KernelKind};
 use crate::models::Node;
 use super::{build_mihomo_config, MihomoConfigOptions};

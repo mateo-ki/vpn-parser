@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::proxy::ProxyState;
 use eframe::egui::Color32;
 

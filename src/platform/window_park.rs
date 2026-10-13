@@ -48,9 +48,9 @@ mod imp {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, EnumWindows, GetClassNameW, GetWindowLongPtrW, GetWindowRect,
         GetWindowThreadProcessId, IsIconic, PostMessageW, SetForegroundWindow, SetWindowLongPtrW,
-        SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE,
-        SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE, SW_SHOW, WM_PAINT, WS_EX_TOOLWINDOW,
-        WS_MINIMIZEBOX, WS_SYSMENU,
+        SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_RESTORE,
+        SW_SHOW, WM_PAINT, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_MINIMIZEBOX, WS_SYSMENU,
     };
 
     /// winit 给真实窗口用的类名；事件窗口 / IME 助手窗口都另有其名，必须排掉。
@@ -126,6 +126,55 @@ pub fn parked() -> bool {
 
     /// 收进托盘：记住位置 -> 挂 `WS_EX_TOOLWINDOW`（任务栏/Alt-Tab 里消失）-> 移到屏幕外。
     /// 返回记下的位置，调用方存着好还原。
+    #[repr(C)]
+    struct ITaskbarListVtbl {
+        pub query_interface: usize,
+        pub add_ref: usize,
+        pub release: unsafe extern "system" fn(this: *mut core::ffi::c_void) -> u32,
+        pub hr_init: unsafe extern "system" fn(this: *mut core::ffi::c_void) -> windows_sys::core::HRESULT,
+        pub add_tab: unsafe extern "system" fn(this: *mut core::ffi::c_void, hwnd: HWND) -> windows_sys::core::HRESULT,
+        pub delete_tab: unsafe extern "system" fn(this: *mut core::ffi::c_void, hwnd: HWND) -> windows_sys::core::HRESULT,
+        pub activate_tab: unsafe extern "system" fn(this: *mut core::ffi::c_void, hwnd: HWND) -> windows_sys::core::HRESULT,
+        pub set_active_alt: unsafe extern "system" fn(this: *mut core::ffi::c_void, hwnd: HWND) -> windows_sys::core::HRESULT,
+    }
+
+    #[repr(C)]
+    struct ITaskbarList {
+        lp_vtbl: *const ITaskbarListVtbl,
+    }
+
+    const CLSID_TASKBAR_LIST: windows_sys::core::GUID = windows_sys::core::GUID::from_u128(0x56fdf344_fd6d_11d0_958a_006097c9a090);
+    const IID_ITASKBAR_LIST: windows_sys::core::GUID = windows_sys::core::GUID::from_u128(0x56fdf342_fd6d_11d0_958a_006097c9a090);
+
+    pub fn set_skip_taskbar(hwnd: HWND, skip: bool) {
+        unsafe {
+            use windows_sys::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+            let mut ptr: *mut core::ffi::c_void = std::ptr::null_mut();
+            let hr = CoCreateInstance(
+                &CLSID_TASKBAR_LIST,
+                std::ptr::null_mut(),
+                CLSCTX_ALL,
+                &IID_ITASKBAR_LIST,
+                &mut ptr,
+            );
+            if hr != 0 || ptr.is_null() {
+                return;
+            }
+            let tb = ptr as *mut ITaskbarList;
+            let vtbl = &*(*tb).lp_vtbl;
+            if (vtbl.hr_init)(ptr) == 0 {
+                if skip {
+                    let _ = (vtbl.delete_tab)(ptr, hwnd);
+                } else {
+                    let _ = (vtbl.add_tab)(ptr, hwnd);
+                }
+            }
+            let _ = (vtbl.release)(ptr);
+        }
+    }
+
+    /// 收进托盘：彻底从任务栏剥离（剥离 WS_EX_APPWINDOW、挂 WS_EX_TOOLWINDOW、调 DeleteTab）-> 移到屏幕外。
+    /// 返回记下的位置，调用方存着好还原。
     pub fn park() -> Option<Spot> {
         let hwnd = find_main()?;
         let r = rect_of(hwnd)?;
@@ -137,7 +186,12 @@ pub fn parked() -> bool {
         };
         unsafe {
             let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW as isize);
+            // 关键：必须同时剥离 WS_EX_APPWINDOW 并挂上 WS_EX_TOOLWINDOW，任务栏按钮才会真正消失
+            SetWindowLongPtrW(
+                hwnd,
+                GWL_EXSTYLE,
+                (ex & !(WS_EX_APPWINDOW as isize)) | (WS_EX_TOOLWINDOW as isize),
+            );
             SetWindowPos(
                 hwnd,
                 std::ptr::null_mut(),
@@ -145,17 +199,18 @@ pub fn parked() -> bool {
                 PARKED_Y,
                 0,
                 0,
-                SWP_NOSIZE | SWP_NOACTIVATE,
+                SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED,
             );
         }
+        set_skip_taskbar(hwnd, true);
         crate::startup_log(&format!(
-            "[托盘] 窗口停放到屏幕外 {PARKED_X},{PARKED_Y}（原位置 {} , {} , {}x{}，已挂 WS_EX_TOOLWINDOW）",
+            "[托盘] 窗口停放到屏幕外 {PARKED_X},{PARKED_Y}（原位置 {} , {} , {}x{}，已从任务栏彻底隐藏）",
             spot.x, spot.y, spot.w, spot.h
         ));
         Some(spot)
     }
 
-    /// 放回原处并摘掉 `WS_EX_TOOLWINDOW`。必须在 UI 线程调用。
+    /// 放回原处并恢复任务栏图标（摘掉 WS_EX_TOOLWINDOW，恢复 WS_EX_APPWINDOW）。必须在 UI 线程调用。
     pub fn unpark(spot: Spot) -> bool {
         let Some(hwnd) = find_main() else {
             crate::startup_log("[托盘] 还原失败：找不到主窗口");
@@ -163,7 +218,12 @@ pub fn parked() -> bool {
         };
         unsafe {
             let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex & !(WS_EX_TOOLWINDOW as isize));
+            // 关键：摘掉 WS_EX_TOOLWINDOW，恢复 WS_EX_APPWINDOW
+            SetWindowLongPtrW(
+                hwnd,
+                GWL_EXSTYLE,
+                (ex & !(WS_EX_TOOLWINDOW as isize)) | (WS_EX_APPWINDOW as isize),
+            );
             if IsIconic(hwnd) != 0 {
                 ShowWindow(hwnd, SW_RESTORE);
             } else {
@@ -176,7 +236,7 @@ pub fn parked() -> bool {
                 spot.y,
                 spot.w,
                 spot.h,
-                SWP_SHOWWINDOW,
+                SWP_SHOWWINDOW | SWP_FRAMECHANGED,
             );
             BringWindowToTop(hwnd);
             SetForegroundWindow(hwnd);
@@ -188,8 +248,9 @@ pub fn parked() -> bool {
             );
             PostMessageW(hwnd, WM_PAINT, 0, 0);
         }
+        set_skip_taskbar(hwnd, false);
         crate::startup_log(&format!(
-            "[托盘] 窗口已还原到 {} , {}（{}x{}，摘掉 WS_EX_TOOLWINDOW 并强制重绘）",
+            "[托盘] 窗口已还原到 {} , {}（{}x{}，已恢复任务栏显示并强制重绘）",
             spot.x, spot.y, spot.w, spot.h
         ));
         true

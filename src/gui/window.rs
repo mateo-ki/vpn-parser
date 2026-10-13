@@ -160,14 +160,19 @@ impl VpnApp {
                 ) {
                     action_toggle_max = true;
                 }
-                if title_button(ui, cell(2), "minimize", Glyph::Minimize, "最小化") {
+                if title_button(ui, cell(2), "minimize", Glyph::Minimize, "最小化（按设置收进系统托盘）") {
                     action_minimize = true;
                 }
             });
 
         if action_minimize {
-            self.was_minimized = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            if self.settings.close_to_tray {
+                crate::startup_log("Title-bar minimize -> 最小化收进托盘（从任务栏隐藏）");
+                self.park_to_tray();
+            } else {
+                self.was_minimized = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
         }
         if action_toggle_max {
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
