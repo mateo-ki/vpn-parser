@@ -30,16 +30,14 @@ jobs:
       - name: 缓存 cargo 依赖和 target
         uses: Swatinem/rust-cache@v2
 
-      - name: 装 Inno Setup (秒级专用安装)
-        uses: horizon-eda/setup-innosetup@v1
-        with:
-          version: "6.3.3"
+      - name: 装 Inno Setup
+        run: choco install innosetup --no-progress -y
 
       - name: 编译 release 版 (LLVM lld 高速并行链接)
         run: cargo build --release --bin vpn-parser
 
       - name: 编译安装包
-        run: ISCC.exe installer/vpn-parser.iss
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer/vpn-parser.iss'
 
       - name: 算 SHA-256
         shell: pwsh
