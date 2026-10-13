@@ -19,7 +19,6 @@ pub const PROXY_CONNECTIVITY_TEST_URL: &str = "https://www.google.com/generate_2
 /// TLS request to generate_204 through a real proxy. Kept moderate: too many concurrent
 /// real-proxy connections saturate consumer NICs/routers.
 const PROXY_CONCURRENCY: usize = 96;
-const MIHOMO_BATCH_SIZE: usize = 256;
 const MIHOMO_BATCH_CONCURRENCY: usize = 3;
 /// Concurrent `mihomo -t` config validations while isolating invalid proxies.
 const VALIDATE_CONCURRENCY: usize = 8;
@@ -33,6 +32,7 @@ pub struct ProxyProbeResult {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub struct ProxyProbeProgress {
     pub done: usize,
     pub total: usize,
@@ -51,32 +51,10 @@ struct PreparedProxy {
     config: Value,
 }
 
-pub async fn verify_nodes_with_mihomo(
-    nodes: Vec<Node>,
-    timeout: Duration,
-) -> Result<Vec<ProxyProbeResult>> {
-    verify_nodes_with_mihomo_progress(nodes, timeout, None::<fn(ProxyProbeProgress)>).await
-}
 
 /// 「常驻内核」打开时一批装下的节点数：一个内核实例装下整轮候选，只付一次冷启动。
 pub const PERSISTENT_MIHOMO_BATCH_SIZE: usize = 8192;
 
-pub async fn verify_nodes_with_mihomo_progress(
-    nodes: Vec<Node>,
-    timeout: Duration,
-    progress: Option<impl Fn(ProxyProbeProgress) + Send + Sync>,
-) -> Result<Vec<ProxyProbeResult>> {
-    let network_limit = Arc::new(Semaphore::new(PROXY_CONCURRENCY));
-    verify_nodes_with_mihomo_progress_limited(
-        nodes,
-        timeout,
-        progress,
-        network_limit,
-        MIHOMO_BATCH_SIZE,
-        false,
-    )
-    .await
-}
 
 pub async fn verify_nodes_with_mihomo_progress_limited(
     nodes: Vec<Node>,

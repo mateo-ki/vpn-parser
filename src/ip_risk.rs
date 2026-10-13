@@ -77,6 +77,7 @@ struct IpInfoCompany {
 /// 表准得多（实测 AS401615 ACCK、AS20473 Vultr 都能识别成 hosting）。注意免费档只有
 /// HTTP、且不能经代理查询；`country` 对 anycast IP 会乱给，所以地区仍以 ipinfo 为准。
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct IpApi {
     #[serde(default)]
     hosting: Option<bool>,

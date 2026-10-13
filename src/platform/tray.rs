@@ -2,7 +2,6 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
 pub const TRAY_WINDOW_CLASS: &str = "VPNParserTrayWindowClass";
-pub const MAIN_WINDOW_TITLE: &str = "VPN Parser";
 pub const WAKEUP_MSG_NAME: &str = "VPN_PARSER_SHOW_WINDOW_MSG\0";
 
 #[cfg(windows)]
@@ -17,6 +16,7 @@ pub enum TrayEvent {
     Quit,
 }
 
+#[allow(dead_code)]
 pub enum TrayUpdate {
     SetProxyRunning(bool),
     SetTooltip(String),
@@ -31,6 +31,7 @@ pub struct TrayHandle {
     _thread: Option<std::thread::JoinHandle<()>>,
 }
 
+#[allow(dead_code)]
 impl TrayHandle {
     pub fn new() -> Self {
         // 诊断壳不注册托盘图标：系统托盘是全局唯一的一处，多一个图标就是给用户添乱，

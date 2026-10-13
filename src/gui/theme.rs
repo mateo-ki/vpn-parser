@@ -338,13 +338,6 @@ pub fn is_light() -> bool {
 }
 
 #[inline]
-pub fn current_id() -> String {
-    CURRENT_ID
-        .read()
-        .map(|id| id.clone())
-        .unwrap_or_else(|_| DEFAULT_THEME.to_string())
-}
-
 /// 装主题：写静态调色板 + 同步 egui 的 `Visuals`（面板底色、控件描边、选中色、超链接、
 /// 间距/圆角这些一并跟着走，否则主题只改了自绘部分、原生控件还是老样子）。
 pub fn apply(ctx: &egui::Context, id: &str) {

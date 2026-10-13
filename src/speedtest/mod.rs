@@ -119,61 +119,6 @@ impl SpeedTester {
         Self { db, tasks }
     }
 
-    /// Latency + optional download throughput.
-    ///
-    /// This is **TCP reachability**, not a real proxy handshake.
-    /// Free lists often open TCP on dead/decoy ports — clients like v2rayN will still
-    /// show latency `-1` when VMess/VLESS/Trojan/SS handshake fails.
-    pub async fn probe_full(
-        host: &str,
-        port: u16,
-        timeout_ms: u32,
-        measure_download: bool,
-        download_test_ms: u32,
-    ) -> (bool, Option<i64>, Option<f64>, String) {
-        if !is_public_proxy_host(host) {
-            return (
-                false,
-                None,
-                None,
-                format!("skip invalid/private host: {host}"),
-            );
-        }
-        if port == 0 {
-            return (false, None, None, "invalid port 0".into());
-        }
-
-        let timeout = Duration::from_millis(timeout_ms.max(200) as u64);
-        let (stream, latency_ms) = match connect_fast(host, port, timeout).await {
-            Ok(v) => v,
-            Err(msg) => return (false, None, None, msg),
-        };
-
-        if !measure_download {
-            return (
-                true,
-                Some(latency_ms),
-                None,
-                format!("{latency_ms} ms (TCP)"),
-            );
-        }
-
-        let download_ms = download_test_ms.clamp(200, 5_000) as u64;
-        let (kbps, detail) = measure_tcp_download(stream, host, download_ms).await;
-        let kbps = kbps.and_then(|k| {
-            if k.is_finite() && k > 0.0 && k < 20_480.0 {
-                Some(k)
-            } else {
-                None
-            }
-        });
-        let msg = match kbps {
-            Some(k) => format!("{latency_ms} ms / {k:.1} KB/s"),
-            None => format!("{latency_ms} ms / 下载不可测 ({detail})"),
-        };
-        (true, Some(latency_ms), kbps, msg)
-    }
-
     async fn probe_full_resolved(
         host: &str,
         port: u16,
@@ -835,126 +780,57 @@ impl SpeedTester {
             proxy_results.extend(sing_box?);
             proxy_results.extend(xray?);
         } else {
-            let mihomo_results = if let Some(progress) = progress.as_ref() {
-                let proxy_progress = |proxy: ProxyProbeProgress| {
-                    let done = rejected_done + proxy.done;
-                    let ok = rejected_ok + proxy.ok;
-                    progress(SpeedTestProgress {
-                        phase: SpeedTestPhase::RealProxy,
-                        done,
-                        total: proxy_total,
-                        ok,
-                        fail: done.saturating_sub(ok),
-                        elapsed: started.elapsed(),
-                        kernel: Some(KernelKind::Mihomo),
-                        batch_index: proxy.batch_index,
-                        batch_total: proxy.batch_total,
-                    });
-                };
-                verify_nodes_with_kernel_progress(
-                    KernelKind::Mihomo,
-                    mihomo_nodes,
-                    proxy_timeout,
-                    Some(&proxy_progress),
-                    network_limit.clone(),
-                    proxy_batch_size,
-                    conditional_isolation,
-                )
-                .await?
-            } else {
-                verify_nodes_with_kernel_progress(
-                    KernelKind::Mihomo,
-                    mihomo_nodes,
-                    proxy_timeout,
-                    None,
-                    network_limit.clone(),
-                    proxy_batch_size,
-                    conditional_isolation,
-                )
-                .await?
-            };
-            let mihomo_done = rejected_done + mihomo_results.len();
-            let mihomo_ok = rejected_ok + mihomo_results.iter().filter(|result| result.ok).count();
+            let mihomo_results = run_sequential_kernel(
+                KernelKind::Mihomo,
+                mihomo_nodes,
+                proxy_timeout,
+                network_limit.clone(),
+                proxy_batch_size,
+                conditional_isolation,
+                progress.as_ref(),
+                rejected_done,
+                rejected_ok,
+                proxy_total,
+                started,
+            )
+            .await?;
+            let done_after_mihomo = rejected_done + mihomo_results.len();
+            let ok_after_mihomo = rejected_ok + mihomo_results.iter().filter(|r| r.ok).count();
             proxy_results.extend(mihomo_results);
-            let sing_box_results = if let Some(progress) = progress.as_ref() {
-                let proxy_progress = |proxy: ProxyProbeProgress| {
-                    let done = mihomo_done + proxy.done;
-                    let ok = mihomo_ok + proxy.ok;
-                    progress(SpeedTestProgress {
-                        phase: SpeedTestPhase::RealProxy,
-                        done,
-                        total: proxy_total,
-                        ok,
-                        fail: done.saturating_sub(ok),
-                        elapsed: started.elapsed(),
-                        kernel: Some(KernelKind::SingBox),
-                        batch_index: proxy.batch_index,
-                        batch_total: proxy.batch_total,
-                    });
-                };
-                verify_nodes_with_kernel_progress(
-                    KernelKind::SingBox,
-                    sing_box_nodes,
-                    proxy_timeout,
-                    Some(&proxy_progress),
-                    network_limit.clone(),
-                    proxy_batch_size,
-                    conditional_isolation,
-                )
-                .await?
-            } else {
-                verify_nodes_with_kernel_progress(
-                    KernelKind::SingBox,
-                    sing_box_nodes,
-                    proxy_timeout,
-                    None,
-                    network_limit.clone(),
-                    proxy_batch_size,
-                    conditional_isolation,
-                )
-                .await?
-            };
+
+            let sing_box_results = run_sequential_kernel(
+                KernelKind::SingBox,
+                sing_box_nodes,
+                proxy_timeout,
+                network_limit.clone(),
+                proxy_batch_size,
+                conditional_isolation,
+                progress.as_ref(),
+                done_after_mihomo,
+                ok_after_mihomo,
+                proxy_total,
+                started,
+            )
+            .await?;
+            let done_after_sing_box = done_after_mihomo + sing_box_results.len();
+            let ok_after_sing_box =
+                ok_after_mihomo + sing_box_results.iter().filter(|r| r.ok).count();
             proxy_results.extend(sing_box_results);
-            let before_xray_done = proxy_results.len();
-            let before_xray_ok = proxy_results.iter().filter(|result| result.ok).count();
-            let xray_results = if let Some(progress) = progress.as_ref() {
-                let proxy_progress = |proxy: ProxyProbeProgress| {
-                    let done = before_xray_done + proxy.done;
-                    let ok = before_xray_ok + proxy.ok;
-                    progress(SpeedTestProgress {
-                        phase: SpeedTestPhase::RealProxy,
-                        done,
-                        total: proxy_total,
-                        ok,
-                        fail: done.saturating_sub(ok),
-                        elapsed: started.elapsed(),
-                        kernel: Some(KernelKind::Xray),
-                        batch_index: proxy.batch_index,
-                        batch_total: proxy.batch_total,
-                    });
-                };
-                verify_nodes_with_kernel_progress(
-                    KernelKind::Xray,
-                    xray_nodes,
-                    proxy_timeout,
-                    Some(&proxy_progress),
-                    network_limit.clone(),
-                    proxy_batch_size,
-                    conditional_isolation,
-                )
-                .await?
-            } else {
-                verify_nodes_with_kernel_progress(
-                    KernelKind::Xray,
-                    xray_nodes,
-                    proxy_timeout,
-                    None,
-                    network_limit,
-                    proxy_batch_size,
-                    conditional_isolation,
-                )
-                .await?
-            };
+
+            let xray_results = run_sequential_kernel(
+                KernelKind::Xray,
+                xray_nodes,
+                proxy_timeout,
+                network_limit,
+                proxy_batch_size,
+                conditional_isolation,
+                progress.as_ref(),
+                done_after_sing_box,
+                ok_after_sing_box,
+                proxy_total,
+                started,
+            )
+            .await?;
             proxy_results.extend(xray_results);
         }
         if let Some(progress) = progress.as_ref() {
@@ -1134,51 +1010,6 @@ fn requires_proxy_without_tcp(protocol: &str) -> bool {
         "hysteria" | "hysteria2" | "hy2" | "tuic" | "wireguard" | "wg"
     )
 }
-/// Resolve + connect with a single overall timeout budget (faster bulk scans).
-async fn connect_fast(
-    host: &str,
-    port: u16,
-    timeout: Duration,
-) -> Result<(TcpStream, i64), String> {
-    let start = Instant::now();
-    let target = format!("{host}:{port}");
-
-    // Cap DNS so slow resolvers don't stall workers for the full timeout.
-    let dns_budget = timeout.min(Duration::from_millis(800));
-    let addrs =
-        match tokio::time::timeout(dns_budget, tokio::net::lookup_host(target.as_str())).await {
-            Ok(Ok(iter)) => {
-                let mut v: Vec<_> = iter.collect();
-                // Prefer IPv4 first for free-node noise (many broken AAAA).
-                v.sort_by_key(|a| if a.is_ipv4() { 0u8 } else { 1u8 });
-                v
-            }
-            Ok(Err(e)) => return Err(format!("dns error: {e}")),
-            Err(_) => return Err("dns timeout".into()),
-        };
-    if addrs.is_empty() {
-        return Err("no address".into());
-    }
-
-    // Try at most 2 addresses within remaining budget.
-    let mut last_err = String::from("connect failed");
-    for addr in addrs.into_iter().take(2) {
-        let left = timeout.saturating_sub(start.elapsed());
-        if left.is_zero() {
-            break;
-        }
-        match tokio::time::timeout(left, TcpStream::connect(addr)).await {
-            Ok(Ok(stream)) => {
-                let latency_ms = start.elapsed().as_millis() as i64;
-                return Ok((stream, latency_ms.max(1)));
-            }
-            Ok(Err(e)) => last_err = format!("connect error: {e}"),
-            Err(_) => last_err = format!("timeout {}ms", timeout.as_millis()),
-        }
-    }
-    Err(last_err)
-}
-
 async fn connect_resolved(
     addresses: Vec<SocketAddr>,
     timeout: Duration,
@@ -1296,6 +1127,62 @@ fn looks_like_public_website(head: &[u8]) -> bool {
         || lower.contains("cf-ray:")
 }
 
+async fn run_sequential_kernel<P>(
+    kernel: KernelKind,
+    nodes: Vec<Node>,
+    proxy_timeout: Duration,
+    network_limit: Arc<Semaphore>,
+    proxy_batch_size: usize,
+    conditional_isolation: bool,
+    progress: Option<&P>,
+    rejected_done: usize,
+    rejected_ok: usize,
+    proxy_total: usize,
+    started: Instant,
+) -> Result<Vec<ProxyProbeResult>>
+where
+    P: Fn(SpeedTestProgress) + Send + Sync,
+{
+    if let Some(progress) = progress {
+        let proxy_progress = |proxy: ProxyProbeProgress| {
+            let done = rejected_done + proxy.done;
+            let ok = rejected_ok + proxy.ok;
+            progress(SpeedTestProgress {
+                phase: SpeedTestPhase::RealProxy,
+                done,
+                total: proxy_total,
+                ok,
+                fail: done.saturating_sub(ok),
+                elapsed: started.elapsed(),
+                kernel: Some(kernel),
+                batch_index: proxy.batch_index,
+                batch_total: proxy.batch_total,
+            });
+        };
+        verify_nodes_with_kernel_progress(
+            kernel,
+            nodes,
+            proxy_timeout,
+            Some(&proxy_progress),
+            network_limit,
+            proxy_batch_size,
+            conditional_isolation,
+        )
+        .await
+    } else {
+        verify_nodes_with_kernel_progress(
+            kernel,
+            nodes,
+            proxy_timeout,
+            None,
+            network_limit,
+            proxy_batch_size,
+            conditional_isolation,
+        )
+        .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1320,11 +1207,9 @@ mod tests {
 
     #[tokio::test]
     async fn probe_rejects_private_host() {
-        let (ok, ms, kbps, msg) = SpeedTester::probe_full("127.0.0.1", 80, 500, false, 200).await;
-        assert!(!ok);
-        assert!(ms.is_none());
-        assert!(kbps.is_none());
-        assert!(msg.contains("skip"));
+        assert!(!is_public_proxy_host("127.0.0.1"));
+        assert!(!is_public_proxy_host("192.168.1.1"));
+        assert!(is_public_proxy_host("1.1.1.1"));
     }
 
     #[tokio::test]

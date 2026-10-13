@@ -213,6 +213,9 @@ impl Database {
         if let Some(v) = input.speedtest_download_top_n {
             s.speedtest_download_top_n = v.min(5000);
         }
+        if let Some(v) = input.speedtest_dedup_egress {
+            s.speedtest_dedup_egress = v;
+        }
         if let Some(v) = input.bandwidth_guard {
             s.bandwidth_guard = v;
         }

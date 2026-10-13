@@ -1,10 +1,10 @@
-use crate::kernel::{KernelInfo, KernelKind, KernelReleaseInfo, KernelUpdateProgress};
+use crate::kernel::{KernelInfo, KernelReleaseInfo, KernelUpdateProgress};
 use crate::models::{
     AppSettings, FetchResult, Node, NodeGroupSummary, NodeSummary, PruneHomogeneityResult, Source,
     SourceHomogeneityReport, SpeedTestSummary, Stats,
 };
 use crate::proxy::{
-    MihomoConfigOptions, NetworkProtocol, ProxyRuntimeStatus, RuleAction, RuleMatcher,
+    MihomoConfigOptions, NetworkProtocol, ProxyRuntimeStatus, RuleMatcher,
 };
 use crate::speedtest::SpeedTestProgress;
 
@@ -41,6 +41,7 @@ pub enum ProxySortBy {
 
 /// 控制台"可用节点"网格的一行：把每帧都要重算的东西（国家猜测、小写名）预先算好。
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct ProxyViewRow {
     pub node: NodeSummary,
     pub country: String,
@@ -261,6 +262,7 @@ pub struct ActiveConnectionInfo {
 }
 
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct KernelGroup {
     pub name: String,
     /// select / url-test（mihomo 返回的是 Selector / URLTest，这里已归一化）。
@@ -298,6 +300,7 @@ pub(crate) struct MihomoDelayEntry {
 
 /// 内核 url-test 成员的一拍延迟读数（省掉 app 层重复探测）。
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct KernelLatency {
     pub name: String,
     pub delay_ms: u64,
@@ -347,7 +350,6 @@ pub(crate) struct MihomoMetadata {
 }
 
 /// Gist 发现默认搜索词（q 参数会被 percent-encode）。
-pub const GIST_DISCOVERY_QUERY: &str = "vless//";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsEditState {

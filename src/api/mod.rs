@@ -85,15 +85,6 @@ pub fn router(state: AppState, api_token: Option<String>) -> Router {
         .with_state(Arc::new(state))
 }
 
-pub async fn serve(state: AppState, listen: &str, api_token: Option<String>) -> anyhow::Result<()> {
-    let addr: std::net::SocketAddr = listen.parse()?;
-    tracing::info!(%addr, "HTTP API listening");
-    let app = router(state, api_token);
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-    Ok(())
-}
-
 pub async fn serve_with_shutdown(
     state: AppState,
     listen: &str,

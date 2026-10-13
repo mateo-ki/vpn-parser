@@ -8,7 +8,7 @@ pub use tray::{
     TrayHandle,
 };
 pub use window_park::{
-    park as park_main_window, parked as main_window_parked, unpark as unpark_main_window, Spot,
+    park as park_main_window, unpark as unpark_main_window,
 };
 
 const SINGLE_INSTANCE_MUTEX_NAME: &str = "Local\\VPNParser-7F61E55C-DB54-49C6-AB9E-986AEBFDD56B";
@@ -286,6 +286,7 @@ pub fn init_process_job() -> Option<JobObjectGuard> {
 /// 两边都没作业时返回什么由不得我们控制，拿它当"我在不在作业里"会得出含糊结论
 /// （我第一版就是这么写，测试直接假失败）。
 #[cfg(windows)]
+#[cfg(test)]
 pub fn current_process_in_our_job() -> bool {
     use windows_sys::Win32::System::JobObjects::IsProcessInJob;
     use windows_sys::Win32::System::Threading::GetCurrentProcess;

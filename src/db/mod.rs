@@ -76,6 +76,7 @@ impl Database {
             ),
         };
         db.migrate().await?;
+        let _ = db.prune_telemetry().await;
         Ok(db)
     }
 
@@ -210,6 +211,20 @@ impl Database {
             }
         }
         Ok(None)
+    }
+
+    /// 统一枚举并打开所有存在的分库连接池，收敛各业务遍历分片的样板代码。
+    pub(crate) async fn active_node_pools(&self, source_id: Option<&str>) -> Result<Vec<(Option<String>, SqlitePool)>> {
+        let scopes = self.node_scopes(source_id).await?;
+        let mut pools = Vec::with_capacity(scopes.len());
+        for scope in scopes {
+            if !self.node_db_path(scope.as_deref()).exists() {
+                continue;
+            }
+            let pool = self.open_node_pool(scope.as_deref()).await?;
+            pools.push((scope, pool));
+        }
+        Ok(pools)
     }
 
     pub(crate) async fn node_scopes(&self, source_id: Option<&str>) -> Result<Vec<Option<String>>> {

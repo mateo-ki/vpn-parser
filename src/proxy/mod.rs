@@ -754,19 +754,6 @@ impl ProxyManager {
         }
     }
 
-    async fn start_inner(&self, node: &Node) -> Result<()> {
-        self.start_inner_with_preference(node, None, None).await
-    }
-
-    async fn start_inner_with_snapshot(
-        &self,
-        node: &Node,
-        preserved_system_proxy_snapshot: Option<SystemProxySnapshot>,
-    ) -> Result<()> {
-        self.start_inner_with_preference(node, preserved_system_proxy_snapshot, None)
-            .await
-    }
-
     async fn start_inner_with_preference(
         &self,
         node: &Node,
@@ -1447,38 +1434,6 @@ fn configure_kernel_command(command: &mut Command, kernel: KernelKind, work_dir:
     kernel_adapter(kernel).configure_command(command, work_dir);
 }
 
-async fn validate_kernel_config(
-    kernel: KernelKind,
-    executable: &Path,
-    work_dir: &ProxyWorkDir,
-) -> Result<()> {
-    let adapter = kernel_adapter(kernel);
-    let Some(args) = adapter.validation_args(work_dir) else {
-        return Ok(());
-    };
-    let mut command = Command::new(executable);
-    command.args(args).stdin(Stdio::null());
-    if kernel == KernelKind::Xray {
-        command
-            .current_dir(managed_kernel_root().join(KernelKind::Xray.directory_name()))
-            .env(
-                "XRAY_LOCATION_ASSET",
-                managed_kernel_root().join(KernelKind::Xray.directory_name()),
-            );
-    }
-    #[cfg(windows)]
-    command.creation_flags(0x0800_0000);
-    let output = command.output().await?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let detail = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stderr),
-        String::from_utf8_lossy(&output.stdout)
-    );
-    Err(anyhow!("{}", last_nonempty_line(&detail)))
-}
 
 async fn wait_for_port(child: &mut Child, port: u16, timeout: Duration) -> bool {
     let started = tokio::time::Instant::now();
@@ -1605,6 +1560,7 @@ fn required_startup_ports(kernel: KernelKind, options: &MihomoConfigOptions) -> 
     kernel_adapter(kernel).required_ports(options)
 }
 
+#[allow(dead_code)]
 trait KernelAdapter: Send + Sync {
     fn kind(&self) -> KernelKind;
     fn supports_protocol(&self, protocol: &str) -> bool {

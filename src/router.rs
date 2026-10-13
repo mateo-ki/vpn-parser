@@ -131,6 +131,7 @@ pub struct Router {
     pub cfg: RouterConfig,
 }
 
+#[allow(dead_code)]
 impl Router {
     pub fn new(cfg: RouterConfig) -> Self {
         Self {

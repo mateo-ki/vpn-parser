@@ -1,10 +1,10 @@
 use crate::gui::icons::{self, icon_label, Icon};
 use crate::gui::types::SourcesPanel;
 use crate::gui::widgets::{
-    card_frame, danger_btn, header_cell, primary_btn, render_fetch_ticks, section_title,
+    card_frame, header_cell, primary_btn, render_fetch_ticks, section_title,
     source_status_failed, status_badge };
 use crate::gui::VpnApp;
-use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
+use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
 use crate::gui::theme;
 
 impl VpnApp {

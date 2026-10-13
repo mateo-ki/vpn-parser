@@ -31,22 +31,6 @@ fn sing_box_batch_count(node_count: usize) -> usize {
     node_count.div_ceil(SING_BOX_BATCH_SIZE)
 }
 
-pub async fn verify_nodes_with_sing_box(
-    nodes: Vec<Node>,
-    timeout: Duration,
-) -> Result<Vec<ProxyProbeResult>> {
-    verify_nodes_with_sing_box_progress(nodes, timeout, None::<fn(ProxyProbeProgress)>).await
-}
-
-pub async fn verify_nodes_with_sing_box_progress(
-    nodes: Vec<Node>,
-    timeout: Duration,
-    progress: Option<impl Fn(ProxyProbeProgress) + Send + Sync>,
-) -> Result<Vec<ProxyProbeResult>> {
-    let network_limit = Arc::new(Semaphore::new(SING_BOX_BATCH_SIZE));
-    verify_nodes_with_sing_box_progress_limited(nodes, timeout, progress, network_limit).await
-}
-
 pub async fn verify_nodes_with_sing_box_progress_limited(
     nodes: Vec<Node>,
     timeout: Duration,
@@ -255,91 +239,6 @@ async fn probe_batch_with_sing_box(
     let _ = child.wait().await;
     let _ = tokio::fs::remove_dir_all(directory).await;
     Ok(results)
-}
-
-async fn probe_node_with_sing_box(
-    binary: &Path,
-    node: Node,
-    timeout: Duration,
-) -> Result<ProxyProbeResult> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let mixed_port = listener.local_addr()?.port();
-    drop(listener);
-    let controller = TcpListener::bind("127.0.0.1:0").await?;
-    let controller_port = controller.local_addr()?.port();
-    drop(controller);
-
-    let options = MihomoConfigOptions {
-        mixed_port,
-        controller_port,
-        ..MihomoConfigOptions::default()
-    };
-    let config = build_sing_box_config(&node, options)?;
-    let directory =
-        std::env::temp_dir().join(format!("vpn-parser-sing-box-probe-{}", Uuid::new_v4()));
-    tokio::fs::create_dir_all(&directory).await?;
-    let config_path = directory.join("config.json");
-    let log_path = directory.join("sing-box.log");
-    tokio::fs::write(&config_path, serde_json::to_vec_pretty(&config)?).await?;
-    let log = std::fs::File::create(&log_path)?;
-    let stderr = log.try_clone()?;
-    let mut command = Command::new(binary);
-    command
-        .arg("run")
-        .arg("-D")
-        .arg(&directory)
-        .arg("-c")
-        .arg(&config_path)
-        .kill_on_drop(true)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(stderr));
-    #[cfg(windows)]
-    {
-        command.creation_flags(0x0800_0000);
-    }
-    let mut child = command.spawn()?;
-    if let Some(pid) = child.id() {
-        crate::platform::assign_child_process_id(pid);
-    }
-
-    if !wait_for_sing_box_port(&mut child, mixed_port).await {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-        let detail = tokio::fs::read_to_string(&log_path)
-            .await
-            .unwrap_or_default();
-        let _ = tokio::fs::remove_dir_all(&directory).await;
-        return Err(anyhow!("启动失败: {}", last_sing_box_log_line(&detail)));
-    }
-
-    let proxy = reqwest::Proxy::all(format!("http://127.0.0.1:{mixed_port}"))?;
-    let client = reqwest::Client::builder()
-        .proxy(proxy)
-        .connect_timeout(timeout)
-        .timeout(timeout)
-        .build()?;
-    let request_started = tokio::time::Instant::now();
-    let outcome = probe_connectivity_target(&client, PROXY_CONNECTIVITY_TEST_URL, "Google").await;
-    let elapsed = request_started.elapsed().as_millis().max(1) as i64;
-    let result = match outcome {
-        Ok(target) => ProxyProbeResult {
-            id: node.id,
-            ok: true,
-            latency_ms: Some(elapsed),
-            message: format!("{elapsed} ms (Sing-box 真实代理 · {target})"),
-        },
-        Err(error) => ProxyProbeResult {
-            id: node.id,
-            ok: false,
-            latency_ms: None,
-            message: format!("Sing-box 无法访问测试地址: {error}"),
-        },
-    };
-    let _ = child.kill().await;
-    let _ = child.wait().await;
-    let _ = tokio::fs::remove_dir_all(directory).await;
-    Ok(result)
 }
 
 async fn probe_connectivity_target(
@@ -770,19 +669,6 @@ fn number_value(config: &Value, keys: &[&str]) -> Option<u64> {
     })
 }
 
-fn bool_value(config: &Value, keys: &[&str]) -> bool {
-    keys.iter().any(|key| {
-        config.get(*key).is_some_and(|value| match value {
-            Value::Bool(value) => *value,
-            Value::String(value) => {
-                matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes")
-            }
-            Value::Number(value) => value.as_i64().is_some_and(|value| value != 0),
-            _ => false,
-        })
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -974,7 +860,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_sing_box_probe_returns_empty() {
-        let results = verify_nodes_with_sing_box(Vec::new(), std::time::Duration::from_secs(1))
+        let results = verify_nodes_with_sing_box_progress_limited(Vec::new(), std::time::Duration::from_secs(1), None::<fn(ProxyProbeProgress)>, Arc::new(Semaphore::new(1)))
             .await
             .unwrap();
 

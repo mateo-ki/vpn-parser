@@ -21,22 +21,6 @@ fn xray_batch_count(node_count: usize) -> usize {
     node_count.div_ceil(XRAY_BATCH_SIZE)
 }
 
-pub async fn verify_nodes_with_xray(
-    nodes: Vec<Node>,
-    timeout: Duration,
-) -> Result<Vec<ProxyProbeResult>> {
-    verify_nodes_with_xray_progress(nodes, timeout, None::<fn(ProxyProbeProgress)>).await
-}
-
-pub async fn verify_nodes_with_xray_progress(
-    nodes: Vec<Node>,
-    timeout: Duration,
-    progress: Option<impl Fn(ProxyProbeProgress) + Send + Sync>,
-) -> Result<Vec<ProxyProbeResult>> {
-    let network_limit = Arc::new(Semaphore::new(XRAY_BATCH_SIZE));
-    verify_nodes_with_xray_progress_limited(nodes, timeout, progress, network_limit).await
-}
-
 pub async fn verify_nodes_with_xray_progress_limited(
     nodes: Vec<Node>,
     timeout: Duration,
@@ -466,11 +450,6 @@ fn string<'a>(cfg: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a str> {
 fn number(cfg: &Map<String, Value>, keys: &[&str]) -> Option<u64> {
     keys.iter()
         .find_map(|key| cfg.get(*key).and_then(Value::as_u64))
-}
-
-fn bool_value(cfg: &Map<String, Value>, keys: &[&str]) -> bool {
-    keys.iter()
-        .any(|key| cfg.get(*key).and_then(Value::as_bool).unwrap_or(false))
 }
 
 #[cfg(test)]

@@ -154,17 +154,7 @@ impl Database {
         // 每次写状态都同时留一行历史：界面上"最近 7 次"色条靠它。只看 last_status 的话，
         // 一个源上周失败五次、今天成功一次就会显示成"正常"。
         let ok = matches!(status, "ok" | "not modified" | "content unchanged");
-        sqlx::query(
-            "INSERT INTO source_fetch_history (source_id, at, ok, node_count, status) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-        )
-        .bind(id)
-        .bind(&now)
-        .bind(ok as i64)
-        .bind(node_count)
-        .bind(status)
-        .execute(&self.pool)
-        .await?;
+        self.record_fetch_history(id, ok, node_count, status).await?;
         Ok(())
     }
 

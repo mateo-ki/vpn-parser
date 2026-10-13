@@ -401,19 +401,6 @@ pub struct NodeQuery {
     pub sort: Option<String>,
 }
 
-/// Quality filters for export endpoints.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct ExportFilter {
-    pub protocol: Option<String>,
-    pub source_id: Option<String>,
-    /// Only nodes with latency_ok=1 and latency_ms <= this (default 800).
-    pub max_latency_ms: Option<i64>,
-    /// Only nodes with download_kbps >= this (default 50).
-    pub min_download_kbps: Option<f64>,
-    /// If true (default), apply quality filter. If false, export all.
-    pub quality_only: Option<bool>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct Page<T> {
     pub total: i64,

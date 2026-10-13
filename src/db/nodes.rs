@@ -2,13 +2,12 @@ use super::Database;
 use super::UNGROUPED_SOURCE_ID;
 use crate::models::{Node, NodeSummary, Page};
 use crate::parser::node_fingerprint;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use chrono::Utc;
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
     Row,
 };
-use std::path::PathBuf;
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -691,20 +690,16 @@ impl Database {
 
     pub async fn clear_nodes(&self) -> Result<u64> {
         let mut deleted = 0;
-        for scope in self.node_scopes(None).await? {
-            let path = self.node_db_path(scope.as_deref());
-            if path.exists() {
-                let pool = self.open_node_pool(scope.as_deref()).await?;
-                let mut tx = pool.begin().await?;
-                deleted += sqlx::query("DELETE FROM nodes")
-                    .execute(&mut *tx)
-                    .await?
-                    .rows_affected();
-                let _ = sqlx::query("DELETE FROM node_payloads")
-                    .execute(&mut *tx)
-                    .await;
-                tx.commit().await?;
-            }
+        for (_scope, pool) in self.active_node_pools(None).await? {
+            let mut tx = pool.begin().await?;
+            deleted += sqlx::query("DELETE FROM nodes")
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+            let _ = sqlx::query("DELETE FROM node_payloads")
+                .execute(&mut *tx)
+                .await;
+            tx.commit().await?;
         }
         self.invalidate_node_index().await;
         Ok(deleted)
@@ -712,12 +707,7 @@ impl Database {
 
     pub async fn dedupe_nodes(&self) -> Result<u64> {
         let mut deleted = 0u64;
-        for scope in self.node_scopes(None).await? {
-            let path = self.node_db_path(scope.as_deref());
-            if !path.exists() {
-                continue;
-            }
-            let pool = self.open_node_pool(scope.as_deref()).await?;
+        for (_scope, pool) in self.active_node_pools(None).await? {
             let rows = sqlx::query(
                 r#"SELECT n.id, n.source_id, n.protocol, n.name, n.server, n.port,
                           COALESCE(NULLIF(p.raw, ''), n.raw, '') AS raw,
@@ -787,11 +777,7 @@ impl Database {
     pub async fn prune_stale_dead_nodes(&self, days_old: i64) -> Result<usize> {
         let cutoff = (Utc::now() - chrono::Duration::days(days_old)).to_rfc3339();
         let mut deleted_total = 0;
-        for scope in self.node_scopes(None).await? {
-            if !self.node_db_path(scope.as_deref()).exists() {
-                continue;
-            }
-            let pool = self.open_node_pool(scope.as_deref()).await?;
+        for (_scope, pool) in self.active_node_pools(None).await? {
             let res = sqlx::query("DELETE FROM nodes WHERE latency_ok = 0 AND updated_at < ?1")
                 .bind(&cutoff)
                 .execute(&pool)
@@ -875,12 +861,7 @@ impl Database {
         }
 
         let mut deleted = 0u64;
-        for scope in self.node_scopes(None).await? {
-            let path = self.node_db_path(scope.as_deref());
-            if !path.exists() {
-                continue;
-            }
-            let pool = self.open_node_pool(scope.as_deref()).await?;
+        for (_scope, pool) in self.active_node_pools(None).await? {
             for chunk in delete_ids.chunks(200) {
                 let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
                 let q1 = format!("DELETE FROM nodes WHERE id IN ({})", placeholders);
@@ -907,12 +888,7 @@ impl Database {
 
     pub async fn clean_and_beautify_node_names(&self) -> Result<usize> {
         let mut updated = 0usize;
-        for scope in self.node_scopes(None).await? {
-            let path = self.node_db_path(scope.as_deref());
-            if !path.exists() {
-                continue;
-            }
-            let pool = self.open_node_pool(scope.as_deref()).await?;
+        for (_scope, pool) in self.active_node_pools(None).await? {
             let rows = sqlx::query("SELECT id, name, server, port, country FROM nodes")
                 .fetch_all(&pool)
                 .await?;
@@ -964,11 +940,7 @@ impl Database {
             Option<String>,
             Option<String>,
         )> = Vec::new();
-        for scope in self.node_scopes(None).await? {
-            if !self.node_db_path(scope.as_deref()).exists() {
-                continue;
-            }
-            let pool = self.open_node_pool(scope.as_deref()).await?;
+        for (_scope, pool) in self.active_node_pools(None).await? {
             let rows =
                 sqlx::query("SELECT id, server, latency_kernel, latency_test_kind FROM nodes")
                     .fetch_all(&pool)
@@ -1000,11 +972,7 @@ impl Database {
         // 19000 个节点 × 34 个库 ≈ 65 万次查询。
         let mut by_scope: std::collections::HashMap<Option<String>, Vec<String>> =
             std::collections::HashMap::new();
-        for scope in self.node_scopes(None).await? {
-            if !self.node_db_path(scope.as_deref()).exists() {
-                continue;
-            }
-            let pool = self.open_node_pool(scope.as_deref()).await?;
+        for (scope, pool) in self.active_node_pools(None).await? {
             let rows = sqlx::query("SELECT id, server FROM nodes")
                 .fetch_all(&pool)
                 .await?;

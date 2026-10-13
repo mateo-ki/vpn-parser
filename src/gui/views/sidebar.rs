@@ -1,10 +1,10 @@
-use crate::gui::icons::{self, Icon};
+use crate::gui::icons::Icon;
 use crate::gui::types::Tab;
 use crate::gui::widgets::{
     format_duration_ms, header_cell, nav_item, stat_chip };
 use crate::gui::VpnApp;
 use crate::proxy::ProxyState;
-use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, Vec2};
+use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, Vec2};
 use crate::gui::theme;
 
 impl VpnApp {

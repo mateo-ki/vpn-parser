@@ -1,8 +1,7 @@
 use crate::collector::Collector;
-use crate::db::{Database, UNGROUPED_SOURCE_ID};
+use crate::db::Database;
 use crate::kernel::{
-    find_kernel_executable, missing_kernel_for, KernelInfo, KernelKind, KernelManager,
-    KernelPreference, KernelReleaseInfo, KernelUpdateProgress,
+    find_kernel_executable, missing_kernel_for, KernelInfo, KernelKind, KernelManager, KernelReleaseInfo, KernelUpdateProgress,
 };
 use crate::models::{
     AppSettings, CreateSource, FetchResult, Node, NodeGroupSummary, NodeSummary, Source,
@@ -10,12 +9,11 @@ use crate::models::{
 };
 use crate::platform;
 use crate::proxy::{
-    is_node_connectivity_failure, optimize_traffic_rules, MihomoConfigOptions, NetworkProtocol,
-    ProxyManager, ProxyMode, ProxyRuntimeStatus, ProxyState, RoutingMode, RuleAction, RuleMatcher,
-    TrafficRule, TunStack, URL_TEST_GROUP,
+    is_node_connectivity_failure, optimize_traffic_rules, MihomoConfigOptions,
+    ProxyManager, ProxyMode, ProxyRuntimeStatus, ProxyState, RuleAction, URL_TEST_GROUP,
 };
 use crate::speedtest::{
-    SpeedTestOptions, SpeedTestPhase, SpeedTestProgress, SpeedTester, SpeedtestIntensity,
+    SpeedTestOptions, SpeedTester, SpeedtestIntensity,
 };
 use crate::tasks::TaskTracker;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -33,7 +31,6 @@ pub mod types;
 pub mod views;
 pub mod widgets;
 
-pub use icons::{icon_label, Icon};
 pub use types::*;
 pub use widgets::*;
 
@@ -4728,7 +4725,7 @@ impl eframe::App for VpnApp {
             .frame(
                 Frame::NONE
                     .fill(theme::sidebar())
-                    .stroke(Stroke::new(1.0, theme::border_subtle()))
+                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
                     // 上下 8 → 5：这条本来就被内容顶高度，按钮压矮之后它跟着收。
                     .inner_margin(Margin::symmetric(14, 5)),
             )
@@ -4892,7 +4889,7 @@ impl eframe::App for VpnApp {
         }
     }
 
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
         if self.settings_dirty() {
             // eframe 会周期性调用 save()（约每 30 秒一次，UI 线程上）；
             // 绝不能在这里 block_on 等数据库写锁，否则后台任务一重 UI 就冻住。
@@ -4948,6 +4945,7 @@ impl eframe::App for VpnApp {
 
 #[cfg(test)]
 mod tests {
+    use crate::speedtest::{SpeedTestPhase, SpeedTestProgress};
     use super::*;
     use std::time::Duration;
 

@@ -20,6 +20,7 @@ const RETENTION_HITS_DAYS: i64 = 7;
 const FETCH_HISTORY_KEEP: i64 = 40;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct HealthRow {
     pub at: String,
     pub ok: i64,
@@ -31,6 +32,7 @@ pub struct HealthRow {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct SwitchRow {
     pub at: String,
     pub from_node: Option<String>,
@@ -51,6 +53,7 @@ pub struct RuleHit {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct RuleHitRow {
     pub rule: String,
     pub target: String,
@@ -59,6 +62,7 @@ pub struct RuleHitRow {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct FetchHistoryRow {
     pub at: String,
     pub ok: i64,
@@ -157,7 +161,8 @@ impl Database {
     }
 
     /// 最近 N 次实测，新→旧。
-    pub async fn recent_egress_health(&self, limit: i64) -> Result<Vec<HealthRow>> {
+    #[allow(dead_code)]
+pub async fn recent_egress_health(&self, limit: i64) -> Result<Vec<HealthRow>> {
         let rows = sqlx::query_as::<_, HealthRow>(
             "SELECT at, ok, latency_ms, error, node_id, node_name, kind FROM egress_health \
              ORDER BY id DESC LIMIT ?1",
@@ -294,7 +299,8 @@ impl Database {
     }
 
     /// 某个源最近 N 次拉取，新→旧（界面画"最近 7 次"色条）。
-    pub async fn fetch_history_for(&self, source_id: &str, limit: i64) -> Result<Vec<FetchHistoryRow>> {
+    #[allow(dead_code)]
+pub async fn fetch_history_for(&self, source_id: &str, limit: i64) -> Result<Vec<FetchHistoryRow>> {
         let rows = sqlx::query_as::<_, FetchHistoryRow>(
             "SELECT at, ok, node_count, status FROM source_fetch_history \
              WHERE source_id = ?1 ORDER BY id DESC LIMIT ?2",
@@ -335,6 +341,25 @@ impl Database {
     /// 裁剪到保留期内。启动时跑一次，另外每写 200 条健康记录顺手跑一次。
     pub async fn prune_telemetry(&self) -> Result<()> {
         let health_cut = (Utc::now() - chrono::Duration::days(RETENTION_HEALTH_DAYS)).to_rfc3339();
+        let _ = sqlx::query(
+            "INSERT INTO egress_health_daily (day, total_checks, ok_count, fail_count, avg_latency_ms) \
+             SELECT substr(at, 1, 10) as d, \
+                    COUNT(*), \
+                    SUM(CASE WHEN ok != 0 THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END), \
+                    AVG(latency_ms) \
+             FROM egress_health \
+             WHERE at < ?1 \
+             GROUP BY substr(at, 1, 10) \
+             ON CONFLICT(day) DO UPDATE SET \
+                total_checks = total_checks + excluded.total_checks, \
+                ok_count = ok_count + excluded.ok_count, \
+                fail_count = fail_count + excluded.fail_count, \
+                avg_latency_ms = COALESCE(excluded.avg_latency_ms, avg_latency_ms)",
+        )
+        .bind(&health_cut)
+        .execute(&self.pool)
+        .await;
         let switch_cut = (Utc::now() - chrono::Duration::days(RETENTION_SWITCHES_DAYS)).to_rfc3339();
         let hits_cut = (Utc::now() - chrono::Duration::days(RETENTION_HITS_DAYS))
             .with_timezone(&Local)

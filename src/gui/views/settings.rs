@@ -4,7 +4,7 @@ use crate::gui::widgets::{
     card_frame, normalize_api_base, primary_btn, section_title, status_badge };
 use crate::gui::VpnApp;
 use crate::proxy::ProxyState;
-use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui};
+use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui};
 use crate::gui::theme;
 
 impl VpnApp {
@@ -537,7 +537,7 @@ impl VpnApp {
                 ui.label(RichText::new("切换延迟阈值:").small().color(theme::muted()));
                 ui.add(
                     egui::DragValue::new(&mut self.edit_failover_latency_ms)
-                        .clamp_range(200..=15_000)
+                        .range(200..=15_000)
                         .speed(50)
                         .suffix(" ms"),
                 );
@@ -555,7 +555,7 @@ impl VpnApp {
                 ui.checkbox(&mut self.edit_bandwidth_guard, "带宽保护");
                 ui.add(
                     egui::DragValue::new(&mut self.edit_bandwidth_min_kbps)
-                        .clamp_range(0..=10000)
+                        .range(0..=10000)
                         .speed(10)
                         .suffix(" KB/s"),
                 );
@@ -632,7 +632,7 @@ impl VpnApp {
                 ui.label(RichText::new("沿用已验证结果:").small().color(theme::muted()));
                 ui.add(
                     egui::DragValue::new(&mut self.edit_speedtest_reuse_minutes)
-                        .clamp_range(0..=1440)
+                        .range(0..=1440)
                         .speed(5)
                         .suffix(" 分钟"),
                 );
@@ -652,7 +652,7 @@ impl VpnApp {
                 ui.label(RichText::new("下载测速只做延迟前:").small().color(theme::muted()));
                 ui.add(
                     egui::DragValue::new(&mut self.edit_speedtest_download_top_n)
-                        .clamp_range(0..=1000)
+                        .range(0..=1000)
                         .speed(5)
                         .suffix(" 个"),
                 );
@@ -1123,10 +1123,6 @@ impl VpnApp {
         });
     }
 
-    pub(crate) fn active_api_base(&self) -> &str {
-        &self.api_addr
-    }
-
     /// 拼出可直接在浏览器打开的完整 API URL，并按需带上访问令牌
     /// （服务端只对只读 GET 接受 `?token=`，写操作必须走 Bearer 头）。
     pub(crate) fn api_url(&self, path: &str, with_token: bool) -> String {
@@ -1235,7 +1231,7 @@ mod layout_tests {
 
 #[cfg(test)]
 mod header_probe_tests {
-    use eframe::egui::{self, Frame, Margin, RawInput, Rect, Stroke, Vec2};
+    use eframe::egui::{self, Frame, Margin, RawInput, Rect, Vec2};
 
     /// 复刻系统设置页那一列的结构：CentralPanel(左右 18 内边距) → 标题行 →
     /// 右对齐动作行 → ScrollArea(里面是不换行的一排统计芯片)。

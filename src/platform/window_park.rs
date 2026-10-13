@@ -13,6 +13,7 @@
 pub const PARKED_X: i32 = -32_000;
 pub const PARKED_Y: i32 = -32_000;
 /// 判定"这个位置是被我们停放的"的阈值：留一点 DPI/取整余量。
+#[allow(dead_code)]
 pub const PARKED_THRESHOLD: i32 = -20_000;
 
 /// 停放前窗口的位置与大小，unpark 原样还回去。
@@ -25,11 +26,13 @@ pub struct Spot {
 }
 
 /// 纯判据：矩形左上角落在停放区就算"已停放"。单独拎出来是为了能测。
+#[allow(dead_code)]
 pub fn is_parked_rect(left: i32, top: i32) -> bool {
     left <= PARKED_THRESHOLD && top <= PARKED_THRESHOLD
 }
 
 /// 窗口现在到底能不能收到 WM_PAINT。不可绘制的三种情况：隐藏、最小化、被我们停放。
+#[allow(dead_code)]
 pub fn can_paint(is_visible: bool, iconic: bool, parked: bool) -> bool {
     is_visible && !iconic && !parked
 }
@@ -108,7 +111,8 @@ mod imp {
     }
 
     /// 窗口此刻是不是被停放在屏幕外。找不到窗口时按"没停放"处理（宁可继续跑帧也别乱动）。
-    pub fn parked() -> bool {
+    #[allow(dead_code)]
+pub fn parked() -> bool {
         match find_main().and_then(rect_of) {
             Some(r) => is_parked_rect(r.left, r.top),
             None => false,
@@ -174,7 +178,7 @@ mod imp {
 }
 
 #[cfg(windows)]
-pub use imp::{park, parked, unpark};
+pub use imp::{park, unpark};
 
 #[cfg(not(windows))]
 pub fn parked() -> bool {

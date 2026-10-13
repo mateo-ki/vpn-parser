@@ -645,7 +645,7 @@ impl VpnApp {
         let search_key = self.proxy_search.trim().to_lowercase();
         let sort_key = self.proxy_sort_by;
         let rev = self.proxy_nodes_rev;
-        let mut view = match self.proxy_view.take() {
+        let view = match self.proxy_view.take() {
             Some(cached)
                 if cached.rev == rev
                     && cached.region == region_key

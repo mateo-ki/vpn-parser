@@ -1,9 +1,5 @@
 use crate::models::Node;
 use serde_json::Value;
-use std::time::{Duration, Instant};
-use tokio::net::TcpStream;
-use tokio::task::JoinSet;
-use tracing::debug;
 
 /// Score a node for client export. Higher is better.
 /// TCP latency alone is a bad ranker for free lists (open ports / decoys win).
@@ -90,6 +86,7 @@ pub fn export_score(node: &Node) -> i64 {
 }
 
 /// Whether a node is worth exporting under quality_only mode.
+#[cfg(test)]
 pub fn is_strict_export_candidate(node: &Node) -> bool {
     if !has_credentials(node) {
         return false;
@@ -199,186 +196,6 @@ fn first_str(cfg: &Value, keys: &[&str]) -> Option<String> {
     None
 }
 
-fn needs_tls(node: &Node) -> bool {
-    let proto = node.protocol.to_ascii_lowercase();
-    if matches!(proto.as_str(), "trojan") {
-        return true;
-    }
-    matches!(
-        security_kind(&node.config),
-        SecurityKind::Tls | SecurityKind::Reality
-    )
-}
-
-fn sni_for(node: &Node) -> String {
-    first_str(&node.config, &["sni", "servername", "host"])
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| node.server.clone())
-}
-
-/// Re-check candidates live, keep only those still reachable (and TLS-handshakable when needed).
-/// Stops early once `want` survivors are collected (candidates should already be score-sorted).
-pub async fn live_filter_for_export(nodes: Vec<Node>, want: usize, timeout_ms: u32) -> Vec<Node> {
-    if nodes.is_empty() || want == 0 {
-        return Vec::new();
-    }
-    let timeout = Duration::from_millis(timeout_ms.max(300) as u64);
-    let concurrency = 64usize;
-    let mut iter = nodes.into_iter();
-    let mut inflight = JoinSet::new();
-    let mut kept = Vec::with_capacity(want);
-
-    loop {
-        if kept.len() >= want {
-            break;
-        }
-        while inflight.len() < concurrency {
-            let Some(node) = iter.next() else {
-                break;
-            };
-            inflight.spawn(async move {
-                let ok = live_probe_node(&node, timeout).await;
-                (ok, node)
-            });
-        }
-        let Some(joined) = inflight.join_next().await else {
-            break;
-        };
-        if let Ok((true, node)) = joined {
-            kept.push(node);
-        }
-    }
-    // Drain remaining tasks quickly without waiting long? just drop joinset by returning
-    kept
-}
-
-async fn live_probe_node(node: &Node, timeout: Duration) -> bool {
-    let host = node.server.trim();
-    if host.is_empty() || node.port == 0 {
-        return false;
-    }
-    let start = Instant::now();
-    let addr = format!("{host}:{}", node.port);
-    let stream = match tokio::time::timeout(timeout, TcpStream::connect(&addr)).await {
-        Ok(Ok(s)) => s,
-        _ => return false,
-    };
-    if !needs_tls(node) {
-        // Plain SS / none-security: TCP up is all we can cheaply verify.
-        // Reject obvious immediate HTTP websites.
-        return !looks_like_immediate_http(stream, timeout.saturating_sub(start.elapsed())).await;
-    }
-
-    // TLS handshake (cert verification disabled). Real proxies/CDNs usually complete it;
-    // closed/protocol-dead ports often fail.
-    tls_handshake(
-        stream,
-        &sni_for(node),
-        timeout.saturating_sub(start.elapsed()),
-    )
-    .await
-}
-
-async fn looks_like_immediate_http(mut stream: TcpStream, budget: Duration) -> bool {
-    use tokio::io::AsyncReadExt;
-    if budget.is_zero() {
-        return false;
-    }
-    // Don't send request; some open HTTP ports still don't talk first.
-    // Send a short HTTP probe instead.
-    use tokio::io::AsyncWriteExt;
-    let req = b"GET / HTTP/1.0\r\nHost: x\r\n\r\n";
-    let _ = tokio::time::timeout(
-        budget.min(Duration::from_millis(250)),
-        stream.write_all(req),
-    )
-    .await;
-    let mut buf = [0u8; 16];
-    match tokio::time::timeout(
-        budget.min(Duration::from_millis(350)),
-        stream.read(&mut buf),
-    )
-    .await
-    {
-        Ok(Ok(n)) if n > 0 => {
-            let s = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
-            s.starts_with("http/") || s.starts_with("<!do") || s.starts_with("<html")
-        }
-        _ => false,
-    }
-}
-
-async fn tls_handshake(stream: TcpStream, sni: &str, budget: Duration) -> bool {
-    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-    use rustls::{ClientConfig, DigitallySignedStruct, Error as TlsError, SignatureScheme};
-    use std::sync::Arc;
-    use tokio_rustls::TlsConnector;
-
-    #[derive(Debug)]
-    struct NoVerify;
-    impl ServerCertVerifier for NoVerify {
-        fn verify_server_cert(
-            &self,
-            _end_entity: &CertificateDer<'_>,
-            _intermediates: &[CertificateDer<'_>],
-            _server_name: &ServerName<'_>,
-            _ocsp_response: &[u8],
-            _now: UnixTime,
-        ) -> Result<ServerCertVerified, TlsError> {
-            Ok(ServerCertVerified::assertion())
-        }
-        fn verify_tls12_signature(
-            &self,
-            _message: &[u8],
-            _cert: &CertificateDer<'_>,
-            _dss: &DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, TlsError> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-        fn verify_tls13_signature(
-            &self,
-            _message: &[u8],
-            _cert: &CertificateDer<'_>,
-            _dss: &DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, TlsError> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-            vec![
-                SignatureScheme::ECDSA_NISTP256_SHA256,
-                SignatureScheme::ED25519,
-                SignatureScheme::RSA_PSS_SHA256,
-                SignatureScheme::RSA_PKCS1_SHA256,
-            ]
-        }
-    }
-
-    if budget.is_zero() {
-        return false;
-    }
-    let mut cfg = ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(NoVerify))
-        .with_no_client_auth();
-    cfg.enable_sni = true;
-    let connector = TlsConnector::from(Arc::new(cfg));
-    let server_name = match ServerName::try_from(sni.to_string()) {
-        Ok(n) => n,
-        Err(_) => match ServerName::try_from(sni.to_owned()) {
-            Ok(n) => n,
-            Err(_) => return false,
-        },
-    };
-    match tokio::time::timeout(budget, connector.connect(server_name, stream)).await {
-        Ok(Ok(_)) => true,
-        Ok(Err(e)) => {
-            debug!(error = %e, sni, "tls handshake failed");
-            false
-        }
-        Err(_) => false,
-    }
-}
 
 #[cfg(test)]
 mod tests {

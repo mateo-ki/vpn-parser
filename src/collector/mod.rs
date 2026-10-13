@@ -672,7 +672,7 @@ impl Collector {
         let raw_base = raw_base.to_string();
         for gist in gists.iter().cloned() {
             let collector = self.clone();
-            let task_id = task_id.to_string();
+            let _task_id = task_id.to_string();
             let raw_base = raw_base.clone();
             tasks.spawn(async move {
                 let created = match collector

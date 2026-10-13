@@ -6,16 +6,6 @@ use chrono::Utc;
 use sqlx::Row;
 
 impl Database {
-    pub async fn update_node_latency(
-        &self,
-        id: &str,
-        ok: bool,
-        latency_ms: Option<i64>,
-    ) -> Result<()> {
-        self.update_node_speed(id, ok, latency_ms, None, None, None)
-            .await
-    }
-
     pub async fn update_node_speed(
         &self,
         id: &str,
@@ -79,11 +69,7 @@ impl Database {
                 Option<String>,
             )>,
         > = std::collections::HashMap::new();
-        for scope in self.node_scopes(None).await? {
-            if !self.node_db_path(scope.as_deref()).exists() {
-                continue;
-            }
-            let pool = self.open_node_pool(scope.as_deref()).await?;
+        for (scope, pool) in self.active_node_pools(None).await? {
             // 只按候选 id 走主键点查：以前每个分库都 `SELECT id FROM nodes` 全量导出，
             // 19000 条结果里绝大多数会被丢掉。
             let mut group: Vec<&_> = Vec::new();

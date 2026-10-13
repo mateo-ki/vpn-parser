@@ -3,15 +3,6 @@ use crate::models::Node;
 use anyhow::Result;
 
 impl Database {
-    pub async fn export_nodes(
-        &self,
-        protocol: Option<&str>,
-        source_id: Option<&str>,
-    ) -> Result<Vec<Node>> {
-        self.export_nodes_filtered(protocol, source_id, false, None, None, None)
-            .await
-    }
-
     /// Export nodes with optional quality filter.
     ///
     /// quality_only means:
