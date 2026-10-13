@@ -68,4 +68,9 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           $exe = (Get-ChildItem dist -Filter *-setup.exe | Select-Object -First 1).FullName
-          gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG" --generate-notes
+          if (gh release view "$env:TAG" 2>$null) {
+            Write-Host "Release $env:TAG already exists, updating assets with --clobber..."
+            gh release upload "$env:TAG" $exe dist/sha256.txt --clobber
+          } else {
+            gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG" --generate-notes
+          }
