@@ -51,10 +51,8 @@ struct PreparedProxy {
     config: Value,
 }
 
-
 /// 「常驻内核」打开时一批装下的节点数：一个内核实例装下整轮候选，只付一次冷启动。
 pub const PERSISTENT_MIHOMO_BATCH_SIZE: usize = 8192;
-
 
 pub async fn verify_nodes_with_mihomo_progress_limited(
     nodes: Vec<Node>,

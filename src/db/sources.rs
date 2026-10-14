@@ -154,7 +154,8 @@ impl Database {
         // 每次写状态都同时留一行历史：界面上"最近 7 次"色条靠它。只看 last_status 的话，
         // 一个源上周失败五次、今天成功一次就会显示成"正常"。
         let ok = matches!(status, "ok" | "not modified" | "content unchanged");
-        self.record_fetch_history(id, ok, node_count, status).await?;
+        self.record_fetch_history(id, ok, node_count, status)
+            .await?;
         Ok(())
     }
 

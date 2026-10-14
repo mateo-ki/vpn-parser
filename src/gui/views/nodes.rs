@@ -1,12 +1,13 @@
 use crate::gui::icons::{self, Icon};
+use crate::gui::theme;
+use crate::gui::view_models::nodes_vm::NodesViewModel;
 use crate::gui::widgets::{
     card_frame, compact_node_card, latency_label, node_group_key, panel_frame, primary_btn,
-    region_label, section_title, sort_label };
+    region_label, section_title, sort_label,
+};
 use crate::gui::VpnApp;
 use crate::speedtest::SpeedtestIntensity;
 use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
-use crate::gui::theme;
-use crate::gui::view_models::nodes_vm::NodesViewModel;
 
 impl VpnApp {
     pub(crate) fn ui_nodes(&mut self, ui: &mut Ui) {
@@ -21,7 +22,11 @@ impl VpnApp {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
 
-                    ui.label(RichText::new("协议").strong().color(theme::text_secondary()));
+                    ui.label(
+                        RichText::new("协议")
+                            .strong()
+                            .color(theme::text_secondary()),
+                    );
                     let protocol_field = ui.add(
                         egui::TextEdit::singleline(&mut self.protocol_filter)
                             .desired_width(65.0)
@@ -30,7 +35,11 @@ impl VpnApp {
                     crate::gui::widgets::note_text_field(ui, &protocol_field);
 
                     ui.separator();
-                    ui.label(RichText::new("关键词").strong().color(theme::text_secondary()));
+                    ui.label(
+                        RichText::new("关键词")
+                            .strong()
+                            .color(theme::text_secondary()),
+                    );
                     let keyword_field = ui.add(
                         egui::TextEdit::singleline(&mut self.keyword)
                             .desired_width(85.0)
@@ -39,7 +48,11 @@ impl VpnApp {
                     crate::gui::widgets::note_text_field(ui, &keyword_field);
 
                     ui.separator();
-                    ui.label(RichText::new("地区").strong().color(theme::text_secondary()));
+                    ui.label(
+                        RichText::new("地区")
+                            .strong()
+                            .color(theme::text_secondary()),
+                    );
                     egui::ComboBox::from_id_salt("region_filter")
                         .selected_text(region_label(&self.region_filter))
                         .show_ui(ui, |ui| {
@@ -63,7 +76,11 @@ impl VpnApp {
                         });
 
                     ui.separator();
-                    ui.label(RichText::new("延迟").strong().color(theme::text_secondary()));
+                    ui.label(
+                        RichText::new("延迟")
+                            .strong()
+                            .color(theme::text_secondary()),
+                    );
                     egui::ComboBox::from_id_salt("latency_filter")
                         .selected_text(latency_label(&self.latency_filter))
                         .show_ui(ui, |ui| {
@@ -107,7 +124,11 @@ impl VpnApp {
                     }
 
                     ui.separator();
-                    ui.label(RichText::new("排序").strong().color(theme::text_secondary()));
+                    ui.label(
+                        RichText::new("排序")
+                            .strong()
+                            .color(theme::text_secondary()),
+                    );
                     egui::ComboBox::from_id_salt("sort_by")
                         .selected_text(sort_label(&self.sort_by))
                         .show_ui(ui, |ui| {
@@ -218,7 +239,10 @@ impl VpnApp {
             ui.add_enabled_ui(!self.busy, |ui| {
                 ui.menu_button("节点清理 ▼", |ui| {
                     delete_dead = ui.button("删除超时/失败节点").clicked();
-                    prune_stale = ui.button("🍂 淘汰过期失效节点").on_hover_text("清理 7 天以上持续不可用的僵尸节点").clicked();
+                    prune_stale = ui
+                        .button("🍂 淘汰过期失效节点")
+                        .on_hover_text("清理 7 天以上持续不可用的僵尸节点")
+                        .clicked();
                     delete_invalid = ui
                         .button("删除无效主机")
                         .on_hover_text("删除 127.0.0.1 / 内网 / localhost 等无效节点")
@@ -322,7 +346,11 @@ impl VpnApp {
 
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("订阅").strong().color(theme::text_secondary()));
+            ui.label(
+                RichText::new("订阅")
+                    .strong()
+                    .color(theme::text_secondary()),
+            );
             let groups = self.node_groups.clone();
             let mut next_source = None;
             ui.scope(|ui| {
@@ -386,15 +414,16 @@ impl VpnApp {
         }
 
         panel_frame().show(ui, |ui| {
-            let (columns, total_card_rows) = NodesViewModel::grid_layout(ui.available_width(), self.nodes.len());
+            let (columns, total_card_rows) =
+                NodesViewModel::grid_layout(ui.available_width(), self.nodes.len());
             let nodes = self.nodes.clone();
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show_rows(ui, 84.0, total_card_rows, |ui, row_range| {
                     for row_idx in row_range {
-                            let start = row_idx * columns;
-                            let end = (start + columns).min(nodes.len());
-                            let row = &nodes[start..end];
+                        let start = row_idx * columns;
+                        let end = (start + columns).min(nodes.len());
+                        let row = &nodes[start..end];
                         ui.columns(columns, |column_uis| {
                             for (column_index, column_ui) in column_uis.iter_mut().enumerate() {
                                 let Some(node) = row.get(column_index) else {
@@ -428,7 +457,9 @@ impl VpnApp {
                                         ui.close_menu();
                                     }
                                     ui.separator();
-                                    if ui.button(RichText::new("删除节点").color(theme::danger())).clicked()
+                                    if ui
+                                        .button(RichText::new("删除节点").color(theme::danger()))
+                                        .clicked()
                                     {
                                         self.delete_node(node.id.clone());
                                         ui.close_menu();

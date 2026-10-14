@@ -69,11 +69,7 @@ fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
         let v = (x as f32) * (1.0 - t) + (y as f32) * t;
         v.round().clamp(0.0, 255.0) as u8
     };
-    Color32::from_rgb(
-        lerp(a.r(), b.r()),
-        lerp(a.g(), b.g()),
-        lerp(a.b(), b.b()),
-    )
+    Color32::from_rgb(lerp(a.r(), b.r()), lerp(a.g(), b.g()), lerp(a.b(), b.b()))
 }
 
 fn darken(c: Color32, t: f32) -> Color32 {
@@ -121,11 +117,7 @@ fn readable_on(base: Color32, bg: Color32, target: f32) -> Color32 {
 
 #[inline]
 fn readable_on_white(accent: Color32) -> Color32 {
-    readable_on(
-        accent,
-        Color32::from_rgb(255, 255, 255),
-        4.6,
-    )
+    readable_on(accent, Color32::from_rgb(255, 255, 255), 4.6)
 }
 
 impl Palette {
@@ -196,17 +188,41 @@ pub struct Theme {
 /// 顺序就是设置页里的顺序。深色那几套（obsidian / latte / midnight / mocha / rosepine /
 /// linear）2026-10-06 按用户要求全部删掉，只留"清爽浅白"这一个家族。
 pub const THEMES: [Theme; 5] = [
-    Theme { id: "soft-cobalt", name: "钴蓝（默认）", accent: 0x2F_6F_EB },
-    Theme { id: "soft-teal", name: "青绿", accent: 0x00_A7_8D },
-    Theme { id: "soft-terracotta", name: "陶土橙", accent: 0xD9_77_2E },
-    Theme { id: "soft-indigo", name: "靛蓝紫", accent: 0x5B_5B_D6 },
-    Theme { id: "soft-violet", name: "紫罗兰", accent: 0x7C_5C_FF },
+    Theme {
+        id: "soft-cobalt",
+        name: "钴蓝（默认）",
+        accent: 0x2F_6F_EB,
+    },
+    Theme {
+        id: "soft-teal",
+        name: "青绿",
+        accent: 0x00_A7_8D,
+    },
+    Theme {
+        id: "soft-terracotta",
+        name: "陶土橙",
+        accent: 0xD9_77_2E,
+    },
+    Theme {
+        id: "soft-indigo",
+        name: "靛蓝紫",
+        accent: 0x5B_5B_D6,
+    },
+    Theme {
+        id: "soft-violet",
+        name: "紫罗兰",
+        accent: 0x7C_5C_FF,
+    },
 ];
 
 pub const DEFAULT_THEME: &str = "soft-cobalt";
 
 fn rgb(hex: u32) -> Color32 {
-    Color32::from_rgb(((hex >> 16) & 0xFF) as u8, ((hex >> 8) & 0xFF) as u8, (hex & 0xFF) as u8)
+    Color32::from_rgb(
+        ((hex >> 16) & 0xFF) as u8,
+        ((hex >> 8) & 0xFF) as u8,
+        (hex & 0xFF) as u8,
+    )
 }
 
 pub fn theme_by_id(id: &str) -> &'static Theme {
@@ -402,7 +418,6 @@ pub fn apply(ctx: &egui::Context, id: &str) {
 mod tests {
     use super::*;
 
-
     #[test]
     fn every_theme_keeps_button_and_banner_text_readable() {
         // 守的是三个真 bug：主按钮文字写死成深藏青（深底看不见）、提示横幅正文写死成深色
@@ -474,9 +489,15 @@ mod tests {
                 ));
             }
         }
-        assert!(failures.is_empty(), "配色对比度不足：
-{}", failures.join("
-"));
+        assert!(
+            failures.is_empty(),
+            "配色对比度不足：
+{}",
+            failures.join(
+                "
+"
+            )
+        );
     }
 
     #[test]
@@ -487,7 +508,11 @@ mod tests {
             let p = palette(theme.id);
             assert_eq!(p.page_bg, base.page_bg, "{} 页面底色被改", theme.name);
             assert_eq!(p.panel, base.panel, "{} 卡片底色被改", theme.name);
-            assert_eq!(p.text_primary, base.text_primary, "{} 正文色被改", theme.name);
+            assert_eq!(
+                p.text_primary, base.text_primary,
+                "{} 正文色被改",
+                theme.name
+            );
             assert_eq!(p.success, base.success, "{} 成功色被改", theme.name);
             assert_ne!(p.accent, base.accent, "{} 强调色和默认那套撞了", theme.name);
         }
@@ -517,23 +542,31 @@ mod tests {
         assert!(palette(DEFAULT_THEME).light, "默认主题应当是浅色");
     }
 
-
     #[test]
     fn models_default_theme_matches() {
         // models 里那份是字面量（不能反向依赖 gui），所以两边会漂；这条守着。
-        assert_eq!(crate::models::AppSettings::default().ui_theme, DEFAULT_THEME);
+        assert_eq!(
+            crate::models::AppSettings::default().ui_theme,
+            DEFAULT_THEME
+        );
     }
 
     #[test]
     fn unknown_theme_id_falls_back_to_default() {
         // 旧 id（obsidian / latte / …）删掉之后，存量设置必须落到默认那套，不能随机挑一套。
-        for legacy in ["obsidian", "latte", "midnight", "mocha", "rosepine", "linear", ""] {
+        for legacy in [
+            "obsidian", "latte", "midnight", "mocha", "rosepine", "linear", "",
+        ] {
             assert_eq!(
                 palette(legacy).accent,
                 palette(DEFAULT_THEME).accent,
                 "{legacy} 没有退回默认主题"
             );
-            assert_eq!(theme_by_id(legacy).id, DEFAULT_THEME, "{legacy} 没有退回默认主题");
+            assert_eq!(
+                theme_by_id(legacy).id,
+                DEFAULT_THEME,
+                "{legacy} 没有退回默认主题"
+            );
         }
     }
 }

@@ -8,8 +8,8 @@ use tokio::process::Command;
 mod updater;
 
 pub use updater::{
-    ASSET_MIRROR_PREFIXES, KernelReleaseInfo, KernelUpdateProgress, KernelUpdateResult,
-    KernelUpdateStage, KernelSource, SOURCE_OPTIONS, proxy_candidates, source_from_id,
+    proxy_candidates, source_from_id, KernelReleaseInfo, KernelSource, KernelUpdateProgress,
+    KernelUpdateResult, KernelUpdateStage, ASSET_MIRROR_PREFIXES, SOURCE_OPTIONS,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -378,7 +378,8 @@ pub fn kernel_candidates(
     if let Some(directory) = current_dir {
         candidates.push(
             directory
-                .join("data").join("kernels")
+                .join("data")
+                .join("kernels")
                 .join(kind.directory_name())
                 .join(kind.executable_name()),
         );
@@ -387,7 +388,8 @@ pub fn kernel_candidates(
         if let Some(directory) = executable.parent() {
             candidates.push(
                 directory
-                    .join("data").join("kernels")
+                    .join("data")
+                    .join("kernels")
                     .join(kind.directory_name())
                     .join(kind.executable_name()),
             );
@@ -437,7 +439,8 @@ fn managed_kernel_paths_use_native_separators() {
 pub fn managed_kernel_root() -> PathBuf {
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join("data").join("kernels")
+        .join("data")
+        .join("kernels")
 }
 
 pub fn parse_version_output(output: &str) -> Option<String> {
@@ -467,7 +470,9 @@ pub fn classify_version_probe(
     let raw = code.unwrap_or(-1);
     let unsigned = raw as u32;
     let known = match unsigned {
-        0xC000_001D => "STATUS_ILLEGAL_INSTRUCTION（这台机器的 CPU 不提供这个构建用到的指令集，虚拟机常见）",
+        0xC000_001D => {
+            "STATUS_ILLEGAL_INSTRUCTION（这台机器的 CPU 不提供这个构建用到的指令集，虚拟机常见）"
+        }
         0xC000_0005 => "STATUS_ACCESS_VIOLATION（内核刚跑就崩了）",
         0xC000_00FD => "STATUS_STACK_OVERFLOW",
         _ => "",
@@ -557,7 +562,9 @@ mod tests {
 Use tags: with_gvisor
 ";
         assert_eq!(
-            classify_version_probe(true, Some(0), good).unwrap().as_deref(),
+            classify_version_probe(true, Some(0), good)
+                .unwrap()
+                .as_deref(),
             Some("Mihomo Meta v1.19.32 windows amd64 with go1.26.8 Wed Sep 30 17:00:13 UTC 2026")
         );
         // 崩掉：退出码 -1073741795 就是 0xC000001D，输出为空 —— 要能指名道姓。
@@ -567,12 +574,15 @@ Use tags: with_gvisor
         // 退出码不是已知那几种也得照实报数。
         let other = classify_version_probe(false, Some(-1073741819), "").unwrap_err();
         assert!(other.contains("0xC0000005"), "{other}");
-        assert!(
-            classify_version_probe(true, Some(0), "
+        assert!(classify_version_probe(
+            true,
+            Some(0),
+            "
   
-").unwrap_err()
-                .contains("没有任何输出")
-        );
+"
+        )
+        .unwrap_err()
+        .contains("没有任何输出"));
     }
 
     #[test]
@@ -608,12 +618,7 @@ Use tags: with_gvisor
     fn preflight_offers_the_named_kernel_even_if_another_one_would_work() {
         // 用户点名 sing-box，机器上只有 mihomo：不能拿"能跑"糊过去，那不是我选的引擎。
         assert_eq!(
-            missing_with(
-                "ss",
-                KernelPreference::SingBox,
-                true,
-                &[KernelKind::Mihomo]
-            ),
+            missing_with("ss", KernelPreference::SingBox, true, &[KernelKind::Mihomo]),
             Some(KernelKind::SingBox)
         );
         assert_eq!(
@@ -625,12 +630,12 @@ Use tags: with_gvisor
     #[test]
     fn preflight_does_not_confuse_unsupported_with_not_installed() {
         // Xray 在 TUN 下是"不支持"，报这个就行，弹下载框反而误导。
+        assert_eq!(missing_with("ss", KernelPreference::Xray, false, &[]), None);
+        // 不认识的协议同理：该走"暂不支持协议"那条错。
         assert_eq!(
-            missing_with("ss", KernelPreference::Xray, false, &[]),
+            missing_with("quantum-tunnel", KernelPreference::Auto, true, &[]),
             None
         );
-        // 不认识的协议同理：该走"暂不支持协议"那条错。
-        assert_eq!(missing_with("quantum-tunnel", KernelPreference::Auto, true, &[]), None);
     }
 
     #[test]

@@ -1,12 +1,15 @@
 use crate::gui::icons::{self, icon_label, Icon};
+use crate::gui::theme;
 use crate::gui::types::{
-    ActiveConnectionInfo, ProxyPanel, ProxySortBy, ProxyView, ProxyViewRow, RuleDraftKind };
+    ActiveConnectionInfo, ProxyPanel, ProxySortBy, ProxyView, ProxyViewRow, RuleDraftKind, RulesTab,
+};
 use crate::gui::widgets::{
-    card_frame, compact_node_card, country_flag_and_name, danger_btn, dns_mode_label, format_bytes,
-    format_speed, header_cell, panel_frame, primary_btn, panel_tab, proxy_state_label,
-    clock_of, render_health_strip, render_traffic_sparkline, routing_mode_description,
-    routing_mode_detail, rule_action_label,
-    rule_matcher_label, section_title, status_badge, tun_stack_label };
+    card_frame, clock_of, compact_node_card, country_flag_and_name, danger_btn, dns_mode_label,
+    format_bytes, format_speed, header_cell, panel_frame, panel_tab, primary_btn,
+    proxy_state_label, render_health_strip, render_traffic_sparkline, routing_mode_description,
+    routing_mode_detail, rule_action_label, rule_matcher_label, section_title, status_badge,
+    tun_stack_label,
+};
 use crate::gui::VpnApp;
 use crate::kernel::{KernelKind, KernelPreference};
 use crate::models::NodeSummary;
@@ -14,10 +17,24 @@ use crate::proxy::{
     adblock_quic_rules, ai_service_rules, dev_mirrors_rules, game_platforms_rules,
     mihomo_dns_poison_overrides, optimize_traffic_rules, recommended_traffic_rules,
     social_telegram_rules, streaming_media_rules, DnsEnhancedMode, ProxyMode, ProxyState,
-    RoutingMode, RuleAction, TrafficRule, TunStack, FINAL_GROUP, URL_TEST_GROUP };
+    RoutingMode, RuleAction, TrafficRule, TunStack, FINAL_GROUP, URL_TEST_GROUP,
+};
 use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, Vec2};
 use std::sync::atomic::Ordering;
-use crate::gui::theme;
+
+/// 分流规则那行表头右侧动作组（导出 JSON + 导入规则）预留的宽度。
+/// 「?」不在这里了 —— 示范只在导入时用得上，2026-10-15 他要求挪进导入弹框。
+const RULES_ACTIONS_WIDTH: f32 = 180.0;
+
+/// 两个分区标签（规则配置 / 命中记录）至少要占的宽度。
+const RULES_TABS_MIN_WIDTH: f32 = 170.0;
+
+/// `split_row` 两个闭包都要碰 `self`，所以动作先记成值、出框后再执行。
+enum RulesHeaderAction {
+    None,
+    Export,
+    Import,
+}
 
 impl VpnApp {
     pub(crate) fn ui_proxy(&mut self, ui: &mut Ui) {
@@ -401,7 +418,10 @@ impl VpnApp {
             ProxyState::Starting | ProxyState::Stopping
         );
         if running {
-            if ui.add_enabled(!self.proxy_busy, danger_btn("停止代理")).clicked() {
+            if ui
+                .add_enabled(!self.proxy_busy, danger_btn("停止代理"))
+                .clicked()
+            {
                 self.stop_proxy();
             }
             if ui
@@ -516,7 +536,11 @@ impl VpnApp {
         // 8 个地区药丸 + 4 个按钮在 960 的最小窗口宽度下放不下，不换行就会被裁掉
         // ——「停止代理」被裁掉就等于没有。
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("地区:").small().color(theme::text_secondary()));
+            ui.label(
+                RichText::new("地区:")
+                    .small()
+                    .color(theme::text_secondary()),
+            );
             let regions = [
                 ("all", "全部"),
                 ("HK", "香港"),
@@ -787,7 +811,9 @@ impl VpnApp {
         if !self.show_kernel_dialog {
             return;
         }
-        let Some(kind) = self.kernel_dialog_kind else { return };
+        let Some(kind) = self.kernel_dialog_kind else {
+            return;
+        };
         let mut open = true;
         let mut start: Option<(KernelSource, Option<std::path::PathBuf>)> = None;
 
@@ -884,18 +910,12 @@ impl VpnApp {
                     );
                     let dot = egui::pos2(rect.min.x + PAD + 5.0, rect.min.y + PAD + 8.0);
                     if selected {
-                        ui.painter().circle_stroke(
-                            dot,
-                            5.0,
-                            Stroke::new(1.6_f32, theme::accent()),
-                        );
+                        ui.painter()
+                            .circle_stroke(dot, 5.0, Stroke::new(1.6_f32, theme::accent()));
                         ui.painter().circle_filled(dot, 2.3_f32, theme::accent());
                     } else {
-                        ui.painter().circle_stroke(
-                            dot,
-                            5.0,
-                            Stroke::new(1.2_f32, theme::muted()),
-                        );
+                        ui.painter()
+                            .circle_stroke(dot, 5.0, Stroke::new(1.2_f32, theme::muted()));
                     }
                     ui.painter().galley(
                         egui::pos2(rect.min.x + PAD + DOT_W, rect.min.y + PAD - 1.0),
@@ -1059,10 +1079,14 @@ impl VpnApp {
                                 ui.label(RichText::new(target_text).small());
                                 ui.label(RichText::new(&c.rule).small().color(theme::accent()));
                                 ui.label(
-                                    RichText::new(format_bytes(c.upload)).small().color(theme::muted()),
+                                    RichText::new(format_bytes(c.upload))
+                                        .small()
+                                        .color(theme::muted()),
                                 );
                                 ui.label(
-                                    RichText::new(format_bytes(c.download)).small().color(theme::muted()),
+                                    RichText::new(format_bytes(c.download))
+                                        .small()
+                                        .color(theme::muted()),
                                 );
                                 if ui
                                     .add(danger_btn("断开"))
@@ -1084,7 +1108,176 @@ impl VpnApp {
         }
     }
 
+    /// 分流规则面板：拆成「规则配置」和「命中记录」两个分区。
+    /// 导入/导出挂在配置那一侧 —— 它们动的是规则表本身。
     pub(crate) fn ui_proxy_rules(&mut self, ui: &mut Ui) {
+        // 两个闭包都要动 self，所以 tab 状态先取副本、动作先记成枚举，出框后再落地。
+        let mut tab = self.rules_tab;
+        // 动作组按"这一帧进来时"的分区决定画不画；`tab` 被左闭包可变借用，这里另存一份。
+        let tab_now = self.rules_tab;
+        let busy = self.proxy_busy;
+        let mut action = RulesHeaderAction::None;
+        // 系统显示缩放 125%/150% 叠上字体 140% 时，960 物理最小宽只剩 550~460 逻辑点，
+        // 中央面板不到 420 —— 一行放不下"两个分区标签 + 250 宽的动作组"，右对齐那组会
+        // 直接压到标签上（2026-10-15 他报的"导出 JSON 被挤出去"）。放不下就让它换一行。
+        let one_row_fits =
+            ui.max_rect().width() >= RULES_ACTIONS_WIDTH + RULES_TABS_MIN_WIDTH + 8.0;
+        if one_row_fits {
+            crate::gui::widgets::split_row(
+                ui,
+                "rules:tabs",
+                RULES_ACTIONS_WIDTH,
+                |ui| {
+                    panel_tab(ui, &mut tab, RulesTab::Config, Icon::Rules, "规则配置");
+                    panel_tab(ui, &mut tab, RulesTab::Hits, Icon::Radar, "命中记录");
+                },
+                |ui| Self::rules_actions(ui, tab_now, busy, &mut action),
+            );
+        } else {
+            let _ = ui.horizontal(|ui| {
+                panel_tab(ui, &mut tab, RulesTab::Config, Icon::Rules, "规则配置");
+                panel_tab(ui, &mut tab, RulesTab::Hits, Icon::Radar, "命中记录");
+            });
+            // 连一行都放不下时（200% 系统缩放 + 140% 字体）让它自己折，别越界。
+            let _ = ui.horizontal_wrapped(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    Self::rules_actions(ui, tab_now, busy, &mut action);
+                });
+            });
+        }
+        self.rules_tab = tab;
+        match action {
+            RulesHeaderAction::None => {}
+            RulesHeaderAction::Export => self.export_rules_as_json(),
+            RulesHeaderAction::Import => self.show_rule_import = true,
+        }
+        ui.add_space(8.0);
+        match self.rules_tab {
+            RulesTab::Config => self.ui_proxy_rules_config(ui),
+            RulesTab::Hits => self.ui_proxy_rules_hits(ui),
+        }
+        self.ui_rule_import(ui.ctx());
+        self.ui_rule_import_help(ui.ctx());
+    }
+
+    fn button_small(text: &str) -> egui::Button<'_> {
+        egui::Button::new(RichText::new(text).strong().size(12.5))
+    }
+
+    /// 分流规则表头右侧那组动作（导出 JSON / 导入规则）。
+    /// 两个闭包都要碰 `self`，所以这里只把点击记进 `action`，由调用方出框后再执行。
+    fn rules_actions(ui: &mut Ui, tab: RulesTab, busy: bool, action: &mut RulesHeaderAction) {
+        if tab != RulesTab::Config {
+            return;
+        }
+        if ui
+            .button("导出 JSON")
+            .on_hover_text(
+                "把当前规则表导成 mihomo 规则字符串数组：写进 data/exports 并复制到剪贴板",
+            )
+            .clicked()
+        {
+            *action = RulesHeaderAction::Export;
+        }
+        if ui
+            .add_enabled(!busy, Self::button_small("导入规则"))
+            .on_hover_text("贴 JSON 或一行一条的文本，解析后追加进规则表")
+            .clicked()
+        {
+            *action = RulesHeaderAction::Import;
+        }
+    }
+
+    /// 命中记录：规则列表说的是"应该走哪"，这张表说的是"实际走了哪"。
+    /// 连接是快照不是事件流，所以统计从本进程启动开始，重启前的那部分没有。
+    fn ui_proxy_rules_hits(&mut self, ui: &mut Ui) {
+        let total: i64 = self.rule_hits_today.iter().map(|hit| hit.hits).sum();
+        let matched: i64 = self
+            .rule_hits_today
+            .iter()
+            .filter(|hit| hit.rule.starts_with("MATCH"))
+            .map(|hit| hit.hits)
+            .sum();
+        let pct = if total > 0 { matched * 100 / total } else { 0 };
+        let empty = self.rule_hits_today.is_empty();
+        let mut refresh = false;
+        card_frame().show(ui, |ui| {
+            // 说明并进表头那一行（原来它单独占一行 + 8pt 间隔），滚动区再吃满剩余高度，
+            // 列表视口从 469 涨到 534（1330×800）、240 涨到 305（140% 字体）。
+            crate::gui::widgets::split_row(
+                ui,
+                "rules:hits_header",
+                96.0,
+                |ui| {
+                    icon_label(ui, Icon::Radar, 16.0, theme::accent());
+                    ui.label(RichText::new("规则命中记录").strong().size(15.0));
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!(
+                                "{total} 条连接 · 兜底 MATCH {matched} 条（{pct}%） · \
+                                 占比按连接数算，一条连接只计一次"
+                            ))
+                            .small()
+                            .color(theme::text_secondary()),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text("统计从本进程启动开始；命中每 30 秒自动落库一次。");
+                },
+                |ui| {
+                    if ui
+                        .button("立即刷新")
+                        .on_hover_text("命中每 30 秒自动落库一次，这里手动拉最新那份")
+                        .clicked()
+                    {
+                        refresh = true;
+                    }
+                },
+            );
+            ui.add_space(6.0);
+            if empty {
+                ui.label(
+                    RichText::new("还没有命中记录：启动代理并跑点流量之后再回来看。")
+                        .color(theme::muted()),
+                );
+                return;
+            }
+            ui.horizontal(|ui| {
+                header_cell(ui, "命中的规则");
+                header_cell(ui, "派给");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    header_cell(ui, "条数 / 占比");
+                });
+            });
+            egui::ScrollArea::vertical()
+                .id_salt("rule_hits_table")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for hit in &self.rule_hits_today {
+                        let share = if total > 0 { hit.hits * 100 / total } else { 0 };
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(&hit.rule).color(theme::accent()).monospace());
+                            ui.label(RichText::new(format!("→ {}", hit.target)));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        RichText::new(format!("{} 条 · {}%", hit.hits, share))
+                                            .strong()
+                                            .color(theme::text_primary()),
+                                    );
+                                },
+                            );
+                        });
+                    }
+                });
+        });
+        if refresh {
+            self.reload_rule_hits();
+        }
+    }
+
+    pub(crate) fn ui_proxy_rules_config(&mut self, ui: &mut Ui) {
         let editable = !self.proxy_busy;
         let show_custom_rules = self.proxy_config.routing_mode == RoutingMode::Rule;
         let mut save_mode_clicked = false;
@@ -1100,46 +1293,6 @@ impl VpnApp {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                // 今日命中：规则列表说的是"应该走哪"，这张卡说的是"实际走了哪"。
-                // 连接是快照不是事件流，所以统计从本进程启动开始，重启前的那部分没有。
-                if !self.rule_hits_today.is_empty() {
-                    let total: i64 = self.rule_hits_today.iter().map(|hit| hit.hits).sum();
-                    let matched: i64 = self
-                        .rule_hits_today
-                        .iter()
-                        .filter(|hit| hit.rule.starts_with("MATCH"))
-                        .map(|hit| hit.hits)
-                        .sum();
-                    card_frame().show(ui, |ui| {
-                        section_title(ui, "今日规则命中", "从本进程启动开始统计");
-                        ui.label(
-                            RichText::new(format!(
-                                "本进程启动以来 {total} 条连接，其中 {matched} 条走兜底 MATCH（{}%）",
-                                if total > 0 { matched * 100 / total } else { 0 }
-                            ))
-                            .small()
-                            .color(theme::text_secondary()),
-                        );
-                        for hit in self.rule_hits_today.iter().take(8) {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(&hit.rule).small().color(theme::accent()));
-                                ui.label(RichText::new(format!("→ {}", hit.target)).small());
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.label(
-                                            RichText::new(format!("{} 条", hit.hits))
-                                                .small()
-                                                .strong()
-                                                .color(theme::text_primary()),
-                                        );
-                                    },
-                                );
-                            });
-                        }
-                    });
-                    ui.add_space(10.0);
-                }
                 section_title(
                     ui,
                     "分流模式",
@@ -1558,6 +1711,248 @@ impl VpnApp {
         self.ui_recommended_rules_confirm(ui.ctx());
     }
 
+    /// 导出当前规则表：写一份 JSON 到 `data/exports/`，同时复制到剪贴板。
+    /// 没有原生"另存为"对话框（不为此引依赖），所以走"文件 + 剪贴板"两条路，
+    /// 哪条成了/没成都写在状态栏里，不假装成功。
+    pub(crate) fn export_rules_as_json(&mut self) {
+        let rules = self.proxy_config.rules.clone();
+        let count = rules.len();
+        let json = match crate::proxy::rule_io::export_json(&rules) {
+            Ok(json) => json,
+            Err(error) => {
+                self.status = format!("导出失败：{error}");
+                return;
+            }
+        };
+        let directory = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join("data")
+            .join("exports");
+        let name = format!(
+            "rules-{}-{}.json",
+            crate::app_update::current_version(),
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        );
+        let written = std::fs::create_dir_all(&directory)
+            .and_then(|_| std::fs::write(directory.join(&name), &json))
+            .map(|_| directory.join(name))
+            .map_err(|error| error.to_string());
+        let copied = arboard::Clipboard::new()
+            .and_then(|mut clipboard| clipboard.set_text(json))
+            .map_err(|error| error.to_string());
+        let mut parts = vec![format!("导出 {count} 条规则")];
+        parts.push(match &written {
+            Ok(path) => format!("已写入 {}", path.display()),
+            Err(error) => format!("写文件失败：{error}"),
+        });
+        parts.push(match copied {
+            Ok(_) => "并复制到剪贴板".to_string(),
+            Err(error) => format!("但剪贴板复制失败：{error}"),
+        });
+        self.status = parts.join(" · ");
+    }
+
+    /// 「导入规则」弹框：贴文本 → 当场给出解析预览 → 才让追加。
+    /// 预览这一步不是客气：导入直接改流量走向，不能点下去才知道进了什么。
+    pub(crate) fn ui_rule_import(&mut self, ctx: &egui::Context) {
+        if !self.show_rule_import {
+            return;
+        }
+        let mut open = true;
+        let mut apply = false;
+        // `Window::open` 已经借走了 `open`，闭包里只能记一笔，出框之后再关。
+        let mut cancel = false;
+        egui::Window::new("导入分流规则")
+            .id(egui::Id::new("vpn-parser:rule-import"))
+            .default_width(680.0)
+            .collapsible(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(
+                        "支持三种形状：JSON 数组、带 rules/prependRules 字段的 JSON 对象、\
+                         以及一行一条的文本（可带引号、尾逗号与 // 注释）。\
+                         目标写自定义组名的，落到本程序的代理组。",
+                    )
+                    .small()
+                    .color(theme::muted()),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("从剪贴板读取")
+                        .on_hover_text("整段粘进来即可，不用先摘引号")
+                        .clicked()
+                    {
+                        match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
+                            Ok(text) => {
+                                self.rule_import_text = text.clone();
+                                self.rule_import_preview =
+                                    Some(crate::proxy::rule_io::parse_rules_text(&text));
+                            }
+                            Err(error) => self.status = format!("读剪贴板失败：{error}"),
+                        }
+                    }
+                    // 「?」贴着「从剪贴板读取」：示范段落就是给人抄进这个框的。
+                    let help = ui.add(
+                        egui::Button::new(
+                            RichText::new("?")
+                                .strong()
+                                .size(12.5)
+                                .color(theme::accent()),
+                        )
+                        .min_size(Vec2::new(22.0, 22.0))
+                        .fill(Color32::TRANSPARENT),
+                    );
+                    if help
+                        .on_hover_text("导入格式示范：四种输入形状 + 支持/会跳过的类型")
+                        .clicked()
+                    {
+                        self.show_rule_import_help = true;
+                    }
+                    if !self.rule_import_text.is_empty() && ui.button("清空").clicked() {
+                        self.rule_import_text.clear();
+                        self.rule_import_preview = None;
+                    }
+                });
+                let field = ui.add(
+                    egui::TextEdit::multiline(&mut self.rule_import_text)
+                        .desired_rows(10)
+                        .desired_width(f32::INFINITY)
+                        .font(egui::TextStyle::Monospace)
+                        .hint_text("DOMAIN-SUFFIX,example.com,PROXY"),
+                );
+                crate::gui::widgets::note_text_field(ui, &field);
+                if field.changed() {
+                    let text = self.rule_import_text.clone();
+                    self.rule_import_preview = Some(crate::proxy::rule_io::parse_rules_text(&text));
+                }
+                let preview = self.rule_import_preview.clone();
+                match preview {
+                    Some(preview) => {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(preview.summary())
+                                .strong()
+                                .color(theme::text_primary()),
+                        );
+                        if !preview.rules.is_empty() {
+                            egui::ScrollArea::vertical()
+                                .id_salt("rule_import_preview")
+                                .max_height(140.0)
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    for line in crate::proxy::rule_io::export_lines(&preview.rules)
+                                        .unwrap_or_default()
+                                    {
+                                        ui.label(RichText::new(line).small().monospace());
+                                    }
+                                });
+                        }
+                        if !preview.unparsed.is_empty() {
+                            ui.label(
+                                RichText::new(format!(
+                                    "认不出的前 {} 条：{}",
+                                    preview.unparsed.len().min(3),
+                                    preview
+                                        .unparsed
+                                        .iter()
+                                        .take(3)
+                                        .cloned()
+                                        .collect::<Vec<_>>()
+                                        .join(" / ")
+                                ))
+                                .small()
+                                .color(theme::warning()),
+                            );
+                        }
+                        apply = ui
+                            .add_enabled(
+                                !preview.rules.is_empty() && !self.proxy_busy,
+                                primary_btn("追加到规则表并保存"),
+                            )
+                            .on_hover_text("已存在的同样规则会跳过；保存时照常去重")
+                            .clicked();
+                    }
+                    None => {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new("粘贴或从剪贴板读取后，这里会先给解析结果再让导入。")
+                                .small()
+                                .color(theme::muted()),
+                        );
+                    }
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("取消").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if cancel {
+            open = false;
+        }
+        if apply {
+            self.apply_rule_import();
+        }
+        if !open {
+            self.show_rule_import = false;
+            self.rule_import_preview = None;
+        }
+    }
+
+    /// 导入框旁边那个「?」：把每种能吃的输入形状各给一段可直接用的示范。
+    /// 示范不是手写的漂亮话 —— `rule_io` 里有测试把每段喂回解析器，条数对不上就红，
+    /// 所以照着抄不会错；「填入导入框」还会立刻开出解析预览让他先看清进了什么。
+    pub(crate) fn ui_rule_import_help(&mut self, ctx: &egui::Context) {
+        if !self.show_rule_import_help {
+            return;
+        }
+        let (msg, _rect) = ui_rule_import_help_window(ctx);
+        match msg {
+            RuleHelpMsg::Nothing => {}
+            RuleHelpMsg::Close => self.show_rule_import_help = false,
+            RuleHelpMsg::Status(text) => self.status = text,
+            RuleHelpMsg::Fill(body) => {
+                self.rule_import_text = body.to_string();
+                self.rule_import_preview = Some(crate::proxy::rule_io::parse_rules_text(
+                    &self.rule_import_text,
+                ));
+                // 填完直接把导入框开出来：他要看到的就是"这段抄进去到底进了什么"。
+                self.show_rule_import = true;
+                self.show_rule_import_help = false;
+            }
+        }
+    }
+
+    fn apply_rule_import(&mut self) {
+        let Some(preview) = self.rule_import_preview.clone() else {
+            return;
+        };
+        let mut added = 0usize;
+        for rule in &preview.rules {
+            if self
+                .proxy_config
+                .rules
+                .iter()
+                .any(|existing| existing == rule)
+            {
+                continue;
+            }
+            self.proxy_config.rules.push(rule.clone());
+            added += 1;
+        }
+        let duplicates = preview.rules.len() - added;
+        self.status = format!(
+            "导入完成：新增 {added} 条，跳过重复 {duplicates} 条，规则表现共 {} 条",
+            self.proxy_config.rules.len()
+        );
+        self.show_rule_import = false;
+        self.rule_import_text.clear();
+        self.rule_import_preview = None;
+        self.save_proxy_config();
+    }
+
     pub(crate) fn ui_recommended_rules_confirm(&mut self, ctx: &egui::Context) {
         if !self.show_recommended_rules_confirm {
             return;
@@ -1821,11 +2216,21 @@ impl VpnApp {
                 );
                 ui.add_sized(
                     [version_width, 20.0],
-                    egui::Label::new(RichText::new("当前版本").strong().color(theme::muted()).small()),
+                    egui::Label::new(
+                        RichText::new("当前版本")
+                            .strong()
+                            .color(theme::muted())
+                            .small(),
+                    ),
                 );
                 ui.add_sized(
                     [latest_width, 20.0],
-                    egui::Label::new(RichText::new("最新版本").strong().color(theme::muted()).small()),
+                    egui::Label::new(
+                        RichText::new("最新版本")
+                            .strong()
+                            .color(theme::muted())
+                            .small(),
+                    ),
                 );
                 ui.add_sized(
                     [path_width, 20.0],
@@ -2265,5 +2670,566 @@ fn build_proxy_view(
         search: search.to_owned(),
         sort,
         rows,
+    }
+}
+
+/// 「导入格式示范」弹框里点出来的动作。
+/// 整个弹框抽成不碰 `VpnApp` 的自由函数，好让离屏 `egui::Context` 能单独渲染它做布局验收。
+pub(crate) enum RuleHelpMsg {
+    Nothing,
+    Status(String),
+    Fill(&'static str),
+    Close,
+}
+
+fn set_help_msg(slot: &mut RuleHelpMsg, next: RuleHelpMsg) {
+    if matches!(*slot, RuleHelpMsg::Nothing) {
+        *slot = next;
+    }
+}
+
+/// 每种能吃的输入形状给一段可直接抄用的示范 + 支持/跳过的类型清单。
+/// 示范文本本身由 `rule_io` 的测试逐段喂回解析器（条数对不上就红），
+/// 所以这里写的"可导入 N 条"不是宣传语。
+/// 「导入格式示范」整个弹框。宽度与滚动区高度都跟着屏幕算 ——
+/// 字体调到 140% 时逻辑屏幕只剩物理的 0.71 倍，写死尺寸会把窗口顶出右缘
+/// （离屏量到 660 宽的屏面上窗口画到 662）。
+/// 抽成不碰 `VpnApp` 的自由函数，好让离屏 `egui::Context` 真开一次窗口做验收。
+fn ui_rule_import_help_window(ctx: &egui::Context) -> (RuleHelpMsg, egui::Rect) {
+    let screen = ctx.screen_rect();
+    let width = (screen.width() - 96.0).clamp(320.0, 680.0);
+    let scroll_height = (screen.height() * 0.5).clamp(180.0, 430.0);
+    let mut open = true;
+    let mut msg = RuleHelpMsg::Nothing;
+    // `Window::open` 借走了 `open`，闭包里只记一笔，出框之后再合。
+    let shown = egui::Window::new("导入格式示范")
+        .id(egui::Id::new("vpn-parser:rule-import-help"))
+        .default_width(width)
+        .default_pos(screen.min + Vec2::new(48.0, 32.0))
+        .collapsible(false)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            msg = ui_rule_import_help_body(ui, scroll_height);
+        });
+    let rect = shown
+        .map(|inner| inner.response.rect)
+        .unwrap_or(egui::Rect::NOTHING);
+    if !open && matches!(msg, RuleHelpMsg::Nothing) {
+        msg = RuleHelpMsg::Close;
+    }
+    (msg, rect)
+}
+
+fn ui_rule_import_help_body(ui: &mut Ui, scroll_height: f32) -> RuleHelpMsg {
+    let mut msg = RuleHelpMsg::Nothing;
+    ui.label(
+        RichText::new(
+            "目标写 PROXY / DIRECT / REJECT 以外的自定义组名，一律落到本程序的代理组；\
+             GEOIP 的 no-resolve 由本程序自动补；重复的规则保存时去重。",
+        )
+        .small()
+        .color(theme::muted()),
+    );
+    ui.label(
+        RichText::new(format!(
+            "认这些类型：{}",
+            crate::proxy::rule_io::SUPPORTED_KINDS.join("、")
+        ))
+        .small()
+        .color(theme::text_secondary()),
+    );
+    ui.label(
+        RichText::new(format!(
+            "点名跳过：{}、MATCH/FINAL 兜底行",
+            crate::proxy::rule_io::UNSUPPORTED_KINDS.join("、")
+        ))
+        .small()
+        .color(theme::warning()),
+    );
+    egui::ScrollArea::vertical()
+        .id_salt("rule_import_help")
+        .max_height(scroll_height)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for example in crate::proxy::rule_io::import_examples() {
+                ui.add_space(8.0);
+                // 每种格式一张卡：卡片用页面那档蓝灰，弹框本身是纯白容器，
+                // 卡片内层的代码块再回到纯白 —— 三层靠深浅分，不靠描边堆。
+                Frame::NONE
+                    .fill(theme::page_bg())
+                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                    .corner_radius(CornerRadius::same(14))
+                    .inner_margin(Margin::symmetric(13, 11))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(example.title)
+                                    .strong()
+                                    .color(theme::text_primary()),
+                            );
+                            ui.add_space(6.0);
+                            let (badge, color) = if example.expected_rules > 0 {
+                                (
+                                    format!("可导入 {} 条", example.expected_rules),
+                                    theme::success(),
+                                )
+                            } else {
+                                (
+                                    format!("{} 条全部点名跳过", example.expected_unsupported),
+                                    theme::warning(),
+                                )
+                            };
+                            status_badge(ui, &badge, color);
+                        });
+                        ui.label(RichText::new(example.note).small().color(theme::muted()));
+                        Frame::NONE
+                            .fill(theme::panel())
+                            .stroke(Stroke::new(1.0_f32, theme::border()))
+                            .corner_radius(CornerRadius::same(8))
+                            .inner_margin(Margin::symmetric(10, 8))
+                            .show(ui, |ui| {
+                                for line in example.body.lines() {
+                                    ui.label(
+                                        RichText::new(line)
+                                            .small()
+                                            .monospace()
+                                            .color(theme::text_secondary()),
+                                    );
+                                }
+                            });
+                        ui.add_space(2.0);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button("填入导入框")
+                                .on_hover_text("整段塞进「导入规则」，先给解析预览再让导入")
+                                .clicked()
+                            {
+                                set_help_msg(&mut msg, RuleHelpMsg::Fill(example.body));
+                            }
+                            if ui.button("复制这段").clicked() {
+                                let outcome =
+                                    arboard::Clipboard::new().and_then(|mut clipboard| {
+                                        clipboard.set_text(example.body.to_string())
+                                    });
+                                set_help_msg(
+                                    &mut msg,
+                                    RuleHelpMsg::Status(match outcome {
+                                        Ok(()) => "示范已复制到剪贴板".to_string(),
+                                        Err(error) => format!("复制失败：{error}"),
+                                    }),
+                                );
+                            }
+                        });
+                    });
+            }
+        });
+    ui.add_space(10.0);
+    if ui.button("关闭").clicked() {
+        set_help_msg(&mut msg, RuleHelpMsg::Close);
+    }
+    msg
+}
+
+#[cfg(test)]
+mod rule_import_help_probe_tests {
+    use super::ui_rule_import_help_window;
+    use eframe::egui::{self, RawInput, Rect, Vec2};
+
+    /// 用产品同一份构造函数真开三帧「导入格式示范」窗口：
+    /// 第 1 帧布局、第 2 帧读"看得见的那部分"、第 3 帧再读一次（确认滚动后仍在渲染）。
+    /// 返回（窗口矩形, 第 2 帧文字, 第 3 帧文字）。
+    fn probe(screen_width: f32) -> (Rect, String, String) {
+        let ctx = egui::Context::default();
+        let mut rect = Rect::NOTHING;
+        let mut top = String::new();
+        let mut bottom = String::new();
+        for frame in 0..3 {
+            let mut input = RawInput::default();
+            input.screen_rect = Some(Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(screen_width, 900.0),
+            ));
+            if frame == 2 {
+                // 光标停在窗口里往下滚，够滚到底。
+                let center = rect.center();
+                input.events.push(egui::Event::PointerMoved(center));
+                input.events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: Vec2::new(0.0, -2000.0),
+                    modifiers: egui::Modifiers::default(),
+                });
+            }
+            let mut this_frame = String::new();
+            let _ = ctx.run(input, |ctx| {
+                let (_msg, window_rect) = ui_rule_import_help_window(ctx);
+                rect = window_rect;
+                // 形状只能在同一帧里读：这一画在下一帧开始前就被 egui 清掉了。
+                let ids: Vec<egui::LayerId> = ctx.memory(|m| m.layer_ids().collect());
+                this_frame = ctx.graphics_mut(|g| {
+                    let mut out = String::new();
+                    for id in &ids {
+                        let Some(list) = g.get(*id) else {
+                            continue;
+                        };
+                        for shape in list.all_entries() {
+                            if let egui::Shape::Text(text) = &shape.shape {
+                                out.push_str(&text.galley.text());
+                                out.push('\n');
+                            }
+                        }
+                    }
+                    out
+                });
+            });
+            match frame {
+                1 => top = this_frame,
+                2 => bottom = this_frame,
+                _ => {}
+            }
+        }
+        (rect, top, bottom)
+    }
+
+    /// 示范弹框必须：整窗留在屏幕里（字体调到 140% 时逻辑宽度只剩物理的 0.71 倍）、
+    /// 类型清单与"打开就该看见"的前三段示范真的画出来、两个动作按钮也在。
+    /// 断言读的是这一帧实际提交的文字，渲染没跑就等于红；
+    /// 六段示范内容的正确性由 rule_io 里"逐段喂回解析器"的测试钉住。
+    #[test]
+    fn the_help_window_fits_and_paints_the_visible_examples() {
+        let examples = crate::proxy::rule_io::import_examples();
+        assert_eq!(examples.len(), 6, "示范段落数变了，弹框的说明文案要跟着改");
+        for screen_width in [1298.0, 940.0, 660.0, 480.0] {
+            let (rect, top, bottom) = probe(screen_width);
+            assert!(
+                rect.max.x <= screen_width + 0.5,
+                "{screen_width:.0} 宽屏面上窗口画到 {:.1}，超出右边界",
+                rect.max.x
+            );
+            assert!(
+                rect.height() > 200.0,
+                "窗口只有 {:.1} 高，示范没渲染",
+                rect.height()
+            );
+            for (name, text) in [("未滚动", &top), ("滚动后", &bottom)] {
+                assert!(
+                    text.len() > 200,
+                    "{screen_width:.0} 宽时{name}那一帧只画出 {} 字",
+                    text.len()
+                );
+            }
+            let painted = format!("{top}\n{bottom}");
+            assert!(
+                painted.contains("认这些类型") && painted.contains("点名跳过"),
+                "{screen_width:.0} 宽时类型清单没画出来"
+            );
+            // 卡片比原来的裸文本各高 ~30pt：620 逻辑宽以上能不滚动看见前三段，
+            // 更窄（960 物理 ÷ 150% 缩放 ÷ 140% 字体）只保证前两段，剩下的靠滚动。
+            let visible = if screen_width >= 620.0 { 3 } else { 2 };
+            for example in &examples[..visible] {
+                assert!(
+                    painted.contains(example.title),
+                    "{screen_width:.0} 宽时示范「{}」没画出来",
+                    example.title
+                );
+            }
+            assert!(
+                painted.contains("填入导入框") && painted.contains("复制这段"),
+                "{screen_width:.0} 宽时示范的操作按钮没画出来"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod rule_hits_height_probe_tests {
+    use eframe::egui::{self, Frame, Margin, RawInput, Rect, Vec2};
+
+    /// 复刻「命中记录」那一列的结构，量滚动区实际拿到的视口高度。
+    /// `strip_note` = 把"从本进程启动开始统计…"那行并掉；`reserve` = 视口预留量。
+    fn probe(window: Vec2, strip_note: bool, reserve: f32) -> (f32, f32) {
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(Rect::from_min_size(egui::Pos2::ZERO, window));
+        let mut viewport = 0.0_f32;
+        let mut card_bottom = 0.0_f32;
+        let _ = ctx.run(input, |ctx| {
+            egui::TopBottomPanel::top("title_bar")
+                .exact_height(34.0)
+                .frame(Frame::NONE.fill(egui::Color32::WHITE))
+                .show(ctx, |ui| {
+                    let _ = ui.label("VPN Parser");
+                });
+            egui::SidePanel::left("sidebar")
+                .exact_width(220.0)
+                .show(ctx, |ui| {
+                    let _ = ui.label("导航");
+                });
+            egui::TopBottomPanel::bottom("status")
+                .exact_height(32.0)
+                .frame(Frame::NONE.fill(egui::Color32::GRAY))
+                .show(ctx, |ui| {
+                    let _ = ui.label("状态栏");
+                });
+            egui::TopBottomPanel::bottom("control")
+                .exact_height(48.0)
+                .frame(Frame::NONE.fill(egui::Color32::DARK_GRAY))
+                .show(ctx, |ui| {
+                    let _ = ui.button("启动代理");
+                });
+            egui::CentralPanel::default()
+                .frame(
+                    Frame::NONE
+                        .fill(egui::Color32::LIGHT_GRAY)
+                        .inner_margin(Margin::symmetric(18, 14)),
+                )
+                .show(ctx, |ui| {
+                    let _ = ui.horizontal(|ui| {
+                        let _ = ui.button("规则配置");
+                        let _ = ui.button("命中记录");
+                    });
+                    let _ = ui.separator();
+                    ui.add_space(6.0);
+                    let card = Frame::NONE
+                        .fill(egui::Color32::WHITE)
+                        .inner_margin(Margin::same(22));
+                    let shown = card.show(ui, |ui| {
+                        let _ = ui.horizontal(|ui| {
+                            let _ = ui.label("规则命中记录");
+                            let _ = ui.label("123 条连接 · 兜底 MATCH 20 条（16%）");
+                            let _ = ui.button("立即刷新");
+                        });
+                        ui.add_space(2.0);
+                        if !strip_note {
+                            ui.label("从本进程启动开始统计；占比按连接数算，一条连接只计一次。");
+                            ui.add_space(8.0);
+                        }
+                        let _ = ui.horizontal(|ui| {
+                            let _ = ui.label("命中的规则");
+                            let _ = ui.label("派给");
+                            let _ = ui.label("条数 / 占比");
+                        });
+                        let area = egui::ScrollArea::vertical()
+                            .id_salt("rule_hits_table_probe")
+                            .auto_shrink([false, false])
+                            .max_height(ui.available_height() - reserve)
+                            .show(ui, |ui| {
+                                for _ in 0..40 {
+                                    let _ = ui.horizontal(|ui| {
+                                        let _ = ui.label("GEOIP,CN,DIRECT");
+                                        let _ = ui.label("→ 代理");
+                                        let _ = ui.label("12 条 · 9%");
+                                    });
+                                }
+                            });
+                        viewport = area.inner_rect.height();
+                    });
+                    card_bottom = shown.response.rect.max.y;
+                });
+        });
+        (viewport, card_bottom)
+    }
+
+    /// 命中记录列表要把剩余高度全吃掉：说明并进表头 + 取消 40pt 预留之后，
+    /// 1330×800 的视口从 469（约 19 行）涨到 ≥520（约 22 行），
+    /// 140% 字体（950×571 逻辑）从 240（10 行）涨到 ≥290（12 行）。
+    /// 同一份结构按老写法（独立说明行 + 预留 40）再量一次，那两行确实是白送的；
+    /// 顺手钉住"卡片底不许越过中央面板底"，加高不能靠溢出实现。
+    #[test]
+    fn the_hits_list_uses_every_remaining_pixel() {
+        for (size, min_new) in [
+            (Vec2::new(1330.0, 800.0), 520.0),
+            (Vec2::new(950.0, 571.0), 290.0),
+        ] {
+            let (new_vp, new_bottom) = probe(size, true, 0.0);
+            let (old_vp, _old_bottom) = probe(size, false, 40.0);
+            assert!(
+                new_vp >= min_new,
+                "{size:?} 时列表视口只有 {new_vp:.1}，没到 {min_new:.0}"
+            );
+            assert!(
+                new_vp > old_vp + 50.0,
+                "新写法视口 {new_vp:.1} 只比老写法 {old_vp:.1} 高一点点，说明没省下来"
+            );
+            // 中央面板底边 = 屏高 - 状态栏 32 - 控制栏 48，再收掉 14 的下内边距。
+            let limit = size.y - 32.0 - 48.0 - 14.0;
+            assert!(
+                new_bottom <= limit + 1.0,
+                "{size:?} 时卡片底画到 {new_bottom:.1}，越过中央面板底 {limit:.1}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod rules_row_probe_tests {
+    use super::{RULES_ACTIONS_WIDTH, RULES_TABS_MIN_WIDTH};
+    use eframe::egui::{self, Frame, Margin, RawInput, Rect, Vec2};
+
+    /// 复刻分流规则那行表头**含现写的分支判断**：宽到放得下就一行钉右，
+    /// 放不下就让动作组另起一行。返回（面板矩形, 分区标签占的矩形, 动作组占的矩形）。
+    fn probe(window_width: f32) -> (Rect, Rect, Rect) {
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(Rect::from_min_size(
+            egui::Pos2::ZERO,
+            Vec2::new(window_width, 800.0),
+        ));
+        let mut panel = Rect::NOTHING;
+        let mut tabs = Rect::NOTHING;
+        let mut group = Rect::NOTHING;
+        let _ = ctx.run(input, |ctx| {
+            egui::TopBottomPanel::top("title_bar")
+                .exact_height(34.0)
+                .frame(Frame::NONE.fill(egui::Color32::WHITE))
+                .show(ctx, |ui| {
+                    let _ = ui.label("VPN Parser");
+                });
+            egui::SidePanel::left("sidebar")
+                .exact_width(220.0)
+                .show(ctx, |ui| {
+                    let _ = ui.label("导航");
+                });
+            egui::CentralPanel::default()
+                .frame(
+                    Frame::NONE
+                        .fill(egui::Color32::LIGHT_GRAY)
+                        .inner_margin(Margin::symmetric(18, 14)),
+                )
+                .show(ctx, |ui| {
+                    panel = ui.max_rect();
+                    let mut draw_tabs = |ui: &mut egui::Ui| {
+                        let a = ui.button("规则配置").rect;
+                        let b = ui.button("命中记录").rect;
+                        let added = a.union(b);
+                        tabs = if !tabs.is_finite() {
+                            added
+                        } else {
+                            tabs.union(added)
+                        };
+                    };
+                    let mut draw_actions = |ui: &mut egui::Ui| {
+                        // 只并按钮自己的矩形：min_rect 会把同一行里先画的东西也算进来。
+                        let a = ui.button("导出 JSON").rect;
+                        let c = ui.button("导入规则").rect;
+                        let added = a.union(c);
+                        group = if !group.is_finite() {
+                            added
+                        } else {
+                            group.union(added)
+                        };
+                    };
+                    // 与产品同一个判据（ui.max_rect() 就是中央面板的内容宽）。
+                    if ui.max_rect().width() >= RULES_ACTIONS_WIDTH + RULES_TABS_MIN_WIDTH + 8.0 {
+                        crate::gui::widgets::split_row(
+                            ui,
+                            "rules:tabs",
+                            RULES_ACTIONS_WIDTH,
+                            |ui| draw_tabs(ui),
+                            |ui| draw_actions(ui),
+                        );
+                    } else {
+                        let _ = ui.horizontal(|ui| draw_tabs(ui));
+                        let _ = ui.horizontal_wrapped(|ui| {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| draw_actions(ui),
+                            );
+                        });
+                    }
+                });
+        });
+        (panel, tabs, group)
+    }
+
+    /// 老写法的毛病：右对齐那组和左边的分区标签在窄面板上**互相压住**（x 方向重叠），
+    /// 按钮看起来就是被挤走。反向验证：同一个宽度下老写法确实重叠、新写法不重叠。
+    #[test]
+    fn the_old_single_row_really_collided() {
+        let (panel, tabs, group) = probe_single_row(520.0);
+        assert!(
+            group.min.x < tabs.max.x,
+            "老写法在 520 宽没重叠（组从 {:.1} 开始，标签到 {:.1}）—— 反向验证失去意义",
+            group.min.x,
+            tabs.max.x
+        );
+        assert!(panel.width() > 0.0);
+    }
+
+    fn probe_single_row(window_width: f32) -> (Rect, Rect, Rect) {
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(Rect::from_min_size(
+            egui::Pos2::ZERO,
+            Vec2::new(window_width, 800.0),
+        ));
+        let mut panel = Rect::NOTHING;
+        let mut tabs = Rect::NOTHING;
+        let mut group = Rect::NOTHING;
+        let _ = ctx.run(input, |ctx| {
+            egui::TopBottomPanel::top("title_bar")
+                .exact_height(34.0)
+                .frame(Frame::NONE.fill(egui::Color32::WHITE))
+                .show(ctx, |ui| {
+                    let _ = ui.label("VPN Parser");
+                });
+            egui::SidePanel::left("sidebar")
+                .exact_width(220.0)
+                .show(ctx, |ui| {
+                    let _ = ui.label("导航");
+                });
+            egui::CentralPanel::default()
+                .frame(
+                    Frame::NONE
+                        .fill(egui::Color32::LIGHT_GRAY)
+                        .inner_margin(Margin::symmetric(18, 14)),
+                )
+                .show(ctx, |ui| {
+                    panel = ui.max_rect();
+                    let _ = ui.horizontal(|ui| {
+                        let a = ui.button("规则配置").rect;
+                        let b = ui.button("命中记录").rect;
+                        tabs = a.union(b);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let before = ui.min_rect();
+                            let _ = ui.button("导出 JSON");
+                            let _ = ui.button("导入规则");
+                            group = before.union(ui.min_rect());
+                        });
+                    });
+                });
+        });
+        (panel, tabs, group)
+    }
+
+    /// 动作组不许和分区标签互相压住，也不许越过面板右缘。
+    /// 下限取 460 = 960 物理最小宽 ÷（150% 系统缩放 × 140% 字体）；再窄（200% 缩放叠 140%
+    /// 字体 = 380 逻辑点）egui 自己的右锚点会溢出 4.1pt，那已经不是这套布局能救的了。
+    #[test]
+    fn the_actions_never_collide_or_leave_the_panel() {
+        for width in [1330.0, 950.0, 760.0, 686.0, 620.0, 520.0, 460.0] {
+            let (panel, tabs, group) = probe(width);
+            assert!(
+                group.max.x <= panel.right() + 0.5,
+                "{width:.0} 宽时动作组画到 {:.1}，越过面板右缘 {:.1}",
+                group.max.x,
+                panel.right()
+            );
+            assert!(
+                tabs.min.x >= panel.left() - 0.5 && tabs.max.x <= panel.right() + 0.5,
+                "{width:.0} 宽时分区标签画到 [{:.1}, {:.1}]，超出面板 [{:.1}, {:.1}]",
+                tabs.min.x,
+                tabs.max.x,
+                panel.left(),
+                panel.right()
+            );
+            assert!(
+                !group.intersects(tabs),
+                "{width:.0} 宽时动作组 [{:.1},{:.1}] 压住分区标签 [{:.1},{:.1}]",
+                group.min.x,
+                group.max.x,
+                tabs.min.x,
+                tabs.max.x
+            );
+        }
     }
 }

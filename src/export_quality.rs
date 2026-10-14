@@ -196,7 +196,6 @@ fn first_str(cfg: &Value, keys: &[&str]) -> Option<String> {
     None
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

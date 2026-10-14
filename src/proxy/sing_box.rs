@@ -578,7 +578,7 @@ fn build_route_rules(options: &MihomoConfigOptions) -> Result<(Vec<Value>, Vec<V
                     GEOIP_CN_URL,
                 );
                 json!({ "rule_set": ["geoip-cn"], "action": "route", "outbound": action })
-            },
+            }
             RuleMatcher::RuleSet(tag) => {
                 json!({ "rule_set": [tag], "action": "route", "outbound": action })
             }
@@ -860,9 +860,14 @@ mod tests {
 
     #[tokio::test]
     async fn empty_sing_box_probe_returns_empty() {
-        let results = verify_nodes_with_sing_box_progress_limited(Vec::new(), std::time::Duration::from_secs(1), None::<fn(ProxyProbeProgress)>, Arc::new(Semaphore::new(1)))
-            .await
-            .unwrap();
+        let results = verify_nodes_with_sing_box_progress_limited(
+            Vec::new(),
+            std::time::Duration::from_secs(1),
+            None::<fn(ProxyProbeProgress)>,
+            Arc::new(Semaphore::new(1)),
+        )
+        .await
+        .unwrap();
 
         assert!(results.is_empty());
     }

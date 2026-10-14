@@ -20,10 +20,11 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
+pub mod adapter;
 mod config;
+pub(crate) mod rule_io;
 mod sing_box;
 mod xray;
-pub mod adapter;
 pub use adapter::{kernel_adapter, KernelAdapter};
 pub use config::*;
 
@@ -820,15 +821,11 @@ impl ProxyManager {
         }
         // 分流数据库没备好就别急着起内核：半截库会让内核直接拒绝启动，而且报出来的
         // 是一句要人复制才能看懂的长错误。这里缺就补（镜像优先，其次系统代理）。
-        if kernel == KernelKind::Mihomo
-            && runtime.options.rules.iter().any(TrafficRule::uses_geo)
-        {
+        if kernel == KernelKind::Mihomo && runtime.options.rules.iter().any(TrafficRule::uses_geo) {
             let dir = crate::geo::mihomo_dir();
             if !crate::geo::geo_ready(&dir) {
                 let system = crate::system_proxy::current_system_proxy_url();
-                if let Err(error) =
-                    crate::geo::provision(&dir, system.as_deref(), false).await
-                {
+                if let Err(error) = crate::geo::provision(&dir, system.as_deref(), false).await {
                     return Err(error);
                 }
             }
@@ -1432,7 +1429,6 @@ fn serialize_kernel_config(kernel: KernelKind, config: &Value) -> Result<String>
 fn configure_kernel_command(command: &mut Command, kernel: KernelKind, work_dir: &ProxyWorkDir) {
     kernel_adapter(kernel).configure_command(command, work_dir);
 }
-
 
 async fn wait_for_port(child: &mut Child, port: u16, timeout: Duration) -> bool {
     let started = tokio::time::Instant::now();

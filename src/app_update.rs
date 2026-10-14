@@ -275,7 +275,11 @@ fn transports(app_proxy: Option<&str>) -> Result<Vec<Transport>> {
     let mut list = Vec::new();
     for candidate in crate::kernel::proxy_candidates(app_proxy) {
         let mut builder = Client::builder()
-            .user_agent(concat!("vpn-parser/", env!("CARGO_PKG_VERSION"), " app-updater"))
+            .user_agent(concat!(
+                "vpn-parser/",
+                env!("CARGO_PKG_VERSION"),
+                " app-updater"
+            ))
             .connect_timeout(std::time::Duration::from_secs(4))
             .read_timeout(std::time::Duration::from_secs(15))
             .http1_only();
@@ -355,7 +359,9 @@ pub async fn check(
     channel: UpdateChannel,
 ) -> Result<AppReleaseInfo> {
     let url = match channel {
-        UpdateChannel::Stable => format!("https://api.github.com/repos/{REPOSITORY}/releases/latest"),
+        UpdateChannel::Stable => {
+            format!("https://api.github.com/repos/{REPOSITORY}/releases/latest")
+        }
         UpdateChannel::Insider => {
             format!("https://api.github.com/repos/{REPOSITORY}/releases?per_page=15")
         }
@@ -394,21 +400,25 @@ pub async fn check(
     )
 }
 
-fn summarize(
-    release: ReleaseJson,
-    current: &str,
-    channel: UpdateChannel,
-) -> AppReleaseInfo {
+fn summarize(release: ReleaseJson, current: &str, channel: UpdateChannel) -> AppReleaseInfo {
     let asset = pick_installer_asset(&release.assets, &release.tag_name);
     let update_available = asset.is_some() && version_is_newer(&release.tag_name, current);
     let message = if asset.is_none() {
-        format!("{} Release {} 里没有 Windows 安装包资产", channel.label(), release.tag_name)
+        format!(
+            "{} Release {} 里没有 Windows 安装包资产",
+            channel.label(),
+            release.tag_name
+        )
     } else if update_available {
         format!(
             "v{} 可更新至 {}{}",
             current,
             release.tag_name,
-            if release.prerelease { "（预发）" } else { "" }
+            if release.prerelease {
+                "（预发）"
+            } else {
+                ""
+            }
         )
     } else {
         format!("已是最新版本（v{current}）")
@@ -426,10 +436,9 @@ fn summarize(
                 .iter()
                 .find(|asset| asset.name.ends_with(INSTALLER_SUFFIX))?;
             Some(
-                installer.browser_download_url.replace(
-                    installer.name.rsplit('/').next()?,
-                    HASH_INDEX_NAME,
-                ),
+                installer
+                    .browser_download_url
+                    .replace(installer.name.rsplit('/').next()?, HASH_INDEX_NAME),
             )
         });
     AppReleaseInfo {
@@ -443,9 +452,14 @@ fn summarize(
     }
 }
 
-/// 安装包放哪儿：临时目录下的固定子目录，重复下载就地覆盖，不让它攒一份份 15 MB。
+/// 安装包暂存在**软件目录下的 `data/updates`**（和内核的 `data/kernels` 同一层，用户 2026-10-14 指定）：
+/// 装完想留着或手动删掉都找得到，不会像 `%TEMP%` 那样被清理工具悄悄收走、也看不见。
+/// 诊断壳（VPN_PARSER_DIAG）的 cwd 已经切到临时目录，所以它天然落在自己那份里，不碰真安装目录。
 pub fn installer_cache_dir() -> PathBuf {
-    std::env::temp_dir().join("vpn-parser-update")
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("data")
+        .join("updates")
 }
 
 /// 下载安装包并校验 SHA-256，成功返回本地路径。校验不过直接报错，绝不返回半截或换过内容的文件。
@@ -469,12 +483,14 @@ where
         (Some(digest), _) => digest,
         (None, Some(index_url)) => {
             let text = fetch_text(index_url, app_proxy).await?;
-            digest_from_hash_index(&text, &asset.name)
-                .with_context(|| format!("{HASH_INDEX_NAME} 里找不到 {asset} 的摘要", asset = asset.name))?
+            digest_from_hash_index(&text, &asset.name).with_context(|| {
+                format!(
+                    "{HASH_INDEX_NAME} 里找不到 {asset} 的摘要",
+                    asset = asset.name
+                )
+            })?
         }
-        (None, None) => bail!(
-            "GitHub 既没给资产摘要也没有 {HASH_INDEX_NAME}，无法校验安装包"
-        ),
+        (None, None) => bail!("GitHub 既没给资产摘要也没有 {HASH_INDEX_NAME}，无法校验安装包"),
     };
 
     let channels = download_ladder(&asset.url, &crate::kernel::proxy_candidates(app_proxy));
@@ -615,12 +631,10 @@ async fn fetch_text(url: &str, app_proxy: Option<&str>) -> Result<String> {
             .await
             .and_then(reqwest::Response::error_for_status)
         {
-            Ok(response) => {
-                match response.text().await {
-                    Ok(text) => return Ok(text),
-                    Err(error) => failures.push(format!("{}: {error}", transport.label)),
-                }
-            }
+            Ok(response) => match response.text().await {
+                Ok(text) => return Ok(text),
+                Err(error) => failures.push(format!("{}: {error}", transport.label)),
+            },
             Err(error) => failures.push(format!("{}: {error}", transport.label)),
         }
     }
@@ -648,7 +662,9 @@ mod tests {
     fn asset(name: &str, digest: Option<&str>) -> AssetJson {
         AssetJson {
             name: name.to_string(),
-            browser_download_url: format!("https://github.com/{REPOSITORY}/releases/download/v1.2.2/{name}"),
+            browser_download_url: format!(
+                "https://github.com/{REPOSITORY}/releases/download/v1.2.2/{name}"
+            ),
             size: 15_000_000,
             digest: digest.map(str::to_string),
         }
@@ -657,10 +673,16 @@ mod tests {
     #[test]
     fn version_compare_only_looks_at_numbers() {
         assert!(version_is_newer("v1.2.2", "1.2.1"));
-        assert!(version_is_newer("1.10.0", "1.9.3"), "按数字比，不能按字典序");
+        assert!(
+            version_is_newer("1.10.0", "1.9.3"),
+            "按数字比，不能按字典序"
+        );
         assert!(version_is_newer("1.3", "1.2.9"));
         assert!(!version_is_newer("1.2.1", "1.2.1"));
-        assert!(!version_is_newer("1.2", "1.2.1"), "缺的位补 0，不能把补丁版当新版");
+        assert!(
+            !version_is_newer("1.2", "1.2.1"),
+            "缺的位补 0，不能把补丁版当新版"
+        );
         assert!(
             !version_is_newer("2.0.1", "3.0.0"),
             "高位段更小就不能算新版，哪怕末位更大"
@@ -688,12 +710,18 @@ mod tests {
             !version_is_newer("1.4.0-beta.1", "1.4.0"),
             "beta 永远不许被当成稳定版的新版本"
         );
-        assert!(!version_is_newer("1.4.0-beta.1", "1.4.0-beta.1"), "同版本不算更新");
+        assert!(
+            !version_is_newer("1.4.0-beta.1", "1.4.0-beta.1"),
+            "同版本不算更新"
+        );
         assert!(
             !version_is_newer("1.4.0-beta", "1.4.0-beta.1"),
             "标识少的一方是前缀时更小"
         );
-        assert!(version_is_newer("v1.4.0-beta.2", "v1.4.0-beta.1"), "带 v 前缀同样成立");
+        assert!(
+            version_is_newer("v1.4.0-beta.2", "v1.4.0-beta.1"),
+            "带 v 前缀同样成立"
+        );
         assert!(
             !version_is_newer("1.3.1", "1.4.0-beta.1"),
             "beta 用户的核心号是 1.4.0，更低的补丁号不该推给他"
@@ -716,9 +744,7 @@ mod tests {
         // 名字对不上 tag（比如 tag 打错、资产手工传过）时退到后缀匹配的最后一个。
         let loose = vec![asset("vpn-parser-0.9.0-windows-x64-setup.exe", None)];
         assert_eq!(
-            pick_installer_asset(&loose, "v1.2.2")
-                .unwrap()
-                .name,
+            pick_installer_asset(&loose, "v1.2.2").unwrap().name,
             "vpn-parser-0.9.0-windows-x64-setup.exe"
         );
         assert!(pick_installer_asset(&[asset("sha256.txt", None)], "v1.2.2").is_none());
@@ -727,8 +753,16 @@ mod tests {
     #[test]
     fn digests_are_accepted_only_in_full_hex() {
         let hex = "a".repeat(64);
-        assert_eq!(normalized_digest(&format!("sha256:{hex}")).as_deref(), Some(hex.as_str()));
-        assert_eq!(normalized_digest(hex.to_uppercase().as_str()).unwrap().len(), 64);
+        assert_eq!(
+            normalized_digest(&format!("sha256:{hex}")).as_deref(),
+            Some(hex.as_str())
+        );
+        assert_eq!(
+            normalized_digest(hex.to_uppercase().as_str())
+                .unwrap()
+                .len(),
+            64
+        );
         assert!(normalized_digest("sha256:short").is_none());
         assert!(normalized_digest("md5:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").is_none());
         let asset = AssetJson {
@@ -878,6 +912,19 @@ mod tests {
         assert!(launch_installer(&missing).is_err());
     }
 
+    /// 下载好的安装包放在**软件目录下**（用户 2026-10-14 指定），不是 `%TEMP%`：
+    /// 装完要留着还是手删都看得见，也不会被清理工具悄悄收走。
+    #[test]
+    fn installer_cache_lives_under_the_program_directory() {
+        let dir = installer_cache_dir();
+        let cwd = std::env::current_dir().expect("测试总该有 cwd");
+        assert!(dir.starts_with(&cwd), "{dir:?} 必须在程序目录 {cwd:?} 下面");
+        assert_eq!(dir.file_name().unwrap(), "updates");
+        assert_eq!(dir.parent().unwrap().file_name().unwrap(), "data");
+        // 和内核同一层：data/kernels 的兄弟目录。
+        assert_eq!(dir.parent(), crate::kernel::managed_kernel_root().parent());
+    }
+
     /// 真实网络手测：两个通道各查一遍，打印拿到的 tag / 是否 prerelease / 资产。
     /// `cargo test --release -- --ignored real_network_app_check --nocapture`
     #[tokio::test]
@@ -892,9 +939,11 @@ mod tests {
                 info.tag,
                 info.prerelease,
                 info.update_available,
-                info.asset
-                    .as_ref()
-                    .map(|asset| (asset.name.clone(), asset.size, asset.sha256.is_some())),
+                info.asset.as_ref().map(|asset| (
+                    asset.name.clone(),
+                    asset.size,
+                    asset.sha256.is_some()
+                )),
             );
             assert!(info.tag.starts_with('v'));
         }

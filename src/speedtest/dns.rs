@@ -27,7 +27,12 @@ pub async fn resolve_targets_parallel(
                 };
 
                 let target = format!("{host}:{port}");
-                let res = match tokio::time::timeout(dns_timeout, tokio::net::lookup_host(target.as_str())).await {
+                let res = match tokio::time::timeout(
+                    dns_timeout,
+                    tokio::net::lookup_host(target.as_str()),
+                )
+                .await
+                {
                     Ok(Ok(iter)) => {
                         let mut addrs: Vec<SocketAddr> = iter.collect();
                         addrs.sort_by_key(|addr| if addr.is_ipv4() { 0u8 } else { 1u8 });

@@ -17,7 +17,10 @@ impl ProxyViewModel {
     ) -> (String, Color32) {
         if is_prepared {
             let text = if kernel_busy {
-                format!("预备 · 正在下载内核 ({}/{})", prepare_attempts, max_attempts)
+                format!(
+                    "预备 · 正在下载内核 ({}/{})",
+                    prepare_attempts, max_attempts
+                )
             } else if prepare_error {
                 format!("预备 · 下载失败 {}/{}", prepare_attempts, max_attempts)
             } else {

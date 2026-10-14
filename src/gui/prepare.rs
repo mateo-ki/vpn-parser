@@ -36,8 +36,7 @@ pub fn should_download_kernel(
     if attempts == 0 {
         return true;
     }
-    attempts < MAX_AUTO_ATTEMPTS
-        && since_last.is_some_and(|elapsed| elapsed >= MIN_ATTEMPT_SPACING)
+    attempts < MAX_AUTO_ATTEMPTS && since_last.is_some_and(|elapsed| elapsed >= MIN_ATTEMPT_SPACING)
 }
 
 /// 自动预备这一次该用哪种下载方式。
@@ -111,9 +110,30 @@ mod tests {
             "内核作业还在跑不许叠第二个"
         );
         // 隔得不够久不重试；够久了可以；用满三次就停。
-        assert!(!should_download_kernel(true, false, false, false, 1, Some(secs(10))));
-        assert!(should_download_kernel(true, false, false, false, 1, Some(secs(90))));
-        assert!(should_download_kernel(true, false, false, false, 2, Some(secs(3_600))));
+        assert!(!should_download_kernel(
+            true,
+            false,
+            false,
+            false,
+            1,
+            Some(secs(10))
+        ));
+        assert!(should_download_kernel(
+            true,
+            false,
+            false,
+            false,
+            1,
+            Some(secs(90))
+        ));
+        assert!(should_download_kernel(
+            true,
+            false,
+            false,
+            false,
+            2,
+            Some(secs(3_600))
+        ));
         assert!(!should_download_kernel(
             true,
             false,
@@ -127,13 +147,22 @@ mod tests {
     #[test]
     fn added_source_is_only_tested_after_it_yields_nodes() {
         assert!(should_test_added_source(true, true, true, 40));
-        assert!(!should_test_added_source(false, true, true, 40), "开关关着不自动测");
+        assert!(
+            !should_test_added_source(false, true, true, 40),
+            "开关关着不自动测"
+        );
         assert!(
             !should_test_added_source(true, false, true, 40),
             "不是我刚加的那个源就别管"
         );
-        assert!(!should_test_added_source(true, true, false, 40), "拉取失败不测");
-        assert!(!should_test_added_source(true, true, true, 0), "解析出 0 个节点不测");
+        assert!(
+            !should_test_added_source(true, true, false, 40),
+            "拉取失败不测"
+        );
+        assert!(
+            !should_test_added_source(true, true, true, 0),
+            "解析出 0 个节点不测"
+        );
     }
 
     use crate::kernel::KernelSource;
@@ -166,6 +195,9 @@ mod tests {
             "自动预备不能挑一种需要人选文件的方式"
         );
         // 预算用完后停在最后一档，不越界。
-        assert_eq!(auto_prepare_source(KernelSource::GhFast, 99, false), KernelSource::Official);
+        assert_eq!(
+            auto_prepare_source(KernelSource::GhFast, 99, false),
+            KernelSource::Official
+        );
     }
 }

@@ -111,11 +111,16 @@ impl Database {
     pub async fn record_egress_switch(&self, record: &SwitchRecord) -> Result<()> {
         // 和上一条完全一样的变更（同一个 to、同一个原因）不重复记，
         // 否则探测抖动会把历史刷成一片复制粘贴。
-        let previous: Option<String> =
-            sqlx::query_scalar("SELECT to_node || '|' || reason FROM egress_switches ORDER BY id DESC LIMIT 1")
-                .fetch_optional(&self.pool)
-                .await?;
-        let signature = format!("{}|{}", record.to_node.clone().unwrap_or_default(), clip(&record.reason));
+        let previous: Option<String> = sqlx::query_scalar(
+            "SELECT to_node || '|' || reason FROM egress_switches ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        let signature = format!(
+            "{}|{}",
+            record.to_node.clone().unwrap_or_default(),
+            clip(&record.reason)
+        );
         if previous.as_deref() == Some(signature.as_str()) {
             return Ok(());
         }
@@ -162,7 +167,7 @@ impl Database {
 
     /// 最近 N 次实测，新→旧。
     #[allow(dead_code)]
-pub async fn recent_egress_health(&self, limit: i64) -> Result<Vec<HealthRow>> {
+    pub async fn recent_egress_health(&self, limit: i64) -> Result<Vec<HealthRow>> {
         let rows = sqlx::query_as::<_, HealthRow>(
             "SELECT at, ok, latency_ms, error, node_id, node_name, kind FROM egress_health \
              ORDER BY id DESC LIMIT ?1",
@@ -187,11 +192,10 @@ pub async fn recent_egress_health(&self, limit: i64) -> Result<Vec<HealthRow>> {
 
     /// 当前连续失败次数（最近一段连续的 `ok=0`）。表头那句"连续 N 次不通"就报这个数。
     pub async fn egress_fail_streak(&self) -> Result<i64> {
-        let rows = sqlx::query_scalar::<_, i64>(
-            "SELECT ok FROM egress_health ORDER BY id DESC LIMIT 200",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows =
+            sqlx::query_scalar::<_, i64>("SELECT ok FROM egress_health ORDER BY id DESC LIMIT 200")
+                .fetch_all(&self.pool)
+                .await?;
         Ok(rows.into_iter().take_while(|ok| *ok == 0).count() as i64)
     }
 
@@ -215,21 +219,23 @@ pub async fn recent_egress_health(&self, limit: i64) -> Result<Vec<HealthRow>> {
         // NaiveDateTime，也就没有 DST 歧义（零点切换的那几天构造不出合法时刻）。
         let now_local = Local::now();
         let elapsed = now_local.num_seconds_from_midnight() as i64;
-        let start_utc = (now_local.with_timezone(&Utc) - chrono::Duration::seconds(elapsed)).to_rfc3339();
-        let count = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM egress_switches WHERE at >= ?1",
-        )
-        .bind(start_utc)
-        .fetch_one(&self.pool)
-        .await?;
+        let start_utc =
+            (now_local.with_timezone(&Utc) - chrono::Duration::seconds(elapsed)).to_rfc3339();
+        let count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM egress_switches WHERE at >= ?1")
+                .bind(start_utc)
+                .fetch_one(&self.pool)
+                .await?;
         Ok(count)
     }
 
     /// 库里还留着多少条切换记录（保留期之内，不只今天）。
     pub async fn switch_history_count(&self) -> Result<i64> {
-        Ok(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM egress_switches")
-            .fetch_one(&self.pool)
-            .await?)
+        Ok(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM egress_switches")
+                .fetch_one(&self.pool)
+                .await?,
+        )
     }
 
     /// 把这一秒采到的命中累加进按天聚合的表。连接是瞬时的，只能边采边加。
@@ -300,7 +306,11 @@ pub async fn recent_egress_health(&self, limit: i64) -> Result<Vec<HealthRow>> {
 
     /// 某个源最近 N 次拉取，新→旧（界面画"最近 7 次"色条）。
     #[allow(dead_code)]
-pub async fn fetch_history_for(&self, source_id: &str, limit: i64) -> Result<Vec<FetchHistoryRow>> {
+    pub async fn fetch_history_for(
+        &self,
+        source_id: &str,
+        limit: i64,
+    ) -> Result<Vec<FetchHistoryRow>> {
         let rows = sqlx::query_as::<_, FetchHistoryRow>(
             "SELECT at, ok, node_count, status FROM source_fetch_history \
              WHERE source_id = ?1 ORDER BY id DESC LIMIT ?2",
@@ -360,7 +370,8 @@ pub async fn fetch_history_for(&self, source_id: &str, limit: i64) -> Result<Vec
         .bind(&health_cut)
         .execute(&self.pool)
         .await;
-        let switch_cut = (Utc::now() - chrono::Duration::days(RETENTION_SWITCHES_DAYS)).to_rfc3339();
+        let switch_cut =
+            (Utc::now() - chrono::Duration::days(RETENTION_SWITCHES_DAYS)).to_rfc3339();
         let hits_cut = (Utc::now() - chrono::Duration::days(RETENTION_HITS_DAYS))
             .with_timezone(&Local)
             .format("%Y-%m-%d")
@@ -418,7 +429,10 @@ mod tests {
             .unwrap();
         let rows = db.recent_egress_switches(10).await.unwrap();
         assert_eq!(rows.len(), 1, "同样的复检失败不该每两分钟刷一条");
-        assert!(rows[0].to_node.as_deref() == Some(""), "空 to_node 表示这压根没切");
+        assert!(
+            rows[0].to_node.as_deref() == Some(""),
+            "空 to_node 表示这压根没切"
+        );
 
         db.record_egress_switch(&miss("没有可用替补：库里也找不出第二个测通过的节点"))
             .await
@@ -448,12 +462,26 @@ mod tests {
         db.record_egress_health(true, Some(900), None, Some("n1"), Some("节点一"), "startup")
             .await
             .unwrap();
-        db.record_egress_health(false, None, Some("连接超时"), Some("n2"), Some("节点二"), "periodic")
-            .await
-            .unwrap();
-        db.record_egress_health(false, Some(8000), Some("TLS 握手失败"), Some("n2"), None, "periodic")
-            .await
-            .unwrap();
+        db.record_egress_health(
+            false,
+            None,
+            Some("连接超时"),
+            Some("n2"),
+            Some("节点二"),
+            "periodic",
+        )
+        .await
+        .unwrap();
+        db.record_egress_health(
+            false,
+            Some(8000),
+            Some("TLS 握手失败"),
+            Some("n2"),
+            None,
+            "periodic",
+        )
+        .await
+        .unwrap();
 
         let recent = db.recent_egress_health(10).await.unwrap();
         assert_eq!(recent.len(), 3);
@@ -580,7 +608,13 @@ mod tests {
         let just_before = (midnight - chrono::Duration::seconds(1)).to_rfc3339();
         record_at(&db, &just_after, "甲", "乙").await;
         record_at(&db, &just_before, "乙", "丙").await;
-        record_at(&db, &(midnight - chrono::Duration::days(3)).to_rfc3339(), "丙", "丁").await;
+        record_at(
+            &db,
+            &(midnight - chrono::Duration::days(3)).to_rfc3339(),
+            "丙",
+            "丁",
+        )
+        .await;
 
         assert_eq!(
             db.switch_count_today().await.unwrap(),
@@ -681,7 +715,11 @@ mod tests {
         db.prune_telemetry().await.unwrap();
 
         let kept = db.fetch_history_for(&source_id, 100).await.unwrap();
-        assert_eq!(kept.len() as i64, FETCH_HISTORY_KEEP, "每个源只留最近 40 条");
+        assert_eq!(
+            kept.len() as i64,
+            FETCH_HISTORY_KEEP,
+            "每个源只留最近 40 条"
+        );
         assert_eq!(kept[0].node_count, FETCH_HISTORY_KEEP + 4, "新的在前");
         // 别的源不受这个源的裁剪影响。
         let other = db.fetch_history_for("other", 100).await.unwrap();

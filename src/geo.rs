@@ -189,10 +189,7 @@ mod tests {
 
     #[test]
     fn readiness_uses_the_size_floor() {
-        let dir = std::env::temp_dir().join(format!(
-            "vpn-parser-geo-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("vpn-parser-geo-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         assert!(!geo_ready(&dir));

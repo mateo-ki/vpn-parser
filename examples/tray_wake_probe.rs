@@ -57,7 +57,10 @@ fn main() -> eframe::Result {
                         hidden = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                         last_frames = FRAMES.load(Ordering::SeqCst);
-                        println!("[probe] t={:.2} 已发送 Visible(false)，当时 frame={last_frames}", t.as_secs_f32());
+                        println!(
+                            "[probe] t={:.2} 已发送 Visible(false)，当时 frame={last_frames}",
+                            t.as_secs_f32()
+                        );
                     }
                     if t > Duration::from_secs(8) && !revived {
                         revived = true;

@@ -189,8 +189,12 @@ impl Database {
         // 字体/界面大小（1.0 = 不缩放）。老库升级上来的这一列就是 1.0，行为不变。
         self.ensure_column("settings", "ui_scale", "REAL NOT NULL DEFAULT 1.0")
             .await?;
-        self.ensure_column("settings", "kernel_source", "TEXT NOT NULL DEFAULT 'ghfast'")
-            .await?;
+        self.ensure_column(
+            "settings",
+            "kernel_source",
+            "TEXT NOT NULL DEFAULT 'ghfast'",
+        )
+        .await?;
         self.ensure_column(
             "settings",
             "firewall_auto_allow",

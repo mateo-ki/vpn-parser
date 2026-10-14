@@ -3,9 +3,7 @@ use crate::models::{
     AppSettings, FetchResult, Node, NodeGroupSummary, NodeSummary, PruneHomogeneityResult, Source,
     SourceHomogeneityReport, SpeedTestSummary, Stats,
 };
-use crate::proxy::{
-    MihomoConfigOptions, NetworkProtocol, ProxyRuntimeStatus, RuleMatcher,
-};
+use crate::proxy::{MihomoConfigOptions, NetworkProtocol, ProxyRuntimeStatus, RuleMatcher};
 use crate::speedtest::SpeedTestProgress;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +38,15 @@ pub enum ProxyPanel {
     Network,
     Kernels,
     Logs,
+}
+
+/// 分流规则面板里的两个分区：规则本身（该怎么走）和实际命中记录（真走了哪）。
+/// 以前它们挤在同一屏里，规则表一长就看不到命中，反之命中一多就翻不到规则。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RulesTab {
+    #[default]
+    Config,
+    Hits,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

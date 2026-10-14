@@ -1,11 +1,10 @@
 use crate::gui::icons::Icon;
+use crate::gui::theme;
 use crate::gui::types::Tab;
-use crate::gui::widgets::{
-    format_duration_ms, header_cell, nav_item, stat_chip };
+use crate::gui::widgets::{format_duration_ms, header_cell, nav_item, stat_chip};
 use crate::gui::VpnApp;
 use crate::proxy::ProxyState;
 use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, Vec2};
-use crate::gui::theme;
 
 impl VpnApp {
     pub(crate) fn ui_sidebar(&mut self, ui: &mut Ui, target_tab: &mut Tab) {
@@ -45,10 +44,19 @@ impl VpnApp {
                         .corner_radius(CornerRadius::same(4))
                         .inner_margin(Margin::symmetric(4, 1))
                         .show(ui, |ui| {
-                            ui.label(RichText::new("CORE").size(9.0).strong().color(theme::accent()));
+                            ui.label(
+                                RichText::new("CORE")
+                                    .size(9.0)
+                                    .strong()
+                                    .color(theme::accent()),
+                            );
                         });
                 });
-                ui.label(RichText::new("网络代理控制台").small().color(theme::sidebar_muted()));
+                ui.label(
+                    RichText::new("网络代理控制台")
+                        .small()
+                        .color(theme::sidebar_muted()),
+                );
             });
         });
         ui.add_space(14.0);
@@ -84,7 +92,9 @@ impl VpnApp {
                                 self.kernel_installed_cached(),
                                 matches!(
                                     self.proxy_status.state,
-                                    ProxyState::Running | ProxyState::Degraded | ProxyState::Starting
+                                    ProxyState::Running
+                                        | ProxyState::Degraded
+                                        | ProxyState::Starting
                                 ),
                             );
                             let (dot_color, status_text) = match self.proxy_status.state {
@@ -93,7 +103,9 @@ impl VpnApp {
                                 ProxyState::Starting => (theme::accent_hover(), "代理启动中..."),
                                 ProxyState::Stopping => (theme::muted(), "代理停止中..."),
                                 ProxyState::Failed => (theme::danger(), "代理启动失败"),
-                                ProxyState::Stopped if prepared => (theme::accent(), "预备 · 等待内核"),
+                                ProxyState::Stopped if prepared => {
+                                    (theme::accent(), "预备 · 等待内核")
+                                }
                                 ProxyState::Stopped => (theme::sidebar_muted(), "代理未启动"),
                             };
                             let (rect, _) =
@@ -194,13 +206,13 @@ impl VpnApp {
         if let Some(s) = &self.stats {
             ui.horizontal_wrapped(|ui| {
                 stat_chip(ui, "订阅源", &s.source_count.to_string(), theme::accent());
-                stat_chip(ui, "启用", &s.enabled_source_count.to_string(), theme::success());
                 stat_chip(
                     ui,
-                    "节点",
-                    &s.node_count.to_string(),
-                    theme::accent(),
+                    "启用",
+                    &s.enabled_source_count.to_string(),
+                    theme::success(),
                 );
+                stat_chip(ui, "节点", &s.node_count.to_string(), theme::accent());
                 stat_chip(ui, "已测", &s.tested_count.to_string(), theme::warning());
                 stat_chip(ui, "可用", &s.alive_count.to_string(), theme::success());
                 for p in s.protocol_stats.iter().take(6) {

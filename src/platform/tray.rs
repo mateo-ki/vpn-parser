@@ -127,7 +127,6 @@ impl Drop for TrayHandle {
 // （日志停在「queueing show-window event」之后无输出，左键右键全无反应）。
 // 别再把它加回来。
 
-
 /// 让 Win11 给窗口圆角。`with_decorations(false)` 之后系统那条属性不再作用
 /// （它管的是非客户区），无边框窗口的四个角是方的，只能自己向 DWM 要。
 /// Win10 上没有 33 号属性，返回错误就静默跳过 —— 那边无边框窗口本来也圆不了。
@@ -160,9 +159,7 @@ pub fn round_window_corners() {
                 );
                 crate::startup_log(&format!(
                     "round_window_corners hwnd={:?} class={} hr=0x{:08X}",
-                    hwnd,
-                    class_name,
-                    result as u32
+                    hwnd, class_name, result as u32
                 ));
             }
         }
@@ -468,7 +465,9 @@ fn run_tray_loop(
                 0
             }
             WM_DESTROY => {
-                crate::startup_log("Tray wnd_proc WM_DESTROY -> deleting tray icon and posting quit");
+                crate::startup_log(
+                    "Tray wnd_proc WM_DESTROY -> deleting tray icon and posting quit",
+                );
                 unsafe {
                     let mut nid_del: NOTIFYICONDATAW = std::mem::zeroed();
                     nid_del.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
@@ -638,7 +637,9 @@ pub fn refresh_notification_area() {
     }
 
     let tray_wnd_name = "Shell_TrayWnd\0".encode_utf16().collect::<Vec<u16>>();
-    let overflow_wnd_name = "NotifyIconOverflowWindow\0".encode_utf16().collect::<Vec<u16>>();
+    let overflow_wnd_name = "NotifyIconOverflowWindow\0"
+        .encode_utf16()
+        .collect::<Vec<u16>>();
 
     unsafe {
         let h_tray = FindWindowW(tray_wnd_name.as_ptr(), std::ptr::null());

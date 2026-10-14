@@ -7,7 +7,9 @@ pub async fn measure_tcp_download(
     host: &str,
     download_ms: u64,
 ) -> (Option<f64>, String) {
-    let req = format!("GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: curl/8.0\r\nConnection: close\r\n\r\n");
+    let req = format!(
+        "GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: curl/8.0\r\nConnection: close\r\n\r\n"
+    );
     if let Err(e) = stream.write_all(req.as_bytes()).await {
         return (None, format!("发送探测失败: {e}"));
     }

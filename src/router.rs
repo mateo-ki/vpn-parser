@@ -739,7 +739,9 @@ mod backup_tests {
 
     #[test]
     fn limit_caps_the_shortlist_and_an_empty_pool_is_honest() {
-        let all: Vec<BackupCandidate> = (0..20u64).map(|i| node(&format!("n{i}"), &format!("N{i}"), Some(i))).collect();
+        let all: Vec<BackupCandidate> = (0..20u64)
+            .map(|i| node(&format!("n{i}"), &format!("N{i}"), Some(i)))
+            .collect();
         assert_eq!(pick_backups(&all, "cur", &none(), "", 6).len(), 6);
         assert!(pick_backups(&[], "cur", &none(), "", 8).is_empty());
         // 只剩当前节点一个候选时，必须回空 —— 这就是"没切成"那种情况。

@@ -88,9 +88,11 @@ impl Database {
                 let Ok(pool) = db.open_node_pool(scope.as_deref()).await else {
                     return Vec::new();
                 };
-                match sqlx::query("SELECT id, source_id, protocol, latency_ms, latency_ok FROM nodes")
-                    .fetch_all(&pool)
-                    .await
+                match sqlx::query(
+                    "SELECT id, source_id, protocol, latency_ms, latency_ok FROM nodes",
+                )
+                .fetch_all(&pool)
+                .await
                 {
                     Ok(rows) => rows
                         .into_iter()
@@ -129,7 +131,9 @@ impl Database {
         }
 
         let mut tx = self.pool.begin().await?;
-        sqlx::query("DROP TABLE IF EXISTS node_index_new").execute(&mut *tx).await?;
+        sqlx::query("DROP TABLE IF EXISTS node_index_new")
+            .execute(&mut *tx)
+            .await?;
         sqlx::query(
             "CREATE TABLE node_index_new(
                 id TEXT PRIMARY KEY NOT NULL,
@@ -158,7 +162,9 @@ impl Database {
             }
             query.execute(&mut *tx).await?;
         }
-        sqlx::query("DROP TABLE IF EXISTS node_index").execute(&mut *tx).await?;
+        sqlx::query("DROP TABLE IF EXISTS node_index")
+            .execute(&mut *tx)
+            .await?;
         sqlx::query("ALTER TABLE node_index_new RENAME TO node_index")
             .execute(&mut *tx)
             .await?;
@@ -170,7 +176,7 @@ impl Database {
         .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS node_index_source ON node_index(source_id)")
             .execute(&mut *tx)
-        .await?;
+            .await?;
         tx.commit().await?;
 
         self.set_node_index_built_at(now_unix()).await;
@@ -210,13 +216,11 @@ impl Database {
     /// `(总数, 测通数)`，直接问索引表。要不要信它由调用方判断 —— 计数那条路的口径
     /// 在 `stats.rs::node_verification_counts`（只在索引已经新鲜时搭便车）。
     pub async fn node_index_counts(&self) -> (i64, i64) {
-        let row = sqlx::query(
-            "SELECT COUNT(*), COALESCE(SUM(latency_ok = 1), 0) FROM node_index",
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .ok()
-        .flatten();
+        let row = sqlx::query("SELECT COUNT(*), COALESCE(SUM(latency_ok = 1), 0) FROM node_index")
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten();
         match row {
             Some(row) => (
                 row.try_get::<i64, _>(0).unwrap_or(0),
@@ -239,12 +243,16 @@ impl Database {
         exclude_id: Option<&str>,
     ) -> Result<Vec<(String, Option<String>)>> {
         let sql = match exclude_id {
-            Some(_) => "SELECT id, source_id FROM node_index
+            Some(_) => {
+                "SELECT id, source_id FROM node_index
                         WHERE latency_ok = 1 AND id != ?
-                        ORDER BY COALESCE(latency_ms, 9223372036854775807) ASC, id ASC LIMIT ?",
-            None => "SELECT id, source_id FROM node_index
+                        ORDER BY COALESCE(latency_ms, 9223372036854775807) ASC, id ASC LIMIT ?"
+            }
+            None => {
+                "SELECT id, source_id FROM node_index
                      WHERE latency_ok = 1
-                     ORDER BY COALESCE(latency_ms, 9223372036854775807) ASC, id ASC LIMIT ?",
+                     ORDER BY COALESCE(latency_ms, 9223372036854775807) ASC, id ASC LIMIT ?"
+            }
         };
         let mut query = sqlx::query(sql);
         if let Some(id) = exclude_id {
@@ -281,10 +289,9 @@ impl Database {
             let Ok(pool) = self.open_node_pool(scope.as_deref()).await else {
                 continue;
             };
-            let Ok(rows) =
-                sqlx::query("SELECT id, COALESCE(latency_ok, 0) AS ok FROM nodes")
-                    .fetch_all(&pool)
-                    .await
+            let Ok(rows) = sqlx::query("SELECT id, COALESCE(latency_ok, 0) AS ok FROM nodes")
+                .fetch_all(&pool)
+                .await
             else {
                 continue;
             };
@@ -293,13 +300,13 @@ impl Database {
                 let Ok(id) = row.try_get::<String, _>("id") else {
                     continue;
                 };
-                *shard_rows.entry(id).or_default() =
-                    row.try_get::<i64, _>("ok").unwrap_or(0);
+                *shard_rows.entry(id).or_default() = row.try_get::<i64, _>("ok").unwrap_or(0);
             }
         }
 
-        let Ok(index_rows) =
-            sqlx::query("SELECT id, latency_ok FROM node_index").fetch_all(&self.pool).await
+        let Ok(index_rows) = sqlx::query("SELECT id, latency_ok FROM node_index")
+            .fetch_all(&self.pool)
+            .await
         else {
             return vec!["node_index 表读不出来".to_string()];
         };
@@ -308,7 +315,8 @@ impl Database {
             let Ok(id) = row.try_get::<String, _>("id") else {
                 continue;
             };
-            *index_rows_map.entry(id).or_default() = row.try_get::<i64, _>("latency_ok").unwrap_or(0);
+            *index_rows_map.entry(id).or_default() =
+                row.try_get::<i64, _>("latency_ok").unwrap_or(0);
         }
 
         let missing: Vec<&String> = shard_rows
@@ -482,7 +490,11 @@ mod tests {
         // 数数这种三毫秒的查询不许顺手触发重建（A/B 实测重建要 111 ms）：
         // 过期就走扇出，答案照样对，而且 built_at 保持 0 —— 没人偷偷替它付钱。
         assert_eq!(db.node_verification_counts().await.unwrap(), (1, 1));
-        assert_eq!(db.node_index_built_at().await, 0, "计数读不该把索引重建了还不知道");
+        assert_eq!(
+            db.node_index_built_at().await,
+            0,
+            "计数读不该把索引重建了还不知道"
+        );
 
         // 选候选那条路才负责重建（它老路是 61 ms 扇出，付一次重建换来以后每次 2 ms）。
         let picked = db.top_verified_nodes(2, None).await.unwrap();
@@ -541,7 +553,11 @@ mod tests {
             .collect::<Vec<_>>();
         db.replace_source_nodes(&a, &nodes).await.unwrap();
         db.rebuild_node_index().await.unwrap();
-        assert_eq!(db.node_index_counts().await.0, 400, "150 行一批，400 行要跨三批");
+        assert_eq!(
+            db.node_index_counts().await.0,
+            400,
+            "150 行一批，400 行要跨三批"
+        );
         // 排第一的必须是延迟最小的那批，说明各批都写进去了。
         let picked = db.node_index_top_verified(3, None).await.unwrap();
         assert_eq!(picked.len(), 3);
@@ -579,7 +595,11 @@ mod tests {
             let nodes = (0..per_source)
                 .map(|i| {
                     // 三分之二的节点"测通"，和他现在界面上的比例差不多。
-                    let latency = if i % 3 == 0 { None } else { Some(i as i64 + s as i64) };
+                    let latency = if i % 3 == 0 {
+                        None
+                    } else {
+                        Some(i as i64 + s as i64)
+                    };
                     node(&format!("s{s}n{i}"), &id, latency)
                 })
                 .collect::<Vec<_>>();

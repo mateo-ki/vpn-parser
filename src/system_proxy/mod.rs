@@ -118,7 +118,11 @@ pub fn classify_drift(snapshot: &SystemProxySnapshot, expected_server: &str) -> 
     if !snapshot.enabled {
         return Drift::Disabled;
     }
-    let raw = snapshot.server.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let raw = snapshot
+        .server
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let matches = match raw {
         Some(server) => {
             server == expected_server
@@ -386,7 +390,10 @@ mod tests {
             }
         );
         let text = drift_text(&drift);
-        assert!(text.contains("127.0.0.1:7890") && text.contains("127.0.0.1:9980"), "{text}");
+        assert!(
+            text.contains("127.0.0.1:7890") && text.contains("127.0.0.1:9980"),
+            "{text}"
+        );
         // 开关开着但压根没有地址：不能说"指向空"，要说没写地址。
         let missing = classify_drift(&snap(true, None), "127.0.0.1:9980");
         assert!(drift_text(&missing).contains("没有写地址"), "{missing:?}");

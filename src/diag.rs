@@ -42,6 +42,55 @@ pub fn prepare_home() -> std::io::Result<PathBuf> {
     Ok(home)
 }
 
+/// 诊断壳专用：`VPN_PARSER_DIAG_TAB=settings`（或 `proxy` + `VPN_PARSER_DIAG_PANEL=rules`）
+/// 让实例一起来就停在要验收的那一页。诊断窗口停在屏幕外、点不到，没有这个就只能看默认页。
+pub fn starting_tab() -> Option<String> {
+    if !enabled() {
+        return None;
+    }
+    std::env::var("VPN_PARSER_DIAG_TAB")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+}
+
+/// 诊断壳专用：`VPN_PARSER_DIAG_SCALE=1.1` 直接指定界面缩放。
+/// 字体缩放和"窗口逻辑宽度"是一对耦合量，很多问题只在 zoom≠1 时露出来。
+pub fn starting_scale() -> Option<f32> {
+    if !enabled() {
+        return None;
+    }
+    std::env::var("VPN_PARSER_DIAG_SCALE")
+        .ok()
+        .and_then(|v| v.trim().parse::<f32>().ok())
+}
+
+/// 诊断壳专用：要验收的子面板（当前只有代理页的 `rules`）。
+pub fn starting_panel() -> Option<String> {
+    if !enabled() {
+        return None;
+    }
+    std::env::var("VPN_PARSER_DIAG_PANEL")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+}
+
+/// 只在内容变化时写日志：几何量具每帧都算，全写进去就把 startup.log 冲满了。
+pub fn log_once(line: &str) {
+    use std::sync::{Mutex, OnceLock};
+    static LAST: OnceLock<Mutex<String>> = OnceLock::new();
+    let last = LAST.get_or_init(|| Mutex::new(String::new()));
+    let mut guard = match last.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if *guard != line {
+        *guard = line.to_string();
+        crate::startup_log(line);
+    }
+}
+
 /// 给拒绝写系统设置那条路用的统一文案：出错时界面/日志都要能看出是"诊断壳拦的"，
 /// 不是"功能坏了"。
 pub const BLOCKED: &str = "诊断实例（VPN_PARSER_DIAG）不写系统代理与终端代理设置";
@@ -63,7 +112,13 @@ mod tests {
     #[test]
     fn home_is_per_process_so_two_instances_do_not_share_state() {
         let path = home();
-        assert!(path.file_name().unwrap().to_string_lossy().starts_with("vpn-parser-diag-"));
-        assert!(path.to_string_lossy().contains(&std::process::id().to_string()));
+        assert!(path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("vpn-parser-diag-"));
+        assert!(path
+            .to_string_lossy()
+            .contains(&std::process::id().to_string()));
     }
 }

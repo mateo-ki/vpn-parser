@@ -1,5 +1,5 @@
-use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, Stroke, StrokeKind, Ui, Vec2};
 use super::theme;
+use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, Stroke, StrokeKind, Ui, Vec2};
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -816,7 +816,8 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
             painter.circle_stroke(center, s * 0.38, stroke);
             let mut half = Vec::new();
             for step in 0..=12 {
-                let angle = std::f32::consts::PI * (step as f32 / 12.0) - std::f32::consts::FRAC_PI_2;
+                let angle =
+                    std::f32::consts::PI * (step as f32 / 12.0) - std::f32::consts::FRAC_PI_2;
                 half.push(Pos2::new(
                     center.x + angle.cos() * s * 0.33,
                     center.y + angle.sin() * s * 0.33,
@@ -858,20 +859,11 @@ pub fn button_with_icon<'a>(icon: Icon, text: &'a str, color: Color32) -> impl e
         let (rect, resp) = ui.allocate_exact_size(desired_size, egui::Sense::click());
         if ui.is_rect_visible(rect) {
             let (bg_fill, border_stroke) = if resp.is_pointer_button_down_on() {
-                (
-                    theme::panel_hover(),
-                    Stroke::new(1.0_f32, theme::accent()),
-                )
+                (theme::panel_hover(), Stroke::new(1.0_f32, theme::accent()))
             } else if resp.hovered() {
-                (
-                    theme::panel_hover(),
-                    Stroke::new(1.0_f32, theme::border()),
-                )
+                (theme::panel_hover(), Stroke::new(1.0_f32, theme::border()))
             } else {
-                (
-                    theme::panel(),
-                    Stroke::new(1.0_f32, theme::border()),
-                )
+                (theme::panel(), Stroke::new(1.0_f32, theme::border()))
             };
 
             ui.painter().rect(
@@ -978,10 +970,7 @@ pub fn danger_icon_btn<'a>(icon: Icon, text: &'a str) -> impl egui::Widget + 'a 
             let (bg_fill, stroke_color) = if resp.hovered() {
                 (theme::danger_bg(), theme::danger())
             } else {
-                (
-                    theme::danger_bg(),
-                    theme::danger_stroke(),
-                )
+                (theme::danger_bg(), theme::danger_stroke())
             };
 
             ui.painter().rect(
@@ -1002,8 +991,7 @@ pub fn danger_icon_btn<'a>(icon: Icon, text: &'a str) -> impl egui::Widget + 'a 
                 icon_rect.max.x + icon_gap,
                 rect.center().y - galley.size().y / 2.0,
             );
-            ui.painter()
-                .galley(text_pos, galley, theme::danger());
+            ui.painter().galley(text_pos, galley, theme::danger());
         }
         resp
     }
@@ -1040,20 +1028,11 @@ pub fn selectable_icon_btn<'a>(
         let (rect, resp) = ui.allocate_exact_size(desired_size, egui::Sense::click());
         if ui.is_rect_visible(rect) {
             let (bg_fill, stroke) = if selected {
-                (
-                    theme::accent_bg(),
-                    Stroke::new(1.0_f32, theme::accent()),
-                )
+                (theme::accent_bg(), Stroke::new(1.0_f32, theme::accent()))
             } else if resp.hovered() {
-                (
-                    theme::panel_hover(),
-                    Stroke::new(1.0_f32, theme::border()),
-                )
+                (theme::panel_hover(), Stroke::new(1.0_f32, theme::border()))
             } else {
-                (
-                    theme::panel(),
-                    Stroke::new(1.0_f32, theme::border()),
-                )
+                (theme::panel(), Stroke::new(1.0_f32, theme::border()))
             };
 
             ui.painter().rect(
@@ -1107,7 +1086,6 @@ pub fn icon_btn_square(icon: Icon, size: f32) -> impl egui::Widget {
         resp
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -1,7 +1,8 @@
 use crate::collector::Collector;
 use crate::db::Database;
 use crate::kernel::{
-    find_kernel_executable, missing_kernel_for, KernelInfo, KernelKind, KernelManager, KernelReleaseInfo, KernelUpdateProgress,
+    find_kernel_executable, missing_kernel_for, KernelInfo, KernelKind, KernelManager,
+    KernelReleaseInfo, KernelUpdateProgress,
 };
 use crate::models::{
     AppSettings, CreateSource, FetchResult, Node, NodeGroupSummary, NodeSummary, Source,
@@ -9,12 +10,10 @@ use crate::models::{
 };
 use crate::platform;
 use crate::proxy::{
-    is_node_connectivity_failure, optimize_traffic_rules, MihomoConfigOptions,
-    ProxyManager, ProxyMode, ProxyRuntimeStatus, ProxyState, RuleAction,
+    is_node_connectivity_failure, optimize_traffic_rules, MihomoConfigOptions, ProxyManager,
+    ProxyMode, ProxyRuntimeStatus, ProxyState, RuleAction,
 };
-use crate::speedtest::{
-    SpeedTestOptions, SpeedTester, SpeedtestIntensity,
-};
+use crate::speedtest::{SpeedTestOptions, SpeedTester, SpeedtestIntensity};
 use crate::tasks::TaskTracker;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use eframe::egui::{self, Frame, Margin, RichText, Stroke};
@@ -23,17 +22,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
+pub mod command_palette;
+pub mod failover;
 pub mod icons;
 pub mod paste;
 pub mod prepare;
+pub mod telemetry_view;
 pub mod theme;
 pub mod types;
+pub mod view_models;
 pub mod views;
 pub mod widgets;
-pub mod failover;
-pub mod telemetry_view;
-pub mod command_palette;
-pub mod view_models;
 pub mod window;
 
 pub use types::*;
@@ -114,6 +113,14 @@ pub struct VpnApp {
     pub(crate) new_rule_value: String,
     pub(crate) new_rule_action: RuleAction,
     pub(crate) show_recommended_rules_confirm: bool,
+    /// 分流规则面板的分区（配置 / 命中记录）。
+    pub(crate) rules_tab: RulesTab,
+    /// 「导入规则」弹框：是否打开、贴进来的原文、最近一次解析结果。
+    pub(crate) show_rule_import: bool,
+    /// 导入框旁边那个「?」——各输入形状的示范，逐段由测试保证真能导入。
+    pub(crate) show_rule_import_help: bool,
+    pub(crate) rule_import_text: String,
+    pub(crate) rule_import_preview: Option<crate::proxy::rule_io::RuleImport>,
 
     pub(crate) editing_id: Option<String>,
     pub(crate) form_name: String,
@@ -240,7 +247,8 @@ pub struct VpnApp {
     pub(crate) last_hit_flush: std::time::Instant,
     pub(crate) rule_hits_today: Vec<crate::db::telemetry::RuleHitRow>,
     /// 订阅源拉取历史，按 source_id 分桶（每源只留最近几条）。
-    pub(crate) fetch_history: std::collections::HashMap<String, Vec<crate::db::telemetry::FetchHistoryRow>>,
+    pub(crate) fetch_history:
+        std::collections::HashMap<String, Vec<crate::db::telemetry::FetchHistoryRow>>,
     pub(crate) switch_rows: Vec<crate::db::telemetry::SwitchRow>,
     pub(crate) switch_today: i64,
     /// 保留期内库里一共有多少条切换记录（不只今天）。
@@ -388,6 +396,11 @@ impl VpnApp {
             new_rule_value: String::new(),
             new_rule_action: RuleAction::Proxy,
             show_recommended_rules_confirm: false,
+            rules_tab: RulesTab::default(),
+            show_rule_import: false,
+            show_rule_import_help: false,
+            rule_import_text: String::new(),
+            rule_import_preview: None,
             editing_id: None,
             form_name: String::new(),
             form_url: String::new(),
@@ -523,6 +536,28 @@ impl VpnApp {
             tx,
             rx,
         };
+        // 诊断壳：把界面停在要验收的那一页（产品路径下这两个函数永远返回 None）。
+        if let Some(tab) = crate::diag::starting_tab().as_deref() {
+            app.tab = match tab {
+                "sources" => Tab::Sources,
+                "nodes" => Tab::Nodes,
+                "proxy" => Tab::Proxy,
+                "settings" => Tab::Settings,
+                "api" => Tab::Api,
+                "about" => Tab::About,
+                other => {
+                    crate::startup_log(&format!("DIAG 认不出的起始页: {other}"));
+                    app.tab
+                }
+            };
+        }
+        if crate::diag::starting_panel().as_deref() == Some("rules") {
+            app.proxy_panel = ProxyPanel::Rules;
+        }
+        if let Some(scale) = crate::diag::starting_scale() {
+            app.settings.ui_scale = scale;
+            app.edit_ui_scale = scale;
+        }
         app.reload_all();
         app
     }
@@ -838,13 +873,13 @@ impl VpnApp {
                                         let manager = self.proxy_manager.clone();
                                         let tx = self.tx.clone();
                                         self.rt.spawn(async move {
-                                            let message = match manager.rearm_system_proxy().await
-                                            {
+                                            let message = match manager.rearm_system_proxy().await {
                                                 Ok(done) => done,
-                                                Err(error) =>
-                                                    format!("系统代理写回失败：{error}"),
+                                                Err(error) => format!("系统代理写回失败：{error}"),
                                             };
-                                            crate::startup_log(&format!("[系统代理核对] {message}"));
+                                            crate::startup_log(&format!(
+                                                "[系统代理核对] {message}"
+                                            ));
                                             let _ = tx.send(BgMsg::Status(message));
                                         });
                                     }
@@ -947,7 +982,11 @@ impl VpnApp {
                                 self.fetch_one(id);
                             }
                         }
-                        BgMsg::AddedSourceIds { source_id, source_name, ids } => {
+                        BgMsg::AddedSourceIds {
+                            source_id,
+                            source_name,
+                            ids,
+                        } => {
                             let _ = source_id;
                             match ids {
                                 Ok(ids) if ids.is_empty() => {
@@ -958,7 +997,9 @@ impl VpnApp {
                                     let count = ids.len();
                                     self.speedtest_ids(
                                         Some(ids),
-                                        &format!("正在测速新增订阅「{source_name}」的 {count} 个节点..."),
+                                        &format!(
+                                            "正在测速新增订阅「{source_name}」的 {count} 个节点..."
+                                        ),
                                     );
                                 }
                                 Err(error) => {
@@ -1007,8 +1048,13 @@ impl VpnApp {
                                     .retain(|item| item.source_id != result.source_id);
                                 self.fetch_results.push(result.clone());
                             }
-                            if self.pending_added_source.as_ref().is_some_and(|(id, _)| id == &source_id) {
-                                let (_, name) = self.pending_added_source.take().unwrap_or_default();
+                            if self
+                                .pending_added_source
+                                .as_ref()
+                                .is_some_and(|(id, _)| id == &source_id)
+                            {
+                                let (_, name) =
+                                    self.pending_added_source.take().unwrap_or_default();
                                 let (ok, nodes) = match &result {
                                     Ok(fetch) => (fetch.success, fetch.node_count as i64),
                                     Err(_) => (false, 0),
@@ -1180,8 +1226,7 @@ impl VpnApp {
                             self.app_update_progress = None;
                             match result {
                                 Ok(path) => {
-                                    self.status =
-                                        format!("安装包已下载并校验：{}", path.display());
+                                    self.status = format!("安装包已下载并校验：{}", path.display());
                                     self.app_installer_path = Some(path);
                                 }
                                 Err(error) => self.status = format!("下载更新失败: {error}"),
@@ -1332,7 +1377,8 @@ impl VpnApp {
                                 self.rule_seen.clear();
                             }
                             if !self.rule_tally.is_empty()
-                                && self.last_hit_flush.elapsed() >= std::time::Duration::from_secs(30)
+                                && self.last_hit_flush.elapsed()
+                                    >= std::time::Duration::from_secs(30)
                             {
                                 self.flush_rule_hits();
                             }
@@ -2335,7 +2381,10 @@ impl VpnApp {
             crate::kernel::KernelKind::Xray,
             crate::kernel::KernelKind::SingBox,
         ] {
-            programs.push(root.join(kind.directory_name()).join(kind.executable_name()));
+            programs.push(
+                root.join(kind.directory_name())
+                    .join(kind.executable_name()),
+            );
         }
         programs
     }
@@ -2346,7 +2395,8 @@ impl VpnApp {
         let tx = self.tx.clone();
         self.status = "正在写入防火墙允许规则...".into();
         self.rt.spawn_blocking(move || {
-            let result = crate::platform::firewall::ensure_all(&programs).map_err(|e| e.to_string());
+            let result =
+                crate::platform::firewall::ensure_all(&programs).map_err(|e| e.to_string());
             let _ = tx.send(BgMsg::FirewallApplied(result));
         });
     }
@@ -2391,19 +2441,12 @@ impl VpnApp {
         );
         self.rt.spawn(async move {
             let result = manager
-                .update_with_options(
-                    kind,
-                    proxy_url,
-                    source,
-                    local_file,
-                    cancelled,
-                    {
-                        let tx = tx.clone();
-                        move |progress| {
-                            let _ = tx.send(BgMsg::KernelProgress(progress));
-                        }
-                    },
-                )
+                .update_with_options(kind, proxy_url, source, local_file, cancelled, {
+                    let tx = tx.clone();
+                    move |progress| {
+                        let _ = tx.send(BgMsg::KernelProgress(progress));
+                    }
+                })
                 .await
                 .map(|result| result.message)
                 .map_err(|error| error.to_string());
@@ -2485,10 +2528,9 @@ impl VpnApp {
     /// 打开某个内核的下载弹框（下载方式沿用上次记下的那个）。
     pub(crate) fn open_kernel_download(&mut self, kind: KernelKind) {
         self.kernel_dialog_kind = Some(kind);
-        self.kernel_dialog_source =
-            crate::kernel::source_from_id(&self.settings.kernel_source)
-                .id()
-                .to_string();
+        self.kernel_dialog_source = crate::kernel::source_from_id(&self.settings.kernel_source)
+            .id()
+            .to_string();
         self.show_kernel_dialog = true;
     }
 
@@ -2962,14 +3004,16 @@ impl VpnApp {
         let secret = self.proxy_status.controller_secret.clone();
         let tx = self.tx.clone();
         if !running {
-            // 内核没在跑就没有接口可问。这时直接把两个库下到工作目录，下次启动即用 —— 
+            // 内核没在跑就没有接口可问。这时直接把两个库下到工作目录，下次启动即用 ——
             // 否则就是"不启动代理反而更新不了"那个死结。
             self.status = "代理未运行，正在直接下载 GeoIP / GeoSite 规则文件...".into();
             self.rt.spawn(async move {
                 let report = crate::geo::mihomo_dir();
                 let result = crate::geo::provision(&report, None, true)
                     .await
-                    .map(|detail| format!("内核未运行，已直接更新到 {}：{detail}", report.display()));
+                    .map(|detail| {
+                        format!("内核未运行，已直接更新到 {}：{detail}", report.display())
+                    });
                 let _ = tx.send(BgMsg::GeoUpdated(result.map_err(|error| error.to_string())));
             });
             return;
@@ -3015,7 +3059,6 @@ impl VpnApp {
             let _ = tx.send(BgMsg::GeoUpdated(res));
         });
     }
-
 
     /// 自动切换：每 60 秒经**当前运行中的代理**实测一次连通性与延迟（不新起内核），
     /// 验证失败立即切换；仅延迟劣化则需连续三次、且距上次自动切换满 3 分钟才跳，
@@ -3176,7 +3219,10 @@ impl VpnApp {
                 .await
                 .map(|n| format!("已清理淘汰 {n} 个长期失效节点"))
                 .map_err(|e| e.to_string());
-            let _ = tx.send(BgMsg::OpDone { result: res, unlock: true });
+            let _ = tx.send(BgMsg::OpDone {
+                result: res,
+                unlock: true,
+            });
         });
     }
 
@@ -3540,7 +3586,9 @@ impl eframe::App for VpnApp {
         // 侦测最小化 -> 恢复窗口事件（无论是通过任务栏点击还原，还是托盘唤醒）
         let is_minimized = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
         if self.was_minimized && !is_minimized {
-            crate::startup_log("Window state changed: minimized -> restored, triggering repaint sequence");
+            crate::startup_log(
+                "Window state changed: minimized -> restored, triggering repaint sequence",
+            );
             crate::platform::restore_and_repaint_main_window();
             self.restore_cooldown_frames = 12;
         }
@@ -3646,9 +3694,7 @@ impl eframe::App for VpnApp {
         }
         // 出口通不等于浏览器会走它：核对注册表（内部限频 30 秒一次，且只在系统代理模式下）。
         self.maybe_check_proxy_drift();
-        if self.proxy_status.state != ProxyState::Running
-            && !self.kernel_groups.is_empty()
-        {
+        if self.proxy_status.state != ProxyState::Running && !self.kernel_groups.is_empty() {
             // 停掉内核后这些组就不存在了，留着会显示上一次的假状态。
             self.kernel_groups.clear();
         }
@@ -3710,7 +3756,12 @@ impl eframe::App for VpnApp {
                 ui.horizontal(|ui| {
                     if self.busy {
                         ui.spinner();
-                        ui.label(RichText::new("处理中").color(theme::accent()).strong().small());
+                        ui.label(
+                            RichText::new("处理中")
+                                .color(theme::accent())
+                                .strong()
+                                .small(),
+                        );
                         ui.separator();
                     }
                     ui.label(RichText::new("状态").strong().color(theme::muted()).small());
@@ -3780,13 +3831,10 @@ impl eframe::App for VpnApp {
         // 所以"让不让路"还得用 `widgets::focus_is_text_field` 明确判一次 —— 焦点在文本框里
         // 就是普通粘贴；DragValue/滑块/按钮那些占住焦点的场合一律照常识别。
         let pasted = ctx.input_mut(|i| {
-            let text = i
-                .events
-                .iter()
-                .find_map(|event| match event {
-                    egui::Event::Paste(text) => Some(text.clone()),
-                    _ => None,
-                })?;
+            let text = i.events.iter().find_map(|event| match event {
+                egui::Event::Paste(text) => Some(text.clone()),
+                _ => None,
+            })?;
             i.events
                 .retain(|event| !matches!(event, egui::Event::Paste(_)));
             Some(text)
@@ -3920,10 +3968,10 @@ impl eframe::App for VpnApp {
 
 #[cfg(test)]
 mod tests {
-    use crate::speedtest::{SpeedTestPhase, SpeedTestProgress};
-    use crate::gui::window::{resize_handle_rects, TITLE_BAR_BTN_W, TITLE_BAR_H};
-    use eframe::egui::{Sense, Vec2};
     use super::*;
+    use crate::gui::window::{resize_handle_rects, TITLE_BAR_BTN_W, TITLE_BAR_H};
+    use crate::speedtest::{SpeedTestPhase, SpeedTestProgress};
+    use eframe::egui::{Sense, Vec2};
     use std::time::Duration;
 
     #[test]
@@ -4147,7 +4195,9 @@ mod tests {
     /// 高度。面板只画到 exact_height，但 `Frame` 的外接矩形是按内容 `min_rect` 反推的：
     /// 两个数不等，中间就是没人画的窗口底色 —— 标题栏下面那条黑带。
     fn title_bar_allocated_height(draw_buttons_with_widget: bool) -> f32 {
-        use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Vec2};
+        use eframe::egui::{
+            self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Vec2,
+        };
         const BAR_H: f32 = 34.0;
         const BTN_W: f32 = 46.0;
 
@@ -4439,8 +4489,8 @@ mod tests {
                     crate::gui::widgets::note_text_field(ui, &field);
                 });
                 // 帧尾读一次 —— 和产品里那段同一口径。
-                leftover = ctx
-                    .input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
+                leftover =
+                    ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
                 defers = crate::gui::widgets::focus_is_text_field(ctx);
             });
             (buffer, leftover, defers)
@@ -4478,12 +4528,7 @@ mod tests {
             number: &mut i64,
             text: &mut String,
         ) -> (egui::Rect, egui::Rect, Option<egui::Id>, bool) {
-            let mut out = (
-                egui::Rect::NOTHING,
-                egui::Rect::NOTHING,
-                None,
-                false,
-            );
+            let mut out = (egui::Rect::NOTHING, egui::Rect::NOTHING, None, false);
             let _ = ctx.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     out.0 = ui.add(egui::DragValue::new(number)).rect;

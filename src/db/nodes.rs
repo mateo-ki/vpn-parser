@@ -772,7 +772,6 @@ impl Database {
         Ok(deleted)
     }
 
-    
     /// 淘汰长期失效节点（例如：连续测试失败且更新时间超过 days_old 天）
     pub async fn prune_stale_dead_nodes(&self, days_old: i64) -> Result<usize> {
         let cutoff = (Utc::now() - chrono::Duration::days(days_old)).to_rfc3339();
@@ -1103,7 +1102,9 @@ impl Database {
                 config,
                 country: row.get("country"),
                 latency_ms: row.get("latency_ms"),
-                latency_ok: row.get::<Option<i64>, _>("latency_ok").map(|value| value != 0),
+                latency_ok: row
+                    .get::<Option<i64>, _>("latency_ok")
+                    .map(|value| value != 0),
                 download_kbps: row.try_get("download_kbps").ok().flatten(),
                 latency_kernel: row.get("latency_kernel"),
                 latency_test_kind: row.get("latency_test_kind"),

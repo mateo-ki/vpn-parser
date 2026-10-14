@@ -214,7 +214,10 @@ impl Database {
     }
 
     /// 统一枚举并打开所有存在的分库连接池，收敛各业务遍历分片的样板代码。
-    pub(crate) async fn active_node_pools(&self, source_id: Option<&str>) -> Result<Vec<(Option<String>, SqlitePool)>> {
+    pub(crate) async fn active_node_pools(
+        &self,
+        source_id: Option<&str>,
+    ) -> Result<Vec<(Option<String>, SqlitePool)>> {
         let scopes = self.node_scopes(source_id).await?;
         let mut pools = Vec::with_capacity(scopes.len());
         for scope in scopes {
@@ -1108,10 +1111,8 @@ mod tests {
     /// Telegram 频道这类"零散发节点"的源靠这条语义活着：这一页没看见的旧节点不许被删。
     #[tokio::test]
     async fn accumulate_keeps_nodes_the_current_page_does_not_show() {
-        let path = std::env::temp_dir().join(format!(
-            "vpn-parser-accumulate-{}.db",
-            Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("vpn-parser-accumulate-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let now = Utc::now().to_rfc3339();
         sqlx::query(
@@ -1152,7 +1153,10 @@ mod tests {
         assert_eq!(
             db.accumulate_source_nodes(
                 "src-tg",
-                &[node("A", "10.0.0.1", Some(111)), node("B", "10.0.0.2", None)],
+                &[
+                    node("A", "10.0.0.1", Some(111)),
+                    node("B", "10.0.0.2", None)
+                ],
             )
             .await
             .unwrap(),
@@ -1182,7 +1186,11 @@ mod tests {
             "这一页看不见的 A 不该被删掉"
         );
         let carried = page.items.iter().find(|item| item.name == "A").unwrap();
-        assert_eq!(carried.latency_ms, Some(111), "搬回去的节点必须保住测速记录");
+        assert_eq!(
+            carried.latency_ms,
+            Some(111),
+            "搬回去的节点必须保住测速记录"
+        );
         assert_eq!(carried.server, "10.0.0.1");
         assert_eq!(carried.port, 8388);
         assert_eq!(carried.country.as_deref(), Some("US"));
@@ -1202,11 +1210,7 @@ mod tests {
             .list_nodes(None, Some("src-tg"), None, None, None, 1, 50, None)
             .await
             .unwrap();
-        assert_eq!(
-            after.total,
-            1,
-            "replace 的覆盖语义不能被累积模式污染"
-        );
+        assert_eq!(after.total, 1, "replace 的覆盖语义不能被累积模式污染");
 
         drop(db);
         let _ = std::fs::remove_file(&path);
@@ -1218,10 +1222,8 @@ mod tests {
     /// 用户以为开着，实际一次都不会切。现在它必须落库、且别的设计算保存不能把它冲掉。
     #[tokio::test]
     async fn auto_failover_survives_reopen_and_other_settings_saves() {
-        let path = std::env::temp_dir().join(format!(
-            "vpn-parser-auto-failover-{}.db",
-            Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("vpn-parser-auto-failover-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         assert!(
             !db.get_settings().await.unwrap().auto_failover,
@@ -1264,10 +1266,8 @@ mod tests {
     /// 把"一共多少 / 测通多少"数对 —— 那是这个判定的唯一输入。
     #[tokio::test]
     async fn auto_refill_switch_persists_and_counts_are_cross_shard() {
-        let path = std::env::temp_dir().join(format!(
-            "vpn-parser-auto-refill-{}.db",
-            Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("vpn-parser-auto-refill-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         assert!(
             !db.get_settings().await.unwrap().speedtest_auto_refill,
@@ -1317,11 +1317,15 @@ mod tests {
         .await
         .unwrap();
         let (total, verified) = db.node_verification_counts().await.unwrap();
-        assert_eq!((total, verified), (4, 2), "总数与测通数要分开数，判定用的是后者");
+        assert_eq!(
+            (total, verified),
+            (4, 2),
+            "总数与测通数要分开数，判定用的是后者"
+        );
 
         db.update_settings(UpdateSettings {
             speedtest_auto_refill: Some(true),
-                auto_rearm_system_proxy: Some(true),
+            auto_rearm_system_proxy: Some(true),
             ..Default::default()
         })
         .await
@@ -1357,10 +1361,8 @@ mod tests {
     /// "我明明关了它又自己下"这种事没法交代。
     #[tokio::test]
     async fn the_two_auto_actions_default_on_and_keep_being_off() {
-        let path = std::env::temp_dir().join(format!(
-            "vpn-parser-auto-actions-{}.db",
-            Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("vpn-parser-auto-actions-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let fresh = db.get_settings().await.unwrap();
         assert!(
@@ -1382,7 +1384,10 @@ mod tests {
         .await
         .unwrap();
         let kept = db.get_settings().await.unwrap();
-        assert!(!kept.auto_prepare_kernel, "关掉之后别的设计算保存不该把它翻回来");
+        assert!(
+            !kept.auto_prepare_kernel,
+            "关掉之后别的设计算保存不该把它翻回来"
+        );
         assert!(!kept.speedtest_added_source);
 
         drop(db);
@@ -1455,7 +1460,7 @@ mod tests {
             auto_failover: None,
             insider_channel: None,
             speedtest_auto_refill: None,
-                auto_rearm_system_proxy: None,
+            auto_rearm_system_proxy: None,
             auto_prepare_kernel: None,
             speedtest_added_source: None,
         })

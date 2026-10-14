@@ -381,7 +381,10 @@ mod tests {
             assert!(pipeline::requires_proxy_without_tcp(protocol), "{protocol}");
         }
         for protocol in ["vless", "vmess", "trojan", "ss"] {
-            assert!(!pipeline::requires_proxy_without_tcp(protocol), "{protocol}");
+            assert!(
+                !pipeline::requires_proxy_without_tcp(protocol),
+                "{protocol}"
+            );
         }
     }
 
@@ -451,10 +454,8 @@ mod tests {
 
     #[tokio::test]
     async fn tcp_ping_only_mode_records_tcp_ping_kind() {
-        let path = std::env::temp_dir().join(format!(
-            "vpn-parser-tcp-ping-{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("vpn-parser-tcp-ping-{}.db", uuid::Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let now = chrono::Utc::now();
         let node = Node {

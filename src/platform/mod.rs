@@ -3,10 +3,7 @@ use anyhow::{anyhow, Result};
 pub mod firewall;
 pub mod tray;
 pub mod window_park;
-pub use tray::{
-    refresh_notification_area, round_window_corners, TrayEvent,
-    TrayHandle,
-};
+pub use tray::{refresh_notification_area, round_window_corners, TrayEvent, TrayHandle};
 pub use window_park::{
     ensure_window_sysmenu_and_minimizebox, park as park_main_window,
     restore_and_repaint_main_window, unpark as unpark_main_window,
@@ -427,7 +424,8 @@ pub fn kill_duplicate_vpn_parser_instances() -> usize {
 
                 if exe_lower == "vpn-parser.exe" {
                     unsafe {
-                        let proc_handle = OpenProcess(PROCESS_TERMINATE, FALSE, entry.th32ProcessID);
+                        let proc_handle =
+                            OpenProcess(PROCESS_TERMINATE, FALSE, entry.th32ProcessID);
                         if !proc_handle.is_null() {
                             if TerminateProcess(proc_handle, 1) != 0 {
                                 killed_count += 1;
@@ -538,12 +536,21 @@ mod tests {
 
     #[test]
     fn handoff_keeps_unrelated_flags_including_equals_forms() {
-        let current = ["--db=data/a.db", "--api-token", "t0", "--start-proxy-node=x"]
-            .map(String::from)
-            .to_vec();
+        let current = [
+            "--db=data/a.db",
+            "--api-token",
+            "t0",
+            "--start-proxy-node=x",
+        ]
+        .map(String::from)
+        .to_vec();
         assert_eq!(
             elevated_arguments(&current, &[]),
-            vec!["--db=data/a.db".to_string(), "--api-token".to_string(), "t0".to_string()]
+            vec![
+                "--db=data/a.db".to_string(),
+                "--api-token".to_string(),
+                "t0".to_string()
+            ]
         );
     }
 
@@ -572,7 +579,8 @@ pub fn list_running_processes() -> Vec<String> {
     use std::collections::BTreeSet;
     use windows_sys::Win32::Foundation::{CloseHandle, FALSE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
     };
 
     let mut names = BTreeSet::new();

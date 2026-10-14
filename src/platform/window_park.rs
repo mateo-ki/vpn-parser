@@ -49,8 +49,8 @@ mod imp {
         BringWindowToTop, EnumWindows, GetClassNameW, GetWindowLongPtrW, GetWindowRect,
         GetWindowThreadProcessId, IsIconic, PostMessageW, SetForegroundWindow, SetWindowLongPtrW,
         SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, SWP_FRAMECHANGED,
-        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_RESTORE,
-        SW_SHOW, WM_PAINT, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_MINIMIZEBOX, WS_SYSMENU,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_RESTORE, SW_SHOW,
+        WM_PAINT, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_MINIMIZEBOX, WS_SYSMENU,
     };
 
     /// winit 给真实窗口用的类名；事件窗口 / IME 助手窗口都另有其名，必须排掉。
@@ -93,10 +93,7 @@ mod imp {
 
         let mut best: (HWND, i32) = (std::ptr::null_mut(), 0);
         unsafe {
-            EnumWindows(
-                Some(probe),
-                &mut best as *mut _ as LPARAM,
-            );
+            EnumWindows(Some(probe), &mut best as *mut _ as LPARAM);
         }
         if best.0.is_null() {
             None
@@ -117,7 +114,7 @@ mod imp {
 
     /// 窗口此刻是不是被停放在屏幕外。找不到窗口时按"没停放"处理（宁可继续跑帧也别乱动）。
     #[allow(dead_code)]
-pub fn parked() -> bool {
+    pub fn parked() -> bool {
         match find_main().and_then(rect_of) {
             Some(r) => is_parked_rect(r.left, r.top),
             None => false,
@@ -131,11 +128,24 @@ pub fn parked() -> bool {
         pub query_interface: usize,
         pub add_ref: usize,
         pub release: unsafe extern "system" fn(this: *mut core::ffi::c_void) -> u32,
-        pub hr_init: unsafe extern "system" fn(this: *mut core::ffi::c_void) -> windows_sys::core::HRESULT,
-        pub add_tab: unsafe extern "system" fn(this: *mut core::ffi::c_void, hwnd: HWND) -> windows_sys::core::HRESULT,
-        pub delete_tab: unsafe extern "system" fn(this: *mut core::ffi::c_void, hwnd: HWND) -> windows_sys::core::HRESULT,
-        pub activate_tab: unsafe extern "system" fn(this: *mut core::ffi::c_void, hwnd: HWND) -> windows_sys::core::HRESULT,
-        pub set_active_alt: unsafe extern "system" fn(this: *mut core::ffi::c_void, hwnd: HWND) -> windows_sys::core::HRESULT,
+        pub hr_init:
+            unsafe extern "system" fn(this: *mut core::ffi::c_void) -> windows_sys::core::HRESULT,
+        pub add_tab: unsafe extern "system" fn(
+            this: *mut core::ffi::c_void,
+            hwnd: HWND,
+        ) -> windows_sys::core::HRESULT,
+        pub delete_tab: unsafe extern "system" fn(
+            this: *mut core::ffi::c_void,
+            hwnd: HWND,
+        ) -> windows_sys::core::HRESULT,
+        pub activate_tab: unsafe extern "system" fn(
+            this: *mut core::ffi::c_void,
+            hwnd: HWND,
+        ) -> windows_sys::core::HRESULT,
+        pub set_active_alt: unsafe extern "system" fn(
+            this: *mut core::ffi::c_void,
+            hwnd: HWND,
+        ) -> windows_sys::core::HRESULT,
     }
 
     #[repr(C)]
@@ -143,8 +153,10 @@ pub fn parked() -> bool {
         lp_vtbl: *const ITaskbarListVtbl,
     }
 
-    const CLSID_TASKBAR_LIST: windows_sys::core::GUID = windows_sys::core::GUID::from_u128(0x56fdf344_fd6d_11d0_958a_006097c9a090);
-    const IID_ITASKBAR_LIST: windows_sys::core::GUID = windows_sys::core::GUID::from_u128(0x56fdf342_fd6d_11d0_958a_006097c9a090);
+    const CLSID_TASKBAR_LIST: windows_sys::core::GUID =
+        windows_sys::core::GUID::from_u128(0x56fdf344_fd6d_11d0_958a_006097c9a090);
+    const IID_ITASKBAR_LIST: windows_sys::core::GUID =
+        windows_sys::core::GUID::from_u128(0x56fdf342_fd6d_11d0_958a_006097c9a090);
 
     pub fn set_skip_taskbar(hwnd: HWND, skip: bool) {
         unsafe {
@@ -311,7 +323,9 @@ pub fn parked() -> bool {
 }
 
 #[cfg(windows)]
-pub use imp::{ensure_window_sysmenu_and_minimizebox, park, restore_and_repaint_main_window, unpark};
+pub use imp::{
+    ensure_window_sysmenu_and_minimizebox, park, restore_and_repaint_main_window, unpark,
+};
 
 #[cfg(not(windows))]
 pub fn parked() -> bool {

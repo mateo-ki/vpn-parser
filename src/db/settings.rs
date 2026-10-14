@@ -117,9 +117,11 @@ impl Database {
             speedtest_download_top_n: sqlx::Row::try_get::<i64, _>(&row, "speedtest_download_top_n")
                 .unwrap_or(0) as u32,
             speedtest_dedup_egress: sqlx::Row::try_get::<i64, _>(&row, "speedtest_dedup_egress")
-                .unwrap_or(1) != 0,
+                .unwrap_or(1)
+                != 0,
             speedtest_tcp_ping_only: sqlx::Row::try_get::<i64, _>(&row, "speedtest_tcp_ping_only")
-                .unwrap_or(0) != 0,
+                .unwrap_or(0)
+                != 0,
             bandwidth_guard: sqlx::Row::try_get::<i64, _>(&row, "bandwidth_guard").unwrap_or(0)
                 != 0,
             bandwidth_min_kbps: sqlx::Row::try_get::<i64, _>(&row, "bandwidth_min_kbps")
@@ -136,11 +138,8 @@ impl Database {
             firewall_auto_allow: sqlx::Row::try_get::<i64, _>(&row, "firewall_auto_allow")
                 .unwrap_or(0)
                 != 0,
-            auto_failover: sqlx::Row::try_get::<i64, _>(&row, "auto_failover")
-                .unwrap_or(0)
-                != 0,
-            insider_channel: sqlx::Row::try_get::<i64, _>(&row, "insider_channel")
-                .unwrap_or(0)
+            auto_failover: sqlx::Row::try_get::<i64, _>(&row, "auto_failover").unwrap_or(0) != 0,
+            insider_channel: sqlx::Row::try_get::<i64, _>(&row, "insider_channel").unwrap_or(0)
                 != 0,
             speedtest_auto_refill: sqlx::Row::try_get::<i64, _>(&row, "speedtest_auto_refill")
                 .unwrap_or(0)

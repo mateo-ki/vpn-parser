@@ -71,8 +71,10 @@ pub fn channel_name(url: &str) -> Option<String> {
     };
     let parsed = reqwest::Url::parse(&with_scheme).ok()?;
     let host = parsed.host_str()?.to_ascii_lowercase();
-    if !matches!(host.as_str(), "t.me" | "telegram.me" | "telegram.org" | "telegram.dog")
-        && !host.ends_with(".t.me")
+    if !matches!(
+        host.as_str(),
+        "t.me" | "telegram.me" | "telegram.org" | "telegram.dog"
+    ) && !host.ends_with(".t.me")
     {
         return None;
     }
@@ -87,8 +89,21 @@ pub fn channel_name(url: &str) -> Option<String> {
     };
     if matches!(
         name,
-        "joinchat" | "proxy" | "addstickers" | "addchain" | "addlist" | "share" | "iv"
-            | "login" | "setlanguage" | "telegram" | "blog" | "faq" | "apps" | "premium" | "socks"
+        "joinchat"
+            | "proxy"
+            | "addstickers"
+            | "addchain"
+            | "addlist"
+            | "share"
+            | "iv"
+            | "login"
+            | "setlanguage"
+            | "telegram"
+            | "blog"
+            | "faq"
+            | "apps"
+            | "premium"
+            | "socks"
     ) || name.starts_with('+')
     {
         return None;
@@ -151,8 +166,13 @@ fn decode_entities(text: &str) -> String {
         let code = caps
             .get(1)
             .and_then(|matched| u32::from_str_radix(matched.as_str(), 16).ok())
-            .or_else(|| caps.get(2).and_then(|matched| matched.as_str().parse().ok()));
-        char::from_u32(code.unwrap_or(0xfffd)).unwrap_or('\u{fffd}').to_string()
+            .or_else(|| {
+                caps.get(2)
+                    .and_then(|matched| matched.as_str().parse().ok())
+            });
+        char::from_u32(code.unwrap_or(0xfffd))
+            .unwrap_or('\u{fffd}')
+            .to_string()
     });
     out.replace("&amp;", "&")
 }
@@ -191,7 +211,9 @@ fn payloads(blocks: &[String]) -> (Vec<String>, Vec<String>) {
 }
 
 fn push_unique(list: &mut Vec<String>, value: &str) {
-    let trimmed = value.trim().trim_end_matches([')', '，', ',', '。', ';', '；']);
+    let trimmed = value
+        .trim()
+        .trim_end_matches([')', '，', ',', '。', ';', '；']);
     if trimmed.is_empty() {
         return;
     }
@@ -275,12 +297,11 @@ impl super::Collector {
         // 定时自动拉取（scheduler）拿的是不带代理的那份 collector，而 t.me 直连必挂。
         // 退一步认 Windows 系统代理：app 自己在系统代理模式下写的就是 9980，
         // v2rayN 之类外部工具指着也一样能用。只试这一条，不并发试多条。
-        let through_system_proxy = tokio::task::spawn_blocking(|| {
-            crate::system_proxy::current_system_proxy_url()
-        })
-        .await
-        .ok()
-        .flatten();
+        let through_system_proxy =
+            tokio::task::spawn_blocking(|| crate::system_proxy::current_system_proxy_url())
+                .await
+                .ok()
+                .flatten();
         match through_system_proxy {
             Some(url) => match self.with_proxy(&url) {
                 Ok(via) => {
@@ -376,13 +397,16 @@ impl super::Collector {
             };
         }
 
-        let _ = self.db.update_source_cache(
-            &source.id,
-            &failure_url,
-            downloaded.etag.as_deref(),
-            downloaded.last_modified.as_deref(),
-            Some(&content_sha256),
-        ).await;
+        let _ = self
+            .db
+            .update_source_cache(
+                &source.id,
+                &failure_url,
+                downloaded.etag.as_deref(),
+                downloaded.last_modified.as_deref(),
+                Some(&content_sha256),
+            )
+            .await;
 
         // 第一次见到这个源就多翻几页补历史，之后只看最新一页。
         let wanted = if source.last_fetch_at.is_none() {
@@ -476,11 +500,7 @@ impl super::Collector {
             Ok(stored) => stored,
             Err(error) => {
                 return self
-                    .telegram_failure(
-                        source,
-                        failure_url,
-                        format!("store failed: {error}"),
-                    )
+                    .telegram_failure(source, failure_url, format!("store failed: {error}"))
                     .await;
             }
         };
@@ -634,7 +654,11 @@ vless://uuid-uuid-uuid@203.0.113.7:443?security=tls#DE-9<br/>
     #[test]
     fn payloads_split_raw_uris_from_subscription_urls() {
         let (uris, urls) = payloads(&message_blocks(&fixture()));
-        assert_eq!(uris.len(), 4, "3 条 ss/vless + 1 条 trojan，实测就是这两类混发：{uris:?}");
+        assert_eq!(
+            uris.len(),
+            4,
+            "3 条 ss/vless + 1 条 trojan，实测就是这两类混发：{uris:?}"
+        );
         assert!(uris.iter().any(|u| u.starts_with("ss://")));
         assert!(uris.iter().any(|u| u.starts_with("vless://")));
         assert!(uris.iter().any(|u| u.starts_with("trojan://")));
@@ -718,10 +742,7 @@ vless://uuid-uuid-uuid@203.0.113.7:443?security=tls#DE-9<br/>
             println!("跳过：这台机器现在没有开启系统代理");
             return;
         };
-        let db_path = std::env::temp_dir().join(format!(
-            "vpn-parser-tgsys-{}.db",
-            Uuid::new_v4()
-        ));
+        let db_path = std::env::temp_dir().join(format!("vpn-parser-tgsys-{}.db", Uuid::new_v4()));
         let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
         // 故意用不带代理的那一份 collector。
         let collector =
@@ -767,8 +788,7 @@ vless://uuid-uuid-uuid@203.0.113.7:443?security=tls#DE-9<br/>
 
         let proxy = std::env::var("VPN_PARSER_PROBE_PROXY")
             .unwrap_or_else(|_| "http://127.0.0.1:9980".to_string());
-        let db_path =
-            std::env::temp_dir().join(format!("vpn-parser-tgreal-{}.db", Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!("vpn-parser-tgreal-{}.db", Uuid::new_v4()));
         let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
         let collector = crate::collector::Collector::new(db.clone(), TaskTracker::default())
             .unwrap()
@@ -810,7 +830,10 @@ vless://uuid-uuid-uuid@203.0.113.7:443?security=tls#DE-9<br/>
             .unwrap();
         println!("分片共 {} 个节点", listed.total);
         for item in listed.items.iter().take(3) {
-            println!("  {} · {}:{} · {:?}", item.name, item.server, item.port, item.country);
+            println!(
+                "  {} · {}:{} · {:?}",
+                item.name, item.server, item.port, item.country
+            );
         }
         assert!(listed.total > 0);
 

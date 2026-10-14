@@ -1,11 +1,12 @@
 use crate::gui::icons::{self, icon_label, Icon};
+use crate::gui::theme;
 use crate::gui::types::SourcesPanel;
 use crate::gui::widgets::{
-    card_frame, header_cell, primary_btn, render_fetch_ticks, section_title,
-    source_status_failed, status_badge };
+    card_frame, header_cell, primary_btn, render_fetch_ticks, section_title, source_status_failed,
+    status_badge,
+};
 use crate::gui::VpnApp;
 use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
-use crate::gui::theme;
 
 impl VpnApp {
     pub(crate) fn ui_sources(&mut self, ui: &mut Ui) {
@@ -325,12 +326,18 @@ impl VpnApp {
                                 ui.label(RichText::new(&result.source_name).strong());
                                 ui.label(
                                     RichText::new(if result.success { "成功" } else { "失败" })
-                                        .color(if result.success { theme::success() } else { theme::danger() }),
+                                        .color(if result.success {
+                                            theme::success()
+                                        } else {
+                                            theme::danger()
+                                        }),
                                 );
                                 ui.label(result.node_count.to_string());
                                 ui.add(
                                     egui::Label::new(
-                                        RichText::new(&result.resolved_url).small().color(theme::accent()),
+                                        RichText::new(&result.resolved_url)
+                                            .small()
+                                            .color(theme::accent()),
                                     )
                                     .wrap(),
                                 );

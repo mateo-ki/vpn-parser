@@ -102,7 +102,11 @@ impl Scheduler {
                             concurrency = REFILL_CONCURRENCY,
                             "scheduler: 测通节点太少，后台自动补一轮全量测速"
                         );
-                        match self.speedtester.test_all_sources(refill_opts(&settings)).await {
+                        match self
+                            .speedtester
+                            .test_all_sources(refill_opts(&settings))
+                            .await
+                        {
                             Ok(sum) => {
                                 info!(
                                     ok = sum.ok,
@@ -179,7 +183,7 @@ impl Scheduler {
                             conditional_isolation: settings.speedtest_conditional_isolation,
                             download_top_n: settings.speedtest_download_top_n,
                             dedup_egress: settings.speedtest_dedup_egress,
-        tcp_ping_only: settings.speedtest_tcp_ping_only,
+                            tcp_ping_only: settings.speedtest_tcp_ping_only,
                         };
                         match self.speedtester.test_all_sources(opts).await {
                             Ok(sum) => {
@@ -230,10 +234,20 @@ mod refill_tests {
         // 库里一个节点都没有：跑了也是空转。
         assert!(!refill_needed(&settings(true, None), 0, 0, NOW));
         // 测通的已经够挑替补了。
-        assert!(!refill_needed(&settings(true, None), 5000, SPARSE_VERIFIED_FLOOR, NOW));
+        assert!(!refill_needed(
+            &settings(true, None),
+            5000,
+            SPARSE_VERIFIED_FLOOR,
+            NOW
+        ));
         assert!(!refill_needed(&settings(true, None), 5000, 900, NOW));
         // 差一个就低于地板 -> 跑。
-        assert!(refill_needed(&settings(true, None), 5000, SPARSE_VERIFIED_FLOOR - 1, NOW));
+        assert!(refill_needed(
+            &settings(true, None),
+            5000,
+            SPARSE_VERIFIED_FLOOR - 1,
+            NOW
+        ));
     }
 
     #[test]
@@ -245,7 +259,12 @@ mod refill_tests {
             0,
             NOW
         ));
-        assert!(refill_needed(&settings(true, Some(REFILL_COOLDOWN_MIN)), 5000, 0, NOW));
+        assert!(refill_needed(
+            &settings(true, Some(REFILL_COOLDOWN_MIN)),
+            5000,
+            0,
+            NOW
+        ));
         assert!(refill_needed(&settings(true, Some(600)), 5000, 0, NOW));
     }
 
@@ -256,7 +275,10 @@ mod refill_tests {
         base.speedtest_reuse_minutes = 30;
         base.speedtest_download = true;
         let opts = refill_opts(&base);
-        assert_eq!(opts.concurrency, REFILL_CONCURRENCY, "后台补测不许吃满测速并发");
+        assert_eq!(
+            opts.concurrency, REFILL_CONCURRENCY,
+            "后台补测不许吃满测速并发"
+        );
         assert_eq!(opts.concurrency, 8);
         assert!(
             !opts.measure_download,

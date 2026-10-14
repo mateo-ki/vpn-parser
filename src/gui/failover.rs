@@ -236,8 +236,7 @@ impl VpnApp {
         reason: &str,
     ) {
         if self.failover_searching {
-            self.failover_last_reason =
-                Some("替补复检还在进行中，这一轮的判定先不重复触发".into());
+            self.failover_last_reason = Some("替补复检还在进行中，这一轮的判定先不重复触发".into());
             return;
         }
         let blacklisted: std::collections::HashSet<String> = self
@@ -277,7 +276,10 @@ impl VpnApp {
         self.status = if shortlist.is_empty() {
             format!("{reason}，控制台候选里没有第二个可用节点，改从库里最新测通的里现查...")
         } else {
-            format!("{reason}，正在对 {} 个替补节点做 TCP 复检...", shortlist.len())
+            format!(
+                "{reason}，正在对 {} 个替补节点做 TCP 复检...",
+                shortlist.len()
+            )
         };
         let db = self.db.clone();
         let tx = self.tx.clone();
@@ -381,5 +383,4 @@ impl VpnApp {
             self.router.seed(&id, ms.max(0) as u64, true, now);
         }
     }
-
 }

@@ -1,10 +1,10 @@
 use crate::app_update::{self, AppUpdateProgress, AppUpdateStage};
 use crate::gui::icons::{icon_label, Icon};
+use crate::gui::theme;
 use crate::gui::types::BgMsg;
 use crate::gui::widgets::{card_frame, primary_btn};
 use crate::gui::VpnApp;
 use eframe::egui::{self, CornerRadius, ProgressBar, RichText, Stroke, Ui, Vec2};
-use crate::gui::theme;
 
 impl VpnApp {
     pub(crate) fn ui_about(&mut self, ui: &mut Ui) {
@@ -53,11 +53,23 @@ impl VpnApp {
             });
             ui.add_space(6.0);
             info_row(ui, "项目仓库", "https://github.com/mateo-ki/vpn-parser");
-            info_row(ui, "安装包发布", "GitHub Releases（由 tag 触发 Actions 构建）");
+            info_row(
+                ui,
+                "安装包发布",
+                "GitHub Releases（由 tag 触发 Actions 构建）",
+            );
             info_row(ui, "程序目录", describe(current_exe_dir()));
             info_row(ui, "数据目录", describe(data_dir()));
-            info_row(ui, "内核目录", describe(Some(crate::kernel::managed_kernel_root())));
-            info_row(ui, "更新包暂存", describe(Some(app_update::installer_cache_dir())));
+            info_row(
+                ui,
+                "内核目录",
+                describe(Some(crate::kernel::managed_kernel_root())),
+            );
+            info_row(
+                ui,
+                "更新包暂存",
+                describe(Some(app_update::installer_cache_dir())),
+            );
             ui.add_space(4.0);
             if ui
                 .small_button("打开更新包暂存目录")
@@ -91,9 +103,7 @@ impl VpnApp {
                         theme::success()
                     };
                     ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(&info.message).strong().color(color),
-                        );
+                        ui.label(RichText::new(&info.message).strong().color(color));
                         if info.prerelease {
                             crate::gui::widgets::status_badge(ui, "预发版", theme::warning());
                         }
@@ -170,7 +180,8 @@ impl VpnApp {
                 if self.app_update_busy {
                     ui.spinner();
                     if ui.button("取消").clicked() {
-                        self.app_update_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                        self.app_update_cancel
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
             });
@@ -217,13 +228,9 @@ impl VpnApp {
 
     fn ui_app_update_progress(&self, ui: &mut Ui, progress: &AppUpdateProgress) {
         ui.label(
-            RichText::new(format!(
-                "{} · {}",
-                progress.stage.label(),
-                progress.message
-            ))
-            .small()
-            .color(theme::text_secondary()),
+            RichText::new(format!("{} · {}", progress.stage.label(), progress.message))
+                .small()
+                .color(theme::text_secondary()),
         );
         ui.add_space(3.0);
         if matches!(progress.stage, AppUpdateStage::Downloading) {
@@ -294,11 +301,12 @@ impl VpnApp {
         self.status = format!("正在下载 {}...", info.tag);
         self.rt.spawn(async move {
             let progress_tx = tx.clone();
-            let result = app_update::download(&info, proxy.as_deref(), &cancelled, &move |progress| {
-                let _ = progress_tx.send(BgMsg::AppUpdateProgress(progress));
-            })
-            .await
-            .map_err(|error| error.to_string());
+            let result =
+                app_update::download(&info, proxy.as_deref(), &cancelled, &move |progress| {
+                    let _ = progress_tx.send(BgMsg::AppUpdateProgress(progress));
+                })
+                .await
+                .map_err(|error| error.to_string());
             let _ = tx.send(BgMsg::AppUpdateDownloaded(result));
         });
     }
@@ -339,12 +347,7 @@ fn button(text: &str) -> egui::Button<'_> {
 fn info_row(ui: &mut Ui, label: &str, value: impl Into<String>) {
     let value = value.into();
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(label)
-                .small()
-                .color(theme::muted())
-                .strong(),
-        );
+        ui.label(RichText::new(label).small().color(theme::muted()).strong());
         ui.label(RichText::new(value).small().color(theme::text_secondary()));
     });
 }

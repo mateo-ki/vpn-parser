@@ -1,7 +1,7 @@
 #![allow(dead_code)]
+use super::{build_mihomo_config, MihomoConfigOptions};
 use crate::kernel::{managed_kernel_root, KernelKind};
 use crate::models::Node;
-use super::{build_mihomo_config, MihomoConfigOptions};
 use crate::proxy::sing_box::build_sing_box_config;
 use crate::proxy::xray::build_xray_config;
 use crate::proxy::ProxyWorkDir;

@@ -36,8 +36,7 @@ pub async fn run_speedtest_pipeline(
         let cutoff =
             chrono::Utc::now() - chrono::Duration::minutes(opts.reuse_verified_minutes as i64);
         let (pending, reused): (Vec<Node>, Vec<Node>) = nodes.into_iter().partition(|node| {
-            !(node.latency_ok.is_some()
-                && node.latency_tested_at.is_some_and(|at| at >= cutoff))
+            !(node.latency_ok.is_some() && node.latency_tested_at.is_some_and(|at| at >= cutoff))
         });
         if !reused.is_empty() {
             info!(reused = reused.len(), "沿用近期已验证的节点结果，跳过重测");
@@ -78,7 +77,8 @@ pub async fn run_speedtest_pipeline(
     let started = Instant::now();
 
     // 1. 并发 DNS 预解析
-    let dns_targets: Vec<(String, u16)> = nodes.iter().map(|n| (n.server.clone(), n.port)).collect();
+    let dns_targets: Vec<(String, u16)> =
+        nodes.iter().map(|n| (n.server.clone(), n.port)).collect();
     let resolved = resolve_targets_parallel(
         dns_targets,
         network_limit.clone(),
@@ -223,30 +223,25 @@ pub async fn run_speedtest_pipeline(
         if !target_indices.is_empty() {
             info!(
                 candidates = target_indices.len(),
-                top_limit,
-                "执行分级下载吞吐量测速（梯队精简）"
+                top_limit, "执行分级下载吞吐量测速（梯队精简）"
             );
             let mut dl_tasks = JoinSet::new();
             for index in target_indices {
                 let res = &results[index];
                 let host = res.server.clone();
                 let port = res.port;
-                let addrs = resolved.get(&(host.clone(), port)).cloned().unwrap_or(Ok(vec![]));
+                let addrs = resolved
+                    .get(&(host.clone(), port))
+                    .cloned()
+                    .unwrap_or(Ok(vec![]));
                 let net_limit = network_limit.clone();
                 let dl_ms = opts.download_test_ms;
                 dl_tasks.spawn(async move {
                     let Ok(_permit) = net_limit.acquire_owned().await else {
                         return (index, None);
                     };
-                    let (_, _, kbps, msg) = probe_full_resolved(
-                        &host,
-                        port,
-                        1500,
-                        dl_ms,
-                        true,
-                        addrs,
-                    )
-                    .await;
+                    let (_, _, kbps, msg) =
+                        probe_full_resolved(&host, port, 1500, dl_ms, true, addrs).await;
                     (index, kbps.map(|k| (k, msg)))
                 });
             }
@@ -302,8 +297,10 @@ pub async fn run_speedtest_pipeline(
             total: results.len(),
             ok,
             fail,
-            avg_ms: (!latencies.is_empty()).then(|| latencies.iter().sum::<i64>() as f64 / latencies.len() as f64),
-            avg_download_kbps: (!downloads.is_empty()).then(|| downloads.iter().sum::<f64>() / downloads.len() as f64),
+            avg_ms: (!latencies.is_empty())
+                .then(|| latencies.iter().sum::<i64>() as f64 / latencies.len() as f64),
+            avg_download_kbps: (!downloads.is_empty())
+                .then(|| downloads.iter().sum::<f64>() / downloads.len() as f64),
             results,
         });
     }
@@ -349,22 +346,40 @@ pub async fn run_speedtest_pipeline(
 
     // 同物理落地节点剪枝
     let (actual_candidates, physical_mirrors) = if opts.dedup_egress {
-        let mut groups: std::collections::HashMap<String, Vec<Node>> = std::collections::HashMap::new();
+        let mut groups: std::collections::HashMap<String, Vec<Node>> =
+            std::collections::HashMap::new();
         for node in proxy_candidates {
-            let physical_key = if let Some(Ok(addrs)) = resolved.get(&(node.server.clone(), node.port)) {
-                if let Some(first) = addrs.first() {
-                    format!("{}:{}:{}", first.ip(), node.port, node.protocol.to_ascii_lowercase())
+            let physical_key =
+                if let Some(Ok(addrs)) = resolved.get(&(node.server.clone(), node.port)) {
+                    if let Some(first) = addrs.first() {
+                        format!(
+                            "{}:{}:{}",
+                            first.ip(),
+                            node.port,
+                            node.protocol.to_ascii_lowercase()
+                        )
+                    } else {
+                        format!(
+                            "{}:{}:{}",
+                            node.server.to_ascii_lowercase(),
+                            node.port,
+                            node.protocol.to_ascii_lowercase()
+                        )
+                    }
                 } else {
-                    format!("{}:{}:{}", node.server.to_ascii_lowercase(), node.port, node.protocol.to_ascii_lowercase())
-                }
-            } else {
-                format!("{}:{}:{}", node.server.to_ascii_lowercase(), node.port, node.protocol.to_ascii_lowercase())
-            };
+                    format!(
+                        "{}:{}:{}",
+                        node.server.to_ascii_lowercase(),
+                        node.port,
+                        node.protocol.to_ascii_lowercase()
+                    )
+                };
             groups.entry(physical_key).or_default().push(node);
         }
 
         let mut representatives = Vec::with_capacity(groups.len());
-        let mut mirrors: std::collections::HashMap<String, Vec<Node>> = std::collections::HashMap::new();
+        let mut mirrors: std::collections::HashMap<String, Vec<Node>> =
+            std::collections::HashMap::new();
         for (_key, mut group) in groups {
             let rep = group.remove(0);
             if !group.is_empty() {
@@ -502,8 +517,7 @@ pub async fn run_speedtest_pipeline(
         )
         .await?;
         let done_after_sing_box = done_after_mihomo + sing_box_results.len();
-        let ok_after_sing_box =
-            ok_after_mihomo + sing_box_results.iter().filter(|r| r.ok).count();
+        let ok_after_sing_box = ok_after_mihomo + sing_box_results.iter().filter(|r| r.ok).count();
         proxy_results.extend(sing_box_results);
 
         let xray_results = run_sequential_kernel(
@@ -594,7 +608,10 @@ pub async fn run_speedtest_pipeline(
     let ok = results.iter().filter(|result| result.ok).count();
     let fail = results.len() - ok;
     let avg_ms = {
-        let vals: Vec<f64> = results.iter().filter_map(|r| r.latency_ms.map(|v| v as f64)).collect();
+        let vals: Vec<f64> = results
+            .iter()
+            .filter_map(|r| r.latency_ms.map(|v| v as f64))
+            .collect();
         if vals.is_empty() {
             None
         } else {

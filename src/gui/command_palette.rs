@@ -4,7 +4,6 @@ use crate::proxy::{ProxyMode, ProxyState};
 use eframe::egui::{self, CornerRadius, Margin, RichText, Sense, Vec2};
 
 impl VpnApp {
-
     /// 命令面板里的可执行项。节点也进面板（模糊搜名字直接切出口），所以每帧动态生成。
     fn palette_items(&self) -> Vec<crate::gui::types::PaletteItem> {
         use crate::gui::types::{PaletteAction, PaletteItem};

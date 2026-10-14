@@ -100,7 +100,11 @@ fn main() -> eframe::Result {
     };
     println!(
         "[main] mode={} beat={beat} beatskip={beatskip} poke={poke}",
-        if hide_later { "hide-later" } else { "offscreen" }
+        if hide_later {
+            "hide-later"
+        } else {
+            "offscreen"
+        }
     );
     eframe::run_native(
         "park-probe",

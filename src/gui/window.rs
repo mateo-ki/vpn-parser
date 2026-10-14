@@ -47,10 +47,8 @@ impl VpnApp {
             let c = pill.center();
             match glyph {
                 Glyph::Minimize => {
-                    painter.line_segment(
-                        [c + Vec2::new(-5.5, 0.0), c + Vec2::new(5.5, 0.0)],
-                        stroke,
-                    );
+                    painter
+                        .line_segment([c + Vec2::new(-5.5, 0.0), c + Vec2::new(5.5, 0.0)], stroke);
                 }
                 Glyph::Maximize => {
                     painter.rect(
@@ -76,20 +74,14 @@ impl VpnApp {
                         [c + Vec2::new(-3.0, -6.5), c + Vec2::new(6.5, -6.5)],
                         stroke,
                     );
-                    painter.line_segment(
-                        [c + Vec2::new(6.5, -6.5), c + Vec2::new(6.5, -2.0)],
-                        stroke,
-                    );
+                    painter
+                        .line_segment([c + Vec2::new(6.5, -6.5), c + Vec2::new(6.5, -2.0)], stroke);
                 }
                 Glyph::Close => {
-                    painter.line_segment(
-                        [c + Vec2::new(-5.0, -5.0), c + Vec2::new(5.0, 5.0)],
-                        stroke,
-                    );
-                    painter.line_segment(
-                        [c + Vec2::new(-5.0, 5.0), c + Vec2::new(5.0, -5.0)],
-                        stroke,
-                    );
+                    painter
+                        .line_segment([c + Vec2::new(-5.0, -5.0), c + Vec2::new(5.0, 5.0)], stroke);
+                    painter
+                        .line_segment([c + Vec2::new(-5.0, 5.0), c + Vec2::new(5.0, -5.0)], stroke);
                 }
             }
             ui.interact(rect, ui.id().with(("titlebar-button", key)), Sense::click())
@@ -156,11 +148,21 @@ impl VpnApp {
                     } else {
                         Glyph::Maximize
                     },
-                    if maximized { "向下还原" } else { "最大化" },
+                    if maximized {
+                        "向下还原"
+                    } else {
+                        "最大化"
+                    },
                 ) {
                     action_toggle_max = true;
                 }
-                if title_button(ui, cell(2), "minimize", Glyph::Minimize, "最小化（按设置收进系统托盘）") {
+                if title_button(
+                    ui,
+                    cell(2),
+                    "minimize",
+                    Glyph::Minimize,
+                    "最小化（按设置收进系统托盘）",
+                ) {
                     action_minimize = true;
                 }
             });
@@ -286,12 +288,12 @@ impl VpnApp {
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 for (index, (rect, direction, cursor)) in handles.into_iter().enumerate() {
-                    let local = egui::Rect::from_min_max(rect.min - min.to_vec2(), rect.max - min.to_vec2());
-                    let response = ui.interact(
-                        local,
-                        ui.id().with(("resize-handle", index)),
-                        Sense::drag(),
+                    let local = egui::Rect::from_min_max(
+                        rect.min - min.to_vec2(),
+                        rect.max - min.to_vec2(),
                     );
+                    let response =
+                        ui.interact(local, ui.id().with(("resize-handle", index)), Sense::drag());
                     if response.drag_started() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
                     }
@@ -299,9 +301,7 @@ impl VpnApp {
                 }
             });
     }
-
 }
-
 
 /// 自绘标题栏的高度，和右上角三个按钮各自的宽度。`ui_title_bar` 按它画，
 /// `resize_handle_rects` 也要按同一个数把按钮那一块从缩手感区里挖出去 ——
@@ -325,22 +325,34 @@ pub(crate) fn resize_handle_rects(
     let north_stop = max.x - TITLE_BAR_BTN_W * 3.0 - 8.0;
     vec![
         (
-            egui::Rect::from_min_max(egui::pos2(min.x, side_top), egui::pos2(min.x + EDGE, max.y - corner)),
+            egui::Rect::from_min_max(
+                egui::pos2(min.x, side_top),
+                egui::pos2(min.x + EDGE, max.y - corner),
+            ),
             Dir::West,
             Cursor::ResizeHorizontal,
         ),
         (
-            egui::Rect::from_min_max(egui::pos2(max.x - EDGE, side_top), egui::pos2(max.x, max.y - corner)),
+            egui::Rect::from_min_max(
+                egui::pos2(max.x - EDGE, side_top),
+                egui::pos2(max.x, max.y - corner),
+            ),
             Dir::East,
             Cursor::ResizeHorizontal,
         ),
         (
-            egui::Rect::from_min_max(egui::pos2(min.x + corner, min.y), egui::pos2(north_stop, min.y + EDGE)),
+            egui::Rect::from_min_max(
+                egui::pos2(min.x + corner, min.y),
+                egui::pos2(north_stop, min.y + EDGE),
+            ),
             Dir::North,
             Cursor::ResizeVertical,
         ),
         (
-            egui::Rect::from_min_max(egui::pos2(min.x + corner, max.y - EDGE), egui::pos2(max.x - corner, max.y)),
+            egui::Rect::from_min_max(
+                egui::pos2(min.x + corner, max.y - EDGE),
+                egui::pos2(max.x - corner, max.y),
+            ),
             Dir::South,
             Cursor::ResizeVertical,
         ),
@@ -350,7 +362,10 @@ pub(crate) fn resize_handle_rects(
             Cursor::ResizeNwSe,
         ),
         (
-            egui::Rect::from_min_max(egui::pos2(min.x, max.y - corner), egui::pos2(min.x + corner, max.y)),
+            egui::Rect::from_min_max(
+                egui::pos2(min.x, max.y - corner),
+                egui::pos2(min.x + corner, max.y),
+            ),
             Dir::SouthWest,
             Cursor::ResizeNeSw,
         ),

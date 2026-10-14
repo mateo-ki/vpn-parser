@@ -29,7 +29,11 @@ pub const NODE_LINK_PREFIXES: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PasteOutcome {
     /// 认出来并建了源，`tested` 说明有没有排上自动测速（那条开关关着时不能谎报）。
-    Added { name: String, url: String, tested: bool },
+    Added {
+        name: String,
+        url: String,
+        tested: bool,
+    },
     /// 认出来了，但这个地址已经在订阅源里。
     Duplicate { name: String },
     /// 粘的是节点链接：给一条"按节点导入"的出口，不建源。
@@ -85,7 +89,9 @@ fn node_link_count(text: &str) -> usize {
         .map(str::trim)
         .filter(|line| {
             let low = line.to_ascii_lowercase();
-            NODE_LINK_PREFIXES.iter().any(|prefix| low.starts_with(prefix))
+            NODE_LINK_PREFIXES
+                .iter()
+                .any(|prefix| low.starts_with(prefix))
         })
         .count()
 }
@@ -140,7 +146,10 @@ pub fn recognize(text: &str) -> Option<Detected> {
 
 /// 已经在列表里了吗：只按去掉首尾空白后的地址全等判断（订阅地址带 token，
 /// 少一个参数就是另一个源，不敢做"归一化去重"）。
-pub fn is_duplicate(url: &str, existing: impl IntoIterator<Item = (String, String)>) -> Option<String> {
+pub fn is_duplicate(
+    url: &str,
+    existing: impl IntoIterator<Item = (String, String)>,
+) -> Option<String> {
     let target = url.trim();
     existing
         .into_iter()
@@ -163,20 +172,22 @@ pub fn intake(
     auto_test_added_source: bool,
 ) -> Option<Intake> {
     match recognize(text)? {
-        Detected::Subscription { url, name } => match is_duplicate(&url, existing.iter().cloned()) {
-            Some(found) => Some(Intake {
-                create: None,
-                outcome: PasteOutcome::Duplicate { name: found },
-            }),
-            None => Some(Intake {
-                create: Some((name.clone(), url.clone())),
-                outcome: PasteOutcome::Added {
-                    name,
-                    url,
-                    tested: auto_test_added_source,
-                },
-            }),
-        },
+        Detected::Subscription { url, name } => {
+            match is_duplicate(&url, existing.iter().cloned()) {
+                Some(found) => Some(Intake {
+                    create: None,
+                    outcome: PasteOutcome::Duplicate { name: found },
+                }),
+                None => Some(Intake {
+                    create: Some((name.clone(), url.clone())),
+                    outcome: PasteOutcome::Added {
+                        name,
+                        url,
+                        tested: auto_test_added_source,
+                    },
+                }),
+            }
+        }
         Detected::NodeLinks { count } => Some(Intake {
             create: None,
             outcome: PasteOutcome::NodeLinks { count },
@@ -269,7 +280,8 @@ pub fn describe(outcome: &PasteOutcome) -> (egui::Color32, egui::Color32, String
             theme::muted(),
             theme::panel(),
             format!("剪贴板里是 {count} 条节点链接"),
-            "那是 ss:// / vmess:// 这类单节点地址，不是订阅链接。可以按节点导入，不建订阅源。".to_string(),
+            "那是 ss:// / vmess:// 这类单节点地址，不是订阅链接。可以按节点导入，不建订阅源。"
+                .to_string(),
         ),
         PasteOutcome::Unknown { preview } => (
             theme::danger(),
@@ -304,7 +316,9 @@ mod tests {
         });
         assert!(on.contains("只测这一源"), "{on}");
 
-        let (_, _, dup_title, dup_body) = describe(&PasteOutcome::Duplicate { name: "老源".into() });
+        let (_, _, dup_title, dup_body) = describe(&PasteOutcome::Duplicate {
+            name: "老源".into(),
+        });
         assert!(dup_title.contains("已经在订阅源里") && dup_body.contains("老源"));
         let (_, _, nodes, _) = describe(&PasteOutcome::NodeLinks { count: 4 });
         assert!(nodes.contains("4 条节点链接"), "{nodes}");
@@ -314,10 +328,16 @@ mod tests {
     fn dialog_body_renders_offscreen_for_every_outcome() {
         // 离屏真渲染一遍：只要求"画出来了、有内容、不 panic"，视觉好坏还得人看。
         let cases = [
-            PasteOutcome::Added { name: "n".into(), url: "https://a.b/c".into(), tested: true },
+            PasteOutcome::Added {
+                name: "n".into(),
+                url: "https://a.b/c".into(),
+                tested: true,
+            },
             PasteOutcome::Duplicate { name: "n".into() },
             PasteOutcome::NodeLinks { count: 2 },
-            PasteOutcome::Unknown { preview: "今天天气不错".into() },
+            PasteOutcome::Unknown {
+                preview: "今天天气不错".into(),
+            },
         ];
         for outcome in cases {
             let ctx = egui::Context::default();
@@ -331,10 +351,7 @@ mod tests {
             let clipped = ctx.run(raw, |ctx| {
                 dialog_body(ctx, &outcome);
             });
-            assert!(
-                !clipped.shapes.is_empty(),
-                "{outcome:?} 什么都没画出来"
-            );
+            assert!(!clipped.shapes.is_empty(), "{outcome:?} 什么都没画出来");
         }
     }
 
@@ -365,7 +382,9 @@ mod tests {
         assert_eq!(got.create, None);
         assert_eq!(
             got.outcome,
-            PasteOutcome::Duplicate { name: "老源".into() }
+            PasteOutcome::Duplicate {
+                name: "老源".into()
+            }
         );
     }
 
@@ -480,7 +499,10 @@ mod tests {
     #[test]
     fn duplicate_check_compares_the_template_verbatim() {
         let existing = vec![("老源".to_string(), " https://a.b/c ".to_string())];
-        assert_eq!(is_duplicate("https://a.b/c", existing.clone()), Some("老源".into()));
+        assert_eq!(
+            is_duplicate("https://a.b/c", existing.clone()),
+            Some("老源".into())
+        );
         // token 少一个字符就是另一个源，不做归一化。
         assert_eq!(is_duplicate("https://a.b/c?token=2", existing), None);
     }

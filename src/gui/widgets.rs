@@ -1,4 +1,5 @@
 use super::icons::{icon_label, Icon};
+use super::theme;
 use super::types::Tab;
 use crate::models::{NodeGroupSummary, NodeSummary, GOOGLE_PROXY_TEST_KIND};
 use crate::proxy::{
@@ -7,7 +8,6 @@ use crate::proxy::{
 };
 use crate::speedtest::{SpeedTestPhase, SpeedTestProgress};
 use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, Vec2};
-use super::theme;
 
 /// 全局 Ctrl+V / Ctrl+K 的"这次该不该让路" —— 只有焦点真的落在文本输入框里才让。
 ///
@@ -46,7 +46,6 @@ pub fn normalize_api_base(value: &str) -> String {
     }
 }
 
-
 pub fn card_frame() -> Frame {
     Frame::NONE
         .fill(theme::panel())
@@ -66,14 +65,10 @@ pub fn panel_frame() -> Frame {
 }
 
 pub fn primary_btn(text: &str) -> egui::Button<'_> {
-    egui::Button::new(
-        RichText::new(text)
-            .strong()
-            .color(theme::on_primary()),
-    )
-    .fill(theme::primary_btn())
-    .stroke(Stroke::NONE)
-    .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
+    egui::Button::new(RichText::new(text).strong().color(theme::on_primary()))
+        .fill(theme::primary_btn())
+        .stroke(Stroke::NONE)
+        .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
 }
 
 pub fn danger_btn(text: &str) -> egui::Button<'_> {
@@ -85,9 +80,18 @@ pub fn danger_btn(text: &str) -> egui::Button<'_> {
 
 pub fn section_title(ui: &mut Ui, title: &str, subtitle: &str) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new(title).strong().size(17.0).color(theme::text_primary()));
+        ui.label(
+            RichText::new(title)
+                .strong()
+                .size(17.0)
+                .color(theme::text_primary()),
+        );
         ui.add_space(4.0);
-        ui.label(RichText::new(subtitle).small().color(theme::text_secondary()));
+        ui.label(
+            RichText::new(subtitle)
+                .small()
+                .color(theme::text_secondary()),
+        );
     });
     ui.add_space(6.0);
 }
@@ -140,6 +144,65 @@ pub fn nav_item(ui: &mut Ui, current: &mut Tab, tab: Tab, icon: Icon, label: &st
         *current = tab;
     }
     ui.add_space(3.0);
+}
+
+/// 一行两段的表头：左段按自然宽度排，右段（动作组）钉在内容区右缘。
+///
+/// 为什么不用 `ui.horizontal` + `with_layout(right_to_left)`：右对齐那组只会往左挤，
+/// 一旦逻辑宽度变小（字体调到 140% 时 1330 物理宽只剩 950 逻辑宽，再叠上侧栏就不到 500），
+/// 整组会**越过面板右边界**被裁掉 —— 2026-10-14 系统设置的「保存设置」、
+/// 2026-10-15 分流规则的「导出 JSON」都是这一个病（离屏量到 580 > 502）。
+/// 这里给右段划一块算出来的矩形，右边缘就等于内容区右边缘；左段拿剩下的宽度，
+/// 里面的长文字要自己 `.truncate()`。
+pub fn split_row(
+    ui: &mut Ui,
+    id: &str,
+    right_width: f32,
+    left: impl FnOnce(&mut Ui),
+    right: impl FnOnce(&mut Ui),
+) {
+    const ROW_HEIGHT: f32 = 30.0;
+    const GAP: f32 = 8.0;
+    let row_top = ui.cursor().top();
+    let row = egui::Rect::from_min_max(
+        egui::pos2(ui.max_rect().left(), row_top),
+        egui::pos2(ui.max_rect().right(), row_top + ROW_HEIGHT),
+    );
+    let group = right_width.min(row.width());
+    let left_right = (row.right() - group - GAP).max(row.left());
+    ui.allocate_new_ui(
+        egui::UiBuilder::new()
+            .id_salt(egui::Id::new(format!("{id}:left")))
+            .max_rect(egui::Rect::from_min_max(
+                row.min,
+                egui::pos2(left_right, row.bottom()),
+            ))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        left,
+    );
+    ui.allocate_new_ui(
+        egui::UiBuilder::new()
+            .id_salt(egui::Id::new(format!("{id}:right")))
+            .max_rect(egui::Rect::from_min_max(
+                egui::pos2(row.right() - group, row.top()),
+                row.max,
+            ))
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        right,
+    );
+    if crate::diag::enabled() {
+        // 量具：他报"按钮被挤出界面"时，像素反推不出是 max_rect 还是别的东西，
+        // 就把真实矩形打出来对账（只在诊断壳下写，产品路径零开销）。
+        crate::diag::log_once(&format!(
+            "DIAGROW {id} screen={:.1} max=[{:.1},{:.1}] group=[{:.1},{:.1}]",
+            ui.input(|i| i.screen_rect().width()),
+            row.left(),
+            row.right(),
+            row.right() - group,
+            row.right(),
+        ));
+    }
+    ui.advance_cursor_after_rect(row);
 }
 
 /// 页面顶部的分段标签（控制台那几个面板、系统设置的通用/外观都用它）。
@@ -261,14 +324,21 @@ pub fn compact_node_card(
 
                     if let Some(country) = &node.country {
                         let (flag, name) = country_flag_and_name(country);
-                        ui.label(RichText::new(format!("{flag} {name}")).small().color(theme::text_secondary()));
+                        ui.label(
+                            RichText::new(format!("{flag} {name}"))
+                                .small()
+                                .color(theme::text_secondary()),
+                        );
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if is_switching {
                             ui.horizontal(|ui| {
                                 icon_label(ui, Icon::Lightning, 12.0, theme::warning());
                                 ui.label(
-                                    RichText::new("切换中...").small().strong().color(theme::warning()),
+                                    RichText::new("切换中...")
+                                        .small()
+                                        .strong()
+                                        .color(theme::warning()),
                                 );
                             });
                         } else {
@@ -283,9 +353,13 @@ pub fn compact_node_card(
         .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-
 pub fn header_cell(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).strong().color(theme::text_secondary()).small());
+    ui.label(
+        RichText::new(text)
+            .strong()
+            .color(theme::text_secondary())
+            .small(),
+    );
 }
 
 pub fn format_bytes(bytes: u64) -> String {
@@ -399,11 +473,7 @@ pub fn render_fetch_ticks(ui: &mut Ui, rows: Option<&Vec<crate::db::telemetry::F
 /// 好过显示成看不懂的错误。
 pub fn clock_of(at_rfc3339: &str) -> String {
     chrono::DateTime::parse_from_rfc3339(at_rfc3339)
-        .map(|at| {
-            at.with_timezone(&chrono::Local)
-                .format("%H:%M")
-                .to_string()
-        })
+        .map(|at| at.with_timezone(&chrono::Local).format("%H:%M").to_string())
         .unwrap_or_else(|_| at_rfc3339.chars().take(5).collect())
 }
 
@@ -441,7 +511,12 @@ pub fn render_traffic_sparkline(
 
     let downs: Vec<f32> = history.iter().map(|&(down, _)| down).collect();
     let ups: Vec<f32> = history.iter().map(|&(_, up)| up).collect();
-    let scale = chart_scale(&history.iter().flat_map(|&(d, u)| [d, u]).collect::<Vec<f32>>());
+    let scale = chart_scale(
+        &history
+            .iter()
+            .flat_map(|&(d, u)| [d, u])
+            .collect::<Vec<f32>>(),
+    );
     let last = history.len() - 1;
     let dx = (rect.width() - 6.0) / last as f32;
     let at = |index: usize, value: f32| {
@@ -479,10 +554,7 @@ pub fn render_traffic_sparkline(
                 let index = (((point.x - rect.min.x - 3.0) / dx).round() as usize).min(last);
                 let x = at(index, 0.0).x;
                 painter.line_segment(
-                    [
-                        egui::pos2(x, rect.min.y + 1.0),
-                        egui::pos2(x, baseline),
-                    ],
+                    [egui::pos2(x, rect.min.y + 1.0), egui::pos2(x, baseline)],
                     Stroke::new(1.0_f32, theme::border()),
                 );
                 let ago = (last - index) as u64;
@@ -572,17 +644,41 @@ pub fn format_duration_ms(value: Option<u64>) -> String {
 }
 
 pub fn stat_chip(ui: &mut Ui, label: &str, value: &str, color: Color32) {
-    Frame::NONE
-        .fill(theme::accent_bg())
-        .stroke(Stroke::NONE)
-        .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
-        .inner_margin(Margin::symmetric(13, 8))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(label).small().color(theme::muted()));
-                ui.label(RichText::new(value).strong().color(color).size(13.5));
-            });
-        });
+    // 不能用 `Frame::show`：它在 `horizontal_wrapped` 里**不参与换行判定**，芯片一多整行
+    // 就冲出右边界，还会把父 ui 的 `max_rect` 一起撑大（离屏量到 1535 > 面板 1312），
+    // 于是下面每一行"钉右"的表头都跟着画到屏幕外。自己量尺寸再 `allocate_at_least`
+    // 才会正常换行 —— 分配走 wrapped layout 的 same_row_or_next_row。
+    const PAD_X: f32 = 13.0;
+    const PAD_Y: f32 = 8.0;
+    const GAP: f32 = 6.0;
+    let label_galley = egui::WidgetText::from(RichText::new(label).small().color(theme::muted()))
+        .into_galley(ui, None, f32::INFINITY, egui::TextStyle::Body);
+    let value_galley = egui::WidgetText::from(
+        RichText::new(value).strong().color(color).size(13.5),
+    )
+    .into_galley(ui, None, f32::INFINITY, egui::TextStyle::Body);
+    let size = egui::vec2(
+        label_galley.size().x + GAP + value_galley.size().x + PAD_X * 2.0,
+        label_galley.size().y.max(value_galley.size().y) + PAD_Y * 2.0,
+    );
+    let label_galley = std::sync::Arc::new(label_galley);
+    let value_galley = std::sync::Arc::new(value_galley);
+    let (rect, _response) = ui.allocate_at_least(size, Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.rect_filled(
+            rect,
+            CornerRadius::same(theme::RADIUS_BTN),
+            theme::accent_bg(),
+        );
+        let center_y = rect.center().y;
+        let mut x = rect.left() + PAD_X;
+        for galley in [label_galley.as_ref(), value_galley.as_ref()] {
+            let top = center_y - galley.size().y / 2.0;
+            painter.galley(egui::pos2(x, top), galley.clone(), theme::text_secondary());
+            x += galley.size().x + GAP;
+        }
+    }
 }
 
 pub fn latency_text(n: &NodeSummary) -> RichText {
@@ -605,7 +701,9 @@ pub fn latency_text(n: &NodeSummary) -> RichText {
             };
             RichText::new(format!("{ms} ms {kernel}")).color(color)
         }
-        (Some(false), Some(GOOGLE_PROXY_TEST_KIND)) => RichText::new("代理失败").color(theme::danger()),
+        (Some(false), Some(GOOGLE_PROXY_TEST_KIND)) => {
+            RichText::new("代理失败").color(theme::danger())
+        }
         (Some(true), _) => {
             let ms = n.latency_ms.unwrap_or(0);
             RichText::new(format!("{ms} ms TCP")).color(theme::text_secondary())
@@ -834,7 +932,10 @@ mod sparkline_tests {
                     room = ui.available_width();
                     render_traffic_sparkline(ui, &history(samples), active);
                 });
-                row = (response.response.rect.height(), before - ui.available_height());
+                row = (
+                    response.response.rect.height(),
+                    before - ui.available_height(),
+                );
             });
         });
         (room, row.0, row.1)
@@ -848,7 +949,10 @@ mod sparkline_tests {
             (height - 32.0).abs() < 6.0,
             "这一行应该只占 ~32 高，实测 {height:.1}"
         );
-        assert!(used < 40.0, "整行吃掉的页高 {used:.1}，多了就是又被 with_layout 吃页了");
+        assert!(
+            used < 40.0,
+            "整行吃掉的页高 {used:.1}，多了就是又被 with_layout 吃页了"
+        );
     }
 
     #[test]
@@ -945,8 +1049,14 @@ mod sparkline_tests {
         // `num_hours()` 是**向零截断**的：一小时以内的时钟漂移会算进当前这格（改之前
         // 就是这个语义，这次纯性能重构不动它），超过一小时才落到负数被丢掉。
         let near_future = health_hour_buckets(&[health_row(-30, false)]);
-        assert_eq!(near_future[0], -1, "半小时内飘到未来的行落在当前格，不是越界");
+        assert_eq!(
+            near_future[0], -1,
+            "半小时内飘到未来的行落在当前格，不是越界"
+        );
         let future = health_hour_buckets(&[health_row(-90, false)]);
-        assert_eq!(future, [0i8; 24], "一小时以上的未来行必须丢，否则索引是负数");
+        assert_eq!(
+            future, [0i8; 24],
+            "一小时以上的未来行必须丢，否则索引是负数"
+        );
     }
 }

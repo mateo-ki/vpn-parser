@@ -6,8 +6,8 @@ mod collector;
 mod db;
 mod diag;
 mod export;
-mod geo;
 mod export_quality;
+mod geo;
 #[cfg(feature = "gui")]
 mod gui;
 mod hostutil;
@@ -201,7 +201,9 @@ fn main() -> Result<()> {
             for attempt in 1..=30 {
                 match platform::acquire_single_instance()? {
                     Some(g) => {
-                        startup_log(&format!("Acquired single instance mutex on attempt {attempt}."));
+                        startup_log(&format!(
+                            "Acquired single instance mutex on attempt {attempt}."
+                        ));
                         guard = Some(g);
                         break;
                     }
@@ -213,7 +215,9 @@ fn main() -> Result<()> {
             if guard.is_none() {
                 startup_log("Parent process still holds mutex after 3s; killing duplicate parent/zombie instances...");
                 let killed = platform::kill_duplicate_vpn_parser_instances();
-                startup_log(&format!("Killed {killed} duplicate instances; retrying mutex acquisition..."));
+                startup_log(&format!(
+                    "Killed {killed} duplicate instances; retrying mutex acquisition..."
+                ));
                 guard = platform::acquire_single_instance()?;
             }
             guard
@@ -224,7 +228,9 @@ fn main() -> Result<()> {
                     Some(guard)
                 }
                 None => {
-                    startup_log("Single instance mutex exists! Woke up existing instance and exiting.");
+                    startup_log(
+                        "Single instance mutex exists! Woke up existing instance and exiting.",
+                    );
                     return Ok(());
                 }
             }
@@ -236,7 +242,9 @@ fn main() -> Result<()> {
     if _single_instance.is_some() {
         let killed_zombies = platform::kill_duplicate_vpn_parser_instances();
         if killed_zombies > 0 {
-            startup_log(&format!("Cleaned up {killed_zombies} orphan vpn-parser zombie processes."));
+            startup_log(&format!(
+                "Cleaned up {killed_zombies} orphan vpn-parser zombie processes."
+            ));
         }
     }
     let rt = Arc::new(Runtime::new()?);

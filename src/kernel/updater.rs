@@ -318,8 +318,14 @@ impl KernelUpdater {
         F: Fn(KernelUpdateProgress) + Send + Sync,
     {
         match source {
-            KernelSource::Local => self.install_local(kind, local_file, cancelled, progress).await,
-            _ => self.update_from_network(kind, source, cancelled, progress).await,
+            KernelSource::Local => {
+                self.install_local(kind, local_file, cancelled, progress)
+                    .await
+            }
+            _ => {
+                self.update_from_network(kind, source, cancelled, progress)
+                    .await
+            }
         }
     }
 
@@ -350,19 +356,15 @@ impl KernelUpdater {
             bail!("本地压缩包大小异常: {} bytes", bytes.len());
         }
         // 能对上官方资产名就顺手校验一次，对不上就明确告诉他没校验。
-        let expected = self
-            .fetch_release(kind)
-            .await
-            .ok()
-            .and_then(|release| {
-                let name = path.file_name()?.to_string_lossy().to_string();
-                release
-                    .assets
-                    .iter()
-                    .find(|asset| asset.name == name)
-                    .and_then(|asset| require_sha256(asset).ok())
-                    .map(|hash| (hash.to_string(), release.tag_name.clone()))
-            });
+        let expected = self.fetch_release(kind).await.ok().and_then(|release| {
+            let name = path.file_name()?.to_string_lossy().to_string();
+            release
+                .assets
+                .iter()
+                .find(|asset| asset.name == name)
+                .and_then(|asset| require_sha256(asset).ok())
+                .map(|hash| (hash.to_string(), release.tag_name.clone()))
+        });
         if let Some((hash, _)) = expected.as_ref() {
             progress(KernelUpdateProgress {
                 kind,
@@ -428,7 +430,11 @@ impl KernelUpdater {
         crate::startup_log(&format!(
             "[内核] {} Release 来源={} tag={} 取到版本用的通道 #{transport_index}",
             kind.display_name(),
-            if release.fallback { "内置兜底" } else { "api.github.com/本地缓存" },
+            if release.fallback {
+                "内置兜底"
+            } else {
+                "api.github.com/本地缓存"
+            },
             release.tag_name
         ));
         let asset_name = kind.asset_name(&release.tag_name);
@@ -477,11 +483,10 @@ impl KernelUpdater {
             message: "正在校验 SHA-256".into(),
         });
         ensure_not_cancelled(cancelled)?;
-        verify_sha256(&bytes, &expected_hash)
-            .map_err(|error| {
-                crate::startup_log(&format!("[内核] {} {error}", kind.display_name()));
-                error
-            })?;
+        verify_sha256(&bytes, &expected_hash).map_err(|error| {
+            crate::startup_log(&format!("[内核] {} {error}", kind.display_name()));
+            error
+        })?;
         crate::startup_log(&format!("[内核] {} SHA-256 校验通过", kind.display_name()));
         self.install_bytes(
             kind,
@@ -531,10 +536,8 @@ impl KernelUpdater {
             kind.display_name(),
             staging.display()
         ));
-        tokio::task::spawn_blocking(move || {
-            extract_executable(&bytes, kind, &staging_for_extract)
-        })
-        .await??;
+        tokio::task::spawn_blocking(move || extract_executable(&bytes, kind, &staging_for_extract))
+            .await??;
 
         // 这一步是整个"预备"最容易被外因（虚拟机 CPU / 杀软）打掉的地方，
         // 所以三种结果都写进 startup.log —— VM 上没有控制台，文件是唯一看得见的证据。
@@ -565,8 +568,8 @@ impl KernelUpdater {
                 crate::startup_log(&format!("[内核] 暂存文件: {}", staging.display()));
             }
         }
-        let staged_version = staged?
-            .with_context(|| format!("{} 暂存内核未返回版本", kind.display_name()))?;
+        let staged_version =
+            staged?.with_context(|| format!("{} 暂存内核未返回版本", kind.display_name()))?;
         if let Some(tag) = expected_tag {
             if !version_matches(&staged_version, tag) {
                 crate::startup_log(&format!(
@@ -869,7 +872,10 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
 /// 数据文件处理；2026-10-08 在 VirtualBox 上遇到的正是"下载校验全过、一运行就
 /// 0xC0000005 且零输出"，所以先把这个我们自己造成的变量消掉。
 fn staging_name(kind: KernelKind) -> String {
-    format!("{}.staging.exe", kind.executable_name().trim_end_matches(".exe"))
+    format!(
+        "{}.staging.exe",
+        kind.executable_name().trim_end_matches(".exe")
+    )
 }
 
 fn ensure_not_cancelled(cancelled: &AtomicBool) -> Result<()> {
@@ -1020,17 +1026,21 @@ mod tests {
         archive.write_all(b"not a windows executable").unwrap();
         let bytes = archive.finish().unwrap().into_inner();
 
-        let root = std::env::temp_dir().join(format!(
-            "vpn-parser-prepare-fail-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("vpn-parser-prepare-fail-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let updater = KernelUpdater::new(root.clone(), None).unwrap();
         let cancelled = AtomicBool::new(false);
 
         let error = updater
-            .install_bytes(KernelKind::Mihomo, bytes, Some("v1.19.32"), &cancelled, &|_| {})
+            .install_bytes(
+                KernelKind::Mihomo,
+                bytes,
+                Some("v1.19.32"),
+                &cancelled,
+                &|_| {},
+            )
             .await
             .expect_err("跑不起来的内核必须报错");
         assert!(
@@ -1082,11 +1092,17 @@ mod source_tests {
     #[test]
     fn candidate_chain_always_ends_with_direct_and_no_duplicates() {
         let chain = proxy_candidates(Some("http://127.0.0.1:9980"));
-        assert_eq!(chain.first().unwrap().as_deref(), Some("http://127.0.0.1:9980"));
+        assert_eq!(
+            chain.first().unwrap().as_deref(),
+            Some("http://127.0.0.1:9980")
+        );
         assert!(chain.last().unwrap().is_none(), "最后一档必须是直连兜底");
         let mut deduped = chain.clone();
         deduped.dedup();
-        assert_eq!(deduped, chain, "候选不能重复（系统代理和应用内代理常常是同一个）");
+        assert_eq!(
+            deduped, chain,
+            "候选不能重复（系统代理和应用内代理常常是同一个）"
+        );
         assert!(proxy_candidates(None).last().unwrap().is_none());
         // 空白代理地址不能当成一条通道
         assert_eq!(
@@ -1107,8 +1123,16 @@ mod source_tests {
             asset_url_for(KernelSource::GhFast, direct),
             format!("https://ghfast.top/{direct}")
         );
-        for source in [KernelSource::Official, KernelSource::Proxy, KernelSource::Local] {
-            assert_eq!(asset_url_for(source, direct), direct, "{source:?} 必须只连官方原链");
+        for source in [
+            KernelSource::Official,
+            KernelSource::Proxy,
+            KernelSource::Local,
+        ] {
+            assert_eq!(
+                asset_url_for(source, direct),
+                direct,
+                "{source:?} 必须只连官方原链"
+            );
         }
     }
 
@@ -1134,11 +1158,22 @@ mod source_tests {
         let dir = std::env::temp_dir().join(format!("vpn-parser-source-{}", std::process::id()));
         // 只有一个代理时：官方直连方式应该拿不到通道（而不是悄悄退回直连）
         let updater = KernelUpdater::new(dir, Some("http://127.0.0.1:9")).unwrap();
-        let labels: Vec<&str> = updater.transports.iter().map(|t| t.label.as_str()).collect();
-        assert!(labels.iter().any(|l| l.starts_with("应用内代理")), "{labels:?}");
+        let labels: Vec<&str> = updater
+            .transports
+            .iter()
+            .map(|t| t.label.as_str())
+            .collect();
+        assert!(
+            labels.iter().any(|l| l.starts_with("应用内代理")),
+            "{labels:?}"
+        );
         assert!(updater.transport_order(KernelSource::Proxy).is_ok());
         // 官方直连和两个镜像方式都只允许不经代理那一条（镜像站本身就在国内）
-        for source in [KernelSource::Official, KernelSource::GhProxy, KernelSource::GhFast] {
+        for source in [
+            KernelSource::Official,
+            KernelSource::GhProxy,
+            KernelSource::GhFast,
+        ] {
             let only = updater.transport_order(source).unwrap();
             assert!(
                 only.iter().all(|i| updater.transports[*i].label == "直连"),
@@ -1148,7 +1183,9 @@ mod source_tests {
         // 「走代理」不许退回直连
         let proxied = updater.transport_order(KernelSource::Proxy).unwrap();
         assert!(
-            proxied.iter().all(|i| updater.transports[*i].label != "直连"),
+            proxied
+                .iter()
+                .all(|i| updater.transports[*i].label != "直连"),
             "{labels:?}"
         );
     }

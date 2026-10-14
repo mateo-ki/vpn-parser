@@ -39,7 +39,13 @@ fn run_netsh(args: &[&str]) -> Result<std::process::Output> {
 #[cfg(windows)]
 pub fn rule_exists(program: &Path) -> bool {
     let name = rule_name(program);
-    match run_netsh(&["advfirewall", "firewall", "show", "rule", &format!("name={name}")]) {
+    match run_netsh(&[
+        "advfirewall",
+        "firewall",
+        "show",
+        "rule",
+        &format!("name={name}"),
+    ]) {
         Ok(output) => {
             let text = String::from_utf8_lossy(&output.stdout);
             // 找不到时 netsh 仍返回 0，只能看输出里有没有这条规则的名字。
@@ -99,7 +105,10 @@ pub fn ensure_all(programs: &[std::path::PathBuf]) -> Result<String> {
         }
         match ensure_allowed(program) {
             Ok(message) => added.push(message),
-            Err(error) => failed.push(format!("{:?}: {error}", program.file_name().unwrap_or_default())),
+            Err(error) => failed.push(format!(
+                "{:?}: {error}",
+                program.file_name().unwrap_or_default()
+            )),
         }
     }
     if failed.is_empty() {
@@ -121,7 +130,10 @@ pub fn rule_exists(_program: &Path) -> bool {
 
 #[cfg(not(windows))]
 pub fn ensure_allowed(program: &Path) -> Result<String> {
-    Err(anyhow!("仅 Windows 支持自动添加防火墙规则（{}）", program.display()))
+    Err(anyhow!(
+        "仅 Windows 支持自动添加防火墙规则（{}）",
+        program.display()
+    ))
 }
 
 #[cfg(not(windows))]
@@ -142,7 +154,10 @@ mod tests {
         let name = rule_name(&PathBuf::from(r"C:\Apps\VPN Parser\vpn-parser.exe"));
         assert!(name.starts_with(RULE_PREFIX), "规则名要能认出来: {name}");
         // 路径不变、exe 变了（每次重编译）→ 规则名也不变，这正是"按路径放行"的意义。
-        assert_eq!(name, rule_name(&PathBuf::from(r"E:\other\place\vpn-parser.exe")));
+        assert_eq!(
+            name,
+            rule_name(&PathBuf::from(r"E:\other\place\vpn-parser.exe"))
+        );
         assert!(rule_name(&PathBuf::from("/x/mihomo.exe")).contains("mihomo"));
     }
 }
