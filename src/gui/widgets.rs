@@ -471,10 +471,21 @@ pub fn render_fetch_ticks(ui: &mut Ui, rows: Option<&Vec<crate::db::telemetry::F
 
 /// 把 RFC3339 时间压成表头/日志里放得下的 `HH:MM`。解析不了就原样截五个字符，
 /// 好过显示成看不懂的错误。
+/// 把库里那条时间戳写成界面上的 `HH:MM`。
+///
+/// 存的是 UTC（RFC3339，`Utc::now().to_rfc3339()`），**显示一律换算成本地时区**，
+/// 也就是他要的北京时间；`switch_day` 同理，日头按本地日切。
 pub fn clock_of(at_rfc3339: &str) -> String {
-    chrono::DateTime::parse_from_rfc3339(at_rfc3339)
-        .map(|at| at.with_timezone(&chrono::Local).format("%H:%M").to_string())
-        .unwrap_or_else(|_| at_rfc3339.chars().take(5).collect())
+    if let Ok(at) = chrono::DateTime::parse_from_rfc3339(at_rfc3339) {
+        return at.with_timezone(&chrono::Local).format("%H:%M").to_string();
+    }
+    // 认不出的格式（例如 SQLite 默认那种 "2026-10-14 19:24:05"）宁可退回"取时间那一段"，
+    // 也不能像以前那样取前 5 个字符 —— 那会在时间列上画出"2026-"。
+    let bytes = at_rfc3339.as_bytes();
+    if bytes.len() >= 16 && (bytes[10] == b'T' || bytes[10] == b' ') {
+        return at_rfc3339[11..16].to_string();
+    }
+    "--:--".to_string()
 }
 
 /// 表头里的迷你流量图：下载实线、上传虚线，两条共用一个量程 —— 各用各的量程会让
@@ -679,6 +690,69 @@ pub fn stat_chip(ui: &mut Ui, label: &str, value: &str, color: Color32) {
             x += galley.size().x + GAP;
         }
     }
+}
+
+/// 单个词的小胶囊（版本号、许可、状态）。和 [`stat_chip`] 同一套"自己量再画"的写法，
+/// 不用 `Frame::show`：后者在 `horizontal_wrapped` 里不参与换行判定，会把父 `max_rect`
+/// 撑大（`stat_chip` 那条注释记着实测数字）。
+pub fn pill(ui: &mut Ui, text: &str, fg: Color32, bg: Color32) {
+    const PAD_X: f32 = 10.0;
+    const PAD_Y: f32 = 5.0;
+    let galley = egui::WidgetText::from(RichText::new(text).strong().size(11.5).color(fg))
+        .into_galley(ui, None, f32::INFINITY, egui::TextStyle::Body);
+    let size = galley.size() + Vec2::new(PAD_X * 2.0, PAD_Y * 2.0);
+    let (rect, _response) = ui.allocate_at_least(size, Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.rect_filled(rect, CornerRadius::same(theme::RADIUS_BTN), bg);
+        painter.galley(rect.center() - galley.size() / 2.0, galley, fg);
+    }
+}
+
+/// 卡片表头左边那个圆角方块图标底（40×40）。同 [`pill`]：直接画，不套 `Frame`。
+pub fn icon_tile(ui: &mut Ui, icon: Icon, fg: Color32, bg: Color32) {
+    const TILE: f32 = 40.0;
+    const RADIUS: u8 = 13;
+    let (rect, _response) = ui.allocate_exact_size(Vec2::splat(TILE), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.rect_filled(rect, CornerRadius::same(RADIUS), bg);
+        crate::gui::icons::draw_icon(painter, rect.shrink(9.5), icon, fg);
+    }
+}
+
+/// 量着把一行文字截进 `max_width`：放得下原样返回（只量一次），放不下才二分找"接上
+/// 省略号还塞得进"的最长前缀。逐字回退会让一条 300 字符的值每帧排 300 次版，二分是 9 次。
+///
+/// 为什么不靠 egui 自己截：`allocate_new_ui` 只改 `max_rect` 不改裁剪框，光把文字塞进
+/// 子 ui 是裁不住的（关于页探针量到那条值的裁剪右界是整屏 1330，卡片右界只有 1290）；
+/// 而就算 `set_clip_rect` 了，硬裁出来的也是半截字，不是省略号。
+pub fn ellipsize(ui: &Ui, text: &str, max_width: f32, font: egui::FontId) -> String {
+    const ELLIPSIS: char = '\u{2026}';
+    let width = |candidate: &str| -> f32 {
+        ui.ctx()
+            .fonts(|fonts| {
+                fonts.layout_no_wrap(candidate.to_string(), font.clone(), Color32::PLACEHOLDER)
+            })
+            .size()
+            .x
+    };
+    if width(text) <= max_width {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let (mut lo, mut hi) = (0usize, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let head: String = chars[..mid].iter().copied().collect();
+        if width(&format!("{head}{ELLIPSIS}")) <= max_width {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let head: String = chars[..lo].iter().copied().collect();
+    format!("{head}{ELLIPSIS}")
 }
 
 pub fn latency_text(n: &NodeSummary) -> RichText {

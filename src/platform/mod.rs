@@ -149,9 +149,37 @@ pub fn quote_windows_argument(value: &str) -> String {
     quoted
 }
 
+/// 这个进程到底有没有被提权 —— 读令牌的 `TokenElevation`，不读 `IsUserAnAdmin()`。
+///
+/// 为什么换：`IsUserAnAdmin()` 是 shell32 上的老启发式，问的是"这个用户是不是管理员"，
+/// 不是"这个进程有没有过 UAC 提权"，两者在 UAC 拆分令牌下可以不一致；而它下面所有用法
+/// （防火墙自动放行、TUN 交接、设置页那句"当前是管理员权限"）问的都是后者。
+/// 2026-10-15 那条"添加防火墙规则失败: 未知错误"就是这两者对不上时冒出来的。
 #[cfg(windows)]
 pub fn is_elevated() -> bool {
-    unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() != 0 }
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    unsafe {
+        let mut token: HANDLE = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return false;
+        }
+        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut returned = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            &mut elevation as *mut _ as *mut core::ffi::c_void,
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned,
+        );
+        CloseHandle(token);
+        ok != 0 && elevation.TokenIsElevated != 0
+    }
 }
 
 #[cfg(not(windows))]
@@ -203,6 +231,67 @@ pub fn request_elevation(extra_args: &[String]) -> Result<()> {
 #[cfg(not(windows))]
 pub fn request_elevation(_extra_args: &[String]) -> Result<()> {
     Err(anyhow!("当前平台不支持 Windows TUN 提权"))
+}
+
+/// 用 ShellExecute 把一个 exe 交给系统"打开"。
+///
+/// 为什么不能用 `std::process::Command`：它走 CreateProcess，而 CreateProcess **不看**
+/// exe 里的 requireAdministrator 清单 —— 碰到要管理员的安装包直接失败
+/// （os error 740「请求的操作需要提升」），既不弹 UAC 也不弹向导。
+/// 2026-10-15「关于 → 安装」点了没反应就是这个：安装包 `PrivilegesRequired=admin`。
+/// ShellExecute 才走外壳那条路，UAC 提示和向导都会正常出现。
+#[cfg(windows)]
+pub fn shell_open(path: &std::path::Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let wide = |value: &std::ffi::OsStr| -> Vec<u16> {
+        value.encode_wide().chain(std::iter::once(0)).collect()
+    };
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(|parent| wide(parent.as_os_str()))
+        .unwrap_or_default();
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            wide(std::ffi::OsStr::new("open")).as_ptr(),
+            wide(path.as_os_str()).as_ptr(),
+            std::ptr::null(),
+            if directory.is_empty() {
+                std::ptr::null()
+            } else {
+                directory.as_ptr()
+            },
+            SW_SHOWNORMAL,
+        )
+    };
+    if result as isize <= 32 {
+        return Err(anyhow!(
+            "交给系统打开失败：{}",
+            shell_error_text(result as isize)
+        ));
+    }
+    Ok(())
+}
+
+/// ShellExecute 的返回值不是 HRESULT，是小整数错误码；只把用户会碰到的几种翻成人话。
+#[cfg(windows)]
+fn shell_error_text(code: isize) -> String {
+    match code {
+        2 => "找不到文件".into(),
+        5 => "系统拒绝访问".into(),
+        31 => "这台机器上没有能打开它的程序".into(),
+        1223 => "你在 UAC 提示里选了「否」".into(),
+        other => format!("错误码 {other}"),
+    }
+}
+
+#[cfg(not(windows))]
+pub fn shell_open(_path: &std::path::Path) -> Result<()> {
+    Err(anyhow!("只有 Windows 才有安装包可打开"))
 }
 
 #[cfg(windows)]

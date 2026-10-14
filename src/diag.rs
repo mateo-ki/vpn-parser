@@ -65,6 +65,18 @@ pub fn starting_scale() -> Option<f32> {
         .and_then(|v| v.trim().parse::<f32>().ok())
 }
 
+/// 诊断壳专用：`VPN_PARSER_DIAG_VERSION=1.3.0` 让这个实例自报是老版本，
+/// 用来验证"发现新版 → 侧栏亮绿色↑ → 点它去关于页"整条链路。
+pub fn forced_version() -> Option<String> {
+    if !enabled() {
+        return None;
+    }
+    std::env::var("VPN_PARSER_DIAG_VERSION")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
 /// 诊断壳专用：要验收的子面板（当前只有代理页的 `rules`）。
 pub fn starting_panel() -> Option<String> {
     if !enabled() {

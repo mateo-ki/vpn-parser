@@ -55,6 +55,39 @@ pub fn rule_exists(program: &Path) -> bool {
     }
 }
 
+/// netsh 把错误写在 **stdout**，stderr 通常是空的。这台机上实测：`add rule` 缺权限时
+/// stdout = 56 字节 UTF-8「请求的操作需要提升(作为管理员运行)。」，stderr = 0 字节。
+/// 只读 stderr 的话，界面上就永远是一句没用的"未知错误"（2026-10-15 他报的那条）。
+fn netsh_error_line(stdout: &[u8], stderr: &[u8], code: Option<i32>) -> String {
+    for stream in [stdout, stderr] {
+        let text = String::from_utf8_lossy(stream);
+        if let Some(line) = text.lines().map(str::trim).find(|line| !line.is_empty()) {
+            return line.to_string();
+        }
+    }
+    format!("netsh 没有给出原因（退出码 {}）", code.unwrap_or(-1))
+}
+
+/// 把 netsh 的原话翻成"下一步该干什么"，并把提权状态一起报出来 —— 这条链路上
+/// "是不是管理员"就是第一嫌疑，界面不该让人猜。
+fn explain_failure(raw: &str, elevated: bool) -> String {
+    let needs_admin = raw.contains("需要提升")
+        || raw.contains("管理员")
+        || raw.to_ascii_lowercase().contains("elevation")
+        || raw.to_ascii_lowercase().contains("administrator");
+    if needs_admin {
+        return format!(
+            "需要管理员权限才能改防火墙规则（当前进程提权={}）。用管理员身份启动本程序，\
+             或先关掉自动放行、自己手动加规则",
+            if elevated { "是" } else { "否" }
+        );
+    }
+    format!(
+        "{raw}（当前进程提权={}）",
+        if elevated { "是" } else { "否" }
+    )
+}
+
 /// 按路径加一条"入站允许"规则（已存在就跳过）。返回一句给人看的报告。
 #[cfg(windows)]
 pub fn ensure_allowed(program: &Path) -> Result<String> {
@@ -82,13 +115,17 @@ pub fn ensure_allowed(program: &Path) -> Result<String> {
         "profile=any",
     ])?;
     if !output.status.success() {
+        let raw = netsh_error_line(&output.stdout, &output.stderr, output.status.code());
+        let elevated = crate::platform::is_elevated();
+        // 原文进日志：界面上那句是翻译过的，取证要能看到 netsh 到底说了什么。
+        crate::startup_log(&format!(
+            "[防火墙] {} 添加失败：{raw}（提权={}）",
+            full.display(),
+            if elevated { "是" } else { "否" }
+        ));
         return Err(anyhow!(
-            "添加防火墙规则失败: {}",
-            String::from_utf8_lossy(&output.stderr)
-                .lines()
-                .next()
-                .unwrap_or("未知错误")
-                .trim()
+            "添加防火墙规则失败：{}",
+            explain_failure(&raw, elevated)
         ));
     }
     Ok(format!("已加入允许列表：{}", full.display()))
@@ -159,5 +196,46 @@ mod tests {
             rule_name(&PathBuf::from(r"E:\other\place\vpn-parser.exe"))
         );
         assert!(rule_name(&PathBuf::from("/x/mihomo.exe")).contains("mihomo"));
+    }
+
+    /// 这台机上 netsh 缺权限时的真实输出：stdout 一句 UTF-8 中文，stderr 空字节。
+    /// 旧写法只读 stderr ⇒ 界面只能显示"未知错误"。
+    #[test]
+    fn netsh_writes_its_reason_to_stdout_not_stderr() {
+        let stdout = "请求的操作需要提升(作为管理员运行)。\n\r\n".as_bytes();
+        let read = netsh_error_line(stdout, &[], Some(1));
+        assert_eq!(
+            read, "请求的操作需要提升(作为管理员运行)。",
+            "实际读到：{read:?}"
+        );
+        // 反向对照：旧的那条路（只看 stderr、首行空就兜底）在这种情况下就是"未知错误"。
+        let old_style = String::from_utf8_lossy(&[][..])
+            .lines()
+            .next()
+            .unwrap_or("未知错误")
+            .trim()
+            .to_string();
+        assert_eq!(old_style, "未知错误", "对照组要真的复现出那句没用的话");
+        // 两个流都空：至少报退出码，别再报"未知错误"。
+        assert_eq!(
+            netsh_error_line(&[], &[], Some(2)),
+            "netsh 没有给出原因（退出码 2）"
+        );
+        // stderr 有内容时仍然优先它之外的第一条非空行（netsh 偶尔两边都写）。
+        assert_eq!(
+            netsh_error_line("  \n第一条\n第二条\n".as_bytes(), &[], Some(1)),
+            "第一条"
+        );
+    }
+
+    /// 缺权限这句必须翻成"下一步做什么"，并把提权状态带上。
+    #[test]
+    fn an_elevation_failure_tells_the_user_what_to_do_next() {
+        let text = explain_failure("请求的操作需要提升(作为管理员运行)。", false);
+        assert!(text.contains("需要管理员权限"), "{text}");
+        assert!(text.contains("提权=否"), "{text}");
+        let other = explain_failure("无法与防火墙服务通信。", true);
+        assert!(other.contains("无法与防火墙服务通信"), "{other}");
+        assert!(other.contains("提权=是"), "{other}");
     }
 }

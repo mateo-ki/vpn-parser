@@ -19,6 +19,12 @@ const HASH_INDEX_NAME: &str = "sha256.txt";
 const MAX_INSTALLER_SIZE: u64 = 200 * 1024 * 1024;
 
 pub fn current_version() -> &'static str {
+    // 诊断壳下允许假装自己是老版本 —— "有没有新版"这条链路（含侧栏那个绿色↑）
+    // 只有这样才能在真机上跑通一遍，否则本机版本永远等于最新 Release，永远看不到亮起来。
+    if let Some(fake) = crate::diag::forced_version() {
+        static FAKE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+        return *FAKE.get_or_init(|| Box::leak(fake.into_boxed_str()));
+    }
     env!("CARGO_PKG_VERSION")
 }
 
@@ -113,6 +119,11 @@ impl AppUpdateProgress {
 
 impl AppReleaseInfo {
     /// 「下载更新」按钮的门槛：既要有更新的版本，也要这个 Release 真的挂了安装包。
+    /// 侧栏绿色↑要显示的版本号：只有"确实有更新"才亮，没更新或查失败都返回 None。
+    pub fn marker(&self) -> Option<&str> {
+        self.update_available.then(|| self.tag.as_str())
+    }
+
     pub fn downloadable(&self) -> bool {
         self.update_available && self.asset.is_some()
     }
@@ -648,10 +659,12 @@ pub fn launch_installer(path: &Path) -> Result<()> {
     if !path.is_file() {
         bail!("安装包不在了: {}", path.display());
     }
-    std::process::Command::new(path)
-        .current_dir(path.parent().unwrap_or_else(|| Path::new(".")))
-        .spawn()
+    crate::platform::shell_open(path)
         .with_context(|| format!("启动安装程序失败: {}", path.display()))?;
+    crate::startup_log(&format!(
+        "[更新] 已把安装包交给安装向导: {}",
+        path.display()
+    ));
     Ok(())
 }
 
@@ -903,6 +916,26 @@ mod tests {
         assert_eq!(AppUpdateStage::Verifying.label(), "校验");
     }
 
+    /// 侧栏的↑只在"确实有更新"时亮：查到的版本不比当前新、或者压根没查到，都不许亮。
+    #[test]
+    fn the_sidebar_marker_only_lights_when_there_is_something_new() {
+        let base = AppReleaseInfo {
+            tag: "v1.4.1".into(),
+            current_version: "1.4.0".into(),
+            update_available: true,
+            asset: None,
+            hash_index_url: None,
+            prerelease: false,
+            message: "发现新版本 v1.4.1".into(),
+        };
+        assert_eq!(base.marker(), Some("v1.4.1"));
+        let same = AppReleaseInfo {
+            update_available: false,
+            ..base.clone()
+        };
+        assert_eq!(same.marker(), None, "没有更新就不该亮");
+    }
+
     #[test]
     fn cancellation_is_checked_before_touching_the_network() {
         let cancelled = AtomicBool::new(true);
@@ -923,6 +956,45 @@ mod tests {
         assert_eq!(dir.parent().unwrap().file_name().unwrap(), "data");
         // 和内核同一层：data/kernels 的兄弟目录。
         assert_eq!(dir.parent(), crate::kernel::managed_kernel_root().parent());
+    }
+
+    /// 真实网络手测：走产品那条下载路径把最新安装包拉下来，比对 GitHub 给的摘要。
+    /// `cargo test --release -- --ignored real_network_app_download --nocapture`
+    /// 下载完就把文件删掉 —— 这条测的是"能不能下下来 + 校验认不认"，不是攒包。
+    #[tokio::test]
+    #[ignore]
+    async fn real_network_app_download_verifies_the_digest() {
+        let info = check(None, "0.0.1", UpdateChannel::Stable)
+            .await
+            .expect("查最新 Release");
+        assert!(
+            info.downloadable(),
+            "{} 没有可下载资产：{}",
+            info.tag,
+            info.message
+        );
+        let cancelled = AtomicBool::new(false);
+        let seen = std::sync::Mutex::new(Vec::<String>::new());
+        let path = download(&info, None, &cancelled, &|progress: AppUpdateProgress| {
+            let mut guard = seen.lock().unwrap();
+            if guard.len() < 4 {
+                guard.push(format!(
+                    "{:?} {}/{} {}",
+                    progress.stage, progress.downloaded, progress.total, progress.message
+                ));
+            }
+        })
+        .await
+        .expect("下载并校验");
+        let meta = std::fs::metadata(&path).expect("下载产物");
+        println!(
+            "下载成功 {} 字节 = 期望 {}，摘要与 GitHub 的 digest 逐字符一致，路径 {}",
+            meta.len(),
+            info.asset.as_ref().map(|asset| asset.size).unwrap_or(0),
+            path.display()
+        );
+        println!("进度取样：{:?}", seen.lock().unwrap());
+        std::fs::remove_file(&path).ok();
     }
 
     /// 真实网络手测：两个通道各查一遍，打印拿到的 tag / 是否 prerelease / 资产。

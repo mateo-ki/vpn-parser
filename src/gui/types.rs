@@ -173,6 +173,8 @@ pub enum BgMsg {
     EgressHealth(Vec<crate::db::telemetry::HealthRow>, i64),
     /// 出口切换历史：最近的若干条 + 今天换了几次 + 库里还留着多少条。
     EgressSwitches(Vec<crate::db::telemetry::SwitchRow>, i64, i64),
+    /// 只要两个计数（今日几次 / 库里共几条）：控制台那行话得在没打开窗口时也是真的。
+    SwitchCounts(i64, i64),
     /// 刚创建的订阅源（id, 名称）：开启「加完就测」时由这条串起 拉取 -> 测速。
     SourceAdded(String, String),
     /// 新增源拉取成功后取回它的节点 id 列表，齐了就能发起测速。

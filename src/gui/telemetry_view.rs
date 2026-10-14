@@ -68,6 +68,18 @@ impl VpnApp {
         });
     }
 
+    /// 只查两个计数。控制台那句「查看切换记录（今日 N 次）」以前要等窗口打开才对，
+    /// 刚启动时永远显示"今日 0 次"，而库里明明有今天的记录 —— 那是假话。
+    pub(crate) fn reload_switch_counts(&self) {
+        let db = self.db.clone();
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            let today = db.switch_count_today().await.unwrap_or(0);
+            let total = db.switch_history_count().await.unwrap_or(0);
+            let _ = tx.send(BgMsg::SwitchCounts(today, total));
+        });
+    }
+
     /// 出口切换记录窗口：按本地日分组列出保留期内的全部历史 —— 时间、从谁到谁、为什么。
     pub(crate) fn ui_switch_log(&mut self, ctx: &egui::Context) {
         if !self.show_switch_log {

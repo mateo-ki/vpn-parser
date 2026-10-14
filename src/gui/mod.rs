@@ -62,6 +62,8 @@ pub struct VpnApp {
     pub(crate) sources_panel: SourcesPanel,
     pub(crate) proxy_panel: ProxyPanel,
     pub(crate) status: String,
+    /// 上一帧量到的"状态栏右侧动作组"宽度。状态文本照它让位，长日志才不会压到按钮上面。
+    pub(crate) status_actions_width: f32,
     pub(crate) busy: bool,
     pub(crate) proxy_busy: bool,
     pub(crate) gist_pages: usize,
@@ -94,6 +96,13 @@ pub struct VpnApp {
     pub(crate) app_release: Option<crate::app_update::AppReleaseInfo>,
     pub(crate) app_update_progress: Option<crate::app_update::AppUpdateProgress>,
     pub(crate) app_update_busy: bool,
+    /// 上一次"检查更新"落在几点（本地时、只到分）。关于页那句副标题要说这条状态是新的还是
+    /// 开机时顺手查的；只活在内存里 —— 重启后没查过就是没查过，不拿旧时间糊弄人。
+    pub(crate) app_update_checked_at: Option<String>,
+    /// 侧栏那个绿色↑要自己判断有没有新版：启动后自己查一次（见 `maybe_check_app_update`）。
+    pub(crate) app_update_due: Option<std::time::Instant>,
+    /// 自己发起的那次检查不许动状态栏 —— 用户没点任何东西，"正在检查更新..."是噪音。
+    pub(crate) app_update_quiet: bool,
     pub(crate) app_installer_path: Option<std::path::PathBuf>,
     pub(crate) app_update_cancel: Arc<AtomicBool>,
     pub(crate) proxy_status: ProxyRuntimeStatus,
@@ -346,6 +355,7 @@ impl VpnApp {
             sources_panel: SourcesPanel::List,
             proxy_panel: ProxyPanel::Nodes,
             status: "就绪".into(),
+            status_actions_width: 0.0,
             busy: false,
             proxy_busy: false,
             gist_pages: 100,
@@ -379,6 +389,9 @@ impl VpnApp {
             app_release: None,
             app_update_progress: None,
             app_update_busy: false,
+            app_update_checked_at: None,
+            app_update_due: Some(std::time::Instant::now() + std::time::Duration::from_secs(6)),
+            app_update_quiet: false,
             app_installer_path: None,
             app_update_cancel: Arc::new(AtomicBool::new(false)),
             proxy_log: String::new(),
@@ -611,6 +624,7 @@ impl VpnApp {
         self.reload_proxy_node_groups();
         self.reload_egress_health();
         self.reload_rule_hits();
+        self.reload_switch_counts();
         self.reload_fetch_history();
     }
 
@@ -970,6 +984,10 @@ impl VpnApp {
                             self.health_rows = rows;
                             self.health_fail_streak = streak;
                         }
+                        BgMsg::SwitchCounts(today, total) => {
+                            self.switch_today = today;
+                            self.switch_total = total;
+                        }
                         BgMsg::EgressSwitches(rows, today, total) => {
                             self.switch_rows = rows;
                             self.switch_today = today;
@@ -1199,8 +1217,11 @@ impl VpnApp {
                             self.reload_kernels();
                         }
                         BgMsg::AppUpdateCheck(Ok(info)) => {
+                            let quiet = std::mem::take(&mut self.app_update_quiet);
                             self.app_update_busy = false;
                             self.app_update_progress = None;
+                            self.app_update_checked_at =
+                                Some(chrono::Local::now().format("%H:%M").to_string());
                             // 查到的不是刚才那一版，之前下好的安装包就不能再当"已校验"用。
                             if self
                                 .app_release
@@ -1209,13 +1230,34 @@ impl VpnApp {
                             {
                                 self.app_installer_path = None;
                             }
-                            self.status = info.message.clone();
+                            if quiet {
+                                // 自动那次不吭声，但要在日志里留痕：侧栏↑亮不亮，看的就是这条。
+                                crate::startup_log(&format!(
+                                    "[更新] 自动检查: {}（本机 {}）",
+                                    if info.update_available {
+                                        format!("{} 可更新", info.tag)
+                                    } else {
+                                        "已是最新".into()
+                                    },
+                                    info.current_version
+                                ));
+                            } else {
+                                self.status = info.message.clone();
+                            }
                             self.app_release = Some(info);
                         }
                         BgMsg::AppUpdateCheck(Err(error)) => {
+                            let quiet = std::mem::take(&mut self.app_update_quiet);
                             self.app_update_busy = false;
                             self.app_update_progress = None;
-                            self.status = format!("检查更新失败: {error}");
+                            self.app_update_checked_at =
+                                Some(chrono::Local::now().format("%H:%M").to_string());
+                            if quiet {
+                                // 后台那次查不到不打扰界面，但要在日志里留痕。
+                                crate::startup_log(&format!("[更新] 自动检查失败: {error}"));
+                            } else {
+                                self.status = format!("检查更新失败: {error}");
+                            }
                         }
                         BgMsg::AppUpdateProgress(progress) => {
                             self.status = progress.message.clone();
@@ -3685,6 +3727,8 @@ impl eframe::App for VpnApp {
         }
         // 预备状态（一个内核都没装）自己把内核下下来；一次运行最多自己动一次。
         self.maybe_auto_prepare();
+        // 侧栏的"有新版"标记要自己会亮，不能等用户去关于页点。
+        self.maybe_check_app_update();
         // Degraded 更要测：那正是"出口已经不通了"的状态，探测和 auto_failover 无关。
         if matches!(
             self.proxy_status.state,
@@ -3765,17 +3809,31 @@ impl eframe::App for VpnApp {
                         ui.separator();
                     }
                     ui.label(RichText::new("状态").strong().color(theme::muted()).small());
-                    ui.label(
-                        RichText::new(&self.status)
-                            .color(theme::text_primary())
-                            .small(),
-                    );
+                    // 状态文本必须给右边的动作组让位。`with_layout(right_to_left)` 的那组
+                    // 按钮永远钉在内容区右边界上，所以文本一长就是**压到按钮上面**（他
+                    // 2026-10-15 报的"挤成位置很奇怪"）。动作组多宽只有画完才知道，
+                    // 这里用上一帧量到的那份：按钮组本身从不移动，所以最多抖一帧就对上了。
+                    let status_left = ui.cursor().left();
+                    // 下限：第一帧还没量过，按"四个控件"的常见宽度先让开。
+                    const STATUS_ACTIONS_FLOOR: f32 = 300.0;
+                    let room = (ui.max_rect().right()
+                        - status_left
+                        - self.status_actions_width.max(STATUS_ACTIONS_FLOOR))
+                    .max(120.0);
+                    let status = self.status.clone();
+                    let small = egui::TextStyle::Small.resolve(ui.style());
+                    let shown = crate::gui::widgets::ellipsize(ui, &status, room, small);
+                    ui.label(RichText::new(shown).color(theme::text_primary()).small())
+                        .on_hover_text(status);
+                    let mut group_width = 0.0_f32;
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // 2026-10-07 他要求把控制按钮挪到状态栏右侧：先加的最靠右。
                         // 原来这儿的强调色选择器和会话统计都撤了 —— 主题在系统设置和
                         // Ctrl+K 里都还能改，流量读数挪到控制台表头那行。
                         self.ui_proxy_control_buttons(ui);
+                        group_width = ui.min_rect().width();
                     });
+                    self.status_actions_width = group_width;
                 });
             });
 
@@ -4589,6 +4647,121 @@ mod tests {
             assert_eq!(
                 gate, expect_gate,
                 "{what}：旧门槛会挡住(focused={focused:?})，新判据必须给出 {expect_gate}"
+            );
+        }
+    }
+}
+#[cfg(test)]
+mod status_bar_room_tests {
+    use eframe::egui::{self, RichText, Vec2};
+
+    /// 复刻状态栏那一行的结构（照产品里那段：状态 label 限宽 + 动作组 `right_to_left`）。
+    /// 跑两帧，和产品同一个口径：第一帧量出动作组宽度，第二帧照着让位。
+    /// 返回（状态文字右界, 动作组左界, 动作组右界, 内容区右界）。
+    fn probe(width: f32, status: &str, bound: bool) -> (f32, f32, f32, f32) {
+        let ctx = egui::Context::default();
+        let mut reserved = 0.0_f32;
+        let mut out = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
+        for _ in 0..2 {
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(width, 60.0),
+            ));
+            let _ = ctx.run(input, |ctx| {
+                egui::TopBottomPanel::bottom("status")
+                    .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(14, 5)))
+                    .show(ctx, |ui| {
+                        ui.spacing_mut().button_padding = Vec2::new(11.0, 3.0);
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("状态").small());
+                            let left = ui.cursor().left();
+                            let room = if bound {
+                                (ui.max_rect().right() - left - reserved.max(300.0)).max(120.0)
+                            } else {
+                                f32::INFINITY
+                            };
+                            let small = egui::TextStyle::Small.resolve(ui.style());
+                            let shown = crate::gui::widgets::ellipsize(ui, status, room, small);
+                            let response = ui.label(RichText::new(shown).small());
+                            let mut group_left = f32::MAX;
+                            let mut group_right = 0.0_f32;
+                            let mut group_width = 0.0_f32;
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    for text in ["停止代理", "IP 检测", "测速全部"] {
+                                        let rect = ui.button(text).rect;
+                                        group_left = group_left.min(rect.left());
+                                        group_right = group_right.max(rect.right());
+                                    }
+                                    let chip = egui::Frame::NONE
+                                        .inner_margin(egui::Margin::symmetric(9, 2))
+                                        .show(ui, |ui| {
+                                            ui.label(RichText::new("系统代理").small());
+                                        })
+                                        .response
+                                        .rect;
+                                    group_left = group_left.min(chip.left());
+                                    group_right = group_right.max(chip.right());
+                                    group_width = ui.min_rect().width();
+                                },
+                            );
+                            reserved = group_width;
+                            out = (
+                                response.rect.max.x,
+                                group_left,
+                                group_right,
+                                ui.max_rect().right(),
+                            );
+                        });
+                    });
+            });
+        }
+        out
+    }
+
+    /// 他 2026-10-15 报的那条超长状态（防火墙失败原文，200+ 字）。
+    fn long_status() -> String {
+        let one = "防火墙规则未写入：防火墙放行部分失败（0 成功 / 4 失败：\"vpn-parser.exe\": \
+                   添加防火墙规则失败: 未知错误；\"mihomo.exe\": 添加防火墙规则失败: 未知错误；\
+                   \"xray.exe\": 添加防火墙规则失败: 未知错误；\"sing-box.exe\": \
+                   添加防火墙规则失败: 未知错误）";
+        format!("{one}；{one}")
+    }
+
+    /// 动作组永远钉在内容区右边界上（他这句需求："状态栏右边的动作组不要动"），
+    /// 长状态文本必须自己截断让位，而不是压到按钮上面。
+    #[test]
+    fn a_long_status_line_gives_the_action_group_its_room() {
+        for width in [960.0, 1100.0, 1330.0] {
+            let (status_right, group_left, group_right, content_right) =
+                probe(width, &long_status(), true);
+            assert!(
+                (group_right - content_right).abs() < 0.6,
+                "{width} 宽时动作组右界 {group_right:.1} 没钉在内容区右界 {content_right:.1}"
+            );
+            assert!(
+                status_right <= group_left - 0.5,
+                "{width} 宽时状态文本右界 {status_right:.1} 压到了动作组左界 {group_left:.1}"
+            );
+        }
+    }
+
+    /// 反向对照：不限宽（就是改之前的写法）时，文本确实盖到按钮上，
+    /// 而按钮的位置一动不动 —— 证明"挤成位置很奇怪"是文本越界，不是按钮被推走。
+    #[test]
+    fn without_the_bound_the_text_lands_on_the_buttons() {
+        for width in [960.0, 1330.0] {
+            let (status_right, group_left, group_right, content_right) =
+                probe(width, &long_status(), false);
+            assert!(
+                status_right > group_left,
+                "对照组失效：不限宽时文本右界 {status_right:.1} 竟然没越过按钮左界 {group_left:.1}"
+            );
+            assert!(
+                (group_right - content_right).abs() < 0.6,
+                "{width} 宽时动作组本来就不该移动：右界 {group_right:.1} vs 内容区 {content_right:.1}"
             );
         }
     }

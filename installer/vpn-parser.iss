@@ -55,6 +55,10 @@ function InitializeSetup(): Boolean;
 var
   ResultCode: Integer;
 begin
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM vpn-parser.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // 不能带 /T：从「关于 → 安装」进来的时候，安装向导是本程序的子进程，
+  // 带 /T 会连自己这棵树一起杀掉 —— 现象就是"点了安装，什么都没弹出来"
+  // （2026-10-15 他报的）。按镜像名杀已经覆盖所有 vpn-parser.exe 实例（含提权那个
+  // 子实例）；留下的 mihomo.exe 由新程序启动时"清理残留内核释放端口"那条路收掉。
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM vpn-parser.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Result := True;
 end;

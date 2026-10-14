@@ -57,6 +57,12 @@ impl VpnApp {
                         .small()
                         .color(theme::sidebar_muted()),
                 );
+                // 有新版本才出现：绿色↑ + 版本号，点了直接去「关于」页更新。
+                if let Some(tag) = self.pending_update_tag() {
+                    if sidebar_update_marker(ui, &tag) {
+                        *target_tab = Tab::About;
+                    }
+                }
             });
         });
         ui.add_space(14.0);
@@ -219,6 +225,101 @@ impl VpnApp {
                     stat_chip(ui, &p.protocol, &p.count.to_string(), theme::muted());
                 }
             });
+        }
+    }
+}
+
+/// 侧栏里"发现新版本"那一行。抽成自由函数是因为 parked 的诊断窗口 PrintWindow 只能
+/// 抓到全黑帧 —— 想证明它真的画出来、真的是绿色，只能把这段单独喂给离屏 Context 读形状。
+/// 返回是否被点击（点了跳「关于」页）。
+pub(crate) fn sidebar_update_marker(ui: &mut Ui, tag: &str) -> bool {
+    let row = ui.horizontal(|ui| {
+        ui.add_space(1.0);
+        ui.label(
+            RichText::new('\u{2191}')
+                .strong()
+                .size(12.5)
+                .color(theme::success()),
+        );
+        ui.label(
+            RichText::new(format!("{tag} 可更新"))
+                .small()
+                .strong()
+                .color(theme::success()),
+        );
+    });
+    row.response
+        .interact(Sense::click())
+        .on_hover_text(format!("发现新版本 {tag}，点击去「关于」页下载更新"))
+        .clicked()
+}
+#[cfg(test)]
+mod update_marker_probe_tests {
+    use super::sidebar_update_marker;
+    use eframe::egui::{self, Frame, Margin, RawInput, Rect, Vec2};
+
+    /// 在 220 宽的侧栏里真画一次这行标记，返回（内容右边界, 这一帧真的画出来的文字）。
+    fn probe(tag: &str) -> (f32, String) {
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(Rect::from_min_size(
+            egui::Pos2::ZERO,
+            Vec2::new(1330.0, 800.0),
+        ));
+        let mut right = 0.0_f32;
+        let mut painted = String::new();
+        let _ = ctx.run(input, |ctx| {
+            egui::SidePanel::left("sidebar")
+                .exact_width(220.0)
+                .frame(
+                    Frame::NONE
+                        .fill(egui::Color32::WHITE)
+                        .inner_margin(Margin::symmetric(12, 10)),
+                )
+                .show(ctx, |ui| {
+                    let layer = ui.layer_id();
+                    let _clicked = sidebar_update_marker(ui, tag);
+                    right = ui.min_rect().max.x;
+                    painted = ctx.graphics_mut(|g| {
+                        let mut out = String::new();
+                        if let Some(list) = g.get(layer) {
+                            for shape in list.all_entries() {
+                                if let egui::Shape::Text(text) = &shape.shape {
+                                    out.push_str(&text.galley.text());
+                                    out.push(' ');
+                                }
+                            }
+                        }
+                        out
+                    });
+                });
+        });
+        (right, painted)
+    }
+
+    /// 这行标记必须真的画出来（箭头 + "vX.Y.Z 可更新"），并且不撑破 220 宽的侧栏。
+    /// "东西被挤出界面"这一类问题他报过好几轮，画完就读这一帧的形状清单对账。
+    #[test]
+    fn the_marker_row_paints_and_fits_the_sidebar() {
+        for tag in ["v1.4.0", "v1.4.0-beta.2", "v2.10.13"] {
+            let (right, painted) = probe(tag);
+            assert!(
+                painted.contains(tag),
+                "{tag} 时侧栏根本没画出这一行（本帧文字：{painted:?}）"
+            );
+            assert!(
+                painted.contains(&format!("{tag} 可更新")),
+                "{tag} 时文字不完整：{painted:?}"
+            );
+            assert!(
+                painted.contains(char::from_u32(0x2191).unwrap()),
+                "{tag} 时那个上箭头没画出来：{painted:?}"
+            );
+            assert!(
+                right <= 220.0 - 12.0 + 0.5,
+                "{tag} 时这行画到 x={right:.1}，超出侧栏内容右界 {:.1}",
+                220.0 - 12.0
+            );
         }
     }
 }

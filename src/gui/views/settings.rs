@@ -1806,3 +1806,42 @@ mod slider_tick_probe_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod local_time_tests {
+    use crate::db::telemetry::switch_day;
+    use crate::gui::widgets::clock_of;
+
+    /// 出口切换记录里的时间必须是**本地（北京）时间**，不是库里那份 UTC。
+    /// 断言按当前机器的时区算，不写死 +8 —— 否则 CI（UTC）上这条会假红。
+    #[test]
+    fn switch_times_are_shown_local_not_utc() {
+        for raw in [
+            "2026-10-14T19:24:05.696567800+00:00",
+            "2026-10-14T19:24:05+00:00",
+            "2026-10-14T19:24:05.123456+00:00",
+        ] {
+            let parsed = chrono::DateTime::parse_from_rfc3339(raw)
+                .unwrap_or_else(|error| panic!("{raw} 解析不了: {error}"));
+            let want = parsed
+                .with_timezone(&chrono::Local)
+                .format("%H:%M")
+                .to_string();
+            assert_eq!(clock_of(raw), want, "{raw} 没按本地时区显示");
+            let day = parsed
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d")
+                .to_string();
+            assert_eq!(switch_day(raw), day, "{raw} 的日头没按本地时区切");
+        }
+    }
+
+    /// 库里万一混进非 RFC3339 的写法（SQLite 的 CURRENT_TIMESTAMP 就是空格版），
+    /// 时间列也不许画出"2026-"这种半截日期。
+    #[test]
+    fn an_unparsable_timestamp_never_leaks_a_partial_date() {
+        assert_eq!(clock_of("2026-10-14 19:24:05"), "19:24");
+        assert_eq!(clock_of(""), "--:--");
+        assert_eq!(clock_of("昨天下午"), "--:--");
+    }
+}
