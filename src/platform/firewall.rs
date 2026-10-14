@@ -88,6 +88,23 @@ fn explain_failure(raw: &str, elevated: bool) -> String {
     )
 }
 
+/// 交给 netsh 的 `program=` 值：绝对路径，但**不带** `\\?\` verbatim 前缀。
+///
+/// 实测（非提权 shell 里只测参数解析）：`program=\\?\C:\Apps\VPN Parser\vpn-parser.exe`
+/// 被 netsh 当场拒掉，报的就是用户看到的那句"应用程序包含无效的字符，或具有无效的长度"；
+/// 同一个路径把前缀去掉就解析通过（走到权限检查）。而 `Path::canonicalize()` 在 Windows
+/// 上偏偏就会给出带前缀的那种 —— 所以规范化借它做，前缀必须摘掉再交给 netsh。
+fn netsh_program_value(path: &Path) -> String {
+    let text = path.to_string_lossy().to_string();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) => rest.to_string(),
+        None => text,
+    }
+}
+
 /// 按路径加一条"入站允许"规则（已存在就跳过）。返回一句给人看的报告。
 #[cfg(windows)]
 pub fn ensure_allowed(program: &Path) -> Result<String> {
@@ -102,13 +119,14 @@ pub fn ensure_allowed(program: &Path) -> Result<String> {
         return Ok(format!("{} 已在允许列表", full.display()));
     }
     let name = rule_name(&full);
+    let value = netsh_program_value(&full);
     let output = run_netsh(&[
         "advfirewall",
         "firewall",
         "add",
         "rule",
         &format!("name={name}"),
-        &format!("program={}", full.display()),
+        &format!("program={value}"),
         "dir=in",
         "action=allow",
         "enable=yes",
@@ -120,7 +138,7 @@ pub fn ensure_allowed(program: &Path) -> Result<String> {
         // 原文进日志：界面上那句是翻译过的，取证要能看到 netsh 到底说了什么。
         crate::startup_log(&format!(
             "[防火墙] {} 添加失败：{raw}（提权={}）",
-            full.display(),
+            value,
             if elevated { "是" } else { "否" }
         ));
         return Err(anyhow!(
@@ -128,7 +146,7 @@ pub fn ensure_allowed(program: &Path) -> Result<String> {
             explain_failure(&raw, elevated)
         ));
     }
-    Ok(format!("已加入允许列表：{}", full.display()))
+    Ok(format!("已加入允许列表：{value}"))
 }
 
 /// 一批程序；单个失败不影响其余（比如某个内核还没下载）。
@@ -237,5 +255,37 @@ mod tests {
         let other = explain_failure("无法与防火墙服务通信。", true);
         assert!(other.contains("无法与防火墙服务通信"), "{other}");
         assert!(other.contains("提权=是"), "{other}");
+    }
+
+    /// netsh 只认普通绝对路径：`\\?\` 那种 verbatim 形式会被它判成"无效的字符或长度"。
+    #[test]
+    fn the_verbatim_prefix_never_reaches_netsh() {
+        assert_eq!(
+            netsh_program_value(&PathBuf::from(r"\\?\C:\Apps\VPN Parser\vpn-parser.exe")),
+            r"C:\Apps\VPN Parser\vpn-parser.exe"
+        );
+        assert_eq!(
+            netsh_program_value(&PathBuf::from(r"\\?\UNC\fileserv\share\mihomo.exe")),
+            r"\\fileserv\share\mihomo.exe"
+        );
+        // 本来就没有前缀的（非 Windows、或没走 canonicalize 的调用方）原样通过。
+        assert_eq!(
+            netsh_program_value(&PathBuf::from(r"C:\Apps\VPN Parser\xray.exe")),
+            r"C:\Apps\VPN Parser\xray.exe"
+        );
+    }
+
+    /// 这条钉住"为什么需要上一条"：Windows 的 canonicalize 确实会给 verbatim 路径。
+    /// 哪天它不给了，上一条就是死代码，该删。
+    #[test]
+    #[cfg(windows)]
+    fn windows_canonicalize_really_does_hand_back_the_verbatim_form() {
+        let full = std::env::current_exe().unwrap().canonicalize().unwrap();
+        let text = full.to_string_lossy().to_string();
+        assert!(
+            text.starts_with(r"\\?\"),
+            "canonicalize 没给 verbatim 路径（{text}）：那 netsh_program_value 的剥离就是多余的"
+        );
+        assert!(!netsh_program_value(&full).starts_with(r"\\?\"));
     }
 }
