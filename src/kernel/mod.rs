@@ -8,8 +8,8 @@ use tokio::process::Command;
 mod updater;
 
 pub use updater::{
-    KernelReleaseInfo, KernelUpdateProgress, KernelUpdateResult, KernelUpdateStage, KernelSource,
-    SOURCE_OPTIONS, source_from_id,
+    ASSET_MIRROR_PREFIXES, KernelReleaseInfo, KernelUpdateProgress, KernelUpdateResult,
+    KernelUpdateStage, KernelSource, SOURCE_OPTIONS, proxy_candidates, source_from_id,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

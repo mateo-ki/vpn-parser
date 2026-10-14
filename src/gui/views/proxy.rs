@@ -3,7 +3,7 @@ use crate::gui::types::{
     ActiveConnectionInfo, ProxyPanel, ProxySortBy, ProxyView, ProxyViewRow, RuleDraftKind };
 use crate::gui::widgets::{
     card_frame, compact_node_card, country_flag_and_name, danger_btn, dns_mode_label, format_bytes,
-    format_speed, header_cell, panel_frame, primary_btn, proxy_panel_tab, proxy_state_label,
+    format_speed, header_cell, panel_frame, primary_btn, panel_tab, proxy_state_label,
     clock_of, render_health_strip, render_traffic_sparkline, routing_mode_description,
     routing_mode_detail, rule_action_label,
     rule_matcher_label, section_title, status_badge, tun_stack_label };
@@ -73,12 +73,11 @@ impl VpnApp {
                     // 必须查得到，不能只留一个"下载失败 2/3"。
                     let why = match &self.prepare_error {
                         Some(error) => format!(
-                            "预备状态自动下载 mihomo 失败（第 {}/{} 次）：{}
-
-                             失败多半卡在访问不到 api.github.com 或镜像站；                             想立刻重来：按 Ctrl+K 搜「下载内核」自己选一种方式。",
+                            "预备状态自动下载 mihomo 失败（第 {}/{} 次，每次换一种下载方式）：{error}\n\
+                             三次预算依次试：ghfast → gh-proxy →（这台机器挂了本地代理才有这一档）走代理 → 官方直连。\n\
+                             全失败多半是这台机器到 GitHub 的路都不通；想立刻重来：按 Ctrl+K 搜「下载内核」自己选一种方式。",
                             self.prepare_attempts,
-                            crate::gui::prepare::MAX_AUTO_ATTEMPTS,
-                            error
+                            crate::gui::prepare::MAX_AUTO_ATTEMPTS
                         ),
                         None if self.kernel_busy => "预备状态：正在自动下载 mihomo…".to_string(),
                         None => "预备状态：会自动下载 mihomo 内核（开关在系统设置里）".to_string(),
@@ -327,7 +326,7 @@ impl VpnApp {
 
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            proxy_panel_tab(
+            panel_tab(
                 ui,
                 &mut self.proxy_panel,
                 ProxyPanel::Nodes,
@@ -339,35 +338,35 @@ impl VpnApp {
             } else {
                 format!("活跃连接 ({})", self.active_connections.len())
             };
-            proxy_panel_tab(
+            panel_tab(
                 ui,
                 &mut self.proxy_panel,
                 ProxyPanel::Connections,
                 Icon::Radar,
                 &conn_label,
             );
-            proxy_panel_tab(
+            panel_tab(
                 ui,
                 &mut self.proxy_panel,
                 ProxyPanel::Rules,
                 Icon::Rules,
                 "分流规则",
             );
-            proxy_panel_tab(
+            panel_tab(
                 ui,
                 &mut self.proxy_panel,
                 ProxyPanel::Network,
                 Icon::Globe,
                 "DNS / TUN",
             );
-            proxy_panel_tab(
+            panel_tab(
                 ui,
                 &mut self.proxy_panel,
                 ProxyPanel::Kernels,
                 Icon::Cpu,
                 "内核管理",
             );
-            proxy_panel_tab(
+            panel_tab(
                 ui,
                 &mut self.proxy_panel,
                 ProxyPanel::Logs,
@@ -952,7 +951,7 @@ impl VpnApp {
 
         self.show_kernel_dialog = open;
         if let Some((source, path)) = start {
-            self.update_kernel_from(kind, source, path);
+            self.update_kernel_from(kind, source, path, true);
         }
     }
 

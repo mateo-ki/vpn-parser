@@ -49,6 +49,11 @@ impl VpnApp {
                 hint: "本地 HTTP API".into(),
                 action: PaletteAction::Goto(Tab::Api),
             },
+            PaletteItem {
+                title: "跳到 · 关于".into(),
+                hint: "本机版本与检查更新".into(),
+                action: PaletteAction::Goto(Tab::About),
+            },
         ];
         for (label, panel) in [
             ("活跃连接", ProxyPanel::Connections),

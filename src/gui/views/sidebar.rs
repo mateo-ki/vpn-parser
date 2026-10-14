@@ -65,6 +65,7 @@ impl VpnApp {
         nav_item(ui, target_tab, Tab::Sources, Icon::Subscription, "订阅源");
         nav_item(ui, target_tab, Tab::Settings, Icon::Gear, "系统设置");
         nav_item(ui, target_tab, Tab::Api, Icon::Plug, "外部接口");
+        nav_item(ui, target_tab, Tab::About, Icon::Info, "关于");
 
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
             ui.add_space(6.0);

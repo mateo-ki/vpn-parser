@@ -1,5 +1,5 @@
 use super::icons::{icon_label, Icon};
-use super::types::{ProxyPanel, Tab};
+use super::types::Tab;
 use crate::models::{NodeGroupSummary, NodeSummary, GOOGLE_PROXY_TEST_KIND};
 use crate::proxy::{
     DnsEnhancedMode, NetworkProtocol, ProxyMode, ProxyState, RoutingMode, RuleAction, RuleMatcher,
@@ -142,10 +142,11 @@ pub fn nav_item(ui: &mut Ui, current: &mut Tab, tab: Tab, icon: Icon, label: &st
     ui.add_space(3.0);
 }
 
-pub fn proxy_panel_tab(
+/// 页面顶部的分段标签（控制台那几个面板、系统设置的通用/外观都用它）。
+pub fn panel_tab<T: PartialEq + Copy>(
     ui: &mut Ui,
-    current: &mut ProxyPanel,
-    panel: ProxyPanel,
+    current: &mut T,
+    panel: T,
     icon: Icon,
     label: &str,
 ) {

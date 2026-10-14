@@ -1,7 +1,7 @@
 use crate::gui::icons::{self, icon_label, Icon};
-use crate::gui::types::BgMsg;
+use crate::gui::types::{BgMsg, SettingsTab};
 use crate::gui::widgets::{
-    card_frame, normalize_api_base, primary_btn, section_title, status_badge };
+    card_frame, normalize_api_base, panel_tab, primary_btn, section_title, status_badge };
 use crate::gui::VpnApp;
 use crate::proxy::ProxyState;
 use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui};
@@ -62,16 +62,125 @@ impl VpnApp {
             });
         });
         ui.add_space(6.0);
+        // 顶部两个分区：通用管"软件该怎么做"，外观管"长什么样"。
+        ui.horizontal(|ui| {
+            panel_tab(
+                ui,
+                &mut self.settings_tab,
+                SettingsTab::General,
+                Icon::Gear,
+                "通用",
+            );
+            panel_tab(
+                ui,
+                &mut self.settings_tab,
+                SettingsTab::Appearance,
+                Icon::Appearance,
+                "外观",
+            );
+        });
+        ui.add_space(8.0);
 
         // 设置卡片总高度超过窗口，整页必须可纵向滚动，否则底部内容看不到。
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show(ui, |ui| self.ui_settings_cards(ui));
+            .show(ui, |ui| match self.settings_tab {
+                SettingsTab::General => self.ui_settings_cards(ui),
+                SettingsTab::Appearance => self.ui_settings_appearance(ui),
+            });
+    }
+
+    /// 外观分区：配色 + 字体大小。两条都是"改了立刻生效并自动落库"，所以不挂底部那排
+    /// 保存按钮 —— 和主题一贯的行为一致。
+    fn ui_settings_appearance(&mut self, ui: &mut Ui) {
+        let mut auto_save = false;
+        card_frame().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                icon_label(ui, Icon::Appearance, 16.0, theme::accent());
+                ui.label(RichText::new("界面外观").strong().size(15.0));
+                status_badge(
+                    ui,
+                    &format!("字体 {}%", (self.edit_ui_scale * 100.0).round() as i32),
+                    theme::muted(),
+                );
+            });
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new("改动即时生效并自动保存，下次启动沿用。")
+                    .small()
+                    .color(theme::muted()),
+            );
+            ui.add_space(10.0);
+
+            ui.label(RichText::new("界面配色主题").strong());
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                for theme_spec in theme::THEMES {
+                    if ui
+                        .selectable_value(
+                            &mut self.edit_ui_theme,
+                            theme_spec.id.to_string(),
+                            theme_spec.name,
+                        )
+                        .clicked()
+                    {
+                        // 不在这里直接 apply：那是"还没保存成功的预览"。走一次设置保存，
+                        // 回来后由 update() 的 applied_theme_id 比较来装主题，界面和落盘一致。
+                        auto_save = true;
+                    }
+                }
+            });
+
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.label(RichText::new("字体大小").strong());
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("整屏一起缩放（文字、图标、表格都跟着走），100% = 跟随系统缩放。")
+                    .small()
+                    .color(theme::muted()),
+            );
+            ui.add_space(6.0);
+            let mut percent = (self.edit_ui_scale * 100.0).round() as i32;
+            ui.horizontal(|ui| {
+                // egui 0.31 的 Slider 没有 desired_width，宽度只认 spacing.slider_width。
+                let slider_width = ui.spacing().slider_width;
+                ui.spacing_mut().slider_width = 300.0;
+                let changed = ui
+                    .add(
+                        egui::Slider::new(&mut percent, 85..=140)
+                            .step_by(5.0)
+                            .suffix("%"),
+                    )
+                    .on_hover_text("85% 到 140%，步长 5%")
+                    .changed();
+                ui.spacing_mut().slider_width = slider_width;
+                if changed {
+                    self.edit_ui_scale = percent as f32 / 100.0;
+                    auto_save = true;
+                }
+                if (self.edit_ui_scale - 1.0).abs() > 0.001
+                    && ui
+                        .button("恢复 100%")
+                        .on_hover_text("回到跟随系统缩放")
+                        .clicked()
+                {
+                    self.edit_ui_scale = 1.0;
+                    auto_save = true;
+                }
+            });
+        });
+
+        if auto_save && self.settings_dirty() {
+            self.save_settings();
+        }
     }
 
     fn ui_settings_cards(&mut self, ui: &mut Ui) {
         // 高级设置默认收起：那些数值调参只在出问题才会动，常驻在页面上只是挡路。
-        // 收起时留着的是：自动拉取、同步周期、故障切换阈值、主题、防火墙放行。
+        // 收起时留着的是：自动拉取、同步周期、故障切换阈值、防火墙放行。
         let mut advanced = self.settings_advanced_open;
         ui.horizontal(|ui| {
             if ui.checkbox(&mut advanced, "显示高级设置").changed() {
@@ -155,32 +264,6 @@ impl VpnApp {
                         .small()
                         .color(theme::muted()),
                 );
-            });
-
-            ui.add_space(8.0);
-            ui.label(RichText::new("界面配色主题").strong());
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new("点击即可即时切换界面主题配色，自动保存并在下次启动时沿用。")
-                    .small()
-                    .color(theme::muted()),
-            );
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                for theme_spec in theme::THEMES {
-                    if ui
-                        .selectable_value(
-                            &mut self.edit_ui_theme,
-                            theme_spec.id.to_string(),
-                            theme_spec.name,
-                        )
-                        .clicked()
-                    {
-                        // 不在这里直接 apply：那是"还没保存成功的预览"。走一次设置保存，
-                        // 回来后由 update() 的 applied_theme_id 比较来装主题，界面和落盘一致。
-                        auto_save = true;
-                    }
-                }
             });
 
             ui.add_space(8.0);

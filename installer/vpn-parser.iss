@@ -31,9 +31,11 @@ SetupIconFile=..\assets\app-icon.ico
 CloseApplications=yes
 RestartApplications=no
 UninstallDisplayIcon={app}\{#MyAppExeName}
-VersionInfoVersion={#MyAppVersion}
+; 这两个只收纯数字 x.x.x.x（预发布版号带 -beta.N 会让 ISCC 报错），所以用 build.rs
+; 另算出来的 MyAppFileVersion；上面 AppVersion 和文件名仍用完整的 MyAppVersion。
+VersionInfoVersion={#MyAppFileVersion}
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion={#MyAppVersion}
+VersionInfoProductVersion={#MyAppFileVersion}
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务:"; Flags: unchecked

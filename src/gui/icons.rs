@@ -34,6 +34,8 @@ pub enum Icon {
     Lightbulb,
     Chat,
     Package,
+    Info,
+    Appearance,
 }
 
 pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -797,6 +799,35 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
                 stroke,
             );
         }
+        Icon::Info => {
+            // 圆圈里一个 "i" —— 侧栏「关于」和关于页自己用的那个符号
+            painter.circle_stroke(center, s * 0.38, stroke);
+            painter.circle_filled(Pos2::new(center.x, center.y - s * 0.17), s * 0.055, color);
+            painter.line_segment(
+                [
+                    Pos2::new(center.x, center.y - s * 0.04),
+                    Pos2::new(center.x, center.y + s * 0.21),
+                ],
+                Stroke::new((s * 0.12).clamp(1.5, 2.6), color),
+            );
+        }
+        Icon::Appearance => {
+            // 右半边实心的圆 —— 深浅/外观那类设置通用的符号
+            painter.circle_stroke(center, s * 0.38, stroke);
+            let mut half = Vec::new();
+            for step in 0..=12 {
+                let angle = std::f32::consts::PI * (step as f32 / 12.0) - std::f32::consts::FRAC_PI_2;
+                half.push(Pos2::new(
+                    center.x + angle.cos() * s * 0.33,
+                    center.y + angle.sin() * s * 0.33,
+                ));
+            }
+            painter.add(egui::epaint::PathShape::convex_polygon(
+                half,
+                color,
+                Stroke::NONE,
+            ));
+        }
     }
 }
 
@@ -1077,3 +1108,45 @@ pub fn icon_btn_square(icon: Icon, size: f32) -> impl egui::Widget {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 侧栏每一栏的图标都必须真的画出形状。`draw_icon` 是个穷尽 match，新加一个 `Icon`
+    /// 变体却忘了画它照样编译通过，界面上只剩一个空白格 —— 2026-10-14 他说"关于菜单要
+    /// 加图标"就是这一类问题，所以把它钉成断言。
+    #[test]
+    fn each_sidebar_icon_paints_shapes() {
+        let ctx = egui::Context::default();
+        let layer = egui::LayerId::new(egui::Order::Background, egui::Id::new("icon_probe"));
+        let mut input = egui::RawInput::default();
+        input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(200.0)));
+        let mut painted: Vec<(Icon, usize)> = Vec::new();
+        let _ = ctx.run(input, |ctx| {
+            let painter = egui::Painter::new(ctx.clone(), layer, ctx.screen_rect());
+            for icon in [
+                Icon::Dashboard,
+                Icon::Lightning,
+                Icon::Subscription,
+                Icon::Gear,
+                Icon::Plug,
+                Icon::Info,
+                Icon::Appearance,
+            ] {
+                let before = ctx.graphics_mut(|g| g.entry(layer).all_entries().len());
+                draw_icon(
+                    &painter,
+                    Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::splat(17.0)),
+                    icon,
+                    Color32::WHITE,
+                );
+                let after = ctx.graphics_mut(|g| g.entry(layer).all_entries().len());
+                painted.push((icon, after - before));
+            }
+        });
+        for (icon, count) in painted {
+            assert!(count > 0, "{icon:?} 一个形状都没画，菜单上会是个空白格");
+        }
+    }
+}

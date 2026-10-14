@@ -15,6 +15,15 @@ pub enum Tab {
     Proxy,
     Settings,
     Api,
+    About,
+}
+
+/// 系统设置页顶部的两个分区。卡片按"改的是软件行为"还是"改的是长什么样"分。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsTab {
+    #[default]
+    General,
+    Appearance,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -193,6 +202,10 @@ pub enum BgMsg {
     KernelReleases(Result<Vec<KernelReleaseInfo>, String>),
     KernelProgress(KernelUpdateProgress),
     KernelUpdated(Result<String, String>),
+    /// 应用自身更新（「关于」页）：查版本、下载进度、下载结果（安装包本地路径）。
+    AppUpdateCheck(Result<crate::app_update::AppReleaseInfo, String>),
+    AppUpdateProgress(crate::app_update::AppUpdateProgress),
+    AppUpdateDownloaded(Result<std::path::PathBuf, String>),
     ProxyStatus(ProxyRuntimeStatus),
     ProxyConfig(Result<MihomoConfigOptions, String>),
     ProxyConfigSaved(Result<MihomoConfigOptions, String>),
@@ -351,7 +364,7 @@ pub(crate) struct MihomoMetadata {
 
 /// Gist 发现默认搜索词（q 参数会被 percent-encode）。
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SettingsEditState {
     pub auto_fetch: bool,
     pub interval_min: u32,
@@ -380,6 +393,9 @@ pub struct SettingsEditState {
     pub bandwidth_guard: bool,
     pub bandwidth_min_kbps: u32,
     pub ui_theme: String,
+    pub ui_scale: f32,
+    /// 参与预发：检查更新时也看 GitHub 上标了 prerelease 的 beta（在「关于」页里勾）。
+    pub insider_channel: bool,
     pub kernel_source: String,
     pub firewall_auto_allow: bool,
 }
@@ -414,6 +430,8 @@ impl SettingsEditState {
             bandwidth_guard: s.bandwidth_guard,
             bandwidth_min_kbps: s.bandwidth_min_kbps,
             ui_theme: s.ui_theme.clone(),
+            ui_scale: s.ui_scale,
+            insider_channel: s.insider_channel,
             kernel_source: s.kernel_source.clone(),
             firewall_auto_allow: s.firewall_auto_allow,
         }
@@ -446,5 +464,12 @@ impl SettingsEditState {
             || self.auto_rearm_system_proxy != s.auto_rearm_system_proxy
             || self.auto_prepare_kernel != s.auto_prepare_kernel
             || self.speedtest_added_source != s.speedtest_added_source
+            // 外观这两条以前不在这里比：设置页只点主题时 `auto_save && settings_dirty()`
+            // 的后半个条件不成立，于是"即时切换并自动保存"其实没落盘（Ctrl+K 那条路是直接
+            // save_settings 才看起来正常）。它们能放进来靠的是 `settings_seeded` —— 第一次
+            // 加载设置会无条件把库里的值灌进编辑态，否则启动时一比就脏，同步永远不发生。
+            || self.ui_theme != s.ui_theme
+            || (self.ui_scale - s.ui_scale).abs() > 0.001
+            || self.insider_channel != s.insider_channel
     }
 }

@@ -24,6 +24,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 版本号的唯一真源是 Cargo.toml，tag 只是它的镜像：安装包文件名、"关于"里的版本、
+      # 卸载列表都从 Cargo.toml 来，而「检查更新」是按 tag 去拼资产名找文件的。
+      # 两边写岔时包照样能编出来，但发出去的 Release 会找不到自己的安装包 —— 所以在这里
+      # 就掐死，别等到花二十分钟编完才发现。
+      - name: 核对 tag 与 Cargo.toml 的版本一致
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $declared = (Select-String -Path Cargo.toml -Pattern '^\s*version\s*=\s*"([^"]+)"' |
+              Select-Object -First 1).Matches[0].Groups[1].Value
+          $fromTag = $env:TAG -replace '^v', ''
+          if ($fromTag -ne $declared) {
+            throw "tag $env:TAG says $fromTag but Cargo.toml says $declared - they must match"
+          }
+          Write-Host "version matches tag: $declared"
+
       - name: 装 stable 工具链
         uses: dtolnay/rust-toolchain@stable
 
@@ -66,9 +84,15 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           $exe = (Get-ChildItem dist -Filter *-setup.exe | Select-Object -First 1).FullName
+          # tag 里带 -alpha./-beta./-rc. 就发成预发布版：GitHub 的 /releases/latest 会跳过
+          # prerelease，稳定通道的用户收不到它，只有「关于」里勾了「参与预发」的人才拿得到。
+          $pre = $env:TAG -match '-(alpha|beta|rc)\.'
           if (gh release view "$env:TAG" 2>$null) {
             Write-Host "Release $env:TAG already exists, updating assets with --clobber..."
             gh release upload "$env:TAG" $exe dist/sha256.txt --clobber
+            if ($pre) { gh release edit "$env:TAG" --prerelease } else { gh release edit "$env:TAG" --prerelease=false }
+          } elseif ($pre) {
+            gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG（预发）" --generate-notes --prerelease
           } else {
             gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG" --generate-notes
           }

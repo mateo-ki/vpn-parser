@@ -186,7 +186,10 @@ impl Database {
             .await?;
         self.ensure_column("settings", "ui_theme", "TEXT NOT NULL DEFAULT 'obsidian'")
             .await?;
-        self.ensure_column("settings", "kernel_source", "TEXT NOT NULL DEFAULT 'gh-proxy'")
+        // 字体/界面大小（1.0 = 不缩放）。老库升级上来的这一列就是 1.0，行为不变。
+        self.ensure_column("settings", "ui_scale", "REAL NOT NULL DEFAULT 1.0")
+            .await?;
+        self.ensure_column("settings", "kernel_source", "TEXT NOT NULL DEFAULT 'ghfast'")
             .await?;
         self.ensure_column(
             "settings",
@@ -201,6 +204,9 @@ impl Database {
         )
         .await?;
         self.ensure_column("settings", "auto_failover", "INTEGER NOT NULL DEFAULT 0")
+            .await?;
+        // 参与预发（检查更新也看 beta）：默认关，谁开谁承担 beta 改数据的风险。
+        self.ensure_column("settings", "insider_channel", "INTEGER NOT NULL DEFAULT 0")
             .await?;
         self.ensure_column(
             "settings",

@@ -258,6 +258,10 @@ pub struct AppSettings {
     /// 界面配色主题 id（见 `gui::theme::THEMES`）。未知 id 会退回默认。
     #[serde(default = "default_ui_theme")]
     pub ui_theme: String,
+    /// 字体/界面大小，1.0 = 100%。界面上绝大多数文字写死了 `.size(..)`，只改
+    /// `Style::text_styles` 会一半大一半小，所以这条走 `pixels_per_point` 整屏一起缩。
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: f32,
     /// 内核下载走哪条路：race / official / proxy / local（见 `kernel::KernelSource`）。
     #[serde(default = "default_kernel_source")]
     pub kernel_source: String,
@@ -268,6 +272,10 @@ pub struct AppSettings {
     /// 用户以为开着而实际没开。默认仍关：不擅自改行为。
     #[serde(default)]
     pub auto_failover: bool,
+    /// 参与预发：「关于 → 检查更新」除了稳定版，也看 GitHub 上标了 prerelease 的 beta。
+    /// 默认关 —— 开着它等于同意拿可能改数据结构、没跑稳的安装包。
+    #[serde(default)]
+    pub insider_channel: bool,
     /// 测通的节点太少时，后台自动补一轮全量测速（默认关）。
     /// 自动切换要找替补就是从"测通"这批里捞，这批空掉故障转移就形同虚设。
     #[serde(default)]
@@ -295,13 +303,30 @@ fn default_failover_latency_ms() -> u32 {
 }
 
 fn default_kernel_source() -> String {
-    crate::kernel::KernelSource::GhProxy.id().to_string()
+    // 2026-10-14 实测换到 ghfast：gh-proxy 那家会在 18.6/22.5 MB 处把正文掐断
+    // （新装的机器上就是"预备 · 下载失败"），ghfast 同一次 36.8 秒下完且 SHA-256 对得上。
+    crate::kernel::KernelSource::GhFast.id().to_string()
 }
 
 fn default_ui_theme() -> String {
     // 字面量：models 不能反向依赖 gui（gui 是 feature-gated 的）。
     // gui::theme::DEFAULT_THEME 必须和这里一致，`theme::tests::models_default_theme_matches` 守着。
     "soft-cobalt".to_string()
+}
+
+/// 字体/界面大小的默认值：1.0 = 不缩放。老库里没这一列时（`ensure_column` 给的也是 1.0）
+/// 行为要和升级前完全一致。
+fn default_ui_scale() -> f32 {
+    1.0
+}
+
+/// 允许的字体/界面缩放区间。界面上是 85%~140% 的滑杆，但 API/旧库里的值不一定落在
+/// 这个范围里 —— 越界的值会让窗口内容算成 0 高或撑到屏外，所以只在这一处收口。
+pub fn clamp_ui_scale(value: f32) -> f32 {
+    if !value.is_finite() {
+        return default_ui_scale();
+    }
+    value.clamp(0.85, 1.40)
 }
 
 /// 节点名是否命中排除关键词（大小写不敏感）。
@@ -342,9 +367,11 @@ impl Default for AppSettings {
             publisher_api: String::new(),
             publisher_token: String::new(),
             ui_theme: default_ui_theme(),
+            ui_scale: default_ui_scale(),
             kernel_source: default_kernel_source(),
             firewall_auto_allow: false,
             auto_failover: false,
+            insider_channel: false,
             speedtest_auto_refill: false,
             auto_rearm_system_proxy: false,
             auto_prepare_kernel: true,
@@ -383,9 +410,11 @@ pub struct UpdateSettings {
     pub publisher_api: Option<String>,
     pub publisher_token: Option<String>,
     pub ui_theme: Option<String>,
+    pub ui_scale: Option<f32>,
     pub kernel_source: Option<String>,
     pub firewall_auto_allow: Option<bool>,
     pub auto_failover: Option<bool>,
+    pub insider_channel: Option<bool>,
     pub speedtest_auto_refill: Option<bool>,
     pub auto_rearm_system_proxy: Option<bool>,
     pub auto_prepare_kernel: Option<bool>,

@@ -91,6 +91,12 @@ pub struct VpnApp {
     pub(crate) kernel_progress: Option<KernelUpdateProgress>,
     pub(crate) kernel_cancel: Arc<AtomicBool>,
     pub(crate) kernel_busy: bool,
+    /// 「关于」页的应用自身更新：最新 Release、下载进度、已校验的安装包。
+    pub(crate) app_release: Option<crate::app_update::AppReleaseInfo>,
+    pub(crate) app_update_progress: Option<crate::app_update::AppUpdateProgress>,
+    pub(crate) app_update_busy: bool,
+    pub(crate) app_installer_path: Option<std::path::PathBuf>,
+    pub(crate) app_update_cancel: Arc<AtomicBool>,
     pub(crate) proxy_status: ProxyRuntimeStatus,
     pub(crate) proxy_config: MihomoConfigOptions,
     pub(crate) proxy_log: String,
@@ -259,6 +265,10 @@ pub struct VpnApp {
     pub(crate) edit_bandwidth_guard: bool,
     pub(crate) edit_bandwidth_min_kbps: u32,
     pub(crate) edit_ui_theme: String,
+    /// 字体/界面大小（1.0 = 100%），落库后乘在系统缩放上当 pixels_per_point。
+    pub(crate) edit_ui_scale: f32,
+    /// 参与预发（「关于」页那个勾）：检查更新时也看 beta。
+    pub(crate) edit_insider_channel: bool,
     pub(crate) edit_kernel_source: String,
     pub(crate) edit_firewall_auto_allow: bool,
     /// 「下载内核」弹框：是否打开、选中的方式、本地 zip 路径。
@@ -282,6 +292,10 @@ pub struct VpnApp {
     pub(crate) force_quit: bool,
     /// 已经装到 egui 上的主题 id，用来只在变化时重建 Style。
     pub(crate) applied_theme_id: String,
+    /// 只在第一次拿到库里的设置时把编辑态灌成它（见 `BgMsg::Settings` 那段）。
+    pub(crate) settings_seeded: bool,
+    /// 系统设置页当前分区（通用 / 外观），只活在这次运行里。
+    pub(crate) settings_tab: SettingsTab,
     pub(crate) frame_count: u64,
     pub(crate) logo_texture: Option<egui::TextureHandle>,
 
@@ -354,6 +368,11 @@ impl VpnApp {
             kernel_progress: None,
             kernel_cancel: Arc::new(AtomicBool::new(false)),
             kernel_busy: false,
+            app_release: None,
+            app_update_progress: None,
+            app_update_busy: false,
+            app_installer_path: None,
+            app_update_cancel: Arc::new(AtomicBool::new(false)),
             proxy_log: String::new(),
             selected_proxy_node_id: initial_proxy_node.as_ref().map(|node| node.0.clone()),
             selected_proxy_node_name: initial_proxy_node.map(|node| node.1),
@@ -478,10 +497,12 @@ impl VpnApp {
             edit_bandwidth_guard: false,
             edit_bandwidth_min_kbps: 0,
             edit_ui_theme: theme::DEFAULT_THEME.to_string(),
-            edit_kernel_source: crate::kernel::KernelSource::GhProxy.id().to_string(),
+            edit_ui_scale: 1.0,
+            edit_insider_channel: false,
+            edit_kernel_source: crate::kernel::KernelSource::GhFast.id().to_string(),
             edit_firewall_auto_allow: false,
             show_kernel_dialog: false,
-            kernel_dialog_source: crate::kernel::KernelSource::GhProxy.id().to_string(),
+            kernel_dialog_source: crate::kernel::KernelSource::GhFast.id().to_string(),
             kernel_dialog_path: String::new(),
             kernel_dialog_kind: None,
             firewall_status: None,
@@ -495,6 +516,8 @@ impl VpnApp {
             tray: crate::platform::TrayHandle::new(),
             force_quit: false,
             applied_theme_id: String::new(),
+            settings_seeded: false,
+            settings_tab: SettingsTab::default(),
             frame_count: 0,
             logo_texture: None,
             tx,
@@ -857,7 +880,15 @@ impl VpnApp {
                                 self.failover_seeded = true;
                                 self.auto_failover = self.settings.auto_failover;
                             }
-                            if !self.settings_dirty() && !self.settings_saving {
+                            if !self.settings_seeded {
+                                // 第一次拿到库里的设置：无条件灌进编辑态。
+                                // 下面那个 `!settings_dirty()` 的门槛是为了"别把用户正在改的
+                                // 东西冲掉"，可启动时编辑态还是代码里的默认值，跟库里的值一比
+                                // 就是脏的 —— 于是老版本里这条同步永远不会发生：改过设置的人
+                                // 重启后，设置页显示的是默认值，动一下滑杆就把真配置写回去了。
+                                self.settings_seeded = true;
+                                self.sync_edit_settings();
+                            } else if !self.settings_dirty() && !self.settings_saving {
                                 self.sync_edit_settings();
                             }
                         }
@@ -1120,6 +1151,41 @@ impl VpnApp {
                                 }
                             }
                             self.reload_kernels();
+                        }
+                        BgMsg::AppUpdateCheck(Ok(info)) => {
+                            self.app_update_busy = false;
+                            self.app_update_progress = None;
+                            // 查到的不是刚才那一版，之前下好的安装包就不能再当"已校验"用。
+                            if self
+                                .app_release
+                                .as_ref()
+                                .is_none_or(|old| old.tag != info.tag)
+                            {
+                                self.app_installer_path = None;
+                            }
+                            self.status = info.message.clone();
+                            self.app_release = Some(info);
+                        }
+                        BgMsg::AppUpdateCheck(Err(error)) => {
+                            self.app_update_busy = false;
+                            self.app_update_progress = None;
+                            self.status = format!("检查更新失败: {error}");
+                        }
+                        BgMsg::AppUpdateProgress(progress) => {
+                            self.status = progress.message.clone();
+                            self.app_update_progress = Some(progress);
+                        }
+                        BgMsg::AppUpdateDownloaded(result) => {
+                            self.app_update_busy = false;
+                            self.app_update_progress = None;
+                            match result {
+                                Ok(path) => {
+                                    self.status =
+                                        format!("安装包已下载并校验：{}", path.display());
+                                    self.app_installer_path = Some(path);
+                                }
+                                Err(error) => self.status = format!("下载更新失败: {error}"),
+                            }
                         }
                         BgMsg::ProxyStatus(status) => self.proxy_status = status,
                         BgMsg::ProxyConfig(Ok(config)) => self.set_proxy_config(config),
@@ -2286,11 +2352,14 @@ impl VpnApp {
     }
 
     /// 「下载内核」弹框里点开始走这条：源与（本地导入时的）zip 路径都由弹框决定。
+    /// `remember_source` = 把人选的这种记成默认；自动预备那条传 false —— 它每试一档
+    /// 就把设置改掉的话，阶梯的第一档会被上一次运行撞墙的那一种占掉。
     pub(crate) fn update_kernel_from(
         &mut self,
         kind: KernelKind,
         source: crate::kernel::KernelSource,
         local_file: Option<std::path::PathBuf>,
+        remember_source: bool,
     ) {
         if self.proxy_status.kernel_in_use(kind) {
             self.status = format!("停止代理后才能更新 {}", kind.display_name());
@@ -2311,8 +2380,10 @@ impl VpnApp {
         self.kernel_busy = true;
         self.kernel_progress = None;
         // 记住这次用的方式：弹框下次打开、以及 HTTP API 的更新都按它走。
-        self.edit_kernel_source = source.id().to_string();
-        self.save_settings();
+        if remember_source {
+            self.edit_kernel_source = source.id().to_string();
+            self.save_settings();
+        }
         self.status = format!(
             "正在下载并校验 {}（{}）...",
             kind.display_name(),
@@ -2466,7 +2537,15 @@ impl VpnApp {
         }
         self.prepare_attempts += 1;
         self.prepare_last_at = Some(std::time::Instant::now());
-        let source = crate::kernel::source_from_id(&self.settings.kernel_source);
+        // 「本地代理」= 应用内 mixed 口在跑，或 Windows 系统代理有值。预备状态下前者必然没在跑，
+        // 所以这一档实际用的就是系统代理；没挂代理就不排它（见 prepare::auto_prepare_source）。
+        let has_local_proxy = self.proxy_status.local_proxy_active()
+            || crate::system_proxy::current_system_proxy_url().is_some();
+        let source = prepare::auto_prepare_source(
+            crate::kernel::source_from_id(&self.settings.kernel_source),
+            self.prepare_attempts,
+            has_local_proxy,
+        );
         // 先把要写的东西算成局部值：format! 里直接调 `self.kernel_installed_cached()`
         // 会和后面的可变借用打架（那一步本来就是可变操作）。
         let exe_dir = std::env::current_exe()
@@ -2474,10 +2553,11 @@ impl VpnApp {
             .and_then(|path| path.parent().map(|dir| dir.display().to_string()))
             .unwrap_or_else(|| "未知".to_string());
         crate::startup_log(&format!(
-            "[预备] 第 {}/{} 次自动下载内核：方式={} 代理在跑={} 盘上已有内核={} 程序目录={}",
+            "[预备] 第 {}/{} 次自动下载内核：方式={} 本地代理={} 代理在跑={} 盘上已有内核={} 程序目录={}",
             self.prepare_attempts,
             prepare::MAX_AUTO_ATTEMPTS,
             source.label(),
+            if has_local_proxy { "有" } else { "没有" },
             proxy_active,
             has_kernel,
             exe_dir
@@ -2488,7 +2568,7 @@ impl VpnApp {
             prepare::MAX_AUTO_ATTEMPTS,
             source.label()
         );
-        self.update_kernel_from(KernelKind::Mihomo, source, None);
+        self.update_kernel_from(KernelKind::Mihomo, source, None, false);
     }
 
     /// 新增源拉取成功之后：取这个源的节点 id，回来再发起测速。
@@ -3206,6 +3286,8 @@ impl VpnApp {
     pub(crate) fn settings_edit_state(&self) -> SettingsEditState {
         SettingsEditState {
             ui_theme: self.edit_ui_theme.clone(),
+            ui_scale: self.edit_ui_scale,
+            insider_channel: self.edit_insider_channel,
             kernel_source: self.edit_kernel_source.clone(),
             firewall_auto_allow: self.edit_firewall_auto_allow,
             auto_fetch: self.edit_auto_fetch,
@@ -3241,6 +3323,14 @@ impl VpnApp {
         self.settings_edit_state().is_dirty(&self.settings)
     }
 
+    /// 「字体大小」直接走 egui 的 zoom_factor：它算的就是 `pixels_per_point = zoom × 系统 DPI`，
+    /// 所以 125%/150% 的机器上用户自己的 DPI 不会被冲掉，换显示器也不用我们操心。
+    /// 界面里绝大多数文字写死了 `.size(..)`，只改 `Style::text_styles` 会一半大一半小，
+    /// 因此整屏一起缩才是这里要的效果。值没变时 egui 自己不会重绘，每帧调用是安全的。
+    fn apply_ui_scale(&self, ctx: &egui::Context) {
+        ctx.set_zoom_factor(crate::models::clamp_ui_scale(self.settings.ui_scale));
+    }
+
     pub(crate) fn sync_edit_settings(&mut self) {
         let state = SettingsEditState::from_settings(&self.settings);
         self.edit_auto_fetch = state.auto_fetch;
@@ -3270,6 +3360,8 @@ impl VpnApp {
         self.edit_bandwidth_guard = state.bandwidth_guard;
         self.edit_bandwidth_min_kbps = state.bandwidth_min_kbps;
         self.edit_ui_theme = state.ui_theme.clone();
+        self.edit_ui_scale = state.ui_scale;
+        self.edit_insider_channel = state.insider_channel;
         self.edit_kernel_source = state.kernel_source.clone();
         self.edit_firewall_auto_allow = state.firewall_auto_allow;
     }
@@ -3303,6 +3395,8 @@ impl VpnApp {
             bandwidth_guard: Some(self.edit_bandwidth_guard),
             bandwidth_min_kbps: Some(self.edit_bandwidth_min_kbps),
             ui_theme: Some(self.edit_ui_theme.clone()),
+            ui_scale: Some(crate::models::clamp_ui_scale(self.edit_ui_scale)),
+            insider_channel: Some(self.edit_insider_channel),
             kernel_source: Some(self.edit_kernel_source.clone()),
             firewall_auto_allow: Some(self.edit_firewall_auto_allow),
             auto_failover: Some(self.auto_failover),
@@ -3526,6 +3620,7 @@ impl eframe::App for VpnApp {
             theme::apply(ctx, &self.settings.ui_theme);
             self.applied_theme_id = self.settings.ui_theme.clone();
         }
+        self.apply_ui_scale(ctx);
 
         if self.proxy_status.state == ProxyState::Running {
             if !self.traffic_polling
@@ -3640,7 +3735,7 @@ impl eframe::App for VpnApp {
                     .inner_margin(Margin::symmetric(18, 14)),
             )
             .show(ctx, |ui| {
-                if self.tab != Tab::Proxy {
+                if self.tab != Tab::Proxy && self.tab != Tab::About {
                     self.ui_stats_row(ui);
                     ui.add_space(10.0);
                 }
@@ -3650,6 +3745,7 @@ impl eframe::App for VpnApp {
                     Tab::Proxy => self.ui_proxy(ui),
                     Tab::Settings => self.ui_settings(ui),
                     Tab::Api => self.ui_api(ui),
+                    Tab::About => self.ui_about(ui),
                 }
             });
 
@@ -3884,6 +3980,79 @@ mod tests {
         state = SettingsEditState::from_settings(&settings);
         state.close_to_tray = !settings.close_to_tray;
         assert!(state.is_dirty(&settings));
+    }
+
+    /// 外观那两条以前不在 `is_dirty` 里：设置页只点主题时 `auto_save && settings_dirty()`
+    /// 的后半个条件不成立，于是"即时生效并自动保存"其实根本没落盘。
+    #[test]
+    fn appearance_changes_count_as_unsaved() {
+        let settings = AppSettings::default();
+
+        let mut state = SettingsEditState::from_settings(&settings);
+        state.ui_theme = "soft-teal".to_string();
+        assert!(state.is_dirty(&settings), "只换主题也要算未保存");
+
+        let mut state = SettingsEditState::from_settings(&settings);
+        state.ui_scale = 1.2;
+        assert!(state.is_dirty(&settings), "只调字号也要算未保存");
+
+        let state = SettingsEditState::from_settings(&settings);
+        assert!(!state.is_dirty(&settings), "刚灌进来的值不能一上来就是脏的");
+
+        // 播种走的就是 `from_settings`：库里存的外观值必须原样带出来，否则第一次加载
+        // 设置会把它们显示成默认值（老版本连这一步都没有，见 `settings_seeded`）。
+        let stored = AppSettings {
+            ui_theme: "soft-teal".to_string(),
+            ui_scale: 1.2,
+            ..AppSettings::default()
+        };
+        let state = SettingsEditState::from_settings(&stored);
+        assert_eq!(state.ui_theme, "soft-teal");
+        assert!((state.ui_scale - 1.2).abs() < 0.001);
+        assert!(!state.is_dirty(&stored));
+    }
+
+    /// 「字体大小」= egui 的 `zoom_factor`（`pixels_per_point = zoom × 系统 DPI`）。
+    /// 这里唯一会算错的是取值范围：越界或坏值必须夹回可用区间，否则界面会缩到看不见
+    /// 或者撑出屏外，而且下一次启动还是这样。
+    #[test]
+    fn ui_scale_is_clamped_to_the_usable_band() {
+        use crate::models::clamp_ui_scale;
+        assert_eq!(clamp_ui_scale(1.0), 1.0);
+        assert_eq!(clamp_ui_scale(0.1), 0.85);
+        assert_eq!(clamp_ui_scale(9.0), 1.40);
+        assert_eq!(clamp_ui_scale(f32::NAN), 1.0, "坏值退回不缩放");
+        assert_eq!(clamp_ui_scale(f32::INFINITY), 1.0);
+    }
+
+    /// 钉住这条设置的全部依据：`set_zoom_factor` 确实会把整屏的 `pixels_per_point` 改掉
+    /// （下一帧生效），而不是只影响某一种字号。
+    #[test]
+    fn zoom_factor_rescales_the_whole_ui() {
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::Vec2::new(1280.0, 800.0),
+        ));
+        let viewport_id = input.viewport_id;
+        input
+            .viewports
+            .get_mut(&viewport_id)
+            .expect("默认输入里总该有根视口")
+            .native_pixels_per_point = Some(1.25);
+        let _ = ctx.run(input.clone(), |ctx| {
+            assert_eq!(ctx.pixels_per_point(), 1.25, "系统 DPI 该原样传进来");
+            ctx.set_zoom_factor(1.2);
+        });
+        // zoom 是"下一帧生效"，所以再跑一帧才看得到。
+        let _ = ctx.run(input, |ctx| {
+            assert!(
+                (ctx.pixels_per_point() - 1.5).abs() < 0.001,
+                "1.25 的 DPI × 120% 该是 1.5，实际 {}",
+                ctx.pixels_per_point()
+            );
+        });
     }
 
     #[test]

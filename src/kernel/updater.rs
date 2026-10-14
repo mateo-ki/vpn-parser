@@ -158,18 +158,19 @@ pub struct SourceOption {
 }
 
 /// 弹框里按这个顺序列五种方式；文案带上实测速度，免得凭感觉选。
+/// 顺序就是推荐顺序：ghfast 排第一（它是默认值）。
 pub const SOURCE_OPTIONS: [SourceOption; 5] = [
+    SourceOption {
+        id: "ghfast",
+        label: "ghfast 镜像（默认）",
+        hint: "只连 https://ghfast.top/ 前缀，一条连接下到底（实测 8.13 MB/s；2026-10-14 那家 gh-proxy 停在 18.6/22.5MB 时它 36.8 秒完整下完、SHA-256 一致）",
+        source: KernelSource::GhFast,
+    },
     SourceOption {
         id: "gh-proxy",
         label: "gh-proxy 镜像",
-        hint: "只连 https://gh-proxy.com/ 前缀，一条连接下到底（实测 4.87 MB/s）",
+        hint: "只连 https://gh-proxy.com/ 前缀，一条连接下到底（曾实测 4.87 MB/s，但 2026-10-14 实测会把 22MB 掐断在 18.6MB —— 别当默认）",
         source: KernelSource::GhProxy,
-    },
-    SourceOption {
-        id: "ghfast",
-        label: "ghfast 镜像",
-        hint: "只连 https://ghfast.top/ 前缀，一条连接下到底（实测 8.13 MB/s）",
-        source: KernelSource::GhFast,
     },
     SourceOption {
         id: "official",
@@ -196,8 +197,8 @@ pub fn source_from_id(id: &str) -> KernelSource {
         .iter()
         .find(|option| option.id == id)
         .map(|option| option.source)
-        // 旧的 "race"（三家并发抢跑）已经删掉，存量的值得落到它当时实测最快的那一家。
-        .unwrap_or(KernelSource::GhProxy)
+        // 认不出来的存值（旧的 "race" 三家并发抢跑那一版、手改过的）落到现在的默认那家。
+        .unwrap_or(KernelSource::GhFast)
 }
 
 impl KernelSource {
@@ -216,7 +217,7 @@ impl KernelSource {
             .iter()
             .find(|option| option.source == self)
             .map(|option| option.label)
-            .unwrap_or("gh-proxy 镜像")
+            .unwrap_or("ghfast 镜像（默认）")
     }
 
     fn prefix(self) -> Option<&'static str> {
@@ -1116,11 +1117,16 @@ mod source_tests {
         for option in SOURCE_OPTIONS {
             assert_eq!(source_from_id(option.id).id(), option.id);
         }
-        // 库里可能还留着旧值 "race"（三家并发抢跑那一版）：落到 gh-proxy，既不是"什么都不下"，
-        // 也不会让弹框因为对不上 id 而画不出选中态。
-        assert_eq!(source_from_id("race"), KernelSource::GhProxy);
-        assert_eq!(source_from_id("没有这个"), KernelSource::GhProxy);
-        assert_eq!(source_from_id("").id(), "gh-proxy");
+        // 库里可能还留着旧值 "race"（三家并发抢跑那一版）：落到现在的默认 ghfast，
+        // 既不是"什么都不下"，也不会让弹框因为对不上 id 而画不出选中态。
+        assert_eq!(source_from_id("race"), KernelSource::GhFast);
+        assert_eq!(source_from_id("没有这个"), KernelSource::GhFast);
+        assert_eq!(source_from_id("").id(), "ghfast");
+        // 默认值必须和弹框里排第一的那一项一致，否则"没改过设置"的人看到的选中态是错的。
+        assert_eq!(
+            crate::models::AppSettings::default().kernel_source,
+            SOURCE_OPTIONS[0].id
+        );
     }
 
     #[tokio::test]

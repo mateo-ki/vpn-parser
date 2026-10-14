@@ -435,9 +435,11 @@ mod tests {
                 publisher_api: None,
                 publisher_token: None,
                 ui_theme: None,
+                ui_scale: None,
                 kernel_source: None,
                 firewall_auto_allow: None,
                 auto_failover: None,
+                insider_channel: None,
                 speedtest_auto_refill: None,
                 auto_rearm_system_proxy: None,
                 auto_prepare_kernel: None,
@@ -1411,9 +1413,10 @@ mod tests {
         assert_eq!(saved.publisher_api, "https://gate.example/path/");
         assert_eq!(saved.publisher_token, "secret-token");
 
-        // 主题先落一次库：后面那次"其它设置保存"不能把它冲掉。
+        // 主题与字号先各落一次库：后面那次"其它设置保存"不能把它们冲掉。
         db.update_settings(UpdateSettings {
             ui_theme: Some("mocha".to_string()),
+            ui_scale: Some(1.2),
             ..Default::default()
         })
         .await
@@ -1446,9 +1449,11 @@ mod tests {
             publisher_api: None,
             publisher_token: None,
             ui_theme: None,
+            ui_scale: None,
             kernel_source: None,
             firewall_auto_allow: None,
             auto_failover: None,
+            insider_channel: None,
             speedtest_auto_refill: None,
                 auto_rearm_system_proxy: None,
             auto_prepare_kernel: None,
@@ -1463,6 +1468,23 @@ mod tests {
         assert_eq!(loaded.publisher_api, "https://gate.example/path/");
         assert_eq!(loaded.publisher_token, "secret-token");
         assert_eq!(loaded.ui_theme, "mocha");
+        assert!(
+            (loaded.ui_scale - 1.2).abs() < 0.001,
+            "字号设置不能被其它设置的保存冲掉，实际 {}",
+            loaded.ui_scale
+        );
+        let clamped = reopened
+            .update_settings(UpdateSettings {
+                ui_scale: Some(9.0),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(
+            (clamped.ui_scale - 1.40).abs() < 0.001,
+            "越界的字号要夹回上限，实际 {}",
+            clamped.ui_scale
+        );
         assert_eq!(loaded.fetch_concurrency, 6);
 
         // 清空要能真的清空。

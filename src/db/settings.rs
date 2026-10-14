@@ -58,8 +58,8 @@ impl Database {
                        speedtest_parallel_kernels, speedtest_persistent_kernel,
                        speedtest_reuse_minutes, speedtest_conditional_isolation,
                        speedtest_download_top_n, speedtest_dedup_egress, speedtest_tcp_ping_only, bandwidth_guard, bandwidth_min_kbps,
-                       publisher_api, publisher_token, ui_theme, kernel_source, firewall_auto_allow,
-                       auto_failover, speedtest_auto_refill,
+                       publisher_api, publisher_token, ui_theme, ui_scale, kernel_source, firewall_auto_allow,
+                       auto_failover, insider_channel, speedtest_auto_refill,
                        auto_prepare_kernel, speedtest_added_source,
                        auto_rearm_system_proxy,
                        last_auto_fetch_at, last_auto_speedtest_at
@@ -128,12 +128,18 @@ impl Database {
             publisher_token: sqlx::Row::get::<String, _>(&row, "publisher_token"),
             ui_theme: sqlx::Row::try_get::<String, _>(&row, "ui_theme")
                 .unwrap_or_else(|_| crate::models::AppSettings::default().ui_theme),
+            ui_scale: sqlx::Row::try_get::<f64, _>(&row, "ui_scale")
+                .map(|value| crate::models::clamp_ui_scale(value as f32))
+                .unwrap_or_else(|_| crate::models::AppSettings::default().ui_scale),
             kernel_source: sqlx::Row::try_get::<String, _>(&row, "kernel_source")
                 .unwrap_or_else(|_| crate::models::AppSettings::default().kernel_source),
             firewall_auto_allow: sqlx::Row::try_get::<i64, _>(&row, "firewall_auto_allow")
                 .unwrap_or(0)
                 != 0,
             auto_failover: sqlx::Row::try_get::<i64, _>(&row, "auto_failover")
+                .unwrap_or(0)
+                != 0,
+            insider_channel: sqlx::Row::try_get::<i64, _>(&row, "insider_channel")
                 .unwrap_or(0)
                 != 0,
             speedtest_auto_refill: sqlx::Row::try_get::<i64, _>(&row, "speedtest_auto_refill")
@@ -239,6 +245,9 @@ impl Database {
                 s.ui_theme = v;
             }
         }
+        if let Some(v) = input.ui_scale {
+            s.ui_scale = crate::models::clamp_ui_scale(v);
+        }
         if let Some(v) = input.kernel_source {
             let v = v.trim().to_string();
             if !v.is_empty() {
@@ -250,6 +259,9 @@ impl Database {
         }
         if let Some(v) = input.auto_failover {
             s.auto_failover = v;
+        }
+        if let Some(v) = input.insider_channel {
+            s.insider_channel = v;
         }
         if let Some(v) = input.speedtest_auto_refill {
             s.speedtest_auto_refill = v;
@@ -290,9 +302,11 @@ impl Database {
                  publisher_api=?,
                  publisher_token=?,
                  ui_theme=?,
+                 ui_scale=?,
                  kernel_source=?,
                  firewall_auto_allow=?,
                  auto_failover=?,
+                 insider_channel=?,
                  speedtest_auto_refill=?,
                  auto_rearm_system_proxy=?,
                  auto_prepare_kernel=?,
@@ -324,9 +338,11 @@ impl Database {
         .bind(&s.publisher_api)
         .bind(&s.publisher_token)
         .bind(&s.ui_theme)
+        .bind(s.ui_scale as f64)
         .bind(&s.kernel_source)
         .bind(s.firewall_auto_allow as i64)
         .bind(s.auto_failover as i64)
+        .bind(s.insider_channel as i64)
         .bind(s.speedtest_auto_refill as i64)
         .bind(s.auto_rearm_system_proxy as i64)
         .bind(s.auto_prepare_kernel as i64)
