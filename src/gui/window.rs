@@ -191,9 +191,6 @@ impl VpnApp {
     pub(crate) fn maybe_check_proxy_drift(&mut self) {
         const EVERY: std::time::Duration = std::time::Duration::from_secs(30);
         if !self.proxy_status.local_proxy_ready {
-            if self.proxy_drift.is_some() {
-                self.proxy_drift = None;
-            }
             self.drift_checked_at = None;
             return;
         }

@@ -151,9 +151,8 @@ pub struct VpnApp {
     pub(crate) park_spot: Option<crate::platform::window_park::Spot>,
     /// 什么时候停放的（诊断壳的自动往返自测用它计时）。
     pub(crate) parked_at: Option<std::time::Instant>,
-    /// 系统代理核对：注册表里那份被别人改掉了吗（`None` = 正常/没在跑）。
-    pub(crate) proxy_drift: Option<crate::system_proxy::Drift>,
     /// 上一次核对系统代理的时间与"正在查"标记（查一次要起 reg.exe，必须后台）。
+    /// 核对结果只喂给「自动重开系统代理」那个开关，界面不显示（2026-10-15 他要求撤掉那条提示）。
     pub(crate) drift_checked_at: Option<std::time::Instant>,
     pub(crate) drift_busy: bool,
 
@@ -431,7 +430,6 @@ impl VpnApp {
             restore_cooldown_frames: 0,
             park_spot: None,
             parked_at: None,
-            proxy_drift: None,
             drift_checked_at: None,
             drift_busy: false,
             edit_auto_fetch: false,
@@ -885,28 +883,22 @@ impl VpnApp {
                         BgMsg::ProxyDrift(drift) => {
                             self.drift_busy = false;
                             use crate::system_proxy::Drift;
-                            match drift {
-                                Drift::InSync => self.proxy_drift = None,
-                                other => {
-                                    let text = crate::system_proxy::drift_text(&other);
-                                    crate::startup_log(&format!("[系统代理核对] {text}"));
-                                    self.proxy_drift = Some(other);
-                                    // 开关开着才动手（默认关：那是用户的 HKCU）。
-                                    if self.settings.auto_rearm_system_proxy {
-                                        self.status = format!("{text} -> 正在按设置写回");
-                                        let manager = self.proxy_manager.clone();
-                                        let tx = self.tx.clone();
-                                        self.rt.spawn(async move {
-                                            let message = match manager.rearm_system_proxy().await {
-                                                Ok(done) => done,
-                                                Err(error) => format!("系统代理写回失败：{error}"),
-                                            };
-                                            crate::startup_log(&format!(
-                                                "[系统代理核对] {message}"
-                                            ));
-                                            let _ = tx.send(BgMsg::Status(message));
-                                        });
-                                    }
+                            if !matches!(drift, Drift::InSync) {
+                                let text = crate::system_proxy::drift_text(&drift);
+                                crate::startup_log(&format!("[系统代理核对] {text}"));
+                                // 开关开着才动手（默认关：那是用户的 HKCU）。
+                                if self.settings.auto_rearm_system_proxy {
+                                    self.status = format!("{text} -> 正在按设置写回");
+                                    let manager = self.proxy_manager.clone();
+                                    let tx = self.tx.clone();
+                                    self.rt.spawn(async move {
+                                        let message = match manager.rearm_system_proxy().await {
+                                            Ok(done) => done,
+                                            Err(error) => format!("系统代理写回失败：{error}"),
+                                        };
+                                        crate::startup_log(&format!("[系统代理核对] {message}"));
+                                        let _ = tx.send(BgMsg::Status(message));
+                                    });
                                 }
                             }
                         }
@@ -3824,26 +3816,9 @@ impl eframe::App for VpnApp {
                         );
                         ui.separator();
                     }
-                    // 系统代理归属核对：注册表被别人改掉时界面必须说实话。以前只在启停那一刻
-                    // 写一次，之后哪怕 `ProxyEnable` 被外部置 0（浏览器全断），侧栏仍然显示
-                    // "代理运行中 + 实测 200ms" —— 又一根不说实话的绿条（2026-10-08 现场）。
-                    // 位置放在状态这一侧而不是右边那组按钮中间（2026-10-15 他说挂那儿很奇怪）；
-                    // 它排在"状态"之前，所以后面那句日志的可截宽度会自动扣掉它占的位。
-                    if let Some(drift) = self.proxy_drift.clone() {
-                        crate::gui::icons::icon_label(
-                            ui,
-                            crate::gui::icons::Icon::Alert,
-                            13.0,
-                            theme::warning(),
-                        );
-                        ui.label(
-                            RichText::new(crate::system_proxy::drift_text(&drift))
-                                .size(11.5)
-                                .strong()
-                                .color(theme::warning()),
-                        );
-                        ui.separator();
-                    }
+                    // 系统代理被外部改掉时**不再往这条上写提示**（2026-10-15 他一句"不用显示这个"）。
+                    // 核对本身留着：它是设置页那个「自动重开系统代理」开关的唯一触发器
+                    // （见 `BgMsg::ProxyDrift`），开关关着就只写 startup.log。
                     ui.label(RichText::new("状态").strong().color(theme::muted()).small());
                     // 状态文本必须给右边的动作组让位。`with_layout(right_to_left)` 的那组
                     // 按钮永远钉在内容区右边界上，所以文本一长就是**压到按钮上面**（他
