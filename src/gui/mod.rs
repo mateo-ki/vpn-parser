@@ -3824,6 +3824,26 @@ impl eframe::App for VpnApp {
                         );
                         ui.separator();
                     }
+                    // 系统代理归属核对：注册表被别人改掉时界面必须说实话。以前只在启停那一刻
+                    // 写一次，之后哪怕 `ProxyEnable` 被外部置 0（浏览器全断），侧栏仍然显示
+                    // "代理运行中 + 实测 200ms" —— 又一根不说实话的绿条（2026-10-08 现场）。
+                    // 位置放在状态这一侧而不是右边那组按钮中间（2026-10-15 他说挂那儿很奇怪）；
+                    // 它排在"状态"之前，所以后面那句日志的可截宽度会自动扣掉它占的位。
+                    if let Some(drift) = self.proxy_drift.clone() {
+                        crate::gui::icons::icon_label(
+                            ui,
+                            crate::gui::icons::Icon::Alert,
+                            13.0,
+                            theme::warning(),
+                        );
+                        ui.label(
+                            RichText::new(crate::system_proxy::drift_text(&drift))
+                                .size(11.5)
+                                .strong()
+                                .color(theme::warning()),
+                        );
+                        ui.separator();
+                    }
                     ui.label(RichText::new("状态").strong().color(theme::muted()).small());
                     // 状态文本必须给右边的动作组让位。`with_layout(right_to_left)` 的那组
                     // 按钮永远钉在内容区右边界上，所以文本一长就是**压到按钮上面**（他

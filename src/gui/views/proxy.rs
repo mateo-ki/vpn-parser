@@ -488,20 +488,8 @@ impl VpnApp {
             }
         }
 
-        // 系统代理归属核对：注册表被别人改掉时界面必须说实话。以前只在启停那一刻写一次，
-        // 之后哪怕 `ProxyEnable` 被外部置 0（浏览器全断），侧栏仍然显示"代理运行中 + 实测 200ms"
-        // —— 又一根不说实话的绿条（2026-10-08 现场）。
-        if let Some(drift) = self.proxy_drift.clone() {
-            ui.horizontal(|ui| {
-                icon_label(ui, Icon::Alert, 13.0, theme::warning());
-                ui.label(
-                    RichText::new(crate::system_proxy::drift_text(&drift))
-                        .small()
-                        .strong()
-                        .color(theme::warning()),
-                );
-            });
-        }
+        // 系统代理归属核对的提示不在这儿画：它是"状态"，挂在右边这组按钮中间很奇怪
+        // （2026-10-15 他点的），挪到了状态栏左边那一截，见 `gui::mod` 的 status 面板。
 
         // 测速全部：走的就是订阅源页/节点页那条 `speedtest_all_sources`，不另开一条通道。
         // 并发用系统设置里那个数（默认 128），批量作业自带 TCP 预筛。
