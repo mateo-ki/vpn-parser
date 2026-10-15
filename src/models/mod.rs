@@ -262,6 +262,12 @@ pub struct AppSettings {
     /// `Style::text_styles` 会一半大一半小，所以这条走 `pixels_per_point` 整屏一起缩。
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
+    /// 夜间模式：中性色整套换成深色锚点，和 `ui_theme`（强调色）是两条正交的轴。
+    /// **默认开**（用户 2026-10-15 指定）：新装和老库升级上来第一眼就是夜间，
+    /// 不想要就在设置页「外观」里关掉。这条推翻了他自己 2026-10-06 那句
+    /// "只留清爽浅白" —— 那次是删深色主题条目，这次是把夜间做成默认，按新的走。
+    #[serde(default = "default_ui_dark")]
+    pub ui_dark: bool,
     /// 内核下载走哪条路：race / official / proxy / local（见 `kernel::KernelSource`）。
     #[serde(default = "default_kernel_source")]
     pub kernel_source: String,
@@ -320,6 +326,10 @@ fn default_ui_scale() -> f32 {
     1.0
 }
 
+fn default_ui_dark() -> bool {
+    true
+}
+
 /// 允许的字体/界面缩放区间。界面上是 85%~140% 的滑杆，但 API/旧库里的值不一定落在
 /// 这个范围里 —— 越界的值会让窗口内容算成 0 高或撑到屏外，所以只在这一处收口。
 pub fn clamp_ui_scale(value: f32) -> f32 {
@@ -368,6 +378,7 @@ impl Default for AppSettings {
             publisher_token: String::new(),
             ui_theme: default_ui_theme(),
             ui_scale: default_ui_scale(),
+            ui_dark: true,
             kernel_source: default_kernel_source(),
             firewall_auto_allow: false,
             auto_failover: false,
@@ -411,6 +422,7 @@ pub struct UpdateSettings {
     pub publisher_token: Option<String>,
     pub ui_theme: Option<String>,
     pub ui_scale: Option<f32>,
+    pub ui_dark: Option<bool>,
     pub kernel_source: Option<String>,
     pub firewall_auto_allow: Option<bool>,
     pub auto_failover: Option<bool>,
@@ -483,16 +495,13 @@ pub struct SourceHomogeneityReport {
     pub is_redundant: bool,
 }
 
-/// 「判定建议」那一列的三态。
-///
-/// 为什么不能只看 `is_redundant`：一个这次解析出 0 个节点的源既谈不上冗余（没东西可重合），
-/// 更不该领"核心保留"那块绿牌 —— 它不是核心，它是空的（2026-10-15 他点的这条）。
+/// 「判定建议」那一列的两态。判定本身在数据层（`db::source_homogeneity_analysis`），
+/// 这里只负责把它翻成界面话术 —— 特别是**0 节点的源**：它不是"核心保留"（它没有东西可
+/// 保留），也不该被"重合率"那套话术盖过去，所以单独一句"0 节点"。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HomogeneityVerdict {
-    /// 重合到底了，剔除候选。
+    /// 剔除候选：重合到底了，或者干脆一个节点都没有。
     Redundant,
-    /// 一个节点都没有：不参与"保留还是剔除"的判断。
-    Empty,
     /// 有留下来的理由。
     Core,
 }
@@ -501,10 +510,17 @@ impl SourceHomogeneityReport {
     pub fn verdict(&self) -> HomogeneityVerdict {
         if self.is_redundant {
             HomogeneityVerdict::Redundant
-        } else if self.total_nodes == 0 {
-            HomogeneityVerdict::Empty
         } else {
             HomogeneityVerdict::Core
+        }
+    }
+
+    /// 剔除候选分两种说法：重合掉到底 vs 空得什么都没贡献。
+    pub fn verdict_label(&self) -> &'static str {
+        match self.verdict() {
+            HomogeneityVerdict::Redundant if self.total_nodes == 0 => "⚠️ 建议剔除 · 0 节点",
+            HomogeneityVerdict::Redundant => "⚠️ 建议剔除",
+            HomogeneityVerdict::Core => "✓ 核心保留",
         }
     }
 }
@@ -554,17 +570,22 @@ mod homogeneity_verdict_tests {
         }
     }
 
-    /// 解析出 0 个节点的源不许被判成"核心保留"。
-    /// 顺序也要钉住：0 节点 + 连续失败够多次 = 剔除候选，不能被"空源"这块灰牌挡掉。
+    /// 判定只看数据层给的那个 `is_redundant`，界面不许自己另起一套 —— 不然就会出现
+    /// "徽章说剔除、『仅勾选冗余源』却不勾它"的半改状态。空源单独说一句理由是"空"。
     #[test]
     fn an_empty_source_is_never_marked_core() {
-        assert_eq!(
-            report(0, false).verdict(),
-            HomogeneityVerdict::Empty,
-            "0 节点的源被当成了核心"
-        );
         assert_eq!(report(0, true).verdict(), HomogeneityVerdict::Redundant);
-        assert_eq!(report(12, false).verdict(), HomogeneityVerdict::Core);
+        assert!(
+            report(0, true).verdict_label().contains("0 节点"),
+            "空源的文案没讲清楚理由：{}",
+            report(0, true).verdict_label()
+        );
         assert_eq!(report(12, true).verdict(), HomogeneityVerdict::Redundant);
+        assert_eq!(report(12, false).verdict(), HomogeneityVerdict::Core);
+        assert_ne!(
+            report(12, true).verdict_label(),
+            report(0, true).verdict_label(),
+            "重合掉的源和空源用同一句话，界面就看不出为什么要删它"
+        );
     }
 }

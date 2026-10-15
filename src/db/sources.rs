@@ -327,12 +327,14 @@ impl Database {
             // 冗余源判定：
             // 1. 该源有节点，但独有可用节点为 0，且重合率 >= 85%（或自身存活为0）
             // 2. 或重合率 >= 98%
-            // 3. 或总节点为 0 且连续失败 >= 2 次
+            // 3. 或它现在一个节点都没有 —— 池子里不贡献任何东西的源就是剔除对象。
+            //    （以前这条要再叠一个"连续失败 >= 2 次"，于是刚拉回 0 节点、或者链接还通
+            //    但订阅内容空掉的源会被判成"保留"，用户 2026-10-15 点的就是这条。）
             let is_redundant = if total_nodes > 0 {
                 (unique_alive_nodes == 0 && (overlap_rate_pct >= 85.0 || alive_nodes == 0))
                     || overlap_rate_pct >= 98.0
             } else {
-                source.fail_streak >= 2
+                true
             };
 
             reports.push(SourceHomogeneityReport {

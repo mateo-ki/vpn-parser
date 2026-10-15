@@ -439,6 +439,7 @@ mod tests {
                 publisher_token: None,
                 ui_theme: None,
                 ui_scale: None,
+                ui_dark: None,
                 kernel_source: None,
                 firewall_auto_allow: None,
                 auto_failover: None,
@@ -894,6 +895,17 @@ mod tests {
             .await
             .unwrap();
 
+        // 第四个源：一次都没拉出节点（新加的、或者订阅内容空掉的，都是这个形状）。
+        let s4 = db
+            .create_source(CreateSource {
+                name: "Empty Source".into(),
+                url_template: "https://example.com/s4".into(),
+                enabled: true,
+                remark: None,
+            })
+            .await
+            .unwrap();
+
         let make_node = |id: &str, src_id: &str, server: &str, alive: bool| Node {
             id: id.to_string(),
             source_id: Some(src_id.to_string()),
@@ -934,7 +946,7 @@ mod tests {
 
         // Run analysis
         let reports = db.analyze_source_homogeneity().await.unwrap();
-        assert_eq!(reports.len(), 3);
+        assert_eq!(reports.len(), 4);
 
         let rep_s2 = reports.iter().find(|r| r.source_id == s2.id).unwrap();
         assert_eq!(rep_s2.overlap_rate_pct, 100.0);
@@ -945,6 +957,22 @@ mod tests {
         assert_eq!(rep_s3.unique_alive_nodes, 1);
         assert_eq!(rep_s3.overlap_rate_pct, 0.0);
         assert!(!rep_s3.is_redundant);
+
+        // 0 节点的源必须是剔除候选。以前这条要再叠一个"连续失败 >= 2 次"，于是刚拉回
+        // 0 节点、fail_streak 还是 0 的源一直挂着"核心保留"（用户 2026-10-15 点的这条）。
+        let rep_s4 = reports.iter().find(|r| r.source_id == s4.id).unwrap();
+        assert_eq!(rep_s4.total_nodes, 0);
+        assert!(rep_s4.is_redundant, "0 节点的源没被判成剔除候选");
+        assert_eq!(
+            rep_s4.verdict(),
+            crate::models::HomogeneityVerdict::Redundant,
+            "界面话术和数据层判定不一致"
+        );
+        assert!(
+            rep_s4.verdict_label().contains("0 节点"),
+            "空源的文案没说出理由是空：{}",
+            rep_s4.verdict_label()
+        );
 
         // Prune by disabling
         let prune_res = db
@@ -1356,6 +1384,46 @@ mod tests {
         }
     }
 
+    /// 夜间模式**默认开**（用户 2026-10-15 指定）：新库第一帧就是深色，老库补上这一列之后
+    /// 存量行也跟着变夜间 —— 那是他要的效果。反过来也得成立：关掉之后必须把住别的设置保存
+    /// 和重开，否则就是经典的"我明明关了它又黑回去"。
+    #[tokio::test]
+    async fn night_mode_defaults_on_and_stays_off_when_turned_off() {
+        let path = std::env::temp_dir().join(format!("vpn-parser-night-{}.db", Uuid::new_v4()));
+        let db = Database::connect(path.to_str().unwrap()).await.unwrap();
+        assert!(
+            db.get_settings().await.unwrap().ui_dark,
+            "新库默认就该是夜间"
+        );
+
+        db.update_settings(UpdateSettings {
+            ui_dark: Some(false),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        db.update_settings(UpdateSettings {
+            fetch_concurrency: Some(5),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert!(
+            !db.get_settings().await.unwrap().ui_dark,
+            "别的设置保存不该把夜间翻回去"
+        );
+
+        drop(db);
+        let reopened = Database::connect(path.to_str().unwrap()).await.unwrap();
+        assert!(
+            !reopened.get_settings().await.unwrap().ui_dark,
+            "重开必须还是浅白：默认值不该盖过用户的选择"
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
     /// 「预备状态自动下载内核」和「加完订阅源就测这个源」是**默认开**的两条：他要的
     /// 就是新装机第一次启动自己动起来。关掉的必须扛住别的设置保存和重开，否则
     /// "我明明关了它又自己下"这种事没法交代。
@@ -1455,6 +1523,7 @@ mod tests {
             publisher_token: None,
             ui_theme: None,
             ui_scale: None,
+            ui_dark: None,
             kernel_source: None,
             firewall_auto_allow: None,
             auto_failover: None,

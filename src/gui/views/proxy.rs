@@ -36,6 +36,16 @@ enum RulesHeaderAction {
     Import,
 }
 
+/// 状态栏右侧那一排的普通按钮：填充、描边、字重全部写死一份，好让「IP 检测」「系统代理 /
+/// TUN」「测速全部」和同排的 `primary_btn`/`danger_btn` 长成同一个形状 —— 那两条只换填充色
+/// 表达"这是主操作 / 这是停止"。之前这四个按钮四种长相：普通按钮是常规字重 + 样式默认底，
+/// chip 是手搓 `Frame`（6px 圆角、自己的内边距），主/危险按钮又各自钉过圆角。
+fn status_btn(text: &str) -> egui::Button<'_> {
+    egui::Button::new(RichText::new(text).strong())
+        .fill(theme::panel())
+        .stroke(Stroke::new(1.0_f32, theme::border()))
+}
+
 impl VpnApp {
     pub(crate) fn ui_proxy(&mut self, ui: &mut Ui) {
         let selected_node = self
@@ -186,7 +196,7 @@ impl VpnApp {
                             Icon::Alert,
                             // 和旁边那条健康带的"有不通"同一个红：带子红了、紧挨着的
                             // 这句还是石墨灰，看着像只改了一半。
-                            crate::gui::widgets::HEALTH_FAILED,
+                            crate::gui::widgets::health_failed_color(),
                             format!(
                                 "实测 {} ✗ {}（连续 {} 次）",
                                 clock_of(&row.at),
@@ -427,7 +437,7 @@ impl VpnApp {
                 self.stop_proxy();
             }
             if ui
-                .add_enabled(!self.ip_risk_busy, egui::Button::new("IP 检测"))
+                .add_enabled(!self.ip_risk_busy, status_btn("IP 检测"))
                 .on_hover_text(
                     "查这个节点服务器 IP 的归属（机房/住宅）；当前在跑的节点还会经代理查一次真实出口",
                 )
@@ -448,7 +458,7 @@ impl VpnApp {
                 self.start_proxy();
             }
             if ui
-                .add_enabled(!self.ip_risk_busy, egui::Button::new("IP 检测"))
+                .add_enabled(!self.ip_risk_busy, status_btn("IP 检测"))
                 .on_hover_text("查该节点服务器 IP 是机房还是住宅出口")
                 .clicked()
             {
@@ -456,29 +466,15 @@ impl VpnApp {
             }
         }
 
-        // 系统代理 / TUN：一个 chip 来回切，运行中不给改（改了要重载内核）。
-        let (mode_icon, mode_label) = match self.proxy_config.mode {
-            ProxyMode::System => (Icon::Globe, "系统代理"),
-            ProxyMode::Tun => (Icon::Shield, "TUN 模式"),
+        // 系统代理 / TUN：一个按钮来回切，运行中不给改（改了要重载内核）。
+        // 以前它是手搓的 `Frame`（6px 圆角、自己的内边距、9px 小字），和同排那三个
+        // 按钮四种长相 —— 现在走同一个 `status_btn`，只剩语义差别（用户 2026-10-15）。
+        let mode_label = match self.proxy_config.mode {
+            ProxyMode::System => "系统代理",
+            ProxyMode::Tun => "TUN 模式",
         };
-        let mode_resp = Frame::NONE
-            .fill(theme::panel())
-            .stroke(Stroke::new(1.0_f32, theme::border()))
-            .corner_radius(CornerRadius::same(6))
-            .inner_margin(Margin::symmetric(9, 2))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    icon_label(ui, mode_icon, 13.0, theme::accent());
-                    ui.label(
-                        RichText::new(mode_label)
-                            .small()
-                            .strong()
-                            .color(theme::text_primary()),
-                    );
-                });
-            })
-            .response
-            .interact(Sense::click())
+        let mode_resp = ui
+            .add(status_btn(mode_label))
             .on_hover_text("点击切换 系统代理 / TUN 模式");
         if mode_resp.clicked() {
             if self.proxy_status.config_editable() {
@@ -511,7 +507,7 @@ impl VpnApp {
         // 并发用系统设置里那个数（默认 128），批量作业自带 TCP 预筛。
         let testing = self.busy;
         if ui
-            .add_enabled(!testing, egui::Button::new("测速全部"))
+            .add_enabled(!testing, status_btn("测速全部"))
             .on_hover_text(if testing {
                 "已经有任务在跑，等它结束再测速"
             } else {
@@ -3233,5 +3229,85 @@ mod rules_row_probe_tests {
                 tabs.max.x
             );
         }
+    }
+}
+#[cfg(test)]
+mod status_button_style_tests {
+    use super::status_btn;
+    use crate::gui::widgets::{danger_btn, primary_btn};
+    use eframe::egui::{self, CentralPanel, Color32, CornerRadius, RawInput, Rect, Vec2};
+
+    /// 照状态栏那一排的写法真画一遍，读这一帧画出来的按钮矩形。
+    fn painted() -> Vec<(CornerRadius, f32, Color32)> {
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(Rect::from_min_size(
+            egui::Pos2::ZERO,
+            Vec2::new(1330.0, 200.0),
+        ));
+        let mut out = Vec::new();
+        let _ = ctx.run(input, |ctx| {
+            CentralPanel::default().show(ctx, |ui| {
+                ui.spacing_mut().button_padding = egui::vec2(11.0, 3.0);
+                let layer = ui.layer_id();
+                ui.horizontal(|ui| {
+                    let _ = ui.add(primary_btn("启动代理"));
+                    let _ = ui.add(danger_btn("停止代理"));
+                    let _ = ui.add(status_btn("IP 检测"));
+                    let _ = ui.add(status_btn("系统代理"));
+                    let _ = ui.add(status_btn("测速全部"));
+                });
+                out = ctx.graphics_mut(|g| {
+                    g.get(layer)
+                        .map(|list| {
+                            list.all_entries()
+                                .filter_map(|shape| match &shape.shape {
+                                    egui::Shape::Rect(rect)
+                                        if (16.0..=40.0).contains(&rect.rect.height()) =>
+                                    {
+                                        Some((rect.corner_radius, rect.rect.height(), rect.fill))
+                                    }
+                                    _ => None,
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                });
+            });
+        });
+        out
+    }
+
+    /// 一排五个按钮：圆角和高度必须完全一致（这是他说"样式要一样"时看到的东西），
+    /// 普通那三个的填充也必须一致；主/危险按钮允许只有颜色不同。
+    #[test]
+    fn the_status_row_buttons_share_one_shape() {
+        let rects = painted();
+        assert!(
+            rects.len() >= 5,
+            "五个按钮没都画出来，只读到 {}",
+            rects.len()
+        );
+        let radius = rects[0].0;
+        let height = rects[0].1;
+        for (index, (got_radius, got_height, _)) in rects.iter().enumerate() {
+            assert_eq!(
+                *got_radius, radius,
+                "第 {index} 个按钮圆角 {got_radius:?} 和同排 {radius:?} 不一致"
+            );
+            assert!(
+                (got_height - height).abs() < 0.6,
+                "第 {index} 个按钮高 {got_height:.1}，同排是 {height:.1}"
+            );
+        }
+        let neutral: Vec<Color32> = rects.iter().skip(2).map(|(_, _, fill)| *fill).collect();
+        assert!(
+            neutral.windows(2).all(|pair| pair[0] == pair[1]),
+            "普通按钮的填充色不一致：{neutral:?}"
+        );
+        assert_ne!(
+            rects[0].2, rects[2].2,
+            "主按钮和普通按钮同色了 —— 那这排就没人看得出哪个是主操作"
+        );
     }
 }

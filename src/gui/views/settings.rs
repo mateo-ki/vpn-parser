@@ -137,6 +137,21 @@ impl VpnApp {
                 }
             });
 
+            ui.add_space(10.0);
+            // 夜间：只换中性色，强调色仍然是上面那 5 支里选的一支（两条轴正交）。
+            let mut dark = self.edit_ui_dark;
+            if ui
+                .checkbox(&mut dark, RichText::new("夜间模式（深色底）"))
+                .on_hover_text(
+                    "只换中性色（页面、卡片、文字），强调色还是上面选的那一支 —— 5 支强调色 × 明/暗。\n\
+                     改动即时生效并自动保存，关掉就回到浅白。",
+                )
+                .changed()
+            {
+                self.edit_ui_dark = dark;
+                auto_save = true;
+            }
+
             ui.add_space(12.0);
             ui.separator();
             ui.add_space(8.0);

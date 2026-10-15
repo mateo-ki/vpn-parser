@@ -179,7 +179,11 @@ impl VpnApp {
                                     }
                                     if let Some(reports) = &self.homogeneity_reports {
                                         if let Some(rep) = reports.iter().find(|r| r.source_id == s.id) {
-                                            if rep.is_redundant {
+                                            if rep.total_nodes == 0 {
+                                                // 空源不能写"同质化 0%"：重合率是 0 恰恰因为它
+                                                // 什么都没贡献，剔除理由是"空"不是"重"。
+                                                status_badge(ui, "⚠️ 空源 · 建议剔除", theme::danger());
+                                            } else if rep.is_redundant {
                                                 status_badge(ui, &format!("⚠️ 同质化 {:.0}%", rep.overlap_rate_pct), theme::danger());
                                             } else if rep.unique_alive_nodes > 0 {
                                                 status_badge(ui, &format!("独有可用 {}", rep.unique_alive_nodes), theme::success());
@@ -513,18 +517,13 @@ impl VpnApp {
                                             .color(if r.unique_alive_nodes > 0 { theme::success() } else { theme::danger() }),
                                     );
 
-                                    match r.verdict() {
+                                    let verdict_color = match r.verdict() {
                                         crate::models::HomogeneityVerdict::Redundant => {
-                                            status_badge(ui, "⚠️ 建议剔除", theme::danger());
+                                            theme::danger()
                                         }
-                                        crate::models::HomogeneityVerdict::Empty => {
-                                            // 0 节点的源不给绿牌：它不是核心，它是空的。
-                                            status_badge(ui, "空源 · 不参与判定", theme::muted());
-                                        }
-                                        crate::models::HomogeneityVerdict::Core => {
-                                            status_badge(ui, "✓ 核心保留", theme::success());
-                                        }
-                                    }
+                                        crate::models::HomogeneityVerdict::Core => theme::success(),
+                                    };
+                                    status_badge(ui, r.verdict_label(), verdict_color);
                                     ui.end_row();
                                 }
                             });

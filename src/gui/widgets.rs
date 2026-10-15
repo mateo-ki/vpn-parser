@@ -588,6 +588,20 @@ pub fn render_traffic_sparkline(
 /// 真红，不去动 `danger` —— 其余界面继续没有红。
 pub const HEALTH_FAILED: Color32 = Color32::from_rgb(0xB3, 0x2A, 0x2A);
 
+/// 夜间那支红：同一个色相往白里提一档。`HEALTH_FAILED` 压在夜间卡片 `#1A1A1A` 上
+/// 只有约 2.4:1，看着像"没点亮"；提到这个值才在纯黑/深灰底上仍然读得出"这里不通"。
+pub const HEALTH_FAILED_DARK: Color32 = Color32::from_rgb(0xE5, 0x6A, 0x6A);
+
+/// 当前主题下该用哪支红。
+#[inline]
+pub fn health_failed_color() -> Color32 {
+    if theme::is_light() {
+        HEALTH_FAILED
+    } else {
+        HEALTH_FAILED_DARK
+    }
+}
+
 /// 把实测行归进最近 24 个小时的桶：0 = 那一小时没有实测；1 = 全通；-1 = 至少一次不通
 /// （失败优先，一次失败就够看）。
 ///
@@ -638,7 +652,7 @@ pub fn render_health_strip(ui: &mut Ui, buckets: &[i8; 24]) {
         let fill = match state {
             -1 => {
                 failed += 1;
-                HEALTH_FAILED
+                health_failed_color()
             }
             1 => {
                 passed += 1;
@@ -980,7 +994,7 @@ pub fn requires_tun_elevation(mode: ProxyMode, elevated: bool) -> bool {
 #[cfg(test)]
 mod sparkline_tests {
     use super::{
-        health_hour_buckets, render_health_strip, render_traffic_sparkline, HEALTH_FAILED,
+        health_failed_color, health_hour_buckets, render_health_strip, render_traffic_sparkline,
     };
     use eframe::egui::{self, CentralPanel, Color32, RawInput, Rect, Vec2};
     use std::collections::VecDeque;
@@ -1144,7 +1158,10 @@ mod sparkline_tests {
         let painted = fills(&buckets);
         assert_eq!(painted.len(), 24, "24 格应该画满，实际 {}", painted.len());
         assert_eq!(
-            painted.iter().filter(|c| **c == HEALTH_FAILED).count(),
+            painted
+                .iter()
+                .filter(|c| **c == health_failed_color())
+                .count(),
             3,
             "红格数不对（三个有不通的小时没都画成红）"
         );
@@ -1166,7 +1183,7 @@ mod sparkline_tests {
         );
         // 反向：这要是还退回旧的深色写法，这条就红。
         assert_ne!(
-            HEALTH_FAILED,
+            health_failed_color(),
             super::theme::text_primary(),
             "红和正文深色撞了，等于没改"
         );

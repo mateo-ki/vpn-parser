@@ -120,6 +120,20 @@ fn readable_on_white(accent: Color32) -> Color32 {
     readable_on(accent, Color32::from_rgb(255, 255, 255), 4.6)
 }
 
+/// 深色底上的"压深"必须反着走：往**白**里提，直到在 `bg` 上到 `target`:1。
+/// [`readable_on`] 只会往黑里压 —— 那是为"亮强调色压在白底上"写的；拿它算夜间
+/// 的强调文字，越算越看不见（实测钴蓝压在夜间淡底上只有 3.15:1）。
+fn readable_on_dark(base: Color32, bg: Color32, target: f32) -> Color32 {
+    let white = Color32::from_rgb(255, 255, 255);
+    let mut t = 0.0_f32;
+    let mut value = base;
+    while contrast(value, bg) < target && t < 0.9 {
+        t += 0.02;
+        value = mix(base, white, t);
+    }
+    value
+}
+
 impl Palette {
     fn from_ink(ink: Ink) -> Self {
         let accent_hover = if ink.light {
@@ -142,6 +156,14 @@ impl Palette {
         } else {
             ink.on_primary
         };
+        // 淡强调底（选中项、胶囊、提示块）先算出来，"压在它上面的强调色文字"要按
+        // **这块底**去压深/提亮，不是按纯白 —— 按纯白算只有 3.49:1（浅色）/ 3.15:1（夜间）。
+        let accent_bg = mix(ink.page, ink.accent, if ink.light { 0.12 } else { 0.2 });
+        let accent_strong = if ink.light {
+            readable_on(ink.accent, accent_bg, 4.6)
+        } else {
+            readable_on_dark(ink.accent, accent_bg, 4.6)
+        };
         Self {
             page_bg: ink.page,
             sidebar: ink.sidebar,
@@ -154,8 +176,8 @@ impl Palette {
             muted: ink.muted,
             accent: ink.accent,
             accent_hover,
-            accent_bg: mix(ink.page, ink.accent, if ink.light { 0.12 } else { 0.2 }),
-            accent_strong: readable_on_white(ink.accent),
+            accent_bg,
+            accent_strong,
             // 浅色主题下主按钮不再用实心深蓝：淡蓝底 + 压深后的强调色字。
             // 文字必须按**这块淡蓝底**去压深，不是按纯白（按纯白算出来只有 3.49:1）。
             primary_btn: soft_btn,
@@ -233,12 +255,11 @@ pub fn theme_by_id(id: &str) -> &'static Theme {
         .unwrap_or_else(|| &THEMES[0])
 }
 
-pub fn palette(id: &str) -> Palette {
-    let accent = rgb(theme_by_id(id).accent);
-    Palette::from_ink(Ink {
-        // 中性色：左侧菜单纯白，右侧内容页压深一档蓝灰，卡片再回到纯白 —— 分层靠
-        // "页面比卡片深"这一条，不靠描边。用户 2026-10-06：卡片和周围背景快分不开了，
-        // 菜单要更浅、内容要更深。
+/// 浅色那套中性锚点：左侧菜单纯白，右侧内容页压深一档蓝灰，卡片再回到纯白 ——
+/// 分层靠"页面比卡片深"这一条，不靠描边（用户 2026-10-06：卡片和周围背景快分不开了，
+/// 菜单要更浅、内容要更深）。
+fn light_ink(accent: Color32) -> Ink {
+    Ink {
         page: rgb(0xE8_EE_F7),
         sidebar: rgb(0xFF_FF_FF),
         panel: rgb(0xFF_FF_FF),
@@ -256,6 +277,47 @@ pub fn palette(id: &str) -> Palette {
         warning: rgb(0x6B_74_80),
         danger: rgb(0x2E_35_3D),
         light: true,
+    }
+}
+
+/// 夜间锚点：**从用户给的参考截图上逐像素量出来的**（2026-10-15，ChatGPT 深色）。
+/// 页面和侧栏同为纯黑（不分层，靠卡片浮起来分层），卡片 #1A1A1A，内层/hover #262626，
+/// 正文 #EDEDED，灰字 #C9C9C9，分隔线 #1B1B1B —— 整套**零蓝调**。
+/// 状态色是这套里没有的（那张图没有状态语义），按同一条规则现算：中性灰阶里只把
+/// "实测正常"留一点绿，警告/危险仍然是低彩度石墨，不给红/黄。
+fn dark_ink(accent: Color32) -> Ink {
+    Ink {
+        page: rgb(0x00_00_00),
+        sidebar: rgb(0x00_00_00),
+        panel: rgb(0x1A_1A_1A),
+        panel_hover: rgb(0x26_26_26),
+        border: rgb(0x2A_2A_2A),
+        text: rgb(0xED_ED_ED),
+        text_secondary: rgb(0xC9_C9_C9),
+        muted: rgb(0x9A_9A_9A),
+        accent,
+        on_primary: rgb(0xFF_FF_FF),
+        // 主按钮仍然是"压深到白字 4.6:1"的那支强调色：纯黑底上一块实心色站得住。
+        primary_btn: readable_on_white(accent),
+        success: rgb(0x35_D1_96),
+        warning: rgb(0xB0_B0_B0),
+        danger: rgb(0xDC_DC_DC),
+        light: false,
+    }
+}
+
+pub fn palette(id: &str) -> Palette {
+    palette_for(id, false)
+}
+
+/// 同一支强调色 × 明/暗两套中性锚点 = 主题的全部组合。夜间是开关，不是第 6 套主题
+/// （用户 2026-10-15 选的方案一：和现有 5 套强调色正交）。
+pub fn palette_for(id: &str, dark: bool) -> Palette {
+    let accent = rgb(theme_by_id(id).accent);
+    Palette::from_ink(if dark {
+        dark_ink(accent)
+    } else {
+        light_ink(accent)
     })
 }
 
@@ -356,9 +418,10 @@ pub fn is_light() -> bool {
 #[inline]
 /// 装主题：写静态调色板 + 同步 egui 的 `Visuals`（面板底色、控件描边、选中色、超链接、
 /// 间距/圆角这些一并跟着走，否则主题只改了自绘部分、原生控件还是老样子）。
-pub fn apply(ctx: &egui::Context, id: &str) {
+/// `dark` = 夜间开关。它和 `id`（强调色）是两条正交的轴：5 支强调色 × 明/暗。
+pub fn apply(ctx: &egui::Context, id: &str, dark: bool) {
     let resolved = theme_by_id(id).id.to_string();
-    let pal = palette(&resolved);
+    let pal = palette_for(&resolved, dark);
     if let Ok(mut guard) = CURRENT.write() {
         *guard = pal;
     }
@@ -566,6 +629,145 @@ mod tests {
                 theme_by_id(legacy).id,
                 DEFAULT_THEME,
                 "{legacy} 没有退回默认主题"
+            );
+        }
+    }
+}
+#[cfg(test)]
+mod dark_mode_tests {
+    use super::*;
+
+    /// 低彩度判据：红/黄这类有彩度的颜色 max-min 通道差很大，石墨灰很小。
+    /// 浅色那版断言用的是通道上限（`r <= 90` 之类），那套上限在深色锚点上会把
+    /// 正常的浅石墨误判成"混进红/黄"，所以夜间这边换成与亮度无关的彩度。
+    fn chroma(c: Color32) -> u8 {
+        let max = c.r().max(c.g()).max(c.b());
+        let min = c.r().min(c.g()).min(c.b());
+        max - min
+    }
+
+    /// 夜间每一格文字都要读得出来 —— 包括那支"压在淡强调底上的强调色文字"，
+    /// 它是这次新加的 `readable_on_dark`（往白里提）算出来的，用旧的往黑里压会得到 3.15:1。
+    #[test]
+    fn every_dark_text_slot_stays_readable() {
+        for spec in THEMES {
+            let p = palette_for(spec.id, true);
+            assert!(!p.light, "{} 夜间应该走深色分支", spec.name);
+            for (slot, fg, bg, floor) in [
+                ("正文/页面", p.text_primary, p.page_bg, 7.0),
+                ("正文/卡片", p.text_primary, p.panel, 7.0),
+                ("次要/卡片", p.text_secondary, p.panel, 4.5),
+                ("muted/卡片", p.muted, p.panel, 4.5),
+                ("侧栏灰字", p.sidebar_muted, p.sidebar, 4.5),
+                ("强调字/淡强调底", p.accent_strong, p.accent_bg, 4.5),
+                ("主按钮字/按钮底", p.on_primary, p.primary_btn, 4.5),
+                ("成功/卡片", p.success, p.panel, 4.5),
+                ("警告/卡片", p.warning, p.panel, 4.5),
+                ("危险/卡片", p.danger, p.panel, 4.5),
+            ] {
+                let got = contrast(fg, bg);
+                assert!(
+                    got >= floor,
+                    "{} 夜间 {slot} = {got:.2}:1（要 >= {floor}）",
+                    spec.name
+                );
+            }
+        }
+    }
+
+    /// 分层方式照参考图：页面和侧栏同为纯黑（不分层），卡片浮起来靠"比页面亮一档"。
+    /// 门槛 1.15 不是拍的：参考图上卡片 #1A1A1A 压在纯黑上实测就是 **1.21:1**，
+    /// 深色下靠亮度分层本来就只要一点点差，再大就要往灰里走、失去"近黑"那口气。
+    #[test]
+    fn dark_layers_by_lightening_the_card_not_by_tinting_it() {
+        for spec in THEMES {
+            let p = palette_for(spec.id, true);
+            assert!(
+                contrast(p.sidebar, p.page_bg) < 1.02,
+                "{} 夜间侧栏和页面应该同色，实测 {:.2}:1",
+                spec.name,
+                contrast(p.sidebar, p.page_bg)
+            );
+            assert!(
+                contrast(p.panel, p.page_bg) >= 1.15,
+                "{} 夜间卡片没浮起来：{:.2}:1",
+                spec.name,
+                contrast(p.panel, p.page_bg)
+            );
+            // 深色主题必须留描边（阴影在深底上会糊脏，见 card_stroke）。
+            assert!(
+                p.border_subtle != p.panel,
+                "{} 夜间连 border 都和卡片同色，分层就只剩阴影了",
+                spec.name
+            );
+        }
+    }
+
+    /// "页面上不要红/黄"这条在夜间仍然守着；反向对照用同一把尺子量真红，
+    /// 证明这个判据不是永远为真。
+    #[test]
+    fn dark_state_colors_stay_graphite() {
+        for spec in THEMES {
+            let p = palette_for(spec.id, true);
+            assert!(
+                chroma(p.danger) <= 30 && chroma(p.warning) <= 30,
+                "{} 夜间混进了有彩度的状态色：danger={:?} warning={:?}",
+                spec.name,
+                p.danger,
+                p.warning
+            );
+        }
+        assert!(
+            chroma(Color32::from_rgb(0xB3, 0x2A, 0x2A)) > 100,
+            "对照组失效：这把彩度尺子量不出真红，那上面那条断言就是白写的"
+        );
+    }
+
+    /// 接线检查：`apply(ctx, id, dark)` 那个参数真的传到底了 —— egui 自己的
+    /// `Visuals::panel_fill` 和静态调色板必须一起翻，否则自绘的部分是黑的、原生控件
+    /// 还是浅的（半深半浅就是这条最容易漏）。
+    #[test]
+    fn the_dark_switch_reaches_egui_visuals_too() {
+        let ctx = egui::Context::default();
+        apply(&ctx, DEFAULT_THEME, true);
+        assert!(!is_light(), "装了夜间，is_light() 还说自己是浅色");
+        assert_eq!(
+            ctx.style().visuals.panel_fill,
+            Color32::from_rgb(0x00, 0x00, 0x00),
+            "egui 的面板底色没跟着夜间走"
+        );
+        assert_eq!(
+            panel(),
+            Color32::from_rgb(0x1A, 0x1A, 0x1A),
+            "卡片色没跟着走"
+        );
+        assert_eq!(
+            ctx.style().visuals.widgets.inactive.bg_fill,
+            Color32::from_rgb(0x1A, 0x1A, 0x1A),
+            "原生控件的底色没跟着走"
+        );
+
+        apply(&ctx, DEFAULT_THEME, false);
+        assert!(is_light(), "关掉夜间之后没回到浅白");
+        assert_eq!(
+            ctx.style().visuals.panel_fill,
+            Color32::from_rgb(0xE8, 0xEE, 0xF7),
+            "回到浅色时面板底色没换回来"
+        );
+    }
+
+    /// 夜间开关不许动强调色 —— 它是和 5 套主题正交的一条轴，不是第 6 套主题。
+    #[test]
+    fn the_dark_switch_leaves_the_accent_alone() {
+        for spec in THEMES {
+            let light = palette_for(spec.id, false);
+            let dark = palette_for(spec.id, true);
+            assert_eq!(light.accent, dark.accent, "{} 夜间改了强调色", spec.name);
+            assert_ne!(light.page_bg, dark.page_bg, "{} 夜间没换底色", spec.name);
+            assert_ne!(
+                light.text_primary, dark.text_primary,
+                "{} 夜间没换正文色",
+                spec.name
             );
         }
     }

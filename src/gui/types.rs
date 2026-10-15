@@ -403,6 +403,7 @@ pub struct SettingsEditState {
     pub bandwidth_min_kbps: u32,
     pub ui_theme: String,
     pub ui_scale: f32,
+    pub ui_dark: bool,
     /// 参与预发：检查更新时也看 GitHub 上标了 prerelease 的 beta（在「关于」页里勾）。
     pub insider_channel: bool,
     pub kernel_source: String,
@@ -440,6 +441,7 @@ impl SettingsEditState {
             bandwidth_min_kbps: s.bandwidth_min_kbps,
             ui_theme: s.ui_theme.clone(),
             ui_scale: s.ui_scale,
+            ui_dark: s.ui_dark,
             insider_channel: s.insider_channel,
             kernel_source: s.kernel_source.clone(),
             firewall_auto_allow: s.firewall_auto_allow,
@@ -479,6 +481,7 @@ impl SettingsEditState {
             // 加载设置会无条件把库里的值灌进编辑态，否则启动时一比就脏，同步永远不发生。
             || self.ui_theme != s.ui_theme
             || (self.ui_scale - s.ui_scale).abs() > 0.001
+            || self.ui_dark != s.ui_dark
             || self.insider_channel != s.insider_channel
     }
 }

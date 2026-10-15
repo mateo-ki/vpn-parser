@@ -65,6 +65,17 @@ pub fn starting_scale() -> Option<f32> {
         .and_then(|v| v.trim().parse::<f32>().ok())
 }
 
+/// 诊断壳专用：`VPN_PARSER_DIAG_DARK=1` 让这个实例以夜间启动，用来验深色那套锚点在
+/// 真界面上跑不跑得起来（像素仍然看不见，但 `apply(ctx, id, dark)` 接错线会当场露出来）。
+pub fn starting_dark() -> Option<bool> {
+    if !enabled() {
+        return None;
+    }
+    std::env::var("VPN_PARSER_DIAG_DARK")
+        .ok()
+        .map(|value| enabled_from_value(Some(&value)))
+}
+
 /// 诊断壳专用：`VPN_PARSER_DIAG_VERSION=1.3.0` 让这个实例自报是老版本，
 /// 用来验证"发现新版 → 侧栏亮绿色↑ → 点它去关于页"整条链路。
 pub fn forced_version() -> Option<String> {

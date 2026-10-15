@@ -189,6 +189,10 @@ impl Database {
         // 字体/界面大小（1.0 = 不缩放）。老库升级上来的这一列就是 1.0，行为不变。
         self.ensure_column("settings", "ui_scale", "REAL NOT NULL DEFAULT 1.0")
             .await?;
+        // 夜间模式开关：和 ui_theme（强调色）正交。默认开（用户 2026-10-15 指定），
+        // 所以老库补这一列时存量行也会一起变成夜间 —— 这是他要的效果，不是漏掉的条件。
+        self.ensure_column("settings", "ui_dark", "INTEGER NOT NULL DEFAULT 1")
+            .await?;
         self.ensure_column(
             "settings",
             "kernel_source",

@@ -284,6 +284,8 @@ pub struct VpnApp {
     pub(crate) edit_ui_theme: String,
     /// 字体/界面大小（1.0 = 100%），落库后乘在系统缩放上当 pixels_per_point。
     pub(crate) edit_ui_scale: f32,
+    /// 夜间模式（编辑态）：和强调色正交的一个开关。
+    pub(crate) edit_ui_dark: bool,
     /// 参与预发（「关于」页那个勾）：检查更新时也看 beta。
     pub(crate) edit_insider_channel: bool,
     pub(crate) edit_kernel_source: String,
@@ -309,6 +311,8 @@ pub struct VpnApp {
     pub(crate) force_quit: bool,
     /// 已经装到 egui 上的主题 id，用来只在变化时重建 Style。
     pub(crate) applied_theme_id: String,
+    /// 已经装到屏幕上的夜间开关。和主题 id 一起决定要不要重建 Style。
+    pub(crate) applied_ui_dark: bool,
     /// 只在第一次拿到库里的设置时把编辑态灌成它（见 `BgMsg::Settings` 那段）。
     pub(crate) settings_seeded: bool,
     /// 系统设置页当前分区（通用 / 外观），只活在这次运行里。
@@ -524,6 +528,7 @@ impl VpnApp {
             edit_bandwidth_min_kbps: 0,
             edit_ui_theme: theme::DEFAULT_THEME.to_string(),
             edit_ui_scale: 1.0,
+            edit_ui_dark: false,
             edit_insider_channel: false,
             edit_kernel_source: crate::kernel::KernelSource::GhFast.id().to_string(),
             edit_firewall_auto_allow: false,
@@ -542,6 +547,7 @@ impl VpnApp {
             tray: crate::platform::TrayHandle::new(),
             force_quit: false,
             applied_theme_id: String::new(),
+            applied_ui_dark: false,
             settings_seeded: false,
             settings_tab: SettingsTab::default(),
             frame_count: 0,
@@ -570,6 +576,10 @@ impl VpnApp {
         if let Some(scale) = crate::diag::starting_scale() {
             app.settings.ui_scale = scale;
             app.edit_ui_scale = scale;
+        }
+        if let Some(dark) = crate::diag::starting_dark() {
+            app.settings.ui_dark = dark;
+            app.edit_ui_dark = dark;
         }
         app.reload_all();
         app
@@ -3375,6 +3385,7 @@ impl VpnApp {
         SettingsEditState {
             ui_theme: self.edit_ui_theme.clone(),
             ui_scale: self.edit_ui_scale,
+            ui_dark: self.edit_ui_dark,
             insider_channel: self.edit_insider_channel,
             kernel_source: self.edit_kernel_source.clone(),
             firewall_auto_allow: self.edit_firewall_auto_allow,
@@ -3449,6 +3460,7 @@ impl VpnApp {
         self.edit_bandwidth_min_kbps = state.bandwidth_min_kbps;
         self.edit_ui_theme = state.ui_theme.clone();
         self.edit_ui_scale = state.ui_scale;
+        self.edit_ui_dark = state.ui_dark;
         self.edit_insider_channel = state.insider_channel;
         self.edit_kernel_source = state.kernel_source.clone();
         self.edit_firewall_auto_allow = state.firewall_auto_allow;
@@ -3484,6 +3496,7 @@ impl VpnApp {
             bandwidth_min_kbps: Some(self.edit_bandwidth_min_kbps),
             ui_theme: Some(self.edit_ui_theme.clone()),
             ui_scale: Some(crate::models::clamp_ui_scale(self.edit_ui_scale)),
+            ui_dark: Some(self.edit_ui_dark),
             insider_channel: Some(self.edit_insider_channel),
             kernel_source: Some(self.edit_kernel_source.clone()),
             firewall_auto_allow: Some(self.edit_firewall_auto_allow),
@@ -3706,9 +3719,12 @@ impl eframe::App for VpnApp {
                     Some("已勾选但本次未提权，规则没写入；用管理员权限启动后会自动补上".into());
             }
         }
-        if self.applied_theme_id != self.settings.ui_theme {
-            theme::apply(ctx, &self.settings.ui_theme);
+        if self.applied_theme_id != self.settings.ui_theme
+            || self.applied_ui_dark != self.settings.ui_dark
+        {
+            theme::apply(ctx, &self.settings.ui_theme, self.settings.ui_dark);
             self.applied_theme_id = self.settings.ui_theme.clone();
+            self.applied_ui_dark = self.settings.ui_dark;
         }
         self.apply_ui_scale(ctx);
 
