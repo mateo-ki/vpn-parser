@@ -184,7 +184,9 @@ impl VpnApp {
                         )),
                         Some(row) => Some((
                             Icon::Alert,
-                            theme::danger(),
+                            // 和旁边那条健康带的"有不通"同一个红：带子红了、紧挨着的
+                            // 这句还是石墨灰，看着像只改了一半。
+                            crate::gui::widgets::HEALTH_FAILED,
                             format!(
                                 "实测 {} ✗ {}（连续 {} 次）",
                                 clock_of(&row.at),

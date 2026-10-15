@@ -474,11 +474,12 @@ impl VpnApp {
     }
 }
 
+/// 关于页的次级按钮：圆角跟着样式默认走（2px），和旁边那个 `primary_btn("检查更新")`
+/// 一致 —— 之前这里钉了 6px，两个按钮并排在同一张卡里就是两种圆角。
 fn button(text: &str) -> egui::Button<'_> {
     egui::Button::new(RichText::new(text).strong())
         .fill(theme::panel())
         .stroke(Stroke::new(1.0_f32, theme::border()))
-        .corner_radius(CornerRadius::same(6))
         .min_size(Vec2::new(72.0, 26.0))
 }
 

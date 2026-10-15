@@ -513,10 +513,17 @@ impl VpnApp {
                                             .color(if r.unique_alive_nodes > 0 { theme::success() } else { theme::danger() }),
                                     );
 
-                                    if r.is_redundant {
-                                        status_badge(ui, "⚠️ 建议剔除", theme::danger());
-                                    } else {
-                                        status_badge(ui, "✓ 核心保留", theme::success());
+                                    match r.verdict() {
+                                        crate::models::HomogeneityVerdict::Redundant => {
+                                            status_badge(ui, "⚠️ 建议剔除", theme::danger());
+                                        }
+                                        crate::models::HomogeneityVerdict::Empty => {
+                                            // 0 节点的源不给绿牌：它不是核心，它是空的。
+                                            status_badge(ui, "空源 · 不参与判定", theme::muted());
+                                        }
+                                        crate::models::HomogeneityVerdict::Core => {
+                                            status_badge(ui, "✓ 核心保留", theme::success());
+                                        }
                                     }
                                     ui.end_row();
                                 }

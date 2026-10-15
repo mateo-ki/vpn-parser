@@ -483,6 +483,32 @@ pub struct SourceHomogeneityReport {
     pub is_redundant: bool,
 }
 
+/// 「判定建议」那一列的三态。
+///
+/// 为什么不能只看 `is_redundant`：一个这次解析出 0 个节点的源既谈不上冗余（没东西可重合），
+/// 更不该领"核心保留"那块绿牌 —— 它不是核心，它是空的（2026-10-15 他点的这条）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomogeneityVerdict {
+    /// 重合到底了，剔除候选。
+    Redundant,
+    /// 一个节点都没有：不参与"保留还是剔除"的判断。
+    Empty,
+    /// 有留下来的理由。
+    Core,
+}
+
+impl SourceHomogeneityReport {
+    pub fn verdict(&self) -> HomogeneityVerdict {
+        if self.is_redundant {
+            HomogeneityVerdict::Redundant
+        } else if self.total_nodes == 0 {
+            HomogeneityVerdict::Empty
+        } else {
+            HomogeneityVerdict::Core
+        }
+    }
+}
+
 /// 反向剔除同质化源的执行结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PruneHomogeneityResult {
@@ -508,5 +534,37 @@ mod tests {
         // 大小写不敏感
         assert!(name_excluded("US-TEST-01", "test"));
         assert!(name_excluded("us-test-01", "TEST"));
+    }
+}
+#[cfg(test)]
+mod homogeneity_verdict_tests {
+    use crate::models::{HomogeneityVerdict, SourceHomogeneityReport};
+
+    fn report(total_nodes: usize, is_redundant: bool) -> SourceHomogeneityReport {
+        SourceHomogeneityReport {
+            source_id: "s".into(),
+            source_name: "源".into(),
+            total_nodes,
+            alive_nodes: 0,
+            duplicate_nodes: 0,
+            unique_nodes: 0,
+            unique_alive_nodes: 0,
+            overlap_rate_pct: 0.0,
+            is_redundant,
+        }
+    }
+
+    /// 解析出 0 个节点的源不许被判成"核心保留"。
+    /// 顺序也要钉住：0 节点 + 连续失败够多次 = 剔除候选，不能被"空源"这块灰牌挡掉。
+    #[test]
+    fn an_empty_source_is_never_marked_core() {
+        assert_eq!(
+            report(0, false).verdict(),
+            HomogeneityVerdict::Empty,
+            "0 节点的源被当成了核心"
+        );
+        assert_eq!(report(0, true).verdict(), HomogeneityVerdict::Redundant);
+        assert_eq!(report(12, false).verdict(), HomogeneityVerdict::Core);
+        assert_eq!(report(12, true).verdict(), HomogeneityVerdict::Redundant);
     }
 }

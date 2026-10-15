@@ -64,18 +64,19 @@ pub fn panel_frame() -> Frame {
         .inner_margin(Margin::symmetric(theme::PAD_CARD, theme::PAD_CARD - 2))
 }
 
+/// 主按钮 / 危险按钮：**不写 corner_radius**，跟着样式默认走（egui 的按钮是 2px）。
+/// 以前它们各自钉了 `RADIUS_BTN=16`，于是同一条状态栏里「停止代理」是大圆角、旁边的
+/// 「IP 检测」是 2px 方角（用户 2026-10-15：这俩要一致）。16 那个值留给胶囊/芯片用。
 pub fn primary_btn(text: &str) -> egui::Button<'_> {
     egui::Button::new(RichText::new(text).strong().color(theme::on_primary()))
         .fill(theme::primary_btn())
         .stroke(Stroke::NONE)
-        .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
 }
 
 pub fn danger_btn(text: &str) -> egui::Button<'_> {
     egui::Button::new(RichText::new(text).strong().color(theme::danger()))
         .fill(theme::danger_bg())
         .stroke(Stroke::new(1.0_f32, theme::danger_stroke()))
-        .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
 }
 
 pub fn section_title(ui: &mut Ui, title: &str, subtitle: &str) {
@@ -580,8 +581,13 @@ pub fn render_traffic_sparkline(
 }
 
 /// 24 小时出口健康条：一小时一格，最右是"现在"。
-/// 绿=那一小时全部实测通过，深墨=那一小时里至少有一次不通，浅描边=那一小时没测到。
-/// 不用红也不用黄（用户 2026-10-06：页面上不要红色和黄色），"坏"靠深色 + hover 文字表达。
+/// 红=那一小时至少有一次不通，绿=那一小时全部实测通过，浅描边=那一小时没测到。
+///
+/// "坏"为什么是红：他 2026-10-15 点名要红。主题里 `danger` 是石墨蓝灰（2026-10-06 定的
+/// "页面上不要红/黄"），拿它当"红"用画出来还是深色，所以这里给一个**只属于这条带子**的
+/// 真红，不去动 `danger` —— 其余界面继续没有红。
+pub const HEALTH_FAILED: Color32 = Color32::from_rgb(0xB3, 0x2A, 0x2A);
+
 /// 把实测行归进最近 24 个小时的桶：0 = 那一小时没有实测；1 = 全通；-1 = 至少一次不通
 /// （失败优先，一次失败就够看）。
 ///
@@ -632,7 +638,7 @@ pub fn render_health_strip(ui: &mut Ui, buckets: &[i8; 24]) {
         let fill = match state {
             -1 => {
                 failed += 1;
-                theme::text_primary()
+                HEALTH_FAILED
             }
             1 => {
                 passed += 1;
@@ -973,8 +979,10 @@ pub fn requires_tun_elevation(mode: ProxyMode, elevated: bool) -> bool {
 
 #[cfg(test)]
 mod sparkline_tests {
-    use super::{health_hour_buckets, render_health_strip, render_traffic_sparkline};
-    use eframe::egui::{self, CentralPanel, RawInput, Rect, Vec2};
+    use super::{
+        health_hour_buckets, render_health_strip, render_traffic_sparkline, HEALTH_FAILED,
+    };
+    use eframe::egui::{self, CentralPanel, Color32, RawInput, Rect, Vec2};
     use std::collections::VecDeque;
 
     fn history(points: usize) -> VecDeque<(f32, f32)> {
@@ -1088,6 +1096,82 @@ mod sparkline_tests {
         );
     }
 
+    /// 健康条"那一小时有不通"的格子必须真的画成红（2026-10-15 他点名要红）。
+    /// 读的是这一帧真画出来的矩形填充色，不是常量 —— 旧写法用的是 `text_primary()`
+    /// （石墨深色），照着代码念一遍是看不出差别的。
+    #[test]
+    fn the_failed_hours_paint_red() {
+        fn fills(buckets: &[i8; 24]) -> Vec<Color32> {
+            let ctx = egui::Context::default();
+            let mut input = RawInput::default();
+            input.screen_rect = Some(Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(1280.0, 200.0),
+            ));
+            let mut out = Vec::new();
+            let _ = ctx.run(input, |ctx| {
+                CentralPanel::default().show(ctx, |ui| {
+                    let layer = ui.layer_id();
+                    render_health_strip(ui, buckets);
+                    out = ctx.graphics_mut(|g| {
+                        g.get(layer)
+                            .map(|list| {
+                                list.all_entries()
+                                    .filter_map(|shape| match &shape.shape {
+                                        egui::Shape::Rect(rect)
+                                            if (rect.rect.height() - 18.0).abs() < 0.1 =>
+                                        {
+                                            Some(rect.fill)
+                                        }
+                                        _ => None,
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    });
+                });
+            });
+            out
+        }
+
+        let mut buckets = [0i8; 24];
+        for index in [0usize, 3, 9] {
+            buckets[index] = -1;
+        }
+        for index in [1usize, 2, 4] {
+            buckets[index] = 1;
+        }
+        let painted = fills(&buckets);
+        assert_eq!(painted.len(), 24, "24 格应该画满，实际 {}", painted.len());
+        assert_eq!(
+            painted.iter().filter(|c| **c == HEALTH_FAILED).count(),
+            3,
+            "红格数不对（三个有不通的小时没都画成红）"
+        );
+        assert_eq!(
+            painted
+                .iter()
+                .filter(|c| **c == super::theme::success())
+                .count(),
+            3,
+            "绿格数不对"
+        );
+        assert_eq!(
+            painted
+                .iter()
+                .filter(|c| **c == super::theme::border())
+                .count(),
+            18,
+            "没实测的那 18 格颜色不对"
+        );
+        // 反向：这要是还退回旧的深色写法，这条就红。
+        assert_ne!(
+            HEALTH_FAILED,
+            super::theme::text_primary(),
+            "红和正文深色撞了，等于没改"
+        );
+    }
+
     fn health_row(minutes_ago: i64, ok: bool) -> crate::db::telemetry::HealthRow {
         crate::db::telemetry::HealthRow {
             at: (chrono::Utc::now() - chrono::Duration::minutes(minutes_ago)).to_rfc3339(),
@@ -1131,6 +1215,73 @@ mod sparkline_tests {
         assert_eq!(
             future, [0i8; 24],
             "一小时以上的未来行必须丢，否则索引是负数"
+        );
+    }
+}
+#[cfg(test)]
+mod button_radius_tests {
+    use super::{danger_btn, primary_btn};
+    use eframe::egui::{self, CentralPanel, CornerRadius, RawInput, Rect, Vec2};
+
+    /// 读这一帧里画出来的所有"按钮那么高"的矩形的圆角。
+    fn radii(window: f32) -> Vec<CornerRadius> {
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(Rect::from_min_size(
+            egui::Pos2::ZERO,
+            Vec2::new(window, 200.0),
+        ));
+        let mut out = Vec::new();
+        let _ = ctx.run(input, |ctx| {
+            CentralPanel::default().show(ctx, |ui| {
+                let layer = ui.layer_id();
+                ui.horizontal(|ui| {
+                    let _ = ui.button("IP 检测");
+                    let _ = ui.add(primary_btn("启动代理"));
+                    let _ = ui.add(danger_btn("停止代理"));
+                });
+                out = ctx.graphics_mut(|g| {
+                    g.get(layer)
+                        .map(|list| {
+                            list.all_entries()
+                                .filter_map(|shape| match &shape.shape {
+                                    egui::Shape::Rect(rect)
+                                        if (4.0..=40.0).contains(&rect.rect.height()) =>
+                                    {
+                                        Some(rect.corner_radius)
+                                    }
+                                    _ => None,
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                });
+            });
+        });
+        out
+    }
+
+    /// 状态栏那三个按钮必须一个圆角：普通按钮 2px，主/危险按钮以前各自钉了 16px，
+    /// 于是同一条里"停止代理"是圆的、旁边"IP 检测"是方的（2026-10-15 他点的这条）。
+    #[test]
+    fn primary_and_danger_share_the_plain_button_radius() {
+        let painted = radii(1280.0);
+        assert!(
+            painted.len() >= 3,
+            "三个按钮的背景矩形没都画出来，只读到 {}",
+            painted.len()
+        );
+        let plain = painted[0];
+        for (index, radius) in painted.iter().enumerate() {
+            assert_eq!(
+                *radius, plain,
+                "第 {index} 个按钮圆角 {radius:?} 和普通按钮 {plain:?} 不一致"
+            );
+        }
+        assert_ne!(
+            plain,
+            CornerRadius::same(16),
+            "还是那个 16 的大圆角 —— 说明 helper 里那两行没删掉"
         );
     }
 }
