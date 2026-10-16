@@ -1,11 +1,13 @@
 mod clash;
 mod common;
+pub mod openrung;
 mod uri;
 
 pub use clash::parse_clash_yaml;
 pub use common::{
     decode_maybe_base64, expand_url_template, extract_uris, normalize_subscription_text,
 };
+pub use openrung::parse_openrung_json;
 pub use uri::parse_uri;
 
 use crate::models::Node;
@@ -21,11 +23,23 @@ use uuid::Uuid;
 /// - base64-encoded URI lists
 /// - Clash / Clash Meta YAML
 /// - mixed markdown / text with embedded URIs
+/// - OpenRung broker relays JSON
 pub fn parse_subscription(content: &str, source_id: Option<&str>) -> Vec<Node> {
     let content = normalize_subscription_text(content);
     let content = content.trim();
     if content.is_empty() {
         return Vec::new();
+    }
+
+    // 0) Try OpenRung JSON (relays list from broker API)
+    if (content.starts_with('{') || content.starts_with('['))
+        && (content.contains("\"relays\"") || content.contains("reality_public_key"))
+    {
+        if let Some(nodes) = parse_openrung_json(content, source_id) {
+            if !nodes.is_empty() {
+                return dedup_nodes(nodes);
+            }
+        }
     }
 
     // 1) Try Clash YAML first when it looks like YAML proxies list.

@@ -45,6 +45,13 @@ impl VpnApp {
                 self.export_sources_to_clipboard();
             }
             if ui
+                .add_enabled(!self.busy, egui::Button::new("🌐 接入 OpenRung 节点"))
+                .on_hover_text("一键接入 https://github.com/openrung/openrung 官方中继服务，实时获取健康 VLESS-REALITY 节点")
+                .clicked()
+            {
+                self.add_openrung_source();
+            }
+            if ui
                 .add_enabled(!self.busy, primary_btn("拉取全部启用源"))
                 .on_hover_text("后台拉取期间仍可删除/编辑")
                 .clicked()

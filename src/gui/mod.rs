@@ -1619,6 +1619,44 @@ impl VpnApp {
         });
     }
 
+    /// 一键接入 OpenRung 官方中继代理服务（https://github.com/openrung/openrung）
+    pub(crate) fn add_openrung_source(&mut self) {
+        let openrung_url = "https://broker.openrung.org/api/v1/relays";
+        let openrung_name = "OpenRung 官方中继 (VLESS-REALITY)";
+        if let Some(existing) = self.sources.iter().find(|s| s.url_template == openrung_url) {
+            let id = existing.id.clone();
+            self.status = format!("OpenRung 节点源已存在：{}，正在刷新...", existing.name);
+            self.fetch_one(id);
+            return;
+        }
+
+        let db = self.db.clone();
+        let tx = self.tx.clone();
+        self.busy = true;
+        self.status = "正在添加 OpenRung 官方节点服务...".into();
+        self.rt.spawn(async move {
+            let res = match db
+                .create_source(crate::models::CreateSource {
+                    name: openrung_name.into(),
+                    url_template: openrung_url.into(),
+                    enabled: true,
+                    remark: Some("OpenRung Relay Network 官方中继 (VLESS+REALITY+Vision)".into()),
+                })
+                .await
+            {
+                Ok(source) => {
+                    let _ = tx.send(BgMsg::SourceAdded(source.id, source.name));
+                    Ok("成功添加 OpenRung 官方节点源，正在拉取并测速...".into())
+                }
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = tx.send(BgMsg::OpDone {
+                result: res,
+                unlock: true,
+            });
+        });
+    }
+
     /// 粘进来的一律走这里：识别 → 认出来就建源，后面那条"拉取 → 只测这一源"的链复用
     /// `save_source_form`（和手工新增同一条路，不另开一份）。文本由调用方给 ——
     /// 事件本身就是 egui-winit 读过剪贴板才发出来的，这里不再自己开一次剪贴板。
