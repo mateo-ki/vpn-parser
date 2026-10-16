@@ -35,6 +35,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = "0.26"
 rustls-pki-types = "1"
+ring = "0.17"
 sha2 = "0.10"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 # 内核资产在 Linux 上是 gzip / tar.gz（mihomo 发 .gz、sing-box 发 .tar.gz），

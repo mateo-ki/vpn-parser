@@ -1670,6 +1670,78 @@ impl VpnApp {
         });
     }
 
+    pub(crate) fn fetch_warp_masque_native(&mut self) {
+        let warp_url = "warp://native";
+        let warp_name = "Cloudflare WARP (MASQUE) 原生节点";
+        let db = self.db.clone();
+        let tx = self.tx.clone();
+        let proxy_url = self.subscription_proxy_url();
+        self.busy = true;
+        self.status = "正在向 Cloudflare 原生注册并获取 57 个 WARP MASQUE 节点...".into();
+
+        self.rt.spawn(async move {
+            let existing_id = match db.list_sources().await {
+                Ok(sources) => sources.into_iter().find(|s| s.url_template == warp_url).map(|s| s.id),
+                Err(_) => None,
+            };
+
+            let source_id = if let Some(id) = existing_id {
+                id
+            } else {
+                match db
+                    .create_source(crate::models::CreateSource {
+                        name: warp_name.into(),
+                        url_template: warp_url.into(),
+                        enabled: true,
+                        remark: Some("Cloudflare WARP 官方原生 MASQUE 节点池（免第三方仓库）".into()),
+                    })
+                    .await
+                {
+                    Ok(source) => source.id,
+                    Err(e) => {
+                        let _ = tx.send(BgMsg::OpDone {
+                            result: Err(format!("创建 WARP 专属源失败: {e}")),
+                            unlock: true,
+                        });
+                        return;
+                    }
+                }
+            };
+
+            let nodes_res = match crate::parser::warp_masque::register_warp_masque_native(None).await {
+                Ok(nodes) => Ok(nodes),
+                Err(err) => {
+                    if let Some(ref proxy) = proxy_url {
+                        crate::parser::warp_masque::register_warp_masque_native(Some(proxy)).await
+                    } else {
+                        Err(err)
+                    }
+                }
+            };
+
+            let res = match nodes_res {
+                Ok(nodes) => {
+                    let count = nodes.len();
+                    match db.replace_source_nodes(&source_id, &nodes).await {
+                        Ok(_) => {
+                            let _ = db.mark_source_fetched(&source_id, "ok", count as i64).await;
+                            Ok(format!("🎉 成功原生获取 {} 个 Cloudflare WARP MASQUE 节点！", count))
+                        }
+                        Err(e) => Err(format!("保存 WARP 节点失败: {e}")),
+                    }
+                }
+                Err(e) => Err(format!(
+                    "WARP 原生注册失败（若海外网络直连受阻，可开启代理后重试）: {e}"
+                )),
+            };
+
+            let _ = tx.send(BgMsg::OpDone {
+                result: res,
+                unlock: true,
+            });
+        });
+    }
+
     /// 粘进来的一律走这里：识别 → 认出来就建源，后面那条"拉取 → 只测这一源"的链复用
     /// `save_source_form`（和手工新增同一条路，不另开一份）。文本由调用方给 ——
     /// 事件本身就是 egui-winit 读过剪贴板才发出来的，这里不再自己开一次剪贴板。

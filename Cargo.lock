@@ -4250,6 +4250,7 @@ dependencies = [
  "percent-encoding",
  "regex",
  "reqwest",
+ "ring",
  "rustls",
  "rustls-pki-types",
  "serde",

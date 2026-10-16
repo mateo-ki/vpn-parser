@@ -52,6 +52,13 @@ impl VpnApp {
                 self.add_openrung_source();
             }
             if ui
+                .add_enabled(!self.busy, egui::Button::new("⚡ 原生注册 WARP 节点"))
+                .on_hover_text("原生向 Cloudflare 注册并获取 57 个 WARP MASQUE 节点（免任何 GitHub 账号与仓库）")
+                .clicked()
+            {
+                self.fetch_warp_masque_native();
+            }
+            if ui
                 .add_enabled(!self.busy, primary_btn("拉取全部启用源"))
                 .on_hover_text("后台拉取期间仍可删除/编辑")
                 .clicked()
