@@ -382,7 +382,8 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
         let mut download_candidates: Vec<String> = Vec::new();
         for name in &candidate_names {
             let lower = name.to_lowercase();
-            if lower.contains("美")
+            let is_warp = lower.contains("warp");
+            if (lower.contains("美")
                 || lower.contains("us")
                 || lower.contains("usa")
                 || lower.contains("america")
@@ -394,7 +395,8 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
                 || lower.contains("dallas")
                 || lower.contains("new york")
                 || lower.contains("virginia")
-                || lower.contains("washington")
+                || lower.contains("washington"))
+                && !is_warp
             {
                 us_candidates.push(name.clone());
             }
@@ -408,10 +410,25 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
             }
         }
         if us_candidates.is_empty() {
-            us_candidates = candidate_names.clone();
+            let non_warp: Vec<String> = candidate_names
+                .iter()
+                .filter(|n| !n.to_lowercase().contains("warp"))
+                .cloned()
+                .collect();
+            us_candidates = if !non_warp.is_empty() {
+                non_warp
+            } else if !candidate_names.is_empty() {
+                candidate_names.clone()
+            } else {
+                vec!["DIRECT".to_string()]
+            };
         }
         if download_candidates.is_empty() {
-            download_candidates = candidate_names.clone();
+            download_candidates = if !candidate_names.is_empty() {
+                candidate_names.clone()
+            } else {
+                vec!["DIRECT".to_string()]
+            };
         }
 
         smart_groups.push(json!({
@@ -505,11 +522,65 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
     if let Some(ref override_text) = options.override_yaml {
         if !override_text.trim().is_empty() {
             if let Ok(override_val) = serde_yaml::from_str::<Value>(override_text) {
-                if let Some(user_groups) = override_val.get("proxy-groups").and_then(Value::as_array) {
-                    for g in user_groups.iter().rev() {
-                        proxy_groups.insert(0, g.clone());
+                // 兼容两种 YAML 格式：带有顶层 "proxy-groups:" 映射，或用户直接粘贴的策略组列表序列
+                let user_groups: Option<Vec<Value>> = if let Some(arr) = override_val.get("proxy-groups").and_then(Value::as_array) {
+                    Some(arr.clone())
+                } else if let Some(arr) = override_val.as_array() {
+                    Some(arr.clone())
+                } else {
+                    None
+                };
+
+                if let Some(groups) = user_groups {
+                    for mut g in groups {
+                        if let Some(g_obj) = g.as_object_mut() {
+                            let g_name = g_obj.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
+                            let filter_regex = g_obj.get("filter").and_then(Value::as_str).and_then(|pat| regex::Regex::new(pat).ok());
+                            let exclude_regex = g_obj.get("exclude-filter").and_then(Value::as_str).and_then(|pat| regex::Regex::new(pat).ok());
+
+                            // 无论内核对 include-all/filter 的支持程度如何，在后端均主动根据 filter 与 exclude-filter
+                            // 对可用候选节点精准过滤，并灌入 proxies 列表中，确保 100% 成功剔除 exclude-filter 匹配的节点（如 WARP）
+                            if filter_regex.is_some() || exclude_regex.is_some() {
+                                let mut matched_proxies = Vec::new();
+                                for c_name in &candidate_names {
+                                    if let Some(ref f) = filter_regex {
+                                        if !f.is_match(c_name) {
+                                            continue;
+                                        }
+                                    }
+                                    if let Some(ref ef) = exclude_regex {
+                                        if ef.is_match(c_name) {
+                                            continue;
+                                        }
+                                    }
+                                    matched_proxies.push(c_name.clone());
+                                }
+                                // 绝对不可填入空数组 []，否则 Mihomo 必定 fatal 报错：Parse config error: ProxyGroup ... proxies missing
+                                if matched_proxies.is_empty() {
+                                    if candidate_names.is_empty() {
+                                        matched_proxies.push("DIRECT".to_string());
+                                    } else {
+                                        matched_proxies = candidate_names.clone();
+                                    }
+                                }
+                                g_obj.insert("proxies".to_string(), json!(matched_proxies));
+                            } else if g_obj.get("proxies").is_none() && g_obj.get("include-all").and_then(Value::as_bool) != Some(true) {
+                                if !candidate_names.is_empty() {
+                                    g_obj.insert("proxies".to_string(), json!(candidate_names));
+                                } else {
+                                    g_obj.insert("proxies".to_string(), json!(["DIRECT"]));
+                                }
+                            }
+
+                            // 替换已存在的同名内置组（例如默认的“美国节点”），彻底消除重名组被默认组覆盖的冲突
+                            proxy_groups.retain(|existing| {
+                                existing.get("name").and_then(Value::as_str) != Some(&g_name)
+                            });
+                        }
+                        proxy_groups.insert(0, g);
                     }
                 }
+
                 if let Some(user_rules) = override_val.get("rules").and_then(Value::as_array) {
                     let mut user_r = Vec::new();
                     for r in user_rules {
@@ -2071,6 +2142,36 @@ mod tests {
             sanitize_self_referential(off.clone(), "127.0.0.1:9980").server,
             off.server
         );
+    }
+
+    #[test]
+    fn test_diagnose_mihomo_config_with_recommended_override() {
+        use crate::gui::views::proxy::CLASH_VERGE_RECOMMENDED_OVERRIDE;
+        let node = Node {
+            id: "test1".into(),
+            source_id: None,
+            protocol: "ss".into(),
+            name: "香港01".into(),
+            server: "1.1.1.1".into(),
+            port: 443,
+            raw: "".into(),
+            config: r#"{"server":"1.1.1.1","server_port":443,"password":"pass","method":"aes-128-gcm"}"#.into(),
+            country: Some("HK".into()),
+            latency_ms: Some(50),
+            latency_ok: Some(true),
+            download_kbps: Some(5000.0),
+            latency_kernel: Some("mihomo".into()),
+            latency_test_kind: Some("google_proxy".into()),
+            latency_tested_at: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let mut options = MihomoConfigOptions::default();
+        options.smart_routing = true;
+        options.override_yaml = Some(CLASH_VERGE_RECOMMENDED_OVERRIDE.to_string());
+        let config_val = build_mihomo_config(&node, options).expect("build config");
+        let yaml_str = serde_yaml::to_string(&config_val).expect("to yaml");
+        std::fs::write("target/diagnose_mihomo.yaml", &yaml_str).expect("write yaml");
     }
 
     #[derive(Default)]

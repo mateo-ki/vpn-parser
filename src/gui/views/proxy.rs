@@ -712,66 +712,100 @@ impl VpnApp {
                 }
             }
             GroupsTab::Config => {
-                // 自定义配置覆写 (YAML & Clash 脚本片段)，支持大文本平滑上下滚动
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
+                // 自定义配置覆写 (YAML & Clash 脚本片段)：顶部固定标题与操作组，仅编辑区独立垂直滚动
+                Frame::NONE
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                    .corner_radius(CornerRadius::same(10))
+                    .inner_margin(Margin::symmetric(14, 12))
                     .show(ui, |ui| {
-                        Frame::NONE
-                            .fill(theme::panel())
-                            .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
-                            .corner_radius(CornerRadius::same(10))
-                            .inner_margin(Margin::symmetric(14, 12))
+                        let mut save_clicked = false;
+                        let mut load_recommended = false;
+                        let mut clear_override = false;
+
+                        // 固定顶部操作栏（固定不滚动）
+                        ui.horizontal(|ui| {
+                            icon_label(ui, Icon::Terminal, 14.0, theme::text_secondary());
+                            ui.label(
+                                RichText::new("自定义配置覆写 (YAML & Clash 脚本片段)")
+                                    .strong()
+                                    .color(theme::text_primary()),
+                            );
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui
+                                    .add_enabled(!self.proxy_busy, primary_btn("保存配置"))
+                                    .on_hover_text("立即保存 YAML 覆写配置并热重载生效")
+                                    .clicked()
+                                {
+                                    save_clicked = true;
+                                }
+                                if ui
+                                    .button("⚡ 一键载入推荐规则")
+                                    .on_hover_text("填入经典的 AI、Google、多线下载与国内直连分流配置")
+                                    .clicked()
+                                {
+                                    load_recommended = true;
+                                }
+                                if ui.button("清空覆写").clicked() {
+                                    clear_override = true;
+                                }
+                            });
+                        });
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(
+                                "支持直接在此处粘贴 Clash Verge Rev 风格的 YAML 配置覆写（rules / proxy-groups 等），保存后将自动合并生效："
+                            )
+                            .small()
+                            .color(theme::muted()),
+                        );
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.add_space(6.0);
+
+                        // 仅让编辑文本框内部区域支持大文本纵向平滑滚动
+                        let mut text = self.proxy_config.override_yaml.clone().unwrap_or_default();
+                        let max_editor_height = (ui.available_height() - 8.0).max(220.0);
+
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .max_height(max_editor_height)
+                            .id_salt("proxy_override_yaml_editor_scroll")
                             .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    icon_label(ui, Icon::Terminal, 14.0, theme::text_secondary());
-                                    ui.label(
-                                        RichText::new("自定义配置覆写 (YAML & Clash 脚本片段)")
-                                            .strong()
-                                            .color(theme::text_primary()),
-                                    );
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if ui
-                                            .button("⚡ 一键载入推荐 Clash Verge 分流规则")
-                                            .on_hover_text("填入经典的 AI、Google、多线下载与国内直连分流配置")
-                                            .clicked()
-                                        {
-                                            self.proxy_config.override_yaml =
-                                                Some(CLASH_VERGE_RECOMMENDED_OVERRIDE.to_string());
-                                            self.save_proxy_config();
-                                        }
-                                        if ui.button("清空覆写").clicked() {
-                                            self.proxy_config.override_yaml = None;
-                                            self.save_proxy_config();
-                                        }
-                                    });
-                                });
-                                ui.add_space(6.0);
-                                ui.label(
-                                    RichText::new(
-                                        "支持直接粘贴 Clash Verge Rev 风格的 YAML 配置覆写（rules / proxy-groups 等），启动时将自动合并生效："
-                                    )
-                                    .small()
-                                    .color(theme::muted()),
-                                );
-                                ui.add_space(6.0);
-                                let mut text = self.proxy_config.override_yaml.clone().unwrap_or_default();
                                 let editor = ui.add(
                                     egui::TextEdit::multiline(&mut text)
                                         .font(egui::TextStyle::Monospace)
-                                        .desired_rows(18)
                                         .desired_width(f32::INFINITY)
+                                        .desired_rows(22)
                                         .hint_text("# 可在此处粘贴自定义 rules 或 proxy-groups YAML 片段\nrules:\n  - DOMAIN-SUFFIX,openai.com,AI分组\n  - PROCESS-NAME,IDMan.exe,多线并发下载"),
                                 );
                                 if editor.changed() {
                                     self.proxy_config.override_yaml = if text.trim().is_empty() {
                                         None
                                     } else {
-                                        Some(text)
+                                        Some(text.clone())
                                     };
-                                    self.save_proxy_config();
                                 }
                             });
-                        ui.add_space(10.0);
+
+                        if load_recommended {
+                            self.proxy_config.override_yaml =
+                                Some(CLASH_VERGE_RECOMMENDED_OVERRIDE.to_string());
+                            self.save_proxy_config();
+                        }
+                        if clear_override {
+                            self.proxy_config.override_yaml = None;
+                            self.save_proxy_config();
+                        }
+                        if save_clicked {
+                            self.proxy_config.override_yaml = if text.trim().is_empty() {
+                                None
+                            } else {
+                                Some(text)
+                            };
+                            self.save_proxy_config();
+                            self.status = "已保存自定义分流覆写配置并热重载".into();
+                        }
                     });
             }
         }
@@ -3286,10 +3320,11 @@ fn node_matches_group_depth(
     // 针对内置知名策略组做精准语义过滤
     match group_name {
         "美国节点" | "US" => {
-            return country == "US"
+            return (country == "US"
                 || lower_name.contains("us")
                 || lower_name.contains("united states")
-                || node.name.contains("美");
+                || node.name.contains("美"))
+                && !lower_name.contains("warp");
         }
         "AI分组" | "AI" => {
             return matches!(country.as_str(), "US" | "JP" | "SG" | "TW" | "KR" | "GB" | "DE")
