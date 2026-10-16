@@ -23,26 +23,31 @@ impl VpnApp {
             {
                 self.sources_panel = SourcesPanel::Results;
             }
+
+            if self.sources_panel == SourcesPanel::List {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("🔄 刷新").clicked() {
+                        self.reload_all();
+                    }
+                    if ui
+                        .add_enabled(!self.busy, primary_btn("拉取全部启用源"))
+                        .on_hover_text("后台拉取全部启用源")
+                        .clicked()
+                    {
+                        self.fetch_all();
+                    }
+                    if ui.add(primary_btn("新增订阅源")).clicked() {
+                        self.open_create_form();
+                    }
+                });
+            }
         });
         ui.add_space(6.0);
         if self.sources_panel == SourcesPanel::Results {
             self.ui_fetch_results(ui);
             return;
         }
-        ui.horizontal(|ui| {
-            if ui.add(primary_btn("新增订阅源")).clicked() {
-                self.open_create_form();
-            }
-            if ui
-                .add_enabled(!self.busy, egui::Button::new("导入订阅源"))
-                .on_hover_text("从剪贴板导入 JSON 格式订阅源，自动跳过重复项")
-                .clicked()
-            {
-                self.import_sources_from_clipboard();
-            }
-            if ui.button("导出订阅源").clicked() {
-                self.export_sources_to_clipboard();
-            }
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(!self.busy, egui::Button::new("🌐 接入 OpenRung 节点"))
                 .on_hover_text("一键接入 https://github.com/openrung/openrung 官方中继服务，实时获取健康 VLESS-REALITY 节点")
@@ -58,24 +63,26 @@ impl VpnApp {
                 self.fetch_warp_masque_native();
             }
             if ui
-                .add_enabled(!self.busy, primary_btn("拉取全部启用源"))
-                .on_hover_text("后台拉取期间仍可删除/编辑")
+                .add_enabled(!self.busy, egui::Button::new("导入订阅源"))
+                .on_hover_text("从剪贴板导入 JSON 格式订阅源，自动跳过重复项")
                 .clicked()
             {
-                self.fetch_all();
+                self.import_sources_from_clipboard();
             }
-            if ui
-                .add_enabled(
-                    !self.busy && self.subscription_proxy_url().is_some(),
-                    egui::Button::new("代理拉取全部"),
-                )
-                .on_hover_text("通过当前运行中的本地代理拉取全部启用源")
-                .clicked()
-            {
-                self.fetch_all_via_proxy();
+            if ui.button("导出订阅源").clicked() {
+                self.export_sources_to_clipboard();
             }
-            if ui.button("刷新").clicked() {
-                self.reload_all();
+            if self.subscription_proxy_url().is_some() {
+                if ui
+                    .add_enabled(
+                        !self.busy,
+                        egui::Button::new("代理拉取全部"),
+                    )
+                    .on_hover_text("通过当前运行中的本地代理拉取全部启用源")
+                    .clicked()
+                {
+                    self.fetch_all_via_proxy();
+                }
             }
             let prune_enabled = !self.busy && !self.homogeneity_busy;
             let prune_clicked = if self.homogeneity_busy {
