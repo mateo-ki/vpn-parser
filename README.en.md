@@ -1,9 +1,13 @@
 # VPN Parser
 
+<p align="center">
+  <a href="README.md">简体中文</a> | <b>English</b>
+</p>
+
 A high-performance, modern cross-platform proxy tool built with Rust and egui: collects subscriptions, parses nodes, drives proxy cores (Mihomo / sing-box / Xray), and performs real-world reachability and latency benchmarking.
 
 <p align="center">
-  <img src="docs/images/dashboard.png" alt="VPN Parser Dashboard" width="100%">
+  <img src="docs/images/dashboard-v17.png" alt="VPN Parser Dashboard" width="100%">
 </p>
 
 - **Windows**: Modern installer (Inno Setup) + one-click system proxy integration + TUN virtual adapter mode (with elevated privileges)
