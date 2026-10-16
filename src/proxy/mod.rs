@@ -1043,7 +1043,7 @@ impl ProxyManager {
                         kernel.display_name()
                     )
                 };
-                if runtime.options.mode == ProxyMode::System {
+                if runtime.options.mode == ProxyMode::System && self.system_proxy.supported() {
                     if let Some(snapshot) = preserved_system_proxy_snapshot.take() {
                         runtime.system_proxy_snapshot = Some(snapshot);
                     } else if runtime.system_proxy_snapshot.is_none() {
@@ -1075,7 +1075,7 @@ impl ProxyManager {
             );
         }
 
-        if runtime.options.mode == ProxyMode::System {
+        if runtime.options.mode == ProxyMode::System && self.system_proxy.supported() {
             if tokio::time::Instant::now() >= startup_deadline {
                 let _ = child.kill().await;
                 let _ = child.wait().await;
@@ -1119,12 +1119,18 @@ impl ProxyManager {
 
         let elapsed_ms = startup_started.elapsed().as_millis() as u64;
         runtime.status.state = ProxyState::Running;
+        // 这个字段的意思是"本地 mixed 端口已经就绪"（刚 spawn 就置真的那几处是同一个意思），
+        // 不是"系统代理归我们"。归属由 `system_proxy_enabled` 表达，别在这儿混用。
         runtime.status.local_proxy_ready = true;
         runtime.status.system_proxy_enabled = runtime.system_proxy_snapshot.is_some();
         runtime.status.last_error = None;
-        runtime.status.message = format!(
-            "{} 运行中（启动耗时 {elapsed_ms} ms）",
-            kernel.display_name()
+        runtime.status.message = start_success_message(
+            kernel.display_name(),
+            elapsed_ms,
+            runtime.options.mode,
+            runtime.system_proxy_snapshot.is_some(),
+            self.system_proxy.supported(),
+            runtime.options.mixed_port,
         );
         runtime.child = Some(child);
         runtime.work_dir = Some(work_dir);
@@ -1583,6 +1589,29 @@ fn mark_failed(runtime: &mut ProxyRuntime, message: String) {
     runtime.status.message = message;
 }
 
+/// 启动成功后那句状态文案。写不写系统代理是两回事，文案就不能是同一句：
+/// Linux 上没人写过系统代理，界面却说"运行中"就等于让他以为浏览器已经走代理了。
+fn start_success_message(
+    kernel: &str,
+    elapsed_ms: u64,
+    mode: ProxyMode,
+    owns_system_proxy: bool,
+    platform_supports_system_proxy: bool,
+    mixed_port: u16,
+) -> String {
+    let head = format!("{kernel} 运行中（启动耗时 {elapsed_ms} ms）");
+    // 只有一种情形要加后半句：**系统代理模式 + 这个平台根本没有那一格**。那时内核在跑
+    // 而没有任何东西走它，不把地址写在脸上就是一根假绿的绿条。
+    // 反过来，写过系统代理（浏览器已经在走了）和 TUN（流量进隧道，找他自己的端口是错的）
+    // 都不该出现这半句。
+    let needs_port_hint =
+        mode != ProxyMode::Tun && !owns_system_proxy && !platform_supports_system_proxy;
+    if needs_port_hint {
+        return format!("{head}· 本平台没有系统代理设置，请把应用指向 127.0.0.1:{mixed_port}");
+    }
+    head
+}
+
 async fn activate_system_proxy(
     controller: Arc<dyn SystemProxyControl>,
     server: String,
@@ -1710,6 +1739,42 @@ fn format_kernel_diagnostic(raw: &str) -> String {
 mod tests {
     use super::*;
     use crate::models::Node;
+    /// 三种启动结局各自说什么话。反向对照很关键：TUN 模式不许提"请把应用指向端口"，
+    /// 写了系统代理也不许再教他怎么指 —— 多出来的那半句会让人以为还没生效。
+    #[test]
+    fn the_start_message_differs_per_mode_and_platform_capability() {
+        let owned = start_success_message("Mihomo", 4200, ProxyMode::System, true, true, 9980);
+        assert!(owned.contains("运行中"), "{owned}");
+        assert!(
+            !owned.contains("127.0.0.1"),
+            "写过就不该再教他怎么指: {owned}"
+        );
+
+        let tun = start_success_message("Mihomo", 4200, ProxyMode::Tun, false, true, 9980);
+        assert!(!tun.contains("127.0.0.1"), "TUN 不该让他去找端口: {tun}");
+
+        let local_port =
+            start_success_message("Mihomo", 4200, ProxyMode::System, false, false, 9980);
+        assert!(local_port.contains("127.0.0.1:9980"), "{local_port}");
+        assert!(local_port.contains("没有系统代理"), "{local_port}");
+    }
+
+    /// "能不能写系统代理"必须是唯一一个判据：启动流程用它决定要不要写、
+    /// `local_proxy_ready` 用它决定点不点亮、界面用它决定 chip 上写什么字。
+    /// 三处各写一份 `cfg!(windows)` 迟早会漂，漂了就出现"界面说本地端口、状态说拥有系统代理"。
+    #[test]
+    fn the_system_proxy_capability_is_one_answer_for_three_consumers() {
+        // 与平台唯一对应：Windows 能，其它不能。
+        assert_eq!(
+            crate::system_proxy::system_proxy_supported_on_this_platform(),
+            cfg!(windows)
+        );
+        // 平台实现同意同一个答案（不是各自另判一次）。
+        assert_eq!(
+            crate::system_proxy::platform_system_proxy().supported(),
+            crate::system_proxy::system_proxy_supported_on_this_platform()
+        );
+    }
     use chrono::Utc;
     use serde_json::json;
     use std::sync::Mutex as StdMutex;

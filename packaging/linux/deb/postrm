@@ -1,0 +1,16 @@
+#!/bin/sh
+# deb 卸载后：把这条菜单项和图标从缓存里摘掉，否则"应用列表里还留着、点开没东西"。
+set -e
+
+case "$1" in
+    remove|purge)
+        command -v update-desktop-database >/dev/null 2>&1 \
+            && update-desktop-database /usr/share/applications || true
+        command -v gtk4-update-icon-cache >/dev/null 2>&1 \
+            && gtk4-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+        command -v gtk-update-icon-cache >/dev/null 2>&1 \
+            && gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+        ;;
+esac
+
+exit 0

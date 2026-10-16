@@ -11,7 +11,7 @@ axum = { version = "0.8", features = ["macros"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
-eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "wgpu"], optional = true }
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "wgpu", "x11", "wayland"], optional = true }
 egui = { version = "0.31", optional = true }
 # eframe 只给 wgpu 开了 metal/webgpu/wgsl —— Windows 上等于只有 Vulkan 一条腿，
 # 没有 OpenGL 又没有 Vulkan 的机器（虚拟机）仍然起不来。这里靠 feature 合并把 dx12
@@ -37,6 +37,10 @@ tokio-rustls = "0.26"
 rustls-pki-types = "1"
 sha2 = "0.10"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
+# 内核资产在 Linux 上是 gzip / tar.gz（mihomo 发 .gz、sing-box 发 .tar.gz），
+# zip 内部自带的 deflate 解不了外层 gzip，所以这两个得自己声明。
+flate2 = "1"
+tar = "0.4"
 arboard = { version = "3", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
@@ -64,3 +68,61 @@ lto = "thin"
 codegen-units = 16
 strip = true
 incremental = false
+
+# ── Linux 打包元数据（Windows 那条路走 installer/vpn-parser.iss，两边互不影响）──────────
+# 版本号唯一真源仍然是上面的 [package] version：cargo-deb / cargo-generate-rpm 都读它，
+# 所以不会出现 Inno 那边"安装包、关于页、卸载列表各说各话"的老问题。
+[package.metadata.deb]
+maintainer = "mateo-ki <mateo-ki@users.noreply.github.com>"
+section = "net"
+priority = "optional"
+# 运行期真正要加载的库。这里手写而不是 `depends = "$auto"`：自动推导要 dpkg-dev 的
+# shlibdeps，而那要 root —— 我们的包必须在无 sudo 环境里也能造出来。
+depends = "libc6, libxcb1, libxkbcommon0, libwayland-client0, libegl1, libgl1, ca-certificates, zlib1g"
+# 中文界面没有 CJK 字体就是满屏方框（2026-10-16 在 WSL 上实测到），但字体不该是硬依赖：
+# 装不上也不该拦住主程序，所以放 Recommends。
+recommends = "fonts-noto-cjk"
+# 长描述必须自己写：cargo-deb 在没有 extended-description 时会拿 README.md 当默认值，
+# 于是 control 的 Description 字段里出现 "# VPN Parser"、反引号和 markdown 列表 —— apt
+# 界面与 `apt show` 照原样显示那堆 markdown（2026-10-16 出第一个 deb 时就是这样）。
+# Description 字段，于是包里出现 "# VPN Parser"、反引号和 markdown 列表 —— apt 界面
+# 与 `apt show` 会照原样显示那堆 markdown（2026-10-16 出第一个 deb 时就是这样）。
+# Debian 的长描述格式：每行前置一个空格，空行写成单独一个 `.`。
+extended-description = """拉取订阅并解析节点，实测延迟与可用性，再把选中节点交给本地代理内核 （Mihomo / Sing-box / Xray）运行，附带 HTTP 管理接口与桌面界面。
+.
+接管方式按平台而定：Windows 支持系统代理与 TUN（TUN 需管理员），
+Linux 目前只提供本地混合端口（把应用指向 127.0.0.1 的那个端口），TUN 尚未接入。
+可导出 Clash / Sing-box / Xray 配置，并能按域名规则分流。"""
+maintainer-scripts = "packaging/linux/deb/"
+assets = [
+    ["target/release/vpn-parser", "usr/bin/", "755"],
+    ["packaging/linux/vpn-parser.desktop", "usr/share/applications/", "644"],
+    ["assets/app-icon-16.png", "usr/share/icons/hicolor/16x16/apps/vpn-parser.png", "644"],
+    ["assets/app-icon-32.png", "usr/share/icons/hicolor/32x32/apps/vpn-parser.png", "644"],
+    ["assets/app-icon-48.png", "usr/share/icons/hicolor/48x48/apps/vpn-parser.png", "644"],
+    ["assets/app-icon-256.png", "usr/share/icons/hicolor/256x256/apps/vpn-parser.png", "644"],
+    ["LICENSE", "usr/share/doc/vpn-parser/", "644"],
+    ["README.md", "usr/share/doc/vpn-parser/", "644"],
+]
+
+[package.metadata.generate-rpm]
+# rpm 侧没有 "recommends" 这种弱依赖语义可用（generate-rpm 只出 Requires），
+# 所以这里用 Recommends 表达同一个意思：缺字体不该让包装不上。
+auto-requires = false
+assets = [
+    { source = "target/release/vpn-parser", dest = "/usr/bin/vpn-parser", mode = "755" },
+    { source = "packaging/linux/vpn-parser.desktop", dest = "/usr/share/applications/vpn-parser.desktop", mode = "644" },
+    { source = "assets/app-icon-16.png", dest = "/usr/share/icons/hicolor/16x16/apps/vpn-parser.png", mode = "644" },
+    { source = "assets/app-icon-32.png", dest = "/usr/share/icons/hicolor/32x32/apps/vpn-parser.png", mode = "644" },
+    { source = "assets/app-icon-48.png", dest = "/usr/share/icons/hicolor/48x48/apps/vpn-parser.png", mode = "644" },
+    { source = "assets/app-icon-256.png", dest = "/usr/share/icons/hicolor/256x256/apps/vpn-parser.png", mode = "644" },
+    { source = "LICENSE", dest = "/usr/share/doc/vpn-parser/LICENSE", mode = "644" },
+]
+
+[package.metadata.generate-rpm.scripts]
+# 和 deb 那两个 scriptlet 同一件事：装完/卸完刷新桌面入口与图标缓存。
+# rpm 侧不检查工具在不在就直接调，所以用 `command -v ... && ... || :` 兜住。
+post = """if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database /usr/share/applications || :; fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || :; fi"""
+postun = """if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database /usr/share/applications || :; fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || :; fi"""

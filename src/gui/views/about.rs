@@ -178,12 +178,19 @@ impl VpnApp {
                         }
                     }
                     if let Some(path) = self.app_installer_path.clone() {
+                        // 这行提示按平台分叉：Linux 上没有"向导接管"这回事（本程序不会去拿
+                        // root），点了只是把校验过的包和该敲的命令交给你 —— 写着"启动安装向导"
+                        // 就是假话，而这个按钮点下去的行为两个平台确实不一样。
+                        let hint = if cfg!(windows) {
+                            "启动安装向导。安装包一启动就会结束当前这个 vpn-parser.exe，\
+                             装完由向导把程序带回来。"
+                        } else {
+                            "本程序不会自己去拿 root：点这里会把已校验的包交给你，\
+                             并把该执行的命令（sudo dpkg -i 或 sudo rpm -Uvh）写在状态栏上。"
+                        };
                         if ui
                             .add_enabled(!self.app_update_busy, button("安装"))
-                            .on_hover_text(
-                                "启动安装向导。安装包一启动就会结束当前这个 vpn-parser.exe，\
-                                 装完由向导把程序带回来。",
-                            )
+                            .on_hover_text(hint)
                             .clicked()
                         {
                             self.install_app_update(&path);
@@ -451,7 +458,7 @@ impl VpnApp {
 
     pub(crate) fn install_app_update(&mut self, path: &std::path::Path) {
         match app_update::launch_installer(path) {
-            Ok(()) => {
+            Ok(app_update::Handoff::WizardLaunched) => {
                 self.status = format!("安装向导已启动：{}", path.display());
                 self.app_update_progress = Some(AppUpdateProgress {
                     stage: AppUpdateStage::Ready,
@@ -459,6 +466,18 @@ impl VpnApp {
                     total: 0,
                     bytes_per_second: 0.0,
                     message: "安装向导已接管，本程序马上会被关闭".into(),
+                });
+            }
+            // Linux：包已下载并校验过，但程序不会自己去拿 root。把命令原样给出来 ——
+            // 说"安装向导已启动"在这里是假话，而假话比"要你自己动手"更糟。
+            Ok(app_update::Handoff::ManualInstall { command }) => {
+                self.status = format!("包已就位，请执行：{command}");
+                self.app_update_progress = Some(AppUpdateProgress {
+                    stage: AppUpdateStage::Ready,
+                    downloaded: 0,
+                    total: 0,
+                    bytes_per_second: 0.0,
+                    message: format!("已下载到本地并校验通过，执行这条命令完成安装：{command}"),
                 });
             }
             Err(error) => self.status = format!("启动安装程序失败: {error}"),

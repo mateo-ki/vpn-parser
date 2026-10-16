@@ -185,12 +185,14 @@ impl VpnApp {
     }
 
     /// 标题栏的 ✕ 必须和系统关闭按钮走同一套分支，否则"关闭收进托盘"这个设置形同虚设。
-    /// 每 30 秒核对一次系统代理归属。只在"代理在跑、而且是我们开的那份系统代理"
-    /// （`local_proxy_ready`）时查 —— TUN 模式根本不碰注册表，查了只会误报。
+    /// 每 30 秒核对一次系统代理归属。只在"代理在跑、而且**是我们开的那份系统代理**"时查 ——
+    /// 读的是 `system_proxy_enabled`（归属），不是 `local_proxy_ready`（那字段的意思是
+    /// "本地 mixed 端口已就绪"，刚 spawn 就为真）。以前读后者，TUN 模式下端口也是就绪的，
+    /// 于是核对照跑、注册表当然不是我们写的，就会冒出一条本不该出现的误报。
     /// 查询要起 `reg.exe`（三次），所以丢给 `spawn_blocking`，绝不在 UI 线程上等。
     pub(crate) fn maybe_check_proxy_drift(&mut self) {
         const EVERY: std::time::Duration = std::time::Duration::from_secs(30);
-        if !self.proxy_status.local_proxy_ready {
+        if !self.proxy_status.system_proxy_enabled {
             self.drift_checked_at = None;
             return;
         }

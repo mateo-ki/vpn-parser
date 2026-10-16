@@ -19,9 +19,23 @@ pub struct SystemProxySnapshot {
 }
 
 pub trait SystemProxyControl: Send + Sync {
+    /// 这个平台到底有没有"系统代理"这个可写的位置。Windows 有（WinINET 注册表），
+    /// Linux/macOS 没有全局的那一格。
+    ///
+    /// 单独问一句而不是让 `enable` 报错再猜：代理启动那条路在内核**已经起来之后**才写
+    /// 系统代理，写不进去不能等于启动失败 —— 否则 Linux 上内核明明在跑、界面却说失败。
+    fn supported(&self) -> bool {
+        system_proxy_supported_on_this_platform()
+    }
+
     fn capture(&self) -> Result<SystemProxySnapshot>;
     fn enable(&self, server: &str) -> Result<()>;
     fn restore(&self, snapshot: &SystemProxySnapshot) -> Result<()>;
+}
+
+/// 唯一一份"本平台能不能写系统代理"的判据，启动流程与界面共用。
+pub const fn system_proxy_supported_on_this_platform() -> bool {
+    cfg!(windows)
 }
 
 #[derive(Debug, Default)]

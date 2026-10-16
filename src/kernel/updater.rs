@@ -1,4 +1,7 @@
-use super::{read_kernel_version, read_kernel_version_with_env, KernelInfo, KernelKind};
+use super::{
+    read_kernel_version, read_kernel_version_with_env, KernelArchive, KernelInfo, KernelKind,
+    KernelPlatform,
+};
 use anyhow::{bail, Context, Result};
 use reqwest::Client;
 use serde::de::DeserializeOwned;
@@ -92,7 +95,14 @@ struct GithubAsset {
 #[derive(Debug, Clone)]
 pub struct Transport {
     pub label: String,
+    /// 查 Release / 读 JSON 用：4 秒连不上、15 秒读不到就放弃，换下一条通道。
+    /// 这是用户 2026-10 要的"快速失败"语义，别把它放宽。
     client: Client,
+    /// 下 22MB 资产用：只放宽到"连接 10 秒、没有逐次读超时"。
+    /// 理由有实测：WSL 出境到 ghfast 的 TLS 握手要 7 秒上下，同一个资产整趟 36.6 秒，
+    /// 而 4 秒的连接预算让预备下载在第 5 秒就报 `error sending request` —— 元数据那套
+    /// 快失败对这个量级的传输是错的，但我不想因此牺牲元数据的快失败，所以分成两个 client。
+    stream_client: Client,
 }
 
 #[derive(Debug, Clone)]
@@ -254,14 +264,23 @@ impl KernelUpdater {
     pub fn new(root: PathBuf, app_proxy: Option<&str>) -> Result<Self> {
         let mut transports = Vec::new();
         for candidate in proxy_candidates(app_proxy) {
-            let mut builder = Client::builder()
+            // 同一个通道要两个 client（见 `Transport` 上那段注释），而 reqwest 的
+            // `ClientBuilder` 不是 Clone，所以代理与 UA 这些共同项对折两遍。
+            let mut metadata = Client::builder()
                 .user_agent("vpn-parser/0.1 kernel-updater")
+                .http1_only()
                 .connect_timeout(std::time::Duration::from_secs(4))
-                .read_timeout(std::time::Duration::from_secs(15))
-                .http1_only();
+                .read_timeout(std::time::Duration::from_secs(15));
+            let mut streaming = Client::builder()
+                .user_agent("vpn-parser/0.1 kernel-updater")
+                .http1_only()
+                .connect_timeout(std::time::Duration::from_secs(10));
+            // 刻意不调 read_timeout：reqwest 默认就没有逐次读超时。
             let label = match candidate.as_deref() {
                 Some(url) => {
-                    builder = builder.proxy(reqwest::Proxy::all(url)?);
+                    let proxy = reqwest::Proxy::all(url)?;
+                    metadata = metadata.proxy(proxy.clone());
+                    streaming = streaming.proxy(proxy);
                     if app_proxy.is_some() && Some(url) == app_proxy {
                         format!("应用内代理 {url}")
                     } else {
@@ -272,7 +291,8 @@ impl KernelUpdater {
             };
             transports.push(Transport {
                 label,
-                client: builder.build()?,
+                client: metadata.build()?,
+                stream_client: streaming.build()?,
             });
         }
         Ok(Self { transports, root })
@@ -339,7 +359,7 @@ impl KernelUpdater {
     where
         F: Fn(KernelUpdateProgress) + Send + Sync,
     {
-        let path = local_file.ok_or_else(|| anyhow::anyhow!("请先选择要导入的内核 zip"))?;
+        let path = local_file.ok_or_else(|| anyhow::anyhow!("请先选择要导入的内核压缩包"))?;
         ensure_not_cancelled(cancelled)?;
         progress(KernelUpdateProgress {
             kind,
@@ -386,8 +406,23 @@ impl KernelUpdater {
             });
         }
         let expected_tag = expected.as_ref().map(|(_, tag)| tag.clone());
-        self.install_bytes(kind, bytes, expected_tag.as_deref(), cancelled, progress)
-            .await
+        // 本地导入的容器格式按**文件名的后缀**判，不能按当前平台默认：
+        // 他在 Linux 上手拖一个 .zip 进来是完全可能的，反过来也一样。
+        let format = KernelArchive::from_asset_name(
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default(),
+        )
+        .ok_or_else(|| anyhow::anyhow!("本地内核文件只认 .zip、.gz、.tar.gz 三种容器"))?;
+        self.install_bytes(
+            kind,
+            bytes,
+            expected_tag.as_deref(),
+            format,
+            cancelled,
+            progress,
+        )
+        .await
     }
 
     async fn update_from_network<F>(
@@ -492,6 +527,8 @@ impl KernelUpdater {
             kind,
             bytes,
             Some(release.tag_name.as_str()),
+            KernelArchive::from_asset_name(&asset.name)
+                .ok_or_else(|| anyhow::anyhow!("官方资产 {} 的容器格式认不出来", asset.name))?,
             cancelled,
             progress,
         )
@@ -505,6 +542,7 @@ impl KernelUpdater {
         kind: KernelKind,
         bytes: Vec<u8>,
         expected_tag: Option<&str>,
+        format: KernelArchive,
         cancelled: &AtomicBool,
         progress: &F,
     ) -> Result<KernelUpdateResult>
@@ -536,8 +574,10 @@ impl KernelUpdater {
             kind.display_name(),
             staging.display()
         ));
-        tokio::task::spawn_blocking(move || extract_executable(&bytes, kind, &staging_for_extract))
-            .await??;
+        tokio::task::spawn_blocking(move || {
+            extract_executable(&bytes, format, kind, &staging_for_extract)
+        })
+        .await??;
 
         // 这一步是整个"预备"最容易被外因（虚拟机 CPU / 杀软）打掉的地方，
         // 所以三种结果都写进 startup.log —— VM 上没有控制台，文件是唯一看得见的证据。
@@ -671,7 +711,7 @@ impl KernelUpdater {
             let transport = &self.transports[index];
             let label = format!("{}·{}", transport.label, source.label());
             match Self::stream_asset(
-                &transport.client,
+                &transport.stream_client,
                 url.clone(),
                 label.clone(),
                 kind,
@@ -840,17 +880,29 @@ impl KernelUpdater {
 
 /// 内置兜底 Release：只在"查不到最新 Release + 本地也没有缓存"时用。
 ///
-/// `v1.19.32` 是 2026-10-08 实测过的：走 gh-proxy 镜像 2.5 秒下完 22,492,402 字节，
-/// 算出来的 SHA-256 和 GitHub 给的 `digest` **逐字符一致** —— 所以这条路仍然会照常
-/// 校验哈希，不是"跳过检查"。代价是版本号会慢慢落后；更新它只改下面三行常量。
+/// 哈希是**按资产**的，不是按版本号的：同一个 v1.19.32，Windows 的 `.zip` 和 Linux 的
+/// `.gz` 是两个完全不同的字节流，套错号就是"下得来但校验必挂"。
+/// 两组数字都实测过（2026-10-15）：
+/// - Windows：走 gh-proxy 2.5 秒下完 22,492,402 字节，算出的 SHA-256 与 GitHub `digest` 一致；
+/// - Linux：走 ghfast 36.6 秒下完 22,846,526 字节，`sha256sum` 与 GitHub `digest` 逐字符一致，
+///   解出来 61,993,086 字节的静态 ELF，`chmod +x` 后 `-v` 退出码 0。
+/// 代价是版本号会慢慢落后；更新它只改下面这几行常量。
 fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
-    const MIHOMO_TAG: &str = "v1.19.32";
-    const MIHOMO_SHA256: &str =
-        "sha256:1ac84e795b5b915446e20139677fb6cc013a0778e876e8d4c96f994750b4c4a3";
-    const MIHOMO_SIZE: u64 = 22_492_402;
     if kind != KernelKind::Mihomo {
         return None;
     }
+    const MIHOMO_TAG: &str = "v1.19.32";
+    let (digest, size) = if KernelPlatform::current() == KernelPlatform::Windows {
+        (
+            "sha256:1ac84e795b5b915446e20139677fb6cc013a0778e876e8d4c96f994750b4c4a3",
+            22_492_402_u64,
+        )
+    } else {
+        (
+            "sha256:8451100836c9eda194331c2babfad490b2faf30cebc1a04b0e76fd8ac2d35d10",
+            22_846_526_u64,
+        )
+    };
     let name = kind.asset_name(MIHOMO_TAG);
     Some(GithubRelease {
         tag_name: MIHOMO_TAG.to_string(),
@@ -859,8 +911,8 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
             browser_download_url: format!(
                 "https://github.com/MetaCubeX/mihomo/releases/download/{MIHOMO_TAG}/{name}"
             ),
-            size: MIHOMO_SIZE,
-            digest: Some(MIHOMO_SHA256.to_string()),
+            size,
+            digest: Some(digest.to_string()),
         }],
         fallback: true,
     })
@@ -872,10 +924,14 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
 /// 数据文件处理；2026-10-08 在 VirtualBox 上遇到的正是"下载校验全过、一运行就
 /// 0xC0000005 且零输出"，所以先把这个我们自己造成的变量消掉。
 fn staging_name(kind: KernelKind) -> String {
-    format!(
-        "{}.staging.exe",
-        kind.executable_name().trim_end_matches(".exe")
-    )
+    let stem = kind.executable_name().trim_end_matches(".exe");
+    // Linux 上没有"杀软把无扩展名文件当数据文件"这回事，硬加 `.exe` 反而会做出一个
+    // 名叫 `mihomo.exe` 的 ELF（之后排查"为什么这文件不能执行"时极其误导）。
+    if cfg!(windows) {
+        format!("{stem}.staging.exe")
+    } else {
+        format!("{stem}.staging")
+    }
 }
 
 fn ensure_not_cancelled(cancelled: &AtomicBool) -> Result<()> {
@@ -911,7 +967,78 @@ fn version_matches(output: &str, tag: &str) -> bool {
         .any(|part| part.trim_start_matches('v') == version)
 }
 
-fn extract_executable(archive: &[u8], kind: KernelKind, target: &Path) -> Result<()> {
+/// 按容器格式取出内核可执行文件。三种格式都支持，因为三家在 Linux 上发的东西不一样。
+/// `target` 是暂存路径；解完统一补可执行位（Linux 上 `fs::write` 不会自己给 `+x`，
+/// 少了这一步后面"跑一下拿版本"直接 Permission denied）。
+fn extract_executable(
+    archive: &[u8],
+    format: KernelArchive,
+    kind: KernelKind,
+    target: &Path,
+) -> Result<()> {
+    match format {
+        KernelArchive::Zip => extract_from_zip(archive, kind, target),
+        KernelArchive::Gz => extract_from_gz(archive, kind, target),
+        KernelArchive::TarGz => extract_from_tar_gz(archive, kind, target),
+    }?;
+    mark_executable(target)?;
+    Ok(())
+}
+
+/// mihomo 的 Linux 资产是 **gzip 压的单个可执行文件**，没有目录：解出来就是它本身。
+fn extract_from_gz(archive: &[u8], kind: KernelKind, target: &Path) -> Result<()> {
+    let mut decoder = flate2::read::GzDecoder::new(Cursor::new(archive));
+    let mut bytes = Vec::new();
+    decoder
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("解开 {} 的 .gz 失败", kind.executable_name()))?;
+    if bytes.is_empty() {
+        bail!("{} 的 .gz 解出来是空的", kind.executable_name());
+    }
+    std::fs::write(target, bytes)?;
+    Ok(())
+}
+
+/// sing-box 的 Linux 资产是 `.tar.gz`：先解 gzip，再在 tar 条目里找那个可执行文件。
+fn extract_from_tar_gz(archive: &[u8], kind: KernelKind, target: &Path) -> Result<()> {
+    let decoder = flate2::read::GzDecoder::new(Cursor::new(archive));
+    let mut tar = tar::Archive::new(decoder);
+    let mut found = false;
+    for entry in tar.entries().context("打开内核 TAR 失败")? {
+        let mut entry = entry?;
+        let path = entry.path()?.to_path_buf();
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !kind.matches_archive_executable(file_name) || !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes)?;
+        std::fs::write(target, bytes)?;
+        found = true;
+        break;
+    }
+    if found {
+        Ok(())
+    } else {
+        bail!("TAR 中未找到 {}", kind.executable_name())
+    }
+}
+
+#[cfg(unix)]
+fn mark_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn mark_executable(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+fn extract_from_zip(archive: &[u8], kind: KernelKind, target: &Path) -> Result<()> {
     let mut zip = zip::ZipArchive::new(Cursor::new(archive)).context("打开内核 ZIP 失败")?;
     let mut executable_found = false;
     for index in 0..zip.len() {
@@ -971,7 +1098,18 @@ mod tests {
         assert_eq!(release.assets.len(), 1);
         let asset = &release.assets[0];
         assert_eq!(asset.name, KernelKind::Mihomo.asset_name(&release.tag_name));
-        assert_eq!(asset.size, 22_492_402);
+        // 大小/容器要跟着平台走：这两个号分别是 Windows 的 .zip 和 Linux 的 .gz，
+        // 写死任何一个都会在另一个平台上变成"下得来但校验必挂"。
+        let (want_size, want_suffix) = match KernelPlatform::current() {
+            KernelPlatform::Windows => (22_492_402, ".zip"),
+            KernelPlatform::Linux => (22_846_526, ".gz"),
+        };
+        assert_eq!(asset.size, want_size, "兜底大小要对得上当前平台的资产");
+        assert!(
+            asset.name.ends_with(want_suffix),
+            "当前平台要的是 {want_suffix}，实际资产名 {}",
+            asset.name
+        );
         assert_eq!(
             asset.browser_download_url,
             format!(
@@ -1011,10 +1149,64 @@ mod tests {
     fn staging_files_keep_an_executable_name() {
         for kind in [KernelKind::Mihomo, KernelKind::Xray, KernelKind::SingBox] {
             let name = staging_name(kind);
-            assert!(name.ends_with(".exe"), "{name} 必须以 .exe 结尾");
+            // `.exe` 结尾是 Windows 那侧针对杀软的取证结论，Linux 上反过来是负担
+            // （一个叫 `mihomo.exe` 的 ELF 只会误导排障），所以按平台分别要求。
+            if cfg!(windows) {
+                assert!(name.ends_with(".exe"), "{name} 在 Windows 必须以 .exe 结尾");
+            } else {
+                assert!(!name.ends_with(".exe"), "{name} 在 Linux 不该带 .exe");
+            }
             assert!(!name.starts_with('.'), "{name} 不能是隐藏文件");
             assert_ne!(name, kind.executable_name(), "不能和正式内核同名");
         }
+    }
+
+    /// 三家的资产名与容器格式都是拿 GitHub Release API 实测过写死的（2026-10-15）。
+    /// 这条测试的意义：以后谁把 Linux 那套偷偷写成 `.zip`，下载会 404，这里先红。
+    #[test]
+    fn linux_assets_use_each_vendors_own_container() {
+        let mihomo = KernelKind::Mihomo.asset_name_for(KernelPlatform::Linux, "v1.19.32");
+        assert_eq!(mihomo, "mihomo-linux-amd64-v1.19.32.gz");
+        assert_eq!(
+            KernelArchive::from_asset_name(&mihomo),
+            Some(KernelArchive::Gz),
+            "mihomo 的 Linux 资产是 gzip 裸文件，不是 zip"
+        );
+
+        let sing_box = KernelKind::SingBox.asset_name_for(KernelPlatform::Linux, "v1.14.3");
+        assert_eq!(sing_box, "sing-box-1.14.3-linux-amd64.tar.gz");
+        assert_eq!(
+            KernelArchive::from_asset_name(&sing_box),
+            Some(KernelArchive::TarGz)
+        );
+
+        let xray = KernelKind::Xray.asset_name_for(KernelPlatform::Linux, "v26.3.27");
+        assert_eq!(xray, "Xray-linux-64.zip");
+        assert_eq!(
+            KernelArchive::from_asset_name(&xray),
+            Some(KernelArchive::Zip)
+        );
+
+        // 反向对照：Windows 那三行必须一个都没被 Linux 的形状污染。
+        assert_eq!(
+            KernelKind::Mihomo.asset_name_for(KernelPlatform::Windows, "v1.19.32"),
+            "mihomo-windows-amd64-v1.19.32.zip"
+        );
+        assert_eq!(
+            KernelKind::Xray.asset_name_for(KernelPlatform::Windows, "v26.3.27"),
+            "Xray-windows-64.zip"
+        );
+    }
+
+    /// 条目名判据不许只认 `.exe`：Linux 容器里的可执行文件就叫 `mihomo` / `xray` / `sing-box`。
+    #[test]
+    fn archive_entries_match_without_an_exe_suffix() {
+        assert!(KernelKind::Mihomo.matches_archive_executable("mihomo"));
+        assert!(KernelKind::Xray.matches_archive_executable("xray"));
+        assert!(KernelKind::SingBox.matches_archive_executable("sing-box"));
+        assert!(KernelKind::Mihomo.matches_archive_executable("mihomo-windows-amd64.exe"));
+        assert!(!KernelKind::Xray.matches_archive_executable("geoip.dat"));
+        assert!(!KernelKind::Xray.matches_archive_executable("wv2ray"));
     }
 
     #[tokio::test]
@@ -1038,6 +1230,7 @@ mod tests {
                 KernelKind::Mihomo,
                 bytes,
                 Some("v1.19.32"),
+                KernelArchive::Zip,
                 &cancelled,
                 &|_| {},
             )
@@ -1071,9 +1264,9 @@ mod tests {
             std::env::temp_dir().join(format!("vpn-parser-xray-assets-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
-        let target = directory.join(".xray.exe.staging");
+        let target = directory.join(staging_name(KernelKind::Xray));
 
-        extract_executable(&bytes, KernelKind::Xray, &target).unwrap();
+        extract_executable(&bytes, KernelArchive::Zip, KernelKind::Xray, &target).unwrap();
 
         assert_eq!(std::fs::read(&target).unwrap(), b"exe");
         assert_eq!(std::fs::read(directory.join("geoip.dat")).unwrap(), b"ip");
@@ -1082,6 +1275,84 @@ mod tests {
             b"site"
         );
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// mihomo 的 Linux 资产是 gzip 压的**裸可执行文件**（没有目录、没有条目名），
+    /// 所以这条路径连"找哪个条目"都没有 —— 解出来就是它。真实字节我手动验过
+    /// （22,846,526 → 61,993,086 的 ELF，`-v` 退出码 0），这里钉住的是分发逻辑。
+    #[test]
+    fn gz_archive_yields_the_single_executable() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(b"#!/elf-ish mihomo payload").unwrap();
+        let gz = encoder.finish().unwrap();
+
+        let dir = std::env::temp_dir().join(format!("vpn-gz-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join(staging_name(KernelKind::Mihomo));
+        extract_executable(&gz, KernelArchive::Gz, KernelKind::Mihomo, &target).unwrap();
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"#!/elf-ish mihomo payload"
+        );
+
+        // 反向对照：同一份字节按 ZIP 走必须失败，不许"随便挑一种解法都能过"。
+        let wrong = dir.join("wrong");
+        assert!(
+            extract_executable(&gz, KernelArchive::Zip, KernelKind::Mihomo, &wrong).is_err(),
+            "gzip 字节喂给 ZIP 分支必须报错，不能静默产出坏内核"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// sing-box 的 Linux 资产是 `.tar.gz`：里面还有别的东西（目录、许可证），
+    /// 所以要按条目名挑，并且不许把目录当可执行文件收下来。
+    #[test]
+    fn tar_gz_archive_picks_the_executable_entry() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        {
+            let mut builder = tar::Builder::new(&mut gz);
+            let payload = b"sing-box binary";
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_mode(0o755);
+            header.set_size(payload.len() as u64);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "sing-box", &payload[..])
+                .unwrap();
+            // 真的 sing-box tar.gz 里还有 LICENSES/ 这类目录条目：必须被跳过而不是当内核。
+            builder.append_dir("LICENSES", ".").unwrap();
+            builder.finish().unwrap();
+        }
+        let bytes = gz.finish().unwrap();
+
+        let dir = std::env::temp_dir().join(format!("vpn-targz-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join(staging_name(KernelKind::SingBox));
+        extract_executable(&bytes, KernelArchive::TarGz, KernelKind::SingBox, &target).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"sing-box binary");
+
+        // 反向对照：一个只含目录、没有可执行条目的 tar.gz 必须报错。
+        let mut empty_gz = GzEncoder::new(Vec::new(), Compression::default());
+        {
+            let mut builder = tar::Builder::new(&mut empty_gz);
+            builder.append_dir("only-dir", ".").unwrap();
+            builder.finish().unwrap();
+        }
+        let empty = empty_gz.finish().unwrap();
+        let wrong = dir.join("wrong");
+        assert!(
+            extract_executable(&empty, KernelArchive::TarGz, KernelKind::SingBox, &wrong).is_err(),
+            "没有可执行条目时必须失败，不许产出空内核"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

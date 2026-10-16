@@ -41,6 +41,60 @@ impl KernelPreference {
     }
 }
 
+/// 官方 Release 资产按哪个系统出的。名字/后缀/可执行文件名三样都跟着它变。
+///
+/// 显式建模成一个值（而不是在每个函数里写 `#[cfg]`）有两个理由：
+/// ① 在 Windows 上也能把 Linux 那套命名与解包格式断言跑一遍；
+/// ② 兜底版本的 SHA-256 是**按资产**算的，`.zip` 和 `.gz` 两个号不能混用一份常量。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KernelPlatform {
+    Windows,
+    Linux,
+}
+
+impl KernelPlatform {
+    /// 编译目标决定它。非 Windows 非 Linux 的先按 Linux 命名走（没实测过，别当已验证）。
+    pub const fn current() -> Self {
+        #[cfg(windows)]
+        {
+            Self::Windows
+        }
+        #[cfg(all(not(windows), target_os = "linux"))]
+        {
+            Self::Linux
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            Self::Linux
+        }
+    }
+}
+
+/// 资产容器格式。三家在 Linux 上发的东西并不统一：
+/// mihomo 是 gzip 压的裸可执行文件，sing-box 是 `.tar.gz`，xray 才是 `.zip`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KernelArchive {
+    Zip,
+    /// gzip 单层流，解出来就是那一个可执行文件。
+    Gz,
+    TarGz,
+}
+
+impl KernelArchive {
+    pub fn from_asset_name(asset_name: &str) -> Option<Self> {
+        let lower = asset_name.to_ascii_lowercase();
+        if lower.ends_with(".zip") {
+            Some(Self::Zip)
+        } else if lower.ends_with(".tar.gz") {
+            Some(Self::TarGz)
+        } else if lower.ends_with(".gz") {
+            Some(Self::Gz)
+        } else {
+            None
+        }
+    }
+}
+
 impl KernelKind {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -67,10 +121,19 @@ impl KernelKind {
     }
 
     pub fn executable_name(self) -> &'static str {
-        match self {
-            Self::Mihomo => "mihomo.exe",
-            Self::Xray => "xray.exe",
-            Self::SingBox => "sing-box.exe",
+        self.executable_name_for(KernelPlatform::current())
+    }
+
+    /// 同一种内核在每个系统上的可执行文件名不一样（Windows 要带 `.exe`）。
+    /// 平台做成参数而不是散在函数里的 `cfg`，为的是在 Windows 上也能把 Linux 那套断言跑一遍。
+    pub fn executable_name_for(self, platform: KernelPlatform) -> &'static str {
+        match (self, platform) {
+            (Self::Mihomo, KernelPlatform::Windows) => "mihomo.exe",
+            (Self::Xray, KernelPlatform::Windows) => "xray.exe",
+            (Self::SingBox, KernelPlatform::Windows) => "sing-box.exe",
+            (Self::Mihomo, KernelPlatform::Linux) => "mihomo",
+            (Self::Xray, KernelPlatform::Linux) => "xray",
+            (Self::SingBox, KernelPlatform::Linux) => "sing-box",
         }
     }
 
@@ -98,21 +161,38 @@ impl KernelKind {
     }
 
     pub fn asset_name(self, tag: &str) -> String {
-        match self {
-            Self::Mihomo => format!("mihomo-windows-amd64-{tag}.zip"),
-            Self::Xray => "Xray-windows-64.zip".into(),
-            Self::SingBox => format!("sing-box-{}-windows-amd64.zip", tag.trim_start_matches('v')),
+        self.asset_name_for(KernelPlatform::current(), tag)
+    }
+
+    /// 三个内核在 Linux 上发的容器**互不相同**（2026-10-15 拿 GitHub Release API 实测）：
+    /// mihomo = `mihomo-linux-amd64-<tag>.gz`（gzip 压的裸可执行文件），
+    /// sing-box = `sing-box-<ver>-linux-amd64.tar.gz`，xray = `Xray-linux-64.zip`。
+    /// 照 Windows 那套一律写成 `.zip` 会在下载那步直接 404。
+    pub fn asset_name_for(self, platform: KernelPlatform, tag: &str) -> String {
+        let version = tag.trim_start_matches('v');
+        match (self, platform) {
+            (Self::Mihomo, KernelPlatform::Windows) => format!("mihomo-windows-amd64-{tag}.zip"),
+            (Self::Xray, KernelPlatform::Windows) => "Xray-windows-64.zip".into(),
+            (Self::SingBox, KernelPlatform::Windows) => {
+                format!("sing-box-{version}-windows-amd64.zip")
+            }
+            (Self::Mihomo, KernelPlatform::Linux) => format!("mihomo-linux-amd64-{tag}.gz"),
+            (Self::Xray, KernelPlatform::Linux) => "Xray-linux-64.zip".into(),
+            (Self::SingBox, KernelPlatform::Linux) => {
+                format!("sing-box-{version}-linux-amd64.tar.gz")
+            }
         }
     }
 
     pub fn matches_archive_executable(self, file_name: &str) -> bool {
+        // 容器里的条目名 Linux 侧没有 `.exe`，所以判"去掉 .exe 之后的主干"。
+        // 仍保留 `mihomo*` 这种前缀匹配：官方 Windows 压缩包里的条目名有过带变体后缀的时候。
+        let lower = file_name.to_ascii_lowercase();
+        let stem = lower.strip_suffix(".exe").unwrap_or(&lower);
         match self {
-            Self::Mihomo => {
-                file_name.to_ascii_lowercase().starts_with("mihomo")
-                    && file_name.to_ascii_lowercase().ends_with(".exe")
-            }
-            Self::Xray => file_name.eq_ignore_ascii_case("xray.exe"),
-            Self::SingBox => file_name.eq_ignore_ascii_case("sing-box.exe"),
+            Self::Mihomo => stem.starts_with("mihomo"),
+            Self::Xray => stem == "xray",
+            Self::SingBox => stem == "sing-box",
         }
     }
 
@@ -437,10 +517,9 @@ fn managed_kernel_paths_use_native_separators() {
 }
 
 pub fn managed_kernel_root() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("data")
-        .join("kernels")
+    // 数据根目录只有一份判据（见 `crate::data_root`）：库、分片库、内核必须同一个根，
+    // 否则 Linux 上会出现"库在 XDG、内核在 /usr/bin/data"这种一半装上的状态。
+    crate::data_root().join("kernels")
 }
 
 pub fn parse_version_output(output: &str) -> Option<String> {
@@ -647,18 +726,47 @@ Use tags: with_gvisor
 
     #[test]
     fn kernel_candidates_only_include_managed_paths() {
-        let executable = PathBuf::from(r"C:\Tools\vpn-parser\vpn-parser.exe");
-        let working_dir = PathBuf::from(r"D:\vpn-parser");
-        let candidates =
-            kernel_candidates(KernelKind::Mihomo, Some(&executable), Some(&working_dir));
+        // 用当前平台的原生路径写法构造输入：反斜杠在 Linux 上不是分隔符，
+        // 拿 Windows 字面量去断言 join 结果，测的其实不是这段代码的性质。
+        let executable = PathBuf::from("some").join("tools").join("vpn-parser");
+        let working_dir = PathBuf::from("somewhere").join("vpn-parser");
+        let candidates = kernel_candidates(
+            KernelKind::Mihomo,
+            Some(&executable.as_path()),
+            Some(&working_dir.as_path()),
+        );
 
         assert_eq!(candidates.len(), 2);
-        assert!(candidates.contains(&PathBuf::from(
-            r"D:\vpn-parser\data\kernels\mihomo\mihomo.exe"
-        )));
-        assert!(candidates
-            .iter()
-            .all(|path| !path.to_string_lossy().contains("v2rayN")));
+        let expected_from_cwd = working_dir
+            .join("data")
+            .join("kernels")
+            .join("mihomo")
+            .join(KernelKind::Mihomo.executable_name());
+        let expected_from_exe_dir = executable
+            .parent()
+            .unwrap()
+            .join("data")
+            .join("kernels")
+            .join("mihomo")
+            .join(KernelKind::Mihomo.executable_name());
+        assert!(candidates.contains(&expected_from_cwd), "{candidates:?}");
+        assert!(
+            candidates.contains(&expected_from_exe_dir),
+            "{candidates:?}"
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|path| !path.to_string_lossy().contains("v2rayN")),
+            "自动发现不许伸进别人的目录：{candidates:?}"
+        );
+
+        // 只给其中一个输入时就只该有一个候选（另一个来源不该被编出来）。
+        assert_eq!(
+            kernel_candidates(KernelKind::Xray, Some(executable.as_path()), None).len(),
+            1
+        );
+        assert!(kernel_candidates(KernelKind::Xray, None, None).is_empty());
     }
 
     #[test]

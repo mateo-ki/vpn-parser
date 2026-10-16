@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=VPN Parser
+GenericName=Proxy subscription manager
+GenericName[zh_CN]=代理订阅管理器
+Comment=Fetch subscriptions, verify nodes and drive a local proxy kernel
+Comment[zh_CN]=拉取订阅、测速选节点，并驱动本地代理内核
+Exec=vpn-parser
+Icon=vpn-parser
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=proxy;vpn;clash;mihomo;subscription;
+StartupNotify=true
+# 程序没给 winit 设 app_id，X11 的 WM_CLASS 就是可执行文件名；
+# 这行写错的表现是"任务栏图标点了不回到窗口"，不是报错，所以别随手改。
+StartupWMClass=vpn-parser

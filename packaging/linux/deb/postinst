@@ -1,0 +1,19 @@
+#!/bin/sh
+# deb 的 configure 阶段：刷新桌面入口数据库和图标缓存。
+# 不刷新的表现不是报错，而是"装了但应用列表里找不到 / 图标是通用的"——
+# 那种现象最难倒推回打包这一步，所以宁可在这里做掉。
+set -e
+
+case "$1" in
+    configure)
+        # 这两个工具属于桌面栈（desktop-file-utils / libglib2.0-bin / gtk-update-icon-cache），
+        # 服务器镜像和容器里常常没有。装不上也不能让 dpkg 配置失败——程序本身照样能跑，
+        # 所以每句都 `|| true`，但保留 set -e 让"我们自己写错脚本"这种真错误炸出来。
+        command -v update-desktop-database >/dev/null 2>&1 \
+            && update-desktop-database /usr/share/applications || true
+        command -v gtk4-update-icon-cache >/dev/null 2>&1 \
+            && gtk4-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+        command -v gtk-update-icon-cache >/dev/null 2>&1 \
+            && gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+        ;;
+esac

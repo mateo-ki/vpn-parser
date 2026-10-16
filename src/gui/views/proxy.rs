@@ -470,7 +470,12 @@ impl VpnApp {
         // 以前它是手搓的 `Frame`（6px 圆角、自己的内边距、9px 小字），和同排那三个
         // 按钮四种长相 —— 现在走同一个 `status_btn`，只剩语义差别（用户 2026-10-15）。
         let mode_label = match self.proxy_config.mode {
-            ProxyMode::System => "系统代理",
+            // Linux 没有"系统代理"那一格，这个模式下实际做的事就是把端口开着等人来指，
+            // 所以叫「本地端口」；存储值仍是 System，不改数据层、不发明第三态。
+            ProxyMode::System if crate::system_proxy::system_proxy_supported_on_this_platform() => {
+                "系统代理"
+            }
+            ProxyMode::System => "本地端口",
             ProxyMode::Tun => "TUN 模式",
         };
         let mode_resp = ui

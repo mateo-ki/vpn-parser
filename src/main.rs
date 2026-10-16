@@ -53,9 +53,10 @@ struct Cli {
     #[arg(long, default_value = "127.0.0.1:8080")]
     listen: String,
 
-    /// SQLite database path
-    #[arg(long, default_value = "data/vpn-parser.db")]
-    db: std::path::PathBuf,
+    /// SQLite database path。不写就等于 `default_db_path()`：Windows 仍是程序目录下的
+    /// `data/vpn-parser.db`（装机就是那个位置，一个字都没改），Linux 走 XDG 数据目录。
+    #[arg(long)]
+    db: Option<std::path::PathBuf>,
 
     /// Headless mode: only run HTTP API (no GUI)
     #[arg(long, default_value_t = false)]
@@ -264,7 +265,11 @@ fn main() -> Result<()> {
         std::thread::sleep(std::time::Duration::from_millis(750));
     }
 
-    let db_path = cli.db.to_string_lossy().replace('\\', "/");
+    let db_path = cli
+        .db
+        .unwrap_or_else(default_db_path)
+        .to_string_lossy()
+        .replace('\\', "/");
     info!(db = %db_path, "opening database");
 
     let kernel_manager = KernelManager;
@@ -540,25 +545,114 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// 文件名像不像一个中日韩字体。Linux 上要靠它从字体目录里挑；Windows 用固定文件名。
 #[cfg(feature = "gui")]
-/// Load a Windows CJK font so Chinese UI text renders correctly.
-fn setup_chinese_fonts(ctx: &egui::Context) {
-    let candidates = [
-        r"C:\Windows\Fonts\msyh.ttc",   // Microsoft YaHei
-        r"C:\Windows\Fonts\msyhbd.ttc", // Microsoft YaHei Bold
-        r"C:\Windows\Fonts\simhei.ttf", // SimHei
-        r"C:\Windows\Fonts\simsun.ttc", // SimSun
-        r"C:\Windows\Fonts\msjh.ttc",   // Microsoft JhengHei
-        r"C:\Windows\Fonts\NotoSansSC-Regular.otf",
-    ];
+fn looks_like_cjk_font(file_name_lower: &str) -> bool {
+    [
+        "msyh",
+        "simhei",
+        "simsun",
+        "msjh",
+        "notosanscjk",
+        "notosanssc",
+        "notoserifcjk",
+        "sourcehansans",
+        "sourcehanserif",
+        "wqy-microhei",
+        "wqy-zenhei",
+        "uming",
+        "ukai",
+        "droidsansfallback",
+        "fireflysung",
+    ]
+    .iter()
+    .any(|needle| file_name_lower.contains(needle))
+}
 
+/// 在字体目录里递归找中日韩字体。Linux 的字体装在随发行版变化的子目录下，固定路径
+/// 猜不中就走这里；深度封顶，不跟着符号链接往下转。
+#[cfg(feature = "gui")]
+fn scan_cjk_fonts(dirs: &[std::path::PathBuf], depth: u8) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let mut stack: Vec<(std::path::PathBuf, u8)> = dirs.iter().cloned().map(|d| (d, 0)).collect();
+    while let Some((current, level)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue; // 目录不存在或读不了：跳过，这不是错误
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir {
+                if level + 1 <= depth {
+                    stack.push((path, level + 1));
+                }
+                continue;
+            }
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default();
+            let font_file =
+                name.ends_with(".ttf") || name.ends_with(".ttc") || name.ends_with(".otf");
+            if font_file && looks_like_cjk_font(&name) {
+                found.push(path);
+            }
+        }
+    }
+    found
+}
+
+#[cfg(feature = "gui")]
+/// 本机可用的中日韩字体候选，按“先用哪个”排序。
+fn cjk_font_candidates() -> Vec<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        [
+            std::path::PathBuf::from(r"C:\Windows\Fonts\msyh.ttc"),
+            std::path::PathBuf::from(r"C:\Windows\Fonts\msyhbd.ttc"),
+            std::path::PathBuf::from(r"C:\Windows\Fonts\simhei.ttf"),
+            std::path::PathBuf::from(r"C:\Windows\Fonts\simsun.ttc"),
+            std::path::PathBuf::from(r"C:\Windows\Fonts\msjh.ttc"),
+            std::path::PathBuf::from(r"C:\Windows\Fonts\NotoSansSC-Regular.otf"),
+        ]
+        .to_vec()
+    }
+    #[cfg(not(windows))]
+    {
+        let fixed = [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        ];
+        let mut roots = vec![
+            std::path::PathBuf::from("/usr/share/fonts"),
+            std::path::PathBuf::from("/usr/local/share/fonts"),
+        ];
+        if let Some(home) = std::env::var_os("HOME") {
+            roots.push(std::path::Path::new(&home).join(".local/share/fonts"));
+        }
+        let mut out: Vec<_> = fixed.iter().map(std::path::PathBuf::from).collect();
+        out.extend(scan_cjk_fonts(&roots, 4));
+        out
+    }
+}
+
+#[cfg(feature = "gui")]
+/// 加载中文字体。没有它整屏中文都是方框 —— egui 自带字体不含 CJK 字形。
+fn setup_chinese_fonts(ctx: &egui::Context) {
     let mut font_bytes: Option<Vec<u8>> = None;
     let mut font_name = "cjk".to_string();
-    for path in candidates {
-        if let Ok(bytes) = std::fs::read(path) {
-            info!(path, "loaded CJK font for GUI");
+    for path in cjk_font_candidates() {
+        if let Ok(bytes) = std::fs::read(&path) {
+            info!(path = %path.display(), "loaded CJK font for GUI");
             font_bytes = Some(bytes);
-            font_name = path.rsplit('\\').next().unwrap_or("cjk").to_string();
+            // 原来是 `path.rsplit('\\')`：Linux 的路径会把整条路径当成字体名。
+            font_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "cjk".to_string());
             break;
         }
     }
@@ -641,5 +735,184 @@ mod tests {
             parsed.unwrap().elevated_proxy_config.as_deref(),
             Some("-8f2_aQ")
         );
+    }
+}
+#[cfg(all(test, feature = "gui"))]
+mod cjk_font_tests {
+    use super::{looks_like_cjk_font, scan_cjk_fonts};
+    use std::path::PathBuf;
+
+    /// 判据要认得出各发行版真实的文件名，同时**不许**把这台机器上确实存在的
+    /// 拉丁字体（Ubuntu / DejaVu）当成中文 —— 认错了就等于加载一个画不出汉字的字体，
+    /// 现象还是方框，但日志会说"已加载中文字体"，比现在更难查。
+    #[test]
+    fn the_cjk_name_test_accepts_real_packages_and_rejects_latin_fonts() {
+        for name in [
+            "notosanscjk-regular.ttc",
+            "notosanscjksc-regular.otf",
+            "wqy-microhei.ttc",
+            "wqy-zenhei.ttc",
+            "sourcehansanssc-regular.otf",
+            "msyh.ttc",
+            "simhei.ttf",
+            "droidsansfallback.ttf",
+        ] {
+            assert!(looks_like_cjk_font(name), "{name} 该被认成中文字体");
+        }
+        for name in [
+            "dejavusans.ttf",
+            "dejavusansmono.ttf",
+            "ubuntu[wdth,wght].ttf",
+            "ubuntumono[wght].ttf",
+            "liberationMono-Regular.ttf",
+            "",
+        ] {
+            assert!(!looks_like_cjk_font(name), "{name} 不该被认成中文字体");
+        }
+    }
+
+    /// 扫描要能钻进发行版那些不一样的子目录（opentype/noto、truetype/wqy），
+    /// 并且只收字体后缀：同目录下的 .txt、以及不相关的 .ttf 都不能进来。
+    #[test]
+    fn the_font_scan_finds_nested_packages_and_skips_other_files() {
+        let root = std::env::temp_dir().join(format!("vpncjk-{}", std::process::id()));
+        let nested = root.join("opentype/noto");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("NotoSansCJK-Regular.ttc"), b"fake").unwrap();
+        let other = root.join("truetype/dejavu");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("DejaVuSans.ttf"), b"fake").unwrap();
+        std::fs::write(other.join("README.txt"), b"fake").unwrap();
+
+        let found = scan_cjk_fonts(&[root.clone()], 4);
+        assert_eq!(found.len(), 1, "只该找到那个 CJK 字体，实际 {found:?}");
+        assert!(found[0]
+            .to_string_lossy()
+            .ends_with("NotoSansCJK-Regular.ttc"));
+
+        // 反向对照：深度给 0 时，第二层目录不该被打开。
+        let shallow = scan_cjk_fonts(&[PathBuf::from(&root)], 0);
+        assert!(shallow.is_empty(), "深度 0 还找到了 {shallow:?}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+/// 这个实例的数据根目录：DB、分片库、内核都挂在它下面。
+///
+/// 三条规则按重要性排：
+/// ① 诊断壳永远跟着当前工作目录 —— 它已经切进自己的临时隔离目录，落到用户数据里
+///    就等于这个开关存在的意义没了（`VPN_PARSER_DIAG` 的第一条承诺就是不动真数据）。
+/// ② Windows 用工作目录下的 `data/`。装机目录就是程序目录（启动时会 chdir 过去），
+///    从 1.0 到现在都是这个位置，一个字没改。
+/// ③ Linux 用 XDG 数据目录。FHS 布局下可执行文件在 `/usr/bin`，而 `main` 会把工作目录
+///    切到 exe 旁边 —— 相对路径就变成往 `/usr/bin/data` 写，普通用户必然失败，
+///    而且失败发生在"窗口已经建好之后"，看起来像程序坏了。
+pub fn data_root() -> std::path::PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let xdg = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from);
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    data_root_from(
+        crate::diag::enabled(),
+        &cwd,
+        xdg.as_deref(),
+        home.as_deref(),
+    )
+}
+
+/// 纯函数版，判据在这里测得到（Windows 上也能测 Linux 那两行，否则只能等 Linux CI）。
+fn data_root_from(
+    diag: bool,
+    cwd: &std::path::Path,
+    xdg_data_home: Option<&std::path::Path>,
+    home: Option<&std::path::Path>,
+) -> std::path::PathBuf {
+    if diag {
+        return cwd.join("data");
+    }
+    #[cfg(windows)]
+    {
+        let _ = (xdg_data_home, home);
+        cwd.join("data")
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(base) = xdg_data_home.filter(|p| p.is_absolute()) {
+            return base.join("vpn-parser");
+        }
+        if let Some(base) = home {
+            return base.join(".local/share/vpn-parser");
+        }
+        cwd.join("data")
+    }
+}
+
+/// `--db` 不写时的默认库路径。
+fn default_db_path() -> std::path::PathBuf {
+    data_root().join("vpn-parser.db")
+}
+
+#[cfg(test)]
+mod data_root_tests {
+    use super::data_root_from;
+    use std::path::Path;
+
+    /// 诊断壳必须永远落在工作目录里，哪怕这台机器配了 XDG。
+    /// 反向对照：这条要是不成立，`VPN_PARSER_DIAG=1` 就会往真数据目录写东西。
+    #[test]
+    fn the_diag_instance_never_uses_the_user_data_dir() {
+        let got = data_root_from(
+            true,
+            Path::new("/tmp/vpn-parser-diag-1"),
+            Some(Path::new("/home/me/.local/share")),
+            Some(Path::new("/home/me")),
+        );
+        assert_eq!(got, Path::new("/tmp/vpn-parser-diag-1/data").to_path_buf());
+    }
+
+    /// XDG 优先，其次 HOME 下的常见位置，两个都没有才退回工作目录（而不是猜一个绝对路径）。
+    #[cfg(not(windows))]
+    #[test]
+    fn the_linux_data_root_follows_xdg_then_home() {
+        let got = data_root_from(
+            false,
+            Path::new("/usr/bin"),
+            Some(Path::new("/data/x")),
+            Some(Path::new("/home/me")),
+        );
+        assert_eq!(got, Path::new("/data/x/vpn-parser").to_path_buf());
+
+        let got = data_root_from(
+            false,
+            Path::new("/usr/bin"),
+            None,
+            Some(Path::new("/home/me")),
+        );
+        assert_eq!(
+            got,
+            Path::new("/home/me/.local/share/vpn-parser").to_path_buf()
+        );
+
+        // 相对值不当 XDG 配置：那样会拼出一个跟着工作目录跑的假绝对路径。
+        let got = data_root_from(
+            false,
+            Path::new("/usr/bin"),
+            Some(Path::new("relative")),
+            Some(Path::new("/home/me")),
+        );
+        assert_eq!(
+            got,
+            Path::new("/home/me/.local/share/vpn-parser").to_path_buf()
+        );
+
+        let got = data_root_from(false, Path::new("/usr/bin"), None, None);
+        assert_eq!(got, Path::new("/usr/bin/data").to_path_buf());
+    }
+
+    /// Windows 那份没变：工作目录下的 `data/`，和 1.0 以来的装机位置一致。
+    #[cfg(windows)]
+    #[test]
+    fn the_windows_data_root_stays_next_to_the_program() {
+        let got = data_root_from(false, Path::new(r"C:\Apps\VPN Parser"), None, None);
+        assert_eq!(got, Path::new(r"C:\Apps\VPN Parser\data").to_path_buf());
     }
 }

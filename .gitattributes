@@ -1,0 +1,7 @@
+# 只钉 Linux 侧会被"照原样使用"的文件，不动其它路径 —— 这台开发机是
+# core.autocrlf=true，Windows 上 checkout 出一堆 CRLF 无害，但下面这些一旦被
+# 原样打进包里就是故障：`#!/bin/sh` 变成 `/bin/sh^M` 会让 dpkg 直接拒绝配置软件包。
+packaging/linux/** text eol=lf
+*.desktop text eol=lf
+*.service text eol=lf
+*.sh text eol=lf

@@ -11,9 +11,55 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// 安装包发布在这儿，由 `.github/workflows/release.yml` 用 tag 打出来。
+/// 安装包发布在这儿，由 `.github/workflows/release.yml`（Windows）和
+/// `.github/workflows/build-linux.yml`（deb / rpm）用同一个 tag 打出来。
 pub const REPOSITORY: &str = "mateo-ki/vpn-parser";
-const INSTALLER_SUFFIX: &str = "-windows-x64-setup.exe";
+
+/// 一种平台的安装包形态。资产名规则各不同，所以"挑哪个包"和"怎么装"都得跟着它走。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageKind {
+    WindowsSetup,
+    Deb,
+    Rpm,
+}
+
+impl PackageKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::WindowsSetup => "Windows 安装包",
+            Self::Deb => "deb 包",
+            Self::Rpm => "rpm 包",
+        }
+    }
+
+    /// 资产名的尾巴。deb/rpm 的名字由打包工具生成（`vpn-parser_1.6.2-1_amd64.deb`、
+    /// `vpn-parser-1.6.2-1.x86_64.rpm`），**修订号和架构是它们自己填的**，
+    /// 所以只能按"前缀 + 尾巴"认，不能像 Windows 那样比完整名。
+    /// 松匹配要不要逼名字里带版本号（见 `pick_one_kind`）。
+    fn needs_version_in_name(self) -> bool {
+        self != Self::WindowsSetup
+    }
+
+    fn suffix(self) -> &'static str {
+        match self {
+            Self::WindowsSetup => "-windows-x64-setup.exe",
+            Self::Deb => ".deb",
+            Self::Rpm => ".rpm",
+        }
+    }
+
+    /// 该用什么命令装。Linux 侧没有任何免密路径：dpkg/rpm 都要 root，
+    /// 而"以用户身份悄悄换掉系统里的程序"不是我想给这个软件开的能力。
+    pub fn install_command(self, path: &Path) -> String {
+        let file = path.display();
+        match self {
+            Self::WindowsSetup => format!("双击运行 {file}（安装向导会先关掉当前程序）"),
+            Self::Deb => format!("sudo dpkg -i {file}"),
+            Self::Rpm => format!("sudo rpm -Uvh {file}"),
+        }
+    }
+}
+
 const HASH_INDEX_NAME: &str = "sha256.txt";
 /// 安装包现在 ~15 MB，留 200 MB 上限只为挡住"镜像回了一个 HTML 或者整个盘"。
 const MAX_INSTALLER_SIZE: u64 = 200 * 1024 * 1024;
@@ -168,21 +214,83 @@ fn normalized_digest(value: &str) -> Option<String> {
     }
 }
 
-/// 挑安装包资产：先要名字正好等于 `vpn-parser-<tag 去掉 v>-windows-x64-setup.exe` 的那一个
-/// （同一 Release 里可能留着上一版的安装包），一个都对不上才退而求其次取后缀匹配的最后一个。
+/// `/etc/os-release` 里认这个机器该收哪种包（纯函数：喂文本就能测，不靠运气）。
+/// 顺序按"这台机器能装什么"给：Debian 系只要 deb，红帽系只要 rpm，认不出来时 deb 在前
+/// （Debian/Ubuntu 的装机量更大）。`ID_LIKE` 也要看 —— 衍生版常只改 `ID`，
+/// 血统写在 `ID_LIKE` 里，只看 ID 会把 Linux Mint / Pop!_OS 认成"不知道"。
+fn package_preference_from_os_release(os_release: &str) -> Vec<PackageKind> {
+    let mut family: Vec<String> = Vec::new();
+    for line in os_release.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if !matches!(key.trim(), "ID" | "ID_LIKE") {
+            continue;
+        }
+        family.extend(
+            value
+                .trim()
+                .trim_matches('"')
+                .split_whitespace()
+                .map(|token| token.to_ascii_lowercase()),
+        );
+    }
+    let looks_debian = family
+        .iter()
+        .any(|token| token == "debian" || token == "ubuntu");
+    let looks_redhat = family.iter().any(|token| {
+        matches!(
+            token.as_str(),
+            "rhel" | "fedora" | "suse" | "opensuse-tumbleweed"
+        )
+    });
+    match (looks_debian, looks_redhat) {
+        (true, _) => vec![PackageKind::Deb],
+        (false, true) => vec![PackageKind::Rpm],
+        (false, false) => vec![PackageKind::Deb, PackageKind::Rpm],
+    }
+}
+
+/// 这台机器该优先认哪种包。Windows 直接给死；Linux 读 `/etc/os-release`，读不到就两个都试。
+fn package_preference() -> Vec<PackageKind> {
+    #[cfg(windows)]
+    {
+        vec![PackageKind::WindowsSetup]
+    }
+    #[cfg(not(windows))]
+    {
+        let text = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+        let mut kinds = package_preference_from_os_release(&text);
+        kinds.push(PackageKind::WindowsSetup); // 兜底：万一 Release 只发了 Windows 包
+        kinds
+    }
+}
+
+/// 按平台给的顺序逐种包型试；每种内部仍是"正好等于当前 tag 的那个优先"。
+/// 同一 Release 里可能留着上一版的安装包，所以后缀匹配一律要求名字里带当前版本号。
 fn pick_installer_asset(assets: &[AssetJson], tag: &str) -> Option<AppAsset> {
-    let expected = format!(
-        "vpn-parser-{}{INSTALLER_SUFFIX}",
-        tag.trim_start_matches('v')
-    );
+    let version = tag.trim_start_matches('v');
+    for kind in package_preference() {
+        if let Some(asset) = pick_one_kind(assets, kind, version) {
+            return Some(asset);
+        }
+    }
+    None
+}
+
+fn pick_one_kind(assets: &[AssetJson], kind: PackageKind, version: &str) -> Option<AppAsset> {
+    let expected = format!("vpn-parser-{version}{}", kind.suffix());
+    // 松匹配按包型分两档，理由见 `needs_version_in_name`：Windows 那串是 release.yml
+    // 按同一个模板写的，后缀命中就等于版本命中；deb/rpm 的名字里还夹着工具自己填的
+    // 修订号（`-1`）和架构（`amd64`/`x86_64`），只看后缀就可能挑到别的版本那一份。
+    let needs_version = kind.needs_version_in_name();
+    let loose = |asset: &AssetJson| {
+        asset.name.ends_with(kind.suffix()) && (!needs_version || asset.name.contains(version))
+    };
     let found = assets
         .iter()
         .position(|asset| asset.name == expected)
-        .or_else(|| {
-            assets
-                .iter()
-                .rposition(|asset| asset.name.ends_with(INSTALLER_SUFFIX))
-        })?;
+        .or_else(|| assets.iter().rposition(loose))?;
     let asset = &assets[found];
     Some(AppAsset {
         name: asset.name.clone(),
@@ -414,9 +522,14 @@ pub async fn check(
 fn summarize(release: ReleaseJson, current: &str, channel: UpdateChannel) -> AppReleaseInfo {
     let asset = pick_installer_asset(&release.assets, &release.tag_name);
     let update_available = asset.is_some() && version_is_newer(&release.tag_name, current);
+    let wanted = package_preference()
+        .first()
+        .copied()
+        .map(PackageKind::label)
+        .unwrap_or("本机可用的");
     let message = if asset.is_none() {
         format!(
-            "{} Release {} 里没有 Windows 安装包资产",
+            "{} Release {} 里没有 {wanted}资产",
             channel.label(),
             release.tag_name
         )
@@ -442,13 +555,12 @@ fn summarize(release: ReleaseJson, current: &str, channel: UpdateChannel) -> App
         .find(|asset| asset.name == HASH_INDEX_NAME)
         .map(|asset| asset.browser_download_url.clone())
         .or_else(|| {
-            let installer = release
-                .assets
-                .iter()
-                .find(|asset| asset.name.ends_with(INSTALLER_SUFFIX))?;
+            // 这里以前按 `-windows-x64-setup.exe` 找"随便一个安装包"来推 sha256.txt 的地址，
+            // 于是 Linux 上这条回退永远是 None。改成走同一个选包函数：平台不同也不会失联。
+            let installer = pick_installer_asset(&release.assets, &release.tag_name)?;
             Some(
                 installer
-                    .browser_download_url
+                    .url
                     .replace(installer.name.rsplit('/').next()?, HASH_INDEX_NAME),
             )
         });
@@ -463,14 +575,15 @@ fn summarize(release: ReleaseJson, current: &str, channel: UpdateChannel) -> App
     }
 }
 
-/// 安装包暂存在**软件目录下的 `data/updates`**（和内核的 `data/kernels` 同一层，用户 2026-10-14 指定）：
+/// 安装包暂存在**数据根目录下的 `updates`**（和内核的 `kernels` 同一层，用户 2026-10-14 指定）：
 /// 装完想留着或手动删掉都找得到，不会像 `%TEMP%` 那样被清理工具悄悄收走、也看不见。
-/// 诊断壳（VPN_PARSER_DIAG）的 cwd 已经切到临时目录，所以它天然落在自己那份里，不碰真安装目录。
+/// 数据根目录在 Windows 是程序目录下的 `data/`，在 Linux 是 XDG 那份（见 `crate::data_root`）。
+/// 诊断壳（VPN_PARSER_DIAG）的根跟着它自己的临时 cwd 走，所以天然落在临时目录里，不碰真安装目录。
 pub fn installer_cache_dir() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("data")
-        .join("updates")
+    // 和内核同一个根（`crate::data_root`）：这里以前自己拼 `cwd/data`，Linux 上内核搬到
+    // XDG 之后两个目录就分家了 —— 安装包缓存留在 /usr/bin/data（写不进去），内核却在
+    // ~/.local/share。测试里那条"必须是 data/kernels 的兄弟目录"的断言抓到了它。
+    crate::data_root().join("updates")
 }
 
 /// 下载安装包并校验 SHA-256，成功返回本地路径。校验不过直接报错，绝不返回半截或换过内容的文件。
@@ -655,17 +768,45 @@ async fn fetch_text(url: &str, app_proxy: Option<&str>) -> Result<String> {
 /// 把安装包交给 Inno 向导。目录不用传：同一 AppId 的旧安装记录会把它自己填回原目录，
 /// 而 `/DIR=` 带空格那份转义在 Inno 那边是个坑（历史上踩过），能不传就不传。
 /// 注意安装包 `InitializeSetup` 会 taskkill 掉本进程，所以点这个按钮等于"程序马上重启"。
-pub fn launch_installer(path: &Path) -> Result<()> {
+/// 把下好的包"交出去"。两种结局，界面必须分开说，不然 Linux 上会出现
+/// "安装向导已启动"这句假话 —— 根本没有向导会接管。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Handoff {
+    /// Windows：Inno 向导起来了，它会先 taskkill 本进程再装。
+    WizardLaunched,
+    /// Linux：只能把该敲的命令给用户。程序不会自己去拿 root。
+    ManualInstall { command: String },
+}
+
+pub fn launch_installer(path: &Path) -> Result<Handoff> {
     if !path.is_file() {
         bail!("安装包不在了: {}", path.display());
     }
-    crate::platform::shell_open(path)
-        .with_context(|| format!("启动安装程序失败: {}", path.display()))?;
-    crate::startup_log(&format!(
-        "[更新] 已把安装包交给安装向导: {}",
-        path.display()
-    ));
-    Ok(())
+    #[cfg(not(windows))]
+    {
+        let kind = match path.extension().and_then(|ext| ext.to_str()) {
+            Some("deb") => PackageKind::Deb,
+            Some("rpm") => PackageKind::Rpm,
+            _ => PackageKind::Deb,
+        };
+        let command = kind.install_command(path);
+        crate::startup_log(&format!(
+            "[更新] 包已就位，需要用户自行安装：{}（{} 字节已校验）",
+            command,
+            path.metadata().map(|m| m.len()).unwrap_or(0)
+        ));
+        return Ok(Handoff::ManualInstall { command });
+    }
+    #[cfg(windows)]
+    {
+        crate::platform::shell_open(path)
+            .with_context(|| format!("启动安装程序失败: {}", path.display()))?;
+        crate::startup_log(&format!(
+            "[更新] 已把安装包交给安装向导: {}",
+            path.display()
+        ));
+        Ok(Handoff::WizardLaunched)
+    }
 }
 
 #[cfg(test)]
@@ -681,6 +822,103 @@ mod tests {
             size: 15_000_000,
             digest: digest.map(str::to_string),
         }
+    }
+
+    /// 发行版识别只看 `ID` 是不够的：Mint / Pop!_OS / Zorin 的 `ID` 是它们自己，
+    /// 血统写在 `ID_LIKE` 里 —— 漏读会退回"deb+rpm 都试"，也就是把 rpm 包递给 apt 机器。
+    #[test]
+    fn the_distro_probe_reads_id_like_too() {
+        use PackageKind::{Deb, Rpm};
+        assert_eq!(
+            package_preference_from_os_release(
+                "ID=ubuntu
+"
+            ),
+            vec![Deb]
+        );
+        assert_eq!(
+            package_preference_from_os_release(
+                "ID=\"debian\"
+"
+            ),
+            vec![Deb]
+        );
+        assert_eq!(
+            package_preference_from_os_release(
+                "ID=linuxmint
+ID_LIKE=\"ubuntu debian\"
+"
+            ),
+            vec![Deb]
+        );
+        assert_eq!(
+            package_preference_from_os_release(
+                "ID=fedora
+VERSION=40
+"
+            ),
+            vec![Rpm]
+        );
+        assert_eq!(
+            package_preference_from_os_release(
+                "ID=opensuse-tumbleweed
+"
+            ),
+            vec![Rpm]
+        );
+        // 认不出来就两个都留（顺序 deb 在前），而不是猜死一个。
+        assert_eq!(
+            package_preference_from_os_release(
+                "ID=arch
+"
+            ),
+            vec![Deb, Rpm]
+        );
+        assert_eq!(package_preference_from_os_release(""), vec![Deb, Rpm]);
+        // 反向对照：`ID_LIKE` 里含 debian 但键名写成 `ID-LIKE`（打错）时不该被当成识别成功。
+        assert_eq!(
+            package_preference_from_os_release(
+                "ID=weird
+ID-LIKE=\"debian\"
+"
+            ),
+            vec![Deb, Rpm]
+        );
+    }
+
+    /// 打包工具生成的名字带修订号和架构，所以"前缀 + 尾巴"要能认；同时**别的版本的包
+    /// 不许被挑走**（这是 deb/rpm 与 Windows 的差别，Windows 那份由 `installer_asset_is_matched_by_tag_
+    /// not_by_whichever_is_there` 钉住它保留旧的宽松行为）。
+    #[test]
+    fn deb_and_rpm_names_are_matched_with_their_revision_and_arch() {
+        let assets = vec![
+            asset("notes.txt", None),
+            asset("vpn-parser_1.5.0-1_amd64.deb", None),
+            asset("vpn-parser_1.6.2-1_amd64.deb", None),
+            asset("vpn-parser-1.6.2-1.x86_64.rpm", None),
+        ];
+        let deb = pick_one_kind(&assets, PackageKind::Deb, "1.6.2").expect("该找到 deb");
+        assert_eq!(deb.name, "vpn-parser_1.6.2-1_amd64.deb");
+        let rpm = pick_one_kind(&assets, PackageKind::Rpm, "1.6.2").expect("该找到 rpm");
+        assert_eq!(rpm.name, "vpn-parser-1.6.2-1.x86_64.rpm");
+        // 反向对照：只到 1.6.1 的 Release 不该把 1.6.2 那份 deb 当成自己的。
+        assert!(pick_one_kind(&assets, PackageKind::Deb, "1.6.1").is_none());
+    }
+
+    /// 交给用户的那条命令必须带真实路径 —— 说"请用包管理器安装"等于没说。
+    #[test]
+    fn each_kind_names_a_command_you_can_actually_run() {
+        let path = std::path::Path::new("/tmp/vpn-parser_1.6.2-1_amd64.deb");
+        assert_eq!(
+            PackageKind::Deb.install_command(path),
+            "sudo dpkg -i /tmp/vpn-parser_1.6.2-1_amd64.deb"
+        );
+        assert!(PackageKind::Rpm
+            .install_command(path)
+            .starts_with("sudo rpm -Uvh "));
+        assert!(PackageKind::WindowsSetup
+            .install_command(path)
+            .contains("安装向导"));
     }
 
     #[test]
@@ -852,6 +1090,14 @@ mod tests {
             UpdateChannel::Stable,
         );
         assert!(no_asset.asset.is_none());
+        // "少资产"这件事要说清楚，但**具体哪种包型是平台变量**：Ubuntu 上就该说 deb 包
+        // （这台 WSL 实测说 "没有 deb 包资产"），拿 Windows 的文案当普适断言会把测试写成平台专属。
+        assert!(
+            no_asset.message.contains("没有") && no_asset.message.contains("资产"),
+            "{}",
+            no_asset.message
+        );
+        #[cfg(windows)]
         assert!(
             no_asset.message.contains("没有 Windows 安装包"),
             "{}",
@@ -945,17 +1191,24 @@ mod tests {
         assert!(launch_installer(&missing).is_err());
     }
 
-    /// 下载好的安装包放在**软件目录下**（用户 2026-10-14 指定），不是 `%TEMP%`：
-    /// 装完要留着还是手删都看得见，也不会被清理工具悄悄收走。
+    /// 下载好的安装包放在**数据根目录下**（用户 2026-10-14 指定要看得见、不进 `%TEMP%`），
+    /// 并且必须是内核 `kernels` 的兄弟目录 —— 这两条是真不变量。
+    /// "在 cwd 下面、那一层叫 `data`"只是 Windows 的形态：Linux 上根目录在 XDG，
+    /// 照那样断言就是在测路径字符串而不是测这个性质（第一次 Linux 跑就是这样红的）。
     #[test]
-    fn installer_cache_lives_under_the_program_directory() {
+    fn installer_cache_lives_under_the_data_root() {
         let dir = installer_cache_dir();
-        let cwd = std::env::current_dir().expect("测试总该有 cwd");
-        assert!(dir.starts_with(&cwd), "{dir:?} 必须在程序目录 {cwd:?} 下面");
+        assert_eq!(dir, crate::data_root().join("updates"));
         assert_eq!(dir.file_name().unwrap(), "updates");
-        assert_eq!(dir.parent().unwrap().file_name().unwrap(), "data");
         // 和内核同一层：data/kernels 的兄弟目录。
         assert_eq!(dir.parent(), crate::kernel::managed_kernel_root().parent());
+
+        #[cfg(windows)]
+        {
+            let cwd = std::env::current_dir().expect("测试总该有 cwd");
+            assert!(dir.starts_with(&cwd), "{dir:?} 必须在程序目录 {cwd:?} 下面");
+            assert_eq!(dir.parent().unwrap().file_name().unwrap(), "data");
+        }
     }
 
     /// 真实网络手测：走产品那条下载路径把最新安装包拉下来，比对 GitHub 给的摘要。

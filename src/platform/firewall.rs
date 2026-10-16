@@ -206,14 +206,27 @@ mod tests {
 
     #[test]
     fn rule_names_are_stable_and_prefixed() {
-        let name = rule_name(&PathBuf::from(r"C:\Apps\VPN Parser\vpn-parser.exe"));
+        // 这条要钉的性质是"同目录换 exe、规则名不变（按程序名放行），不同程序名要能区分"。
+        // 分隔符按平台给真路径：反斜杠在 Linux 上不是分隔符，整串会被当成一个文件名，
+        // 那样断言的就不是这个性质了（Linux 上第一次跑就是这样红的）。
+        #[cfg(windows)]
+        let (same_name_a, same_name_b, other) = (
+            r"C:\Apps\VPN Parser\vpn-parser.exe",
+            r"E:\other\place\vpn-parser.exe",
+            r"\tmp\mihomo.exe",
+        );
+        #[cfg(not(windows))]
+        let (same_name_a, same_name_b, other) = (
+            "/opt/VPN Parser/vpn-parser",
+            "/srv/other/place/vpn-parser",
+            "/tmp/mihomo",
+        );
+
+        let name = rule_name(&PathBuf::from(same_name_a));
         assert!(name.starts_with(RULE_PREFIX), "规则名要能认出来: {name}");
         // 路径不变、exe 变了（每次重编译）→ 规则名也不变，这正是"按路径放行"的意义。
-        assert_eq!(
-            name,
-            rule_name(&PathBuf::from(r"E:\other\place\vpn-parser.exe"))
-        );
-        assert!(rule_name(&PathBuf::from("/x/mihomo.exe")).contains("mihomo"));
+        assert_eq!(name, rule_name(&PathBuf::from(same_name_b)));
+        assert!(rule_name(&PathBuf::from(other)).contains("mihomo"));
     }
 
     /// 这台机上 netsh 缺权限时的真实输出：stdout 一句 UTF-8 中文，stderr 空字节。

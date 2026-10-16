@@ -1,3 +1,4 @@
+use crate::kernel::KernelKind;
 use anyhow::{anyhow, Result};
 
 pub mod firewall;
@@ -182,9 +183,29 @@ pub fn is_elevated() -> bool {
     }
 }
 
+/// 从 `/proc/self/status` 的 `Uid:` 行判"进程是不是 root"（纯函数，测试能喂假文本）。
+/// 用这个而不是 `geteuid()`：仓库里没有 libc 依赖，而这行文本在 Linux 上一定读得到。
+fn euid_is_root_from_status(status: &str) -> bool {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))
+        .is_some_and(|field| {
+            // 四个数依次是 real / effective / saved / fs；**effective** 才是能不能建 tun 的依据。
+            field
+                .split_whitespace()
+                .nth(1)
+                .is_some_and(|effective| effective == "0")
+        })
+}
+
+/// Linux 上"要不要再提权一次"问的就是 effective uid —— 直接 `sudo` 起本程序时它是 0，
+/// 这时 TUN 已经能做，不该再要求一次提权（以前这里恒 false，root 跑的实例也会被
+/// 判成"没提权"，于是 TUN 永远启动不了，界面还让你去提权）。
 #[cfg(not(windows))]
 pub fn is_elevated() -> bool {
-    false
+    std::fs::read_to_string("/proc/self/status")
+        .map(|text| euid_is_root_from_status(&text))
+        .unwrap_or(false)
 }
 
 #[cfg(windows)]
@@ -228,9 +249,22 @@ pub fn request_elevation(extra_args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Linux 没有 UAC 那样的"再拉一个提权实例"的路（`ShellExecuteW runas` 是 Win32 的）。
+/// 与其报一句和平台无关的话，不如把两条能走通的路和**实测错误**写出来：
+/// 普通用户建 tun 的真实失败是 `ioctl(TUNSETIFF): Operation not permitted`（2026-10-16 在
+/// WSL2 上量的），而 root / `CAP_NET_ADMIN` 下 mihomo 能正常建出适配器（同一台机上验过）。
 #[cfg(not(windows))]
 pub fn request_elevation(_extra_args: &[String]) -> Result<()> {
-    Err(anyhow!("当前平台不支持 Windows TUN 提权"))
+    let exe = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "本程序".to_string());
+    Err(anyhow!(
+        "Linux 上 TUN 需要 CAP_NET_ADMIN（普通用户实测报 ioctl(TUNSETIFF): Operation not permitted）。
+\
+         两条路：① sudo {exe}；② 一次性授权 sudo setcap cap_net_admin,cap_net_raw+ep {exe}（注意 AppImage 没法带这个授权，deb/rpm 装出来的可以）。
+\
+         不想提权就切回本地端口模式，把应用指向 127.0.0.1 的监听端口。"
+    ))
 }
 
 /// 用 ShellExecute 把一个 exe 交给系统"打开"。
@@ -439,7 +473,6 @@ pub fn kill_orphan_proxy_cores() -> usize {
     entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
 
     let mut killed_count = 0;
-    let target_names = ["mihomo.exe", "sing-box.exe", "xray.exe"];
 
     if unsafe { Process32FirstW(snapshot, &mut entry) } != FALSE {
         loop {
@@ -451,7 +484,7 @@ pub fn kill_orphan_proxy_cores() -> usize {
             let exe_name = String::from_utf16_lossy(&entry.szExeFile[..len]);
             let exe_lower = exe_name.to_ascii_lowercase();
 
-            if target_names.iter().any(|&target| exe_lower == target) {
+            if is_proxy_core_name(&exe_lower) {
                 unsafe {
                     let proc_handle = OpenProcess(PROCESS_TERMINATE, FALSE, entry.th32ProcessID);
                     if !proc_handle.is_null() {
@@ -550,19 +583,216 @@ pub fn ensure_job_initialized() {}
 #[cfg(not(windows))]
 pub fn assign_child_process_id(_pid: u32) {}
 
+/// Linux 侧的孤儿内核清理。和 Windows 那条同一个理由：上一次异常退出留下的内核会占死
+/// mixed/controller 端口，新实例起不来；区别是这里用 `/proc/<pid>/exe` 认身份 ——
+/// Linux 没有 Toolhelp 快照，而 `exe` 软链给出的是**真实可执行文件**，不会被同名命令蒙掉。
+///
+/// 名字判据和 Windows 共用 `is_proxy_core_name`，绝不在两边各抄一份列表。
 #[cfg(not(windows))]
 pub fn kill_orphan_proxy_cores() -> usize {
-    0
+    let mut killed = 0;
+    for pid in proc_pids() {
+        let Some(name) = proc_exe_name(pid) else {
+            continue;
+        };
+        if !is_proxy_core_name(&name) {
+            continue;
+        }
+        if send_terminate(pid) {
+            killed += 1;
+            tracing::info!(pid, exe = %name, "已成功清理孤儿代理内核进程");
+        }
+    }
+    killed
+}
+
+/// 第二个 GUI 实例。Linux 上窗口不隐藏就不会有人消费托盘唤醒消息，留着只会两个实例
+/// 抢同一个注册表/端口（Windows 那侧踩过的坑），所以照 Windows 的语义清掉除自己以外的。
+#[cfg(not(windows))]
+pub fn kill_duplicate_vpn_parser_instances() -> usize {
+    let me = std::process::id();
+    let mut killed = 0;
+    for pid in proc_pids() {
+        if pid == me {
+            continue;
+        }
+        let Some(name) = proc_exe_name(pid) else {
+            continue;
+        };
+        if name != "vpn-parser" {
+            continue;
+        }
+        if send_terminate(pid) {
+            killed += 1;
+            crate::startup_log(&format!(
+                "Cleaned up stale duplicate vpn-parser process: pid={pid}"
+            ));
+        }
+    }
+    killed
+}
+
+/// `/proc` 下的数字目录 = 进程号。
+#[cfg(not(windows))]
+fn proc_pids() -> Vec<u32> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
+        .collect()
+}
+
+/// 进程真实可执行文件名（小写）。权限不足或进程刚消失时返回 None，调用方跳过。
+#[cfg(not(windows))]
+fn proc_exe_name(pid: u32) -> Option<String> {
+    std::fs::read_link(format!("/proc/{pid}/exe"))
+        .ok()?
+        .file_name()
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
 }
 
 #[cfg(not(windows))]
-pub fn kill_duplicate_vpn_parser_instances() -> usize {
-    0
+fn send_terminate(pid: u32) -> bool {
+    // 用 SIGTERM 而不是 SIGKILL：mihomo 收到 TERM 会自己收掉监听，端口立刻可复用。
+    std::process::Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+/// 是不是我们该管的内核进程。判据取 `KernelKind::directory_name()` 那三个词
+/// （`mihomo` / `xray` / `sing-box`），并按当前平台允许带 `.exe` —— 这样这个函数在两个
+/// 平台上都是同一份逻辑，不会出现"Windows 列表改了、Linux 忘了改"。
+pub fn is_proxy_core_name(name_lower: &str) -> bool {
+    let stem = name_lower.strip_suffix(".exe").unwrap_or(name_lower);
+    [KernelKind::Mihomo, KernelKind::Xray, KernelKind::SingBox]
+        .iter()
+        .any(|kind| kind.directory_name() == stem)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// `Uid:` 行的第二个数（effective）才算数：只改 real 不算提权，反过来 real 不是 0
+    /// 但 effective 是 0 也算已提权（setuid 场景）。
+    #[test]
+    fn root_detection_reads_the_effective_uid() {
+        assert!(euid_is_root_from_status(
+            "Uid:	0	0	0	0
+"
+        ));
+        assert!(euid_is_root_from_status(
+            "Uid:	1000	0	1000	0
+"
+        ));
+        assert!(!euid_is_root_from_status(
+            "Uid:	1000	1000	1000	1000
+"
+        ));
+        // 反向对照：没有 Uid 行 / 行被截断时不许猜成 root。
+        assert!(!euid_is_root_from_status(
+            "Gid:	0	0	0	0
+"
+        ));
+        assert!(!euid_is_root_from_status("Uid:"));
+    }
+
+    /// Linux 的 TUN 提权请求不能只说"不支持"——那等于把两条能走通的路藏起来。
+    /// 断言的是"这句错误有没有可执行性"：给命令、给能力名、给实测的失败原因。
+    #[cfg(not(windows))]
+    #[test]
+    fn the_linux_tun_error_tells_you_how_to_get_cap_net_admin() {
+        let text = request_elevation(&[])
+            .expect_err("Linux 上不可能就地提权")
+            .to_string();
+        for needle in ["CAP_NET_ADMIN", "setcap", "sudo", "ioctl(TUNSETIFF)"] {
+            assert!(text.contains(needle), "错误里该有 {needle}：{text}");
+        }
+        // 反向对照：不许再把 Windows 的 UAC/runas 话术端给 Linux 用户。
+        assert!(
+            !text.contains("Windows TUN 提权"),
+            "这是 Linux 分支：{text}"
+        );
+    }
+
+    /// 端到端对账：`is_elevated()` 必须等于外部真值（`id -u`）。
+    /// 这条要在两种身份下各跑一次才有意义（普通用户 / `wsl -u root`），
+    /// 因为老实现是恒 false —— 恒 false 在普通用户下"看着是对的"，只有 root 跑才暴露。
+    #[cfg(not(windows))]
+    #[test]
+    fn the_root_detection_agrees_with_id_dash_u() {
+        let out = std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .expect("id 命令总该有");
+        let uid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        assert_eq!(
+            is_elevated(),
+            uid == "0",
+            "以 uid={uid} 跑，is_elevated() 却给出 {}",
+            is_elevated()
+        );
+    }
+
+    /// 名字判据是孤儿清理的唯一身份来源：判错就是"要么没清掉、要么杀了别人的进程"。
+    #[test]
+    fn the_core_name_test_accepts_both_platform_spellings() {
+        for name in [
+            "mihomo",
+            "mihomo.exe",
+            "xray",
+            "xray.exe",
+            "sing-box",
+            "sing-box.exe",
+        ] {
+            assert!(is_proxy_core_name(name), "{name} 该被认出来");
+        }
+        for name in ["vpn-parser", "vpn-parser.exe", "mihomo-service", "", "mi"] {
+            assert!(!is_proxy_core_name(name), "{name} 不该被认出来");
+        }
+    }
+
+    /// 运行时真验一次孤儿清理：起一个名叫 `mihomo` 的进程（用 `sleep` 的副本冒充），
+    /// 调用 `kill_orphan_proxy_cores()`，要求它真的被收掉；同时名字不相干的进程**不许**被牵连。
+    /// 反向判据取"诱饵还活着"而不是"返回 0"：后者在任何一台真跑着 mihomo 的机器上都会假失败。
+    #[cfg(not(windows))]
+    #[test]
+    fn the_orphan_cleaner_kills_matching_processes_and_spares_others() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+
+        let dir = std::env::temp_dir().join(format!("vpn-orphan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spawn_named = |name: &str| -> std::process::Child {
+            let path = dir.join(name);
+            std::fs::copy("/bin/sleep", &path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            Command::new(&path).arg("120").spawn().unwrap()
+        };
+
+        let mut core = spawn_named("mihomo");
+        let mut decoy = spawn_named("totally-unrelated");
+
+        let killed = kill_orphan_proxy_cores();
+        assert!(
+            killed >= 1,
+            "一个名叫 mihomo 的进程没被收掉 = 判据或 /proc 读取不对"
+        );
+        core.wait().unwrap();
+
+        // 诱饵必须还在（没被误杀）。用 /proc 直接看，不等它自己退出。
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            std::path::Path::new(&format!("/proc/{}", decoy.id())).exists(),
+            "名字不相干的进程被误杀了"
+        );
+        decoy.kill().unwrap();
+        let _ = decoy.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn quotes_windows_arguments_with_spaces_and_trailing_slashes() {
@@ -712,5 +942,12 @@ pub fn list_running_processes() -> Vec<String> {
 
 #[cfg(not(windows))]
 pub fn list_running_processes() -> Vec<String> {
-    Vec::new()
+    use std::collections::BTreeSet;
+    let mut names = BTreeSet::new();
+    for pid in proc_pids() {
+        if let Some(name) = proc_exe_name(pid) {
+            names.insert(name);
+        }
+    }
+    names.into_iter().collect()
 }
