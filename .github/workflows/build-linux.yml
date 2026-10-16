@@ -75,18 +75,69 @@ jobs:
       - name: 造 rpm
         run: cargo generate-rpm
 
+      - name: 造 AppImage
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)
+
+          TOOL_DIR="$HOME/.cache/appimagetool"
+          mkdir -p "$TOOL_DIR"
+          curl -fSL "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" -o "$TOOL_DIR/appimagetool.AppImage"
+          chmod +x "$TOOL_DIR/appimagetool.AppImage"
+          (cd "$TOOL_DIR" && ./appimagetool.AppImage --appimage-extract && rm -f ./appimagetool.AppImage)
+
+          RUNTIME_FILE="$TOOL_DIR/runtime-x86_64"
+          curl -fSL "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64" -o "$RUNTIME_FILE"
+          chmod +x "$RUNTIME_FILE"
+
+          APPDIR="target/AppDir"
+          rm -rf "$APPDIR"
+          mkdir -p "$APPDIR/usr/bin"
+          mkdir -p "$APPDIR/usr/share/applications"
+          mkdir -p "$APPDIR/usr/share/icons/hicolor/16x16/apps"
+          mkdir -p "$APPDIR/usr/share/icons/hicolor/32x32/apps"
+          mkdir -p "$APPDIR/usr/share/icons/hicolor/48x48/apps"
+          mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+          mkdir -p "$APPDIR/usr/share/doc/vpn-parser"
+
+          cp target/release/vpn-parser "$APPDIR/usr/bin/vpn-parser"
+          cp packaging/linux/vpn-parser.desktop "$APPDIR/usr/share/applications/vpn-parser.desktop"
+          cp packaging/linux/vpn-parser.desktop "$APPDIR/vpn-parser.desktop"
+          cp assets/app-icon-16.png "$APPDIR/usr/share/icons/hicolor/16x16/apps/vpn-parser.png"
+          cp assets/app-icon-32.png "$APPDIR/usr/share/icons/hicolor/32x32/apps/vpn-parser.png"
+          cp assets/app-icon-48.png "$APPDIR/usr/share/icons/hicolor/48x48/apps/vpn-parser.png"
+          cp assets/app-icon-256.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/vpn-parser.png"
+          cp assets/app-icon-256.png "$APPDIR/vpn-parser.png"
+          (cd "$APPDIR" && ln -sf vpn-parser.png .DirIcon)
+          cp LICENSE "$APPDIR/usr/share/doc/vpn-parser/" || true
+          cp README.md "$APPDIR/usr/share/doc/vpn-parser/" || true
+
+          cat > "$APPDIR/AppRun" << 'EOF'
+          #!/bin/sh
+          set -e
+          HERE="$(dirname "$(readlink -f "${0}")")"
+          export PATH="${HERE}/usr/bin:${PATH}"
+          export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}"
+          export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+          exec "${HERE}/usr/bin/vpn-parser" "$@"
+          EOF
+          chmod 755 "$APPDIR/AppRun"
+
+          mkdir -p target/appimage
+          ARCH=x86_64 "$TOOL_DIR/squashfs-root/AppRun" --no-appstream --runtime-file "$RUNTIME_FILE" "$APPDIR" "target/appimage/vpn-parser-${VERSION}-x86_64.AppImage"
+          chmod +x target/appimage/*.AppImage
+          ls -lh target/appimage/*.AppImage
+
       - name: 验包内容（装进去会落哪些路径，先看清单）
         run: |
           set -euo pipefail
           deb=$(ls target/debian/*.deb | head -1)
           rpm=$(ls target/generate-rpm/*.rpm | head -1)
+          appimage=$(ls target/appimage/*.AppImage | head -1)
           dpkg-deb -I "$deb"
           dpkg-deb -c "$deb"
           echo "--- rpm ---"
           ls -l "$rpm"
-          # 这台的 WSL 里没有 rpm 也没有 zstd（payload 是 zstd 压缩的 cpio），
-          # 两个都要 sudo 装，所以清单只能在 runner 上真验。
-          # 装不上就明确失败：只看文件大小不算"内容正确"。
           if ! command -v rpm >/dev/null 2>&1; then
             sudo apt-get update -qq
             sudo apt-get install -y --no-install-recommends rpm
@@ -94,6 +145,9 @@ jobs:
           rpm -qp --queryformat '%{NAME}-%{VERSION}-%{RELEASE} %{ARCH}\n' "$rpm"
           rpm -qp --list "$rpm"
           rpm -qp --queryformat '[%{FILEMODES:octal} %{FILENAMES}\n]' "$rpm" | grep -E '^0755 /usr/bin/vpn-parser$'
+          echo "--- appimage ---"
+          ls -lh "$appimage"
+          file "$appimage"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -101,11 +155,12 @@ jobs:
           path: |
             target/debian/*.deb
             target/generate-rpm/*.rpm
+            target/appimage/*.AppImage
 
-      # Release 本体是 release.yml（Windows）建的那个。这里只把两个包**追加**进去，
+      # Release 本体是 release.yml（Windows）建的那个。这里只把三个 Linux 包**追加**进去，
       # 所以要先等它出现 —— 两条作业并行，抢跑会 404。等不到就明确失败，
       # 绝不静默跳过（"资产少了两个"这种事最难从现象倒推）。
-      - name: 把两个包挂到同一个 Release
+      - name: 把三个 Linux 包挂到同一个 Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
@@ -115,7 +170,7 @@ jobs:
           for i in $(seq 1 40); do
             if gh release view "$tag" >/dev/null 2>&1; then
               echo "release $tag 已存在（第 $i 次查到），上传 Linux 资产"
-              gh release upload "$tag" target/debian/*.deb target/generate-rpm/*.rpm --clobber
+              gh release upload "$tag" target/debian/*.deb target/generate-rpm/*.rpm target/appimage/*.AppImage --clobber
               exit 0
             fi
             sleep 15
