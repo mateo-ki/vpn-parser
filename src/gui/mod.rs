@@ -2504,13 +2504,7 @@ impl VpnApp {
     }
 
     /// 代理配置进 UI 状态的唯一入口。
-    ///
-    /// 界面上已经没有「自动选路 url-test」开关了（2026-10-06 按用户要求撤掉，理由是他
-    /// 那边内核 url-test 经常网络不稳定）。所以从库里读到的 `true` 一律归成 `false`：
-    /// 留一条没有开关可关的路径，等于让旧存值悄悄决定行为。内核侧的 url-test 生成分支
-    /// 还在（`proxy::mod` 有测试覆盖），要恢复只需把开关画回动作条。
-    fn set_proxy_config(&mut self, mut config: MihomoConfigOptions) {
-        config.url_test = false;
+    fn set_proxy_config(&mut self, config: MihomoConfigOptions) {
         self.proxy_config = config;
     }
 
