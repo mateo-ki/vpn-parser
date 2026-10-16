@@ -1,7 +1,7 @@
 use crate::gui::icons::{self, icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::types::{
-    ActiveConnectionInfo, KernelGroup, ProxyPanel, ProxySortBy, ProxyView, ProxyViewRow, RuleDraftKind, RulesTab,
+    ActiveConnectionInfo, GroupsTab, KernelGroup, ProxyPanel, ProxySortBy, ProxyView, ProxyViewRow, RuleDraftKind, RulesTab,
 };
 use crate::gui::view_models::nodes_vm::NodeCardAction;
 use crate::gui::widgets::{
@@ -518,238 +518,258 @@ impl VpnApp {
     }
 
     pub(crate) fn ui_proxy_groups(&mut self, ui: &mut Ui) {
-        // 1. 顶部科普横幅
-        Frame::NONE
-            .fill(theme::panel())
-            .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
-            .corner_radius(CornerRadius::same(10))
-            .inner_margin(Margin::symmetric(14, 10))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    icon_label(ui, Icon::Shield, 15.0, theme::accent());
-                    ui.label(
-                        RichText::new("智能分流策略组体系（AI / 美国 / 多线下载 / 常用直连）")
-                            .strong()
-                            .color(theme::text_primary()),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .checkbox(&mut self.proxy_config.smart_routing, "启用内置智能策略组")
-                            .on_hover_text("自动创建 AI分组、美国节点、多线并发下载、普通代理 策略组并注入优先级规则")
-                            .changed()
-                        {
-                            self.save_proxy_config();
-                        }
-                    });
-                });
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(
-                        "• 🤖 AI 分组：专供 ChatGPT、Claude、Midjourney、Grok 等 AI，优先保证美国/原生 IP 解锁。\n\
-                         • 🇺🇸 美国节点：url-test 周期测速，实时挑选最低延迟节点供给 Google 与 YouTube。\n\
-                         • ⚡ 多线并发下载：load-balance 负载均衡，聚合低倍率节点并发加速 IDM / 迅雷 / 网盘。\n\
-                         • 🌐 普通代理：常规网页出海兜底；国内服务与常用应用（微信/QQ/Steam）已自动配置直连。"
-                    )
-                    .small()
-                    .color(theme::text_secondary()),
-                );
-            });
+        ui.horizontal(|ui| {
+            if ui
+                .selectable_label(self.groups_tab == GroupsTab::View, "视图")
+                .clicked()
+            {
+                self.groups_tab = GroupsTab::View;
+            }
+            if ui
+                .selectable_label(self.groups_tab == GroupsTab::Config, "配置")
+                .clicked()
+            {
+                self.groups_tab = GroupsTab::Config;
+            }
+        });
+        ui.add_space(6.0);
 
-        ui.add_space(8.0);
-
-        // 2. 策略组列表
-        let is_running = matches!(
-            self.proxy_status.state,
-            ProxyState::Running | ProxyState::Degraded
-        );
-
-        if !is_running {
-            card_frame().show(ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(10.0);
-                    ui.label(
-                        RichText::new("代理核心未运行")
-                            .strong()
-                            .color(theme::text_primary()),
-                    );
-                    ui.label(
-                        RichText::new("启动代理核心后，此处将实时展示各策略组的活跃出口、测速延迟并支持直接切换节点。")
-                            .small()
-                            .color(theme::muted()),
-                    );
-                    ui.add_space(10.0);
-                });
-            });
-        } else if self.kernel_groups.is_empty() {
-            card_frame().show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(
-                        RichText::new("正在从代理内核同步策略组状态（每 5 秒自动轮询）...")
+        match self.groups_tab {
+            GroupsTab::View => {
+                // 1. 顶部科普横幅
+                Frame::NONE
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                    .corner_radius(CornerRadius::same(10))
+                    .inner_margin(Margin::symmetric(14, 10))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            icon_label(ui, Icon::Shield, 15.0, theme::accent());
+                            ui.label(
+                                RichText::new("智能分流策略组体系（AI / 美国 / 多线下载 / 常用直连）")
+                                    .strong()
+                                    .color(theme::text_primary()),
+                            );
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui
+                                    .checkbox(&mut self.proxy_config.smart_routing, "启用内置智能策略组")
+                                    .on_hover_text("自动创建 AI分组、美国节点、多线并发下载、普通代理 策略组并注入优先级规则")
+                                    .changed()
+                                {
+                                    self.save_proxy_config();
+                                }
+                            });
+                        });
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(
+                                "• 🤖 AI 分组：专供 ChatGPT、Claude、Midjourney、Grok 等 AI，优先保证美国/原生 IP 解锁。\n\
+                                 • 🇺🇸 美国节点：url-test 周期测速，实时挑选最低延迟节点供给 Google 与 YouTube。\n\
+                                 • ⚡ 多线并发下载：load-balance 负载均衡，聚合低倍率节点并发加速 IDM / 迅雷 / 网盘。\n\
+                                 • 🌐 普通代理：常规网页出海兜底；国内服务与常用应用（微信/QQ/Steam）已自动配置直连。"
+                            )
                             .small()
                             .color(theme::text_secondary()),
-                    );
-                });
-            });
-        } else {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    for group in self.kernel_groups.clone() {
-                        Frame::NONE
-                            .fill(theme::panel())
-                            .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
-                            .corner_radius(CornerRadius::same(10))
-                            .inner_margin(Margin::symmetric(14, 10))
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    let group_icon = match group.name.as_str() {
-                                        "AI分组" => Icon::Lightning,
-                                        "美国节点" => Icon::Globe,
-                                        "多线并发下载" => Icon::ArrowDown,
-                                        _ => Icon::Radar,
-                                    };
-                                    icon_label(ui, group_icon, 14.0, theme::accent());
-                                    ui.label(
-                                        RichText::new(&group.name)
-                                            .strong()
-                                            .color(theme::text_primary()),
-                                    );
+                        );
+                    });
 
-                                    let type_pill = match group.kind.to_lowercase().as_str() {
-                                        "url-test" | "urltest" => "自动优选 (url-test)",
-                                        "load-balance" | "loadbalance" => "负载均衡 (load-balance)",
-                                        _ => "手动选择 (select)",
-                                    };
-                                    ui.label(
-                                        RichText::new(type_pill)
-                                            .small()
-                                            .color(theme::muted()),
-                                    );
+                ui.add_space(8.0);
 
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            if let Some(now) = &group.now {
-                                                ui.horizontal(|ui| {
-                                                    ui.label(
-                                                        RichText::new(format!("当前出口: {now}"))
+                // 2. 策略组列表
+                let is_running = matches!(
+                    self.proxy_status.state,
+                    ProxyState::Running | ProxyState::Degraded
+                );
+
+                if !is_running {
+                    card_frame().show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(10.0);
+                            ui.label(
+                                RichText::new("代理核心未运行")
+                                    .strong()
+                                    .color(theme::text_primary()),
+                            );
+                            ui.label(
+                                RichText::new("启动代理核心后，此处将实时展示各策略组的活跃出口、测速延迟并支持直接切换节点。")
+                                    .small()
+                                    .color(theme::muted()),
+                            );
+                            ui.add_space(10.0);
+                        });
+                    });
+                } else if self.kernel_groups.is_empty() {
+                    card_frame().show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(
+                                RichText::new("正在从代理内核同步策略组状态（每 5 秒自动轮询）...")
+                                    .small()
+                                    .color(theme::text_secondary()),
+                            );
+                        });
+                    });
+                } else {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for group in self.kernel_groups.clone() {
+                                Frame::NONE
+                                    .fill(theme::panel())
+                                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                                    .corner_radius(CornerRadius::same(10))
+                                    .inner_margin(Margin::symmetric(14, 10))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            let group_icon = match group.name.as_str() {
+                                                "AI分组" => Icon::Lightning,
+                                                "美国节点" => Icon::Globe,
+                                                "多线并发下载" => Icon::ArrowDown,
+                                                _ => Icon::Radar,
+                                            };
+                                            icon_label(ui, group_icon, 14.0, theme::accent());
+                                            ui.label(
+                                                RichText::new(&group.name)
+                                                    .strong()
+                                                    .color(theme::text_primary()),
+                                            );
+
+                                            let type_pill = match group.kind.to_lowercase().as_str() {
+                                                "url-test" | "urltest" => "自动优选 (url-test)",
+                                                "load-balance" | "loadbalance" => "负载均衡 (load-balance)",
+                                                _ => "手动选择 (select)",
+                                            };
+                                            ui.label(
+                                                RichText::new(type_pill)
+                                                    .small()
+                                                    .color(theme::muted()),
+                                            );
+
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    if let Some(now) = &group.now {
+                                                        ui.horizontal(|ui| {
+                                                            ui.label(
+                                                                RichText::new(format!("当前出口: {now}"))
+                                                                    .small()
+                                                                    .strong()
+                                                                    .color(theme::success()),
+                                                            );
+                                                        });
+                                                    }
+                                                },
+                                            );
+                                        });
+
+                                        ui.add_space(6.0);
+                                        ui.horizontal_wrapped(|ui| {
+                                            let is_selector = matches!(
+                                                group.kind.to_lowercase().as_str(),
+                                                "select" | "selector"
+                                            );
+                                            for member in &group.members {
+                                                let is_active = group.now.as_deref() == Some(member.as_str());
+                                                let text_color = if is_active {
+                                                    theme::accent_strong()
+                                                } else {
+                                                    theme::text_secondary()
+                                                };
+                                                let btn = ui.add(
+                                                    egui::Button::new(
+                                                        RichText::new(member)
                                                             .small()
                                                             .strong()
-                                                            .color(theme::success()),
+                                                            .color(text_color),
+                                                    )
+                                                    .fill(if is_active {
+                                                        theme::accent_bg()
+                                                    } else {
+                                                        theme::page_bg()
+                                                    })
+                                                    .stroke(Stroke::new(
+                                                        1.0_f32,
+                                                        if is_active {
+                                                            theme::accent()
+                                                        } else {
+                                                            theme::border_subtle()
+                                                        },
+                                                    ))
+                                                    .corner_radius(CornerRadius::same(6)),
+                                                );
+                                                if is_selector && btn.clicked() && !is_active {
+                                                    self.select_kernel_member(
+                                                        group.name.clone(),
+                                                        member.clone(),
                                                     );
-                                                });
+                                                }
                                             }
-                                        },
-                                    );
-                                });
-
+                                        });
+                                    });
                                 ui.add_space(6.0);
-                                ui.horizontal_wrapped(|ui| {
-                                    let is_selector = matches!(
-                                        group.kind.to_lowercase().as_str(),
-                                        "select" | "selector"
-                                    );
-                                    for member in &group.members {
-                                        let is_active = group.now.as_deref() == Some(member.as_str());
-                                        let text_color = if is_active {
-                                            theme::accent_strong()
-                                        } else {
-                                            theme::text_secondary()
-                                        };
-                                        let btn = ui.add(
-                                            egui::Button::new(
-                                                RichText::new(member)
-                                                    .small()
-                                                    .strong()
-                                                    .color(text_color),
-                                            )
-                                            .fill(if is_active {
-                                                theme::accent_bg()
-                                            } else {
-                                                theme::page_bg()
-                                            })
-                                            .stroke(Stroke::new(
-                                                1.0_f32,
-                                                if is_active {
-                                                    theme::accent()
-                                                } else {
-                                                    theme::border_subtle()
-                                                },
-                                            ))
-                                            .corner_radius(CornerRadius::same(6)),
-                                        );
-                                        if is_selector && btn.clicked() && !is_active {
-                                            self.select_kernel_member(
-                                                group.name.clone(),
-                                                member.clone(),
-                                            );
-                                        }
-                                    }
-                                });
+                            }
+                        });
+                }
+            }
+            GroupsTab::Config => {
+                // 自定义配置覆写 (YAML & Clash 脚本片段)
+                Frame::NONE
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                    .corner_radius(CornerRadius::same(10))
+                    .inner_margin(Margin::symmetric(14, 12))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            icon_label(ui, Icon::Terminal, 14.0, theme::text_secondary());
+                            ui.label(
+                                RichText::new("自定义配置覆写 (YAML & Clash 脚本片段)")
+                                    .strong()
+                                    .color(theme::text_primary()),
+                            );
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui
+                                    .button("⚡ 一键载入推荐 Clash Verge 分流规则")
+                                    .on_hover_text("填入经典的 AI、Google、多线下载与国内直连分流配置")
+                                    .clicked()
+                                {
+                                    self.proxy_config.override_yaml =
+                                        Some(CLASH_VERGE_RECOMMENDED_OVERRIDE.to_string());
+                                    self.save_proxy_config();
+                                }
+                                if ui.button("清空覆写").clicked() {
+                                    self.proxy_config.override_yaml = None;
+                                    self.save_proxy_config();
+                                }
                             });
+                        });
                         ui.add_space(6.0);
-                    }
-                });
-        }
-
-        ui.add_space(10.0);
-        // 3. 配置覆写（方案 B）
-        Frame::NONE
-            .fill(theme::panel())
-            .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
-            .corner_radius(CornerRadius::same(10))
-            .inner_margin(Margin::symmetric(14, 10))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    icon_label(ui, Icon::Terminal, 14.0, theme::text_secondary());
-                    ui.label(
-                        RichText::new("自定义配置覆写 (YAML & Clash 脚本片段)")
-                            .strong()
-                            .color(theme::text_primary()),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button("⚡ 一键载入推荐 Clash Verge 分流规则")
-                            .on_hover_text("填入经典的 AI、Google、多线下载与国内直连分流配置")
-                            .clicked()
-                        {
-                            self.proxy_config.override_yaml =
-                                Some(CLASH_VERGE_RECOMMENDED_OVERRIDE.to_string());
-                            self.save_proxy_config();
-                        }
-                        if ui.button("清空覆写").clicked() {
-                            self.proxy_config.override_yaml = None;
+                        ui.label(
+                            RichText::new(
+                                "支持直接粘贴 Clash Verge Rev 风格的 YAML 配置覆写（rules / proxy-groups 等），启动时将自动合并生效："
+                            )
+                            .small()
+                            .color(theme::muted()),
+                        );
+                        ui.add_space(6.0);
+                        let mut text = self.proxy_config.override_yaml.clone().unwrap_or_default();
+                        let editor = ui.add(
+                            egui::TextEdit::multiline(&mut text)
+                                .font(egui::TextStyle::Monospace)
+                                .desired_rows(16)
+                                .desired_width(f32::INFINITY)
+                                .hint_text("# 可在此处粘贴自定义 rules 或 proxy-groups YAML 片段\nrules:\n  - DOMAIN-SUFFIX,openai.com,AI分组\n  - PROCESS-NAME,IDMan.exe,多线并发下载"),
+                        );
+                        if editor.changed() {
+                            self.proxy_config.override_yaml = if text.trim().is_empty() {
+                                None
+                            } else {
+                                Some(text)
+                            };
                             self.save_proxy_config();
                         }
                     });
-                });
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(
-                        "支持直接粘贴 Clash Verge Rev 风格的 YAML 配置覆写（rules / proxy-groups 等），启动时将自动合并生效："
-                    )
-                    .small()
-                    .color(theme::muted()),
-                );
-                ui.add_space(4.0);
-                let mut text = self.proxy_config.override_yaml.clone().unwrap_or_default();
-                let editor = ui.add(
-                    egui::TextEdit::multiline(&mut text)
-                        .font(egui::TextStyle::Monospace)
-                        .desired_rows(6)
-                        .desired_width(f32::INFINITY)
-                        .hint_text("# 可在此处粘贴自定义 rules 或 proxy-groups YAML 片段\nrules:\n  - DOMAIN-SUFFIX,openai.com,AI分组\n  - PROCESS-NAME,IDMan.exe,多线并发下载"),
-                );
-                if editor.changed() {
-                    self.proxy_config.override_yaml = if text.trim().is_empty() {
-                        None
-                    } else {
-                        Some(text)
-                    };
-                    self.save_proxy_config();
-                }
-            });
+            }
+        }
     }
 
     /// 底部状态栏右侧那一组控制按钮：先加的最靠右，所以启动/停止代理排第一；

@@ -693,6 +693,7 @@ pub fn format_duration_ms(value: Option<u64>) -> String {
         .unwrap_or_else(|| "-".into())
 }
 
+#[allow(dead_code)]
 pub fn stat_chip(ui: &mut Ui, label: &str, value: &str, color: Color32) {
     // 不能用 `Frame::show`：它在 `horizontal_wrapped` 里**不参与换行判定**，芯片一多整行
     // 就冲出右边界，还会把父 ui 的 `max_rect` 一起撑大（离屏量到 1535 > 面板 1312），

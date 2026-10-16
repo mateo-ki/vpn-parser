@@ -207,6 +207,7 @@ impl VpnApp {
             });
     }
 
+    #[allow(dead_code)]
     pub(crate) fn ui_stats_row(&mut self, ui: &mut Ui) {
         if let Some(s) = &self.stats.clone() {
             let is_nodes_tab = self.tab == Tab::Nodes;

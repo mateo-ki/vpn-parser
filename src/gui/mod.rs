@@ -124,6 +124,8 @@ pub struct VpnApp {
     pub(crate) show_recommended_rules_confirm: bool,
     /// 分流规则面板的分区（配置 / 命中记录）。
     pub(crate) rules_tab: RulesTab,
+    /// 分流策略组面板的分区（视图 / 配置）。
+    pub(crate) groups_tab: GroupsTab,
     /// 「导入规则」弹框：是否打开、贴进来的原文、最近一次解析结果。
     pub(crate) show_rule_import: bool,
     /// 导入框旁边那个「?」——各输入形状的示范，逐段由测试保证真能导入。
@@ -419,6 +421,7 @@ impl VpnApp {
             new_rule_action: RuleAction::Proxy,
             show_recommended_rules_confirm: false,
             rules_tab: RulesTab::default(),
+            groups_tab: GroupsTab::default(),
             show_rule_import: false,
             show_rule_import_help: false,
             rule_import_text: String::new(),
@@ -4022,10 +4025,6 @@ impl eframe::App for VpnApp {
                     .inner_margin(Margin::symmetric(18, 14)),
             )
             .show(ctx, |ui| {
-                if self.tab == Tab::Sources || self.tab == Tab::Nodes {
-                    self.ui_stats_row(ui);
-                    ui.add_space(10.0);
-                }
                 match self.tab {
                     Tab::Sources => self.ui_sources(ui),
                     Tab::Nodes => self.ui_nodes(ui),

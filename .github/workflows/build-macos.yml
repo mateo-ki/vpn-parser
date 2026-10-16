@@ -86,10 +86,20 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
         run: |
-          for f in dist/*.tar.gz dist/*.sha256; do
-            [ -f "$f" ] || continue
-            echo "Uploading $f to release $TAG..."
-            gh release upload "$TAG" "$f" --clobber
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          for i in $(seq 1 40); do
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "release $tag 已存在（第 $i 次查到），上传 macOS 资产"
+              for f in dist/*.tar.gz dist/*.sha256; do
+                [ -f "$f" ] || continue
+                echo "Uploading $f to release $tag..."
+                gh release upload "$tag" "$f" --clobber
+              done
+              exit 0
+            fi
+            sleep 15
           done
+          echo "等 Release $tag 出现超时（10 分钟）—— 检查 release.yml 那次运行" >&2
+          exit 1

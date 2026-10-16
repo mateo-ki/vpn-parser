@@ -41,6 +41,14 @@ pub enum ProxyPanel {
     Logs,
 }
 
+/// 分流策略组面板里的两个分区：视图（策略组实时状态与成员拓扑）和配置（自定义配置覆写 YAML 片段）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GroupsTab {
+    #[default]
+    View,
+    Config,
+}
+
 /// 分流规则面板里的两个分区：规则本身（该怎么走）和实际命中记录（真走了哪）。
 /// 以前它们挤在同一屏里，规则表一长就看不到命中，反之命中一多就翻不到规则。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

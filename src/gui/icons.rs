@@ -850,37 +850,20 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
             );
         }
         Icon::Brand => {
-            // 全新品牌 "V" 动态双翼几何图标
-            let left_pts = vec![
-                Pos2::new(center.x - s * 0.36, center.y - s * 0.26),
-                Pos2::new(center.x - s * 0.14, center.y - s * 0.38),
-                Pos2::new(center.x, center.y + s * 0.10),
-                Pos2::new(center.x, center.y + s * 0.38),
+            // 极简现代 "V" 纯几何字标
+            let v_pts = vec![
+                Pos2::new(center.x - s * 0.36, center.y - s * 0.28),
+                Pos2::new(center.x, center.y + s * 0.34),
+                Pos2::new(center.x + s * 0.36, center.y - s * 0.28),
+                Pos2::new(center.x + s * 0.18, center.y - s * 0.28),
+                Pos2::new(center.x, center.y + s * 0.06),
+                Pos2::new(center.x - s * 0.18, center.y - s * 0.28),
             ];
             painter.add(egui::epaint::PathShape::convex_polygon(
-                left_pts,
+                v_pts,
                 color,
                 Stroke::NONE,
             ));
-            let right_pts = vec![
-                Pos2::new(center.x + s * 0.36, center.y - s * 0.26),
-                Pos2::new(center.x + s * 0.14, center.y - s * 0.38),
-                Pos2::new(center.x, center.y + s * 0.10),
-                Pos2::new(center.x, center.y + s * 0.38),
-            ];
-            painter.add(egui::epaint::PathShape::convex_polygon(
-                right_pts,
-                color.gamma_multiply(0.72),
-                Stroke::NONE,
-            ));
-            // 中缝立体反光切面
-            painter.line_segment(
-                [
-                    Pos2::new(center.x, center.y + s * 0.10),
-                    Pos2::new(center.x, center.y + s * 0.38),
-                ],
-                fine_stroke,
-            );
         }
     }
 }

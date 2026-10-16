@@ -13,31 +13,47 @@ use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Sense, Stroke, U
 
 impl VpnApp {
     pub(crate) fn ui_settings(&mut self, ui: &mut Ui) {
-        // 动作组（保存设置 / 重置修改 / 同步状态）钉在内容区右上角。以前是"标题一行、
-        // 右对齐组一行"，字体调大后逻辑宽度掉到 500 出头时，`with_layout` 的右对齐会把
-        // 整组推到面板右边界之外（离屏量到 580 > 502）= 他看到的"按钮被挤出去了"。
+        let mut tab = self.settings_tab;
+        let mut save_clicked = false;
+        let mut reset_clicked = false;
+        let dirty = self.settings_dirty();
+        let saving = self.settings_saving;
+
         crate::gui::widgets::split_row(
             ui,
             "settings:header",
             SETTINGS_ACTIONS_WIDTH,
-            |_ui| {},
             |ui| {
-                let dirty = self.settings_dirty();
+                panel_tab(
+                    ui,
+                    &mut tab,
+                    SettingsTab::General,
+                    Icon::Gear,
+                    "通用",
+                );
+                panel_tab(
+                    ui,
+                    &mut tab,
+                    SettingsTab::Appearance,
+                    Icon::Appearance,
+                    "外观",
+                );
+            },
+            |ui| {
                 if ui
-                    .add_enabled(!self.settings_saving, primary_btn("保存设置"))
+                    .add_enabled(!saving, primary_btn("保存设置"))
                     .clicked()
                 {
-                    self.save_settings();
+                    save_clicked = true;
                 }
                 if ui
                     .button("重置修改")
                     .on_hover_text("恢复为当前已保存的配置")
                     .clicked()
                 {
-                    self.sync_edit_settings();
-                    self.reload_settings();
+                    reset_clicked = true;
                 }
-                if self.settings_saving {
+                if saving {
                     ui.spinner();
                     ui.label(RichText::new("正在保存...").color(theme::accent()).small());
                 } else if dirty {
@@ -51,24 +67,15 @@ impl VpnApp {
                 }
             },
         );
-        ui.add_space(6.0);
-        // 顶部两个分区：通用管"软件该怎么做"，外观管"长什么样"。
-        ui.horizontal(|ui| {
-            panel_tab(
-                ui,
-                &mut self.settings_tab,
-                SettingsTab::General,
-                Icon::Gear,
-                "通用",
-            );
-            panel_tab(
-                ui,
-                &mut self.settings_tab,
-                SettingsTab::Appearance,
-                Icon::Appearance,
-                "外观",
-            );
-        });
+
+        self.settings_tab = tab;
+        if save_clicked {
+            self.save_settings();
+        }
+        if reset_clicked {
+            self.sync_edit_settings();
+            self.reload_settings();
+        }
         ui.add_space(8.0);
 
         // 设置卡片总高度超过窗口，整页必须可纵向滚动，否则底部内容看不到。

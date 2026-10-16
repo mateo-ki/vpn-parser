@@ -1,80 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
   <defs>
-    <!-- Background Gradient -->
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0b0f19"/>
-      <stop offset="60%" stop-color="#141c30"/>
-      <stop offset="100%" stop-color="#0a0d14"/>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#181a20"/>
+      <stop offset="100%" stop-color="#0e1014"/>
     </linearGradient>
-
-    <!-- Outer Border Glow Gradient -->
-    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.9"/>
-      <stop offset="50%" stop-color="#6366f1" stop-opacity="0.6"/>
-      <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0.9"/>
-    </linearGradient>
-
-    <!-- Left Wing Gradient (Cyan -> Cobalt Blue) -->
-    <linearGradient id="leftWingGrad" x1="20%" y1="0%" x2="80%" y2="100%">
-      <stop offset="0%" stop-color="#00f2fe"/>
-      <stop offset="40%" stop-color="#0284c7"/>
-      <stop offset="100%" stop-color="#2563eb"/>
-    </linearGradient>
-
-    <!-- Right Wing Gradient (Neon Purple -> Indigo) -->
-    <linearGradient id="rightWingGrad" x1="80%" y1="0%" x2="20%" y2="100%">
-      <stop offset="0%" stop-color="#d946ef"/>
-      <stop offset="45%" stop-color="#8b5cf6"/>
-      <stop offset="100%" stop-color="#6366f1"/>
-    </linearGradient>
-
-    <!-- Core Floating Accent Gradient -->
-    <linearGradient id="coreGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#38bdf8"/>
-      <stop offset="100%" stop-color="#00f2fe"/>
-    </linearGradient>
-
-    <!-- Ambient Glow Filter -->
-    <filter id="ambientGlow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="8" result="blur"/>
-      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-    </filter>
-
-    <!-- Soft Shadow for Wings -->
-    <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.5"/>
-    </filter>
   </defs>
 
-  <!-- Outer Rounded Squircle Base -->
-  <rect x="12" y="12" width="232" height="232" rx="54" fill="url(#bgGrad)"/>
-  <rect x="12" y="12" width="232" height="232" rx="54" fill="none" stroke="url(#borderGrad)" stroke-width="2.5"/>
+  <!-- Deep Obsidian Squircle Base -->
+  <rect x="14" y="14" width="228" height="228" rx="54" fill="url(#bgGrad)"/>
+  <rect x="14" y="14" width="228" height="228" rx="54" fill="none" stroke="#2e323d" stroke-width="2"/>
 
-  <!-- Ambient Backdrop Glow Circle -->
-  <circle cx="128" cy="140" r="50" fill="#38bdf8" opacity="0.12" filter="url(#ambientGlow)"/>
-
-  <!-- Subtle Cyber Tech Rings -->
-  <circle cx="128" cy="128" r="86" fill="none" stroke="#334155" stroke-width="1.2" stroke-dasharray="5 5" opacity="0.3"/>
-
-  <!-- The "V" Emblem Group -->
-  <g filter="url(#dropShadow)">
-    <!-- Left Wing (Cyan -> Blue) -->
-    <polygon points="48,76 96,54 128,144 128,206" fill="url(#leftWingGrad)"/>
-
-    <!-- Right Wing (Purple -> Indigo) -->
-    <polygon points="208,76 160,54 128,144 128,206" fill="url(#rightWingGrad)"/>
-
-    <!-- Center Seam Specular Highlight (3D Seam Fold) -->
-    <line x1="128" y1="144" x2="128" y2="206" stroke="#ffffff" stroke-width="1.8" opacity="0.75" stroke-linecap="round"/>
-
-    <!-- Top Left Wing Edge Specular -->
-    <line x1="48" y1="76" x2="96" y2="54" stroke="#ffffff" stroke-width="1.5" opacity="0.6" stroke-linecap="round"/>
-
-    <!-- Top Right Wing Edge Specular -->
-    <line x1="160" y1="54" x2="208" y2="76" stroke="#ffffff" stroke-width="1.5" opacity="0.6" stroke-linecap="round"/>
-
-    <!-- Inner Floating Velocity Core Diamond -->
-    <polygon points="128,86 142,100 128,114 114,100" fill="url(#coreGrad)"/>
-    <circle cx="128" cy="100" r="3" fill="#ffffff" opacity="0.9"/>
-  </g>
+  <!-- Minimalist Precision White "V" Lettermark -->
+  <path d="M 56,72 L 128,196 L 200,72 L 166,72 L 128,140 L 90,72 Z"
+        fill="#ffffff"
+        stroke="#ffffff"
+        stroke-width="5"
+        stroke-linejoin="round"
+        stroke-linecap="round"/>
 </svg>

@@ -19,6 +19,43 @@ impl VpnApp {
         let mut dedupe = false;
         let mut clear_all = false;
 
+        // 节点类型统计：协议首字母缩写图标 + 旁边是数量
+        if let Some(s) = &self.stats.clone() {
+            if !s.protocol_stats.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    let is_all = self.protocol_filter.is_empty() || self.protocol_filter == "all";
+                    let all_btn = ui.add(
+                        egui::Button::new(
+                            RichText::new(format!("全部 ({})", s.node_count))
+                                .small()
+                                .strong()
+                                .color(if is_all { theme::accent_strong() } else { theme::text_secondary() }),
+                        )
+                        .fill(if is_all { theme::accent_bg() } else { theme::panel() })
+                        .stroke(Stroke::new(1.0_f32, if is_all { theme::accent() } else { theme::border_subtle() }))
+                        .corner_radius(CornerRadius::same(theme::RADIUS_BTN)),
+                    );
+                    if all_btn.clicked() && !is_all {
+                        self.protocol_filter = "".to_string();
+                        filter_changed = true;
+                    }
+
+                    for p in &s.protocol_stats {
+                        let is_active = self.protocol_filter.eq_ignore_ascii_case(&p.protocol);
+                        if crate::gui::widgets::protocol_stat_chip(ui, &p.protocol, p.count, is_active).clicked() {
+                            if is_active {
+                                self.protocol_filter = "".to_string();
+                            } else {
+                                self.protocol_filter = p.protocol.clone();
+                            }
+                            filter_changed = true;
+                        }
+                    }
+                });
+                ui.add_space(8.0);
+            }
+        }
+
         // 1. 顶部整合卡片：搜索与快速筛选
         Frame::NONE
             .fill(theme::panel())
@@ -202,35 +239,6 @@ impl VpnApp {
                         );
                         if pill.clicked() && !is_active {
                             self.region_filter = val.to_string();
-                            filter_changed = true;
-                        }
-                    }
-                });
-
-                ui.add_space(4.0);
-
-                // 第三行：协议快速筛选胶囊行（放到下一行，界面宽敞清晰）
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("协议:").small().strong().color(theme::muted()));
-                    for (val, lbl) in [
-                        ("", "全部"),
-                        ("vless", "VLESS"),
-                        ("vmess", "VMess"),
-                        ("trojan", "Trojan"),
-                        ("ss", "SS"),
-                        ("hysteria2", "HY2"),
-                        ("masque", "MASQUE"),
-                    ] {
-                        let is_active = self.protocol_filter.eq_ignore_ascii_case(val);
-                        let text_color = if is_active { theme::accent_strong() } else { theme::text_secondary() };
-                        let pill = ui.add(
-                            egui::Button::new(RichText::new(lbl).small().strong().color(text_color))
-                                .fill(if is_active { theme::accent_bg() } else { theme::page_bg() })
-                                .stroke(Stroke::new(1.0_f32, if is_active { theme::accent() } else { theme::border_subtle() }))
-                                .corner_radius(CornerRadius::same(12)),
-                        );
-                        if pill.clicked() && !is_active {
-                            self.protocol_filter = val.to_string();
                             filter_changed = true;
                         }
                     }
