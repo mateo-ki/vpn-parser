@@ -749,33 +749,57 @@ pub fn pill(ui: &mut Ui, text: &str, fg: Color32, bg: Color32) {
     }
 }
 
-/// 协议首字母缩写图标 + 数量胶囊徽标
+/// 协议首字母/双字母缩写图标 + 数量胶囊徽标
 pub fn protocol_stat_chip(
     ui: &mut Ui,
     protocol: &str,
     count: i64,
     is_active: bool,
 ) -> egui::Response {
-    let initial = protocol
-        .chars()
-        .next()
-        .unwrap_or('P')
-        .to_ascii_uppercase();
+    let lower = protocol.to_lowercase();
+    let code: &str = match lower.as_str() {
+        "all" | "全部" => "All",
+        "vless" => "VL",
+        "vmess" => "VM",
+        "trojan" => "TR",
+        "shadowsocks" | "ss" => "SS",
+        "shadowsocksr" | "ssr" => "SR",
+        "hysteria" | "hysteria2" | "hy2" => "HY",
+        "wireguard" | "wg" => "WG",
+        "masque" => "MQ",
+        "tuic" => "TU",
+        "snell" => "SN",
+        "http" | "https" => "HT",
+        "socks5" | "socks" => "S5",
+        _ => {
+            if protocol.len() >= 2 {
+                &protocol[..2]
+            } else if !protocol.is_empty() {
+                protocol
+            } else {
+                "P"
+            }
+        }
+    };
 
-    // 协议首字母个性化配色
-    let (badge_bg, badge_fg) = match initial {
-        'V' => (theme::accent_bg(), theme::accent_strong()),
-        'S' => (theme::success_bg(), theme::success()),
-        'T' => (theme::warning_bg(), theme::warning()),
-        'H' => (Color32::from_rgb(243, 232, 255), Color32::from_rgb(147, 51, 234)),
-        'W' | 'M' => (Color32::from_rgb(224, 242, 254), Color32::from_rgb(2, 132, 199)),
+    // 协议首字母/缩写双字母个性化配色
+    let (badge_bg, badge_fg) = match code {
+        "All" => (theme::panel_hover(), theme::text_primary()),
+        "VL" => (theme::accent_bg(), theme::accent_strong()),
+        "VM" => (Color32::from_rgb(224, 242, 254), Color32::from_rgb(2, 132, 199)),
+        "TR" => (theme::warning_bg(), theme::warning()),
+        "SS" | "SR" => (theme::success_bg(), theme::success()),
+        "HY" => (Color32::from_rgb(243, 232, 255), Color32::from_rgb(147, 51, 234)),
+        "WG" => (Color32::from_rgb(238, 242, 255), Color32::from_rgb(79, 70, 229)),
+        "MQ" => (Color32::from_rgb(204, 251, 241), Color32::from_rgb(13, 148, 136)),
         _ => (theme::panel_hover(), theme::text_secondary()),
     };
 
     const PAD_X: f32 = 7.0;
     const PAD_Y: f32 = 4.0;
     const GAP: f32 = 6.0;
-    const BADGE_SIZE: f32 = 18.0;
+    let badge_w = if code.len() >= 3 { 25.0 } else { 21.0 };
+    const BADGE_H: f32 = 18.0;
 
     let count_str = format!("{count}");
     let count_galley = egui::WidgetText::from(
@@ -786,8 +810,8 @@ pub fn protocol_stat_chip(
     )
     .into_galley(ui, None, f32::INFINITY, egui::TextStyle::Body);
 
-    let total_w = PAD_X * 2.0 + BADGE_SIZE + GAP + count_galley.size().x;
-    let total_h = (BADGE_SIZE.max(count_galley.size().y) + PAD_Y * 2.0).max(26.0);
+    let total_w = PAD_X * 2.0 + badge_w + GAP + count_galley.size().x;
+    let total_h = (BADGE_H.max(count_galley.size().y) + PAD_Y * 2.0).max(26.0);
     let size = egui::vec2(total_w, total_h);
 
     let (rect, response) = ui.allocate_at_least(size, Sense::click());
@@ -809,10 +833,10 @@ pub fn protocol_stat_chip(
             egui::StrokeKind::Inside,
         );
 
-        // 绘制协议首字母徽标图标（带有微圆角与对比反光）
+        // 绘制双字母/All缩写徽标
         let badge_rect = egui::Rect::from_center_size(
-            egui::pos2(rect.left() + PAD_X + BADGE_SIZE / 2.0, rect.center().y),
-            Vec2::splat(BADGE_SIZE),
+            egui::pos2(rect.left() + PAD_X + badge_w / 2.0, rect.center().y),
+            egui::vec2(badge_w, BADGE_H),
         );
         painter.rect_filled(badge_rect, CornerRadius::same(4), badge_bg);
         painter.rect_stroke(
@@ -823,7 +847,7 @@ pub fn protocol_stat_chip(
         );
 
         let initial_galley = egui::WidgetText::from(
-            RichText::new(initial.to_string()).strong().color(badge_fg).size(11.0),
+            RichText::new(code).strong().color(badge_fg).size(10.5),
         )
         .into_galley(ui, None, f32::INFINITY, egui::TextStyle::Body);
         let init_pos = egui::pos2(
@@ -840,7 +864,12 @@ pub fn protocol_stat_chip(
         painter.galley(count_pos, count_galley, theme::text_primary());
     }
 
-    response.on_hover_text(format!("{} 协议：{} 个节点（点击快速筛选）", protocol.to_uppercase(), count))
+    let tooltip = if protocol == "all" || protocol == "All" || protocol == "全部" {
+        format!("全部节点：{} 个节点（点击展示全部）", count)
+    } else {
+        format!("{} ({}) 协议：{} 个节点（点击快速筛选）", protocol.to_uppercase(), code, count)
+    };
+    response.on_hover_text(tooltip)
 }
 
 /// 卡片表头左边那个圆角方块图标底（40×40）。同 [`pill`]：直接画，不套 `Frame`。

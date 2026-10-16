@@ -19,23 +19,12 @@ impl VpnApp {
         let mut dedupe = false;
         let mut clear_all = false;
 
-        // 节点类型统计：协议首字母缩写图标 + 旁边是数量
+        // 节点类型统计：协议双字母缩写图标 (All / VL / VM / TR / SS 等) + 旁边是数量
         if let Some(s) = &self.stats.clone() {
             if !s.protocol_stats.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     let is_all = self.protocol_filter.is_empty() || self.protocol_filter == "all";
-                    let all_btn = ui.add(
-                        egui::Button::new(
-                            RichText::new(format!("全部 ({})", s.node_count))
-                                .small()
-                                .strong()
-                                .color(if is_all { theme::accent_strong() } else { theme::text_secondary() }),
-                        )
-                        .fill(if is_all { theme::accent_bg() } else { theme::panel() })
-                        .stroke(Stroke::new(1.0_f32, if is_all { theme::accent() } else { theme::border_subtle() }))
-                        .corner_radius(CornerRadius::same(theme::RADIUS_BTN)),
-                    );
-                    if all_btn.clicked() && !is_all {
+                    if crate::gui::widgets::protocol_stat_chip(ui, "All", s.node_count, is_all).clicked() {
                         self.protocol_filter = "".to_string();
                         filter_changed = true;
                     }
