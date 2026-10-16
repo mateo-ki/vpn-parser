@@ -207,8 +207,9 @@ impl VpnApp {
             });
     }
 
-    pub(crate) fn ui_stats_row(&self, ui: &mut Ui) {
-        if let Some(s) = &self.stats {
+    pub(crate) fn ui_stats_row(&mut self, ui: &mut Ui) {
+        if let Some(s) = &self.stats.clone() {
+            let is_nodes_tab = self.tab == Tab::Nodes;
             ui.horizontal_wrapped(|ui| {
                 stat_chip(ui, "订阅源", &s.source_count.to_string(), theme::accent());
                 stat_chip(
@@ -220,8 +221,24 @@ impl VpnApp {
                 stat_chip(ui, "节点", &s.node_count.to_string(), theme::accent());
                 stat_chip(ui, "已测", &s.tested_count.to_string(), theme::warning());
                 stat_chip(ui, "可用", &s.alive_count.to_string(), theme::success());
-                for p in s.protocol_stats.iter().take(6) {
-                    stat_chip(ui, &p.protocol, &p.count.to_string(), theme::muted());
+
+                // 仅在「节点池」上方展示协议首字母缩写图标 + 数量
+                if is_nodes_tab {
+                    let mut switch_proto = None;
+                    for p in &s.protocol_stats {
+                        let is_active = self.protocol_filter.eq_ignore_ascii_case(&p.protocol);
+                        if crate::gui::widgets::protocol_stat_chip(ui, &p.protocol, p.count, is_active).clicked() {
+                            if is_active {
+                                switch_proto = Some("".to_string());
+                            } else {
+                                switch_proto = Some(p.protocol.clone());
+                            }
+                        }
+                    }
+                    if let Some(proto) = switch_proto {
+                        self.protocol_filter = proto;
+                        self.reload_node_view();
+                    }
                 }
             });
         }

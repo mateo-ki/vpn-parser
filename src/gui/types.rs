@@ -65,10 +65,10 @@ pub struct ProxyViewRow {
     pub lower_name: String,
 }
 
-/// 过滤 + 排序后的网格视图，按 (数据版本, 地区, 搜索词, 排序) 缓存。以前每帧都
-/// `proxy_nodes.clone()` 再过滤排序一遍，比较器里还 `to_lowercase()` 现分配。
+/// 过滤 + 排序后的网格视图，按 (数据版本, 策略组, 地区, 搜索词, 排序) 缓存。
 pub struct ProxyView {
     pub rev: u64,
+    pub group: String,
     pub region: String,
     pub search: String,
     pub sort: ProxySortBy,

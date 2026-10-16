@@ -748,6 +748,100 @@ pub fn pill(ui: &mut Ui, text: &str, fg: Color32, bg: Color32) {
     }
 }
 
+/// 协议首字母缩写图标 + 数量胶囊徽标
+pub fn protocol_stat_chip(
+    ui: &mut Ui,
+    protocol: &str,
+    count: i64,
+    is_active: bool,
+) -> egui::Response {
+    let initial = protocol
+        .chars()
+        .next()
+        .unwrap_or('P')
+        .to_ascii_uppercase();
+
+    // 协议首字母个性化配色
+    let (badge_bg, badge_fg) = match initial {
+        'V' => (theme::accent_bg(), theme::accent_strong()),
+        'S' => (theme::success_bg(), theme::success()),
+        'T' => (theme::warning_bg(), theme::warning()),
+        'H' => (Color32::from_rgb(243, 232, 255), Color32::from_rgb(147, 51, 234)),
+        'W' | 'M' => (Color32::from_rgb(224, 242, 254), Color32::from_rgb(2, 132, 199)),
+        _ => (theme::panel_hover(), theme::text_secondary()),
+    };
+
+    const PAD_X: f32 = 7.0;
+    const PAD_Y: f32 = 4.0;
+    const GAP: f32 = 6.0;
+    const BADGE_SIZE: f32 = 18.0;
+
+    let count_str = format!("{count}");
+    let count_galley = egui::WidgetText::from(
+        RichText::new(&count_str)
+            .strong()
+            .color(if is_active { theme::accent_strong() } else { theme::text_primary() })
+            .size(12.0),
+    )
+    .into_galley(ui, None, f32::INFINITY, egui::TextStyle::Body);
+
+    let total_w = PAD_X * 2.0 + BADGE_SIZE + GAP + count_galley.size().x;
+    let total_h = (BADGE_SIZE.max(count_galley.size().y) + PAD_Y * 2.0).max(26.0);
+    let size = egui::vec2(total_w, total_h);
+
+    let (rect, response) = ui.allocate_at_least(size, Sense::click());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let (bg, stroke) = if is_active {
+            (theme::accent_bg(), Stroke::new(1.2_f32, theme::accent()))
+        } else if response.hovered() {
+            (theme::panel_hover(), Stroke::new(1.0_f32, theme::border()))
+        } else {
+            (theme::panel(), Stroke::new(1.0_f32, theme::border_subtle()))
+        };
+
+        painter.rect(
+            rect,
+            CornerRadius::same(theme::RADIUS_BTN),
+            bg,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
+
+        // 绘制协议首字母徽标图标（带有微圆角与对比反光）
+        let badge_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + PAD_X + BADGE_SIZE / 2.0, rect.center().y),
+            Vec2::splat(BADGE_SIZE),
+        );
+        painter.rect_filled(badge_rect, CornerRadius::same(4), badge_bg);
+        painter.rect_stroke(
+            badge_rect,
+            CornerRadius::same(4),
+            Stroke::new(0.8_f32, badge_fg.gamma_multiply(0.4)),
+            egui::StrokeKind::Inside,
+        );
+
+        let initial_galley = egui::WidgetText::from(
+            RichText::new(initial.to_string()).strong().color(badge_fg).size(11.0),
+        )
+        .into_galley(ui, None, f32::INFINITY, egui::TextStyle::Body);
+        let init_pos = egui::pos2(
+            badge_rect.center().x - initial_galley.size().x / 2.0,
+            badge_rect.center().y - initial_galley.size().y / 2.0,
+        );
+        painter.galley(init_pos, initial_galley, badge_fg);
+
+        // 绘制数量文字
+        let count_pos = egui::pos2(
+            badge_rect.right() + GAP,
+            rect.center().y - count_galley.size().y / 2.0,
+        );
+        painter.galley(count_pos, count_galley, theme::text_primary());
+    }
+
+    response.on_hover_text(format!("{} 协议：{} 个节点（点击快速筛选）", protocol.to_uppercase(), count))
+}
+
 /// 卡片表头左边那个圆角方块图标底（40×40）。同 [`pill`]：直接画，不套 `Frame`。
 pub fn icon_tile(ui: &mut Ui, icon: Icon, fg: Color32, bg: Color32) {
     const TILE: f32 = 40.0;

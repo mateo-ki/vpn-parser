@@ -2,7 +2,7 @@ use crate::gui::icons::{icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::view_models::nodes_vm::{NodeCardAction, NodesViewModel};
 use crate::gui::widgets::{
-    card_frame, compact_node_card, node_group_key, panel_frame, section_title, sort_label,
+    card_frame, compact_node_card, node_group_key, panel_frame, sort_label,
 };
 use crate::gui::VpnApp;
 use crate::speedtest::SpeedtestIntensity;
@@ -10,7 +10,6 @@ use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
 
 impl VpnApp {
     pub(crate) fn ui_nodes(&mut self, ui: &mut Ui) {
-        section_title(ui, "节点池", "多源汇聚 · 强度测速 · 智能筛选清理");
         let mut filter_changed = false;
         let mut delete_dead = false;
         let mut prune_stale = false;

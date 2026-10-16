@@ -209,6 +209,8 @@ pub struct VpnApp {
     pub(crate) traffic_polling: bool,
     /// 内核各 proxy-group 的实时状态（名字/类型/当前成员）。
     pub(crate) kernel_groups: Vec<KernelGroup>,
+    /// 控制台选中的分流策略组（例如 "全部", "AI分组", "美国节点", "多线并发下载", "普通代理" 等）。
+    pub(crate) proxy_selected_group: String,
     /// 控制台可用节点网格的缓存视图 + 数据版本号（proxy_nodes 每次换数据都 +1）。
     pub(crate) proxy_view: Option<ProxyView>,
     pub(crate) proxy_nodes_rev: u64,
@@ -478,6 +480,7 @@ impl VpnApp {
             last_groups_poll: std::time::Instant::now() - std::time::Duration::from_secs(60),
             traffic_polling: false,
             kernel_groups: Vec::new(),
+            proxy_selected_group: "全部".to_string(),
             proxy_view: None,
             proxy_nodes_rev: 0,
             ip_risk: None,
@@ -634,6 +637,7 @@ impl VpnApp {
         // 每次刷新都打 GitHub API 会很快撞限流（未认证 60 次/小时），这里只本地探测。
         self.detect_kernels();
         self.reload_proxy();
+        self.reload_proxy_nodes();
         self.reload_proxy_node_groups();
         self.reload_egress_health();
         self.reload_rule_hits();
@@ -4018,7 +4022,7 @@ impl eframe::App for VpnApp {
                     .inner_margin(Margin::symmetric(18, 14)),
             )
             .show(ctx, |ui| {
-                if self.tab != Tab::Proxy && self.tab != Tab::About {
+                if self.tab == Tab::Sources || self.tab == Tab::Nodes {
                     self.ui_stats_row(ui);
                     ui.add_space(10.0);
                 }

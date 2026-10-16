@@ -45,7 +45,7 @@ impl VpnApp {
         card_frame().show(ui, |ui| {
             let mut open_repo = false;
             ui.horizontal(|ui| {
-                icon_tile(ui, Icon::Info, theme::accent(), theme::accent_bg());
+                icon_tile(ui, Icon::Brand, theme::accent(), theme::accent_bg());
                 ui.add_space(4.0);
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
@@ -825,7 +825,7 @@ mod about_layout_probe_tests {
             let mut card_right = 0.0_f32;
             in_card(width, |ui, layer| {
                 ui.horizontal(|ui| {
-                    icon_tile(ui, Icon::Info, theme::accent(), theme::accent_bg());
+                    icon_tile(ui, Icon::Brand, theme::accent(), theme::accent_bg());
                     ui.add_space(4.0);
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {

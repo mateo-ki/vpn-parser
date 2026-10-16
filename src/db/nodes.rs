@@ -164,12 +164,30 @@ impl Database {
                       latency_ms, latency_ok, download_kbps, latency_kernel,
                       latency_test_kind, latency_tested_at, updated_at
                FROM nodes
-               WHERE latency_ok = 1 AND latency_test_kind = 'google_proxy'
-               ORDER BY latency_ms ASC"#,
+               WHERE latency_ok = 1
+               ORDER BY (latency_test_kind = 'google_proxy') DESC, (latency_ms IS NULL) ASC, latency_ms ASC"#,
         )
         .fetch_all(&pool)
         .await?;
-        Ok(rows.into_iter().map(super::row_to_node_summary).collect())
+        let summaries: Vec<NodeSummary> = rows.into_iter().map(super::row_to_node_summary).collect();
+        if !summaries.is_empty() {
+            return Ok(summaries);
+        }
+
+        // 回退机制：若该库暂无标记为可用 (latency_ok = 1) 的测速结果，
+        // 自动加载尚未标记失败 (latency_ok != 0) 的候选节点，防止控制台呈现完全空白
+        let fallback_rows = sqlx::query(
+            r#"SELECT id, source_id, protocol, name, server, port, country,
+                      latency_ms, latency_ok, download_kbps, latency_kernel,
+                      latency_test_kind, latency_tested_at, updated_at
+               FROM nodes
+               WHERE latency_ok IS NULL OR latency_ok != 0
+               ORDER BY updated_at DESC
+               LIMIT 50"#,
+        )
+        .fetch_all(&pool)
+        .await?;
+        Ok(fallback_rows.into_iter().map(super::row_to_node_summary).collect())
     }
 
     /// 单节点库的 SQL 分页查询：过滤/排序/分页全部在库内完成，且只加载元数据。
@@ -204,7 +222,7 @@ impl Database {
         }
         match latency.map(|value| value.to_ascii_lowercase()) {
             Some(ref value) if value == "alive" => {
-                where_sql.push_str(" AND latency_ok = 1 AND latency_test_kind = 'google_proxy'");
+                where_sql.push_str(" AND latency_ok = 1");
             }
             Some(ref value) if value == "dead" => where_sql.push_str(" AND latency_ok = 0"),
             Some(ref value) if value == "untested" => where_sql.push_str(" AND latency_ok IS NULL"),
@@ -288,10 +306,7 @@ impl Database {
                         || node.server.to_ascii_lowercase().contains(value)
                 })
                 && match latency.as_deref() {
-                    Some("alive") => {
-                        node.latency_ok == Some(true)
-                            && node.latency_test_kind.as_deref() == Some("google_proxy")
-                    }
+                    Some("alive") => node.latency_ok == Some(true),
                     Some("dead") => node.latency_ok == Some(false),
                     Some("untested") => node.latency_ok.is_none(),
                     _ => true,
@@ -329,10 +344,7 @@ impl Database {
                         || node.server.to_ascii_lowercase().contains(value)
                 })
                 && match latency.as_deref() {
-                    Some("alive") => {
-                        node.latency_ok == Some(true)
-                            && node.latency_test_kind.as_deref() == Some("google_proxy")
-                    }
+                    Some("alive") => node.latency_ok == Some(true),
                     Some("dead") => node.latency_ok == Some(false),
                     Some("untested") => node.latency_ok.is_none(),
                     _ => true,

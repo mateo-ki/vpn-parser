@@ -1,7 +1,7 @@
 use crate::gui::icons::{self, icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::types::{
-    ActiveConnectionInfo, ProxyPanel, ProxySortBy, ProxyView, ProxyViewRow, RuleDraftKind, RulesTab,
+    ActiveConnectionInfo, KernelGroup, ProxyPanel, ProxySortBy, ProxyView, ProxyViewRow, RuleDraftKind, RulesTab,
 };
 use crate::gui::view_models::nodes_vm::NodeCardAction;
 use crate::gui::widgets::{
@@ -856,13 +856,274 @@ impl VpnApp {
             self.selected_proxy_source_id = Some("all".to_string());
             self.reload_proxy_nodes();
         }
+        if self.proxy_selected_group.is_empty() {
+            self.proxy_selected_group = "全部".to_string();
+        }
 
-        // -------------------------------------------------------------------
-        // 现代化精炼控制条（由 4 行碎片合并为 2 行秩序分明的高级控制台）
-        // -------------------------------------------------------------------
         ui.add_space(4.0);
 
-        // 第 1 行：地区胶囊分段条 (左) + 搜索框 & 统计微标 (右)
+        // -------------------------------------------------------------------
+        // 第 1 栏：分流策略组切换胶囊条（搬迁并集成到可用节点）
+        // -------------------------------------------------------------------
+        let mut group_pills: Vec<(String, &'static str, Icon)> = vec![
+            ("全部".to_string(), "所有节点", Icon::Globe),
+            ("AI分组".to_string(), "AI 专用", Icon::Lightning),
+            ("美国节点".to_string(), "US 选优", Icon::Globe),
+            ("多线并发下载".to_string(), "并发加速", Icon::ArrowDown),
+            ("普通代理".to_string(), "出海兜底", Icon::Shield),
+        ];
+
+        // 引入内核实时同步的其他策略组（若已启动内核且有自定义或其它策略组）
+        for kg in &self.kernel_groups {
+            if matches!(kg.name.as_str(), "GLOBAL" | "DIRECT" | "REJECT" | "PASS") {
+                continue;
+            }
+            if !group_pills.iter().any(|(name, _, _)| name == &kg.name) {
+                let (tag, icon) = match kg.kind.to_lowercase().as_str() {
+                    "url-test" | "urltest" => ("自动选优", Icon::Lightning),
+                    "load-balance" | "loadbalance" => ("负载均衡", Icon::ArrowDown),
+                    "fallback" => ("故障转移", Icon::Shield),
+                    _ => ("手动选择", Icon::Radar),
+                };
+                group_pills.push((kg.name.clone(), tag, icon));
+            }
+        }
+
+        ui.horizontal_wrapped(|ui| {
+            icon_label(ui, Icon::Shield, 13.0, theme::accent());
+            ui.label(RichText::new("分流策略组:").small().strong().color(theme::text_primary()));
+
+            for (name, _tag, _icon) in &group_pills {
+                let is_selected = self.proxy_selected_group == *name;
+                let count = self
+                    .proxy_nodes
+                    .iter()
+                    .filter(|n| node_matches_group(n, name, &self.kernel_groups))
+                    .count();
+
+                let (fill, stroke, text_color) = if is_selected {
+                    (
+                        theme::accent_bg(),
+                        Stroke::new(1.2_f32, theme::accent()),
+                        theme::accent_strong(),
+                    )
+                } else {
+                    (
+                        theme::panel(),
+                        Stroke::new(1.0_f32, theme::border_subtle()),
+                        theme::text_secondary(),
+                    )
+                };
+
+                let label_text = format!("{name} ({count})");
+                let btn = egui::Button::new(
+                    RichText::new(&label_text).small().strong().color(text_color),
+                )
+                .fill(fill)
+                .stroke(stroke)
+                .corner_radius(CornerRadius::same(theme::RADIUS_BTN));
+
+                let tooltip = match name.as_str() {
+                    "全部" => "展示全部可用节点，自由选择切换",
+                    "AI分组" => "专供 ChatGPT、Claude、Midjourney、Grok 等 AI，优先保证美国/原生 IP 解锁",
+                    "美国节点" => "url-test 周期测速，实时挑选最低延迟节点供给 Google 与 YouTube",
+                    "多线并发下载" => "load-balance 负载均衡，聚合节点并发加速 IDM / 迅雷 / 网盘下载",
+                    "普通代理" => "常规网页出海兜底；国内服务直连",
+                    _ => "点击切换至该策略组并筛选对应节点",
+                };
+
+                let resp = ui.add(btn).on_hover_text(tooltip);
+                if resp.clicked() && !is_selected {
+                    self.proxy_selected_group = name.clone();
+                }
+            }
+        });
+
+        ui.add_space(6.0);
+
+        // -------------------------------------------------------------------
+        // 第 2 栏：当前策略组运行状态、出口指示与策略/排序控制
+        // -------------------------------------------------------------------
+        let is_auto = self.proxy_config.url_test;
+        let current_strategy = self.proxy_config.auto_strategy;
+        let running = self.proxy_status.state == ProxyState::Running;
+
+        let current_group_now = if self.proxy_selected_group == "全部" || self.proxy_selected_group == "PROXY" {
+            if is_auto {
+                self.kernel_egress_name()
+            } else {
+                self.selected_proxy_node_id.as_ref().and_then(|id| {
+                    self.proxy_nodes.iter().find(|n| &n.id == id).map(|n| n.name.clone())
+                })
+            }
+        } else {
+            self.kernel_groups
+                .iter()
+                .find(|g| g.name == self.proxy_selected_group)
+                .and_then(|g| g.now.clone())
+        };
+
+        let group_kind = self
+            .kernel_groups
+            .iter()
+            .find(|g| g.name == self.proxy_selected_group)
+            .map(|g| g.kind.clone())
+            .unwrap_or_else(|| {
+                match self.proxy_selected_group.as_str() {
+                    "美国节点" => "url-test".to_string(),
+                    "多线并发下载" => "load-balance".to_string(),
+                    "AI分组" | "普通代理" => "select".to_string(),
+                    _ => if is_auto { "url-test".to_string() } else { "select".to_string() },
+                }
+            });
+
+        ui.horizontal(|ui| {
+            if self.proxy_selected_group == "全部" || self.proxy_selected_group == "PROXY" {
+                let is_url_test = is_auto && current_strategy == AutoRoutingStrategy::UrlTest;
+                if ui
+                    .add(icons::selectable_icon_btn(Icon::Lightning, "延迟选优", is_url_test))
+                    .on_hover_text(AutoRoutingStrategy::UrlTest.description())
+                    .clicked()
+                {
+                    self.proxy_config.url_test = true;
+                    self.proxy_config.auto_strategy = AutoRoutingStrategy::UrlTest;
+                    if running {
+                        self.save_proxy_config();
+                    }
+                }
+
+                let is_fallback = is_auto && current_strategy == AutoRoutingStrategy::Fallback;
+                if ui
+                    .add(icons::selectable_icon_btn(Icon::Shield, "故障转移", is_fallback))
+                    .on_hover_text(AutoRoutingStrategy::Fallback.description())
+                    .clicked()
+                {
+                    self.proxy_config.url_test = true;
+                    self.proxy_config.auto_strategy = AutoRoutingStrategy::Fallback;
+                    if running {
+                        self.save_proxy_config();
+                    }
+                }
+
+                let is_load_balance = is_auto && current_strategy == AutoRoutingStrategy::LoadBalance;
+                if ui
+                    .add(icons::selectable_icon_btn(Icon::Rocket, "负载均衡", is_load_balance))
+                    .on_hover_text(AutoRoutingStrategy::LoadBalance.description())
+                    .clicked()
+                {
+                    self.proxy_config.url_test = true;
+                    self.proxy_config.auto_strategy = AutoRoutingStrategy::LoadBalance;
+                    if running {
+                        self.save_proxy_config();
+                    }
+                }
+
+                let is_manual = !is_auto;
+                if ui
+                    .add(icons::selectable_icon_btn(Icon::Pin, "手动指定", is_manual))
+                    .on_hover_text("锁定单节点通信，关闭策略组自动切换")
+                    .clicked()
+                {
+                    self.proxy_config.url_test = false;
+                    if running {
+                        self.save_proxy_config();
+                    }
+                }
+            } else {
+                let (kind_desc, kind_tip) = match group_kind.to_lowercase().as_str() {
+                    "url-test" | "urltest" => (
+                        "⚡ 自动优选 (url-test)",
+                        "内核按周期测速延迟自动选优分配出口节点",
+                    ),
+                    "load-balance" | "loadbalance" => (
+                        "⚖️ 负载均衡 (load-balance)",
+                        "流量分散并发至本组所有可用节点，加速并发传输",
+                    ),
+                    _ => (
+                        "👆 手动切换 (select)",
+                        "点击下方任意节点卡片即可将本组出口切换为该节点",
+                    ),
+                };
+                Frame::NONE
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                    .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
+                    .inner_margin(Margin::symmetric(8, 4))
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(kind_desc).small().strong().color(theme::accent_strong()));
+                    })
+                    .response
+                    .on_hover_text(kind_tip);
+            }
+
+            if running {
+                if let Some(ref now) = current_group_now {
+                    ui.separator();
+                    let clean = crate::gui::widgets::clean_node_display_name(now);
+                    let display_now = if clean.chars().count() > 22 {
+                        let mut s: String = clean.chars().take(22).collect();
+                        s.push('…');
+                        s
+                    } else {
+                        clean.to_string()
+                    };
+                    Frame::NONE
+                        .fill(theme::success_bg())
+                        .stroke(Stroke::new(1.0_f32, theme::success().gamma_multiply(0.4)))
+                        .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
+                        .inner_margin(Margin::symmetric(8, 4))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let (beacon, _) = ui.allocate_exact_size(Vec2::splat(6.0), Sense::hover());
+                                ui.painter().circle_filled(beacon.center(), 3.0, theme::success());
+                                ui.label(
+                                    RichText::new(format!("出口: {display_now}"))
+                                        .small()
+                                        .strong()
+                                        .color(theme::text_primary()),
+                                );
+                            });
+                        })
+                        .response
+                        .on_hover_text(format!("当前「{}」策略组实际选路出口：\n{now}", self.proxy_selected_group));
+                }
+            } else {
+                ui.separator();
+                let has_candidate = self.selected_proxy_node_id.is_some()
+                    || (self.proxy_config.url_test && (!self.proxy_nodes.is_empty() || !self.nodes.is_empty()));
+                if ui
+                    .add_enabled(has_candidate && !self.proxy_busy, primary_btn("🚀 启动代理"))
+                    .on_hover_text("以当前选中的策略组立即启动代理")
+                    .clicked()
+                {
+                    self.start_proxy();
+                }
+            }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let is_name = self.proxy_sort_by == ProxySortBy::Name;
+                if ui
+                    .add(icons::selectable_icon_btn(Icon::Sort, "名称", is_name))
+                    .clicked()
+                {
+                    self.proxy_sort_by = ProxySortBy::Name;
+                }
+                let is_lat = self.proxy_sort_by == ProxySortBy::Latency;
+                if ui
+                    .add(icons::selectable_icon_btn(Icon::Lightning, "延迟", is_lat))
+                    .clicked()
+                {
+                    self.proxy_sort_by = ProxySortBy::Latency;
+                }
+                ui.label(RichText::new("排序:").small().color(theme::muted()));
+            });
+        });
+
+        ui.add_space(4.0);
+
+        // -------------------------------------------------------------------
+        // 第 3 栏：地区胶囊分段条 (左) + 搜索框 & 节点数 (右)
+        // -------------------------------------------------------------------
         ui.horizontal(|ui| {
             let regions = [
                 ("all", "全部"),
@@ -937,135 +1198,10 @@ impl VpnApp {
 
         ui.add_space(6.0);
 
-        // 第 2 行：策略组模式 (左) + 实时选路出口 (中) + 排序与启动 (右)
-        let is_auto = self.proxy_config.url_test;
-        let current_strategy = self.proxy_config.auto_strategy;
-        let running = self.proxy_status.state == ProxyState::Running;
-
-        let proxy_now = self
-            .kernel_groups
-            .iter()
-            .find(|group| group.name == "PROXY")
-            .and_then(|group| group.now.clone());
-
-        ui.horizontal(|ui| {
-            let is_url_test = is_auto && current_strategy == AutoRoutingStrategy::UrlTest;
-            if ui
-                .add(icons::selectable_icon_btn(Icon::Lightning, "延迟选优", is_url_test))
-                .on_hover_text(AutoRoutingStrategy::UrlTest.description())
-                .clicked()
-            {
-                self.proxy_config.url_test = true;
-                self.proxy_config.auto_strategy = AutoRoutingStrategy::UrlTest;
-                if running {
-                    self.save_proxy_config();
-                }
-            }
-
-            let is_fallback = is_auto && current_strategy == AutoRoutingStrategy::Fallback;
-            if ui
-                .add(icons::selectable_icon_btn(Icon::Shield, "故障转移", is_fallback))
-                .on_hover_text(AutoRoutingStrategy::Fallback.description())
-                .clicked()
-            {
-                self.proxy_config.url_test = true;
-                self.proxy_config.auto_strategy = AutoRoutingStrategy::Fallback;
-                if running {
-                    self.save_proxy_config();
-                }
-            }
-
-            let is_load_balance = is_auto && current_strategy == AutoRoutingStrategy::LoadBalance;
-            if ui
-                .add(icons::selectable_icon_btn(Icon::Rocket, "负载均衡", is_load_balance))
-                .on_hover_text(AutoRoutingStrategy::LoadBalance.description())
-                .clicked()
-            {
-                self.proxy_config.url_test = true;
-                self.proxy_config.auto_strategy = AutoRoutingStrategy::LoadBalance;
-                if running {
-                    self.save_proxy_config();
-                }
-            }
-
-            let is_manual = !is_auto;
-            if ui
-                .add(icons::selectable_icon_btn(Icon::Pin, "手动指定", is_manual))
-                .on_hover_text("锁定单节点通信，关闭策略组自动切换")
-                .clicked()
-            {
-                self.proxy_config.url_test = false;
-                if running {
-                    self.save_proxy_config();
-                }
-            }
-
-            if running {
-                if let Some(ref now) = proxy_now {
-                    ui.separator();
-                    let clean = crate::gui::widgets::clean_node_display_name(now);
-                    let display_now = if clean.chars().count() > 22 {
-                        let mut s: String = clean.chars().take(22).collect();
-                        s.push('…');
-                        s
-                    } else {
-                        clean.to_string()
-                    };
-                    Frame::NONE
-                        .fill(theme::success_bg())
-                        .stroke(Stroke::new(1.0_f32, theme::success().gamma_multiply(0.4)))
-                        .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
-                        .inner_margin(Margin::symmetric(8, 4))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let (beacon, _) = ui.allocate_exact_size(Vec2::splat(6.0), Sense::hover());
-                                ui.painter().circle_filled(beacon.center(), 3.0, theme::success());
-                                ui.label(
-                                    RichText::new(format!("出口: {display_now}"))
-                                        .small()
-                                        .strong()
-                                        .color(theme::text_primary()),
-                                );
-                            });
-                        })
-                        .response
-                        .on_hover_text(format!("当前内核实际选路出口节点：\n{now}"));
-                }
-            } else {
-                ui.separator();
-                let has_candidate = self.selected_proxy_node_id.is_some()
-                    || (self.proxy_config.url_test && (!self.proxy_nodes.is_empty() || !self.nodes.is_empty()));
-                if ui
-                    .add_enabled(has_candidate && !self.proxy_busy, primary_btn("🚀 启动代理"))
-                    .on_hover_text("以当前选中的策略组立即启动代理")
-                    .clicked()
-                {
-                    self.start_proxy();
-                }
-            }
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let is_name = self.proxy_sort_by == ProxySortBy::Name;
-                if ui
-                    .add(icons::selectable_icon_btn(Icon::Sort, "名称", is_name))
-                    .clicked()
-                {
-                    self.proxy_sort_by = ProxySortBy::Name;
-                }
-                let is_lat = self.proxy_sort_by == ProxySortBy::Latency;
-                if ui
-                    .add(icons::selectable_icon_btn(Icon::Lightning, "延迟", is_lat))
-                    .clicked()
-                {
-                    self.proxy_sort_by = ProxySortBy::Latency;
-                }
-                ui.label(RichText::new("排序:").small().color(theme::muted()));
-            });
-        });
-        ui.add_space(6.0);
-
-        // 网格视图按 (数据版本, 地区, 搜索词, 排序) 缓存，只有这四样变了才重算 ——
-        // 以前每帧克隆 + 过滤 + 排序约 500 个节点，比较器里还现分配小写字符串。
+        // -------------------------------------------------------------------
+        // 第 4 栏：节点网格渲染（按策略组、地区、搜索词过滤与虚拟滚动）
+        // -------------------------------------------------------------------
+        let group_key = self.proxy_selected_group.clone();
         let region_key = self.proxy_region_filter.clone();
         let search_key = self.proxy_search.trim().to_lowercase();
         let sort_key = self.proxy_sort_by;
@@ -1073,18 +1209,26 @@ impl VpnApp {
         let view = match self.proxy_view.take() {
             Some(cached)
                 if cached.rev == rev
+                    && cached.group == group_key
                     && cached.region == region_key
                     && cached.search == search_key
                     && cached.sort == sort_key =>
             {
                 cached
             }
-            _ => build_proxy_view(&self.proxy_nodes, &region_key, &search_key, sort_key, rev),
+            _ => build_proxy_view(
+                &self.proxy_nodes,
+                &group_key,
+                &self.kernel_groups,
+                &region_key,
+                &search_key,
+                sort_key,
+                rev,
+            ),
         };
 
-        let auto_routing = self.proxy_config.url_test;
-        let kernel_egress = auto_routing.then(|| self.kernel_egress_name()).flatten();
         let mut selected = None;
+        let mut group_switch_member = None;
         let mut locked: Option<(String, String)> = None;
         let mut menu_action: Option<NodeCardAction> = None;
         let mut status_msg: Option<String> = None;
@@ -1099,86 +1243,141 @@ impl VpnApp {
             2
         };
 
-        let total_card_rows = (view.rows.len() + columns - 1) / columns;
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show_rows(ui, 68.0, total_card_rows, |ui, row_range| {
-                if view.rows.is_empty() {
+        if view.rows.is_empty() {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.add_space(20.0);
                     card_frame().show(ui, |ui| {
-                        ui.label(
-                            RichText::new("没有匹配的可用节点，请在「节点列表」中进行测速")
-                                .color(theme::muted()),
-                        );
-                    });
-                    return;
-                }
-                for row_idx in row_range {
-                    let start = row_idx * columns;
-                    let end = (start + columns).min(view.rows.len());
-                    let row = &view.rows[start..end];
-                    ui.columns(columns, |column_uis| {
-                        for (column_index, column_ui) in column_uis.iter_mut().enumerate() {
-                            let Some(entry) = row.get(column_index) else {
-                                continue;
-                            };
-                            let node = &self.proxy_nodes[entry.index];
-                            // 自动选路开着时，"当前用的是谁"由内核决定：高亮跟着内核的
-                            // 出口走，左键点卡片不再改出口（要固定得右键显式锁定）。
-                            let is_selected = if auto_routing {
-                                kernel_egress.as_deref() == Some(node.name.as_str())
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(14.0);
+                            icon_label(ui, Icon::Radar, 28.0, theme::muted());
+                            ui.add_space(8.0);
+                            let title = if self.proxy_nodes.is_empty() {
+                                "暂无可用的代理节点"
                             } else {
-                                selected_id.as_deref() == Some(&node.id)
+                                "当前策略组与筛选条件下无匹配节点"
                             };
-                            let is_switching = switching_id.as_deref() == Some(&node.id);
-                            let response = compact_node_card(
-                                column_ui,
-                                node,
-                                is_selected,
-                                is_switching,
-                            )
-                            .on_hover_text(if auto_routing {
-                                "自动选路中：出口由内核决定。右键可「锁定为出口」（会关掉自动选路）/ 查看详情 / 测速 / IP 检测"
+                            ui.label(RichText::new(title).strong().color(theme::text_primary()));
+                            ui.add_space(4.0);
+                            let hint = if self.proxy_nodes.is_empty() {
+                                "可在「节点列表」中进行节点测速以获取可用节点，或尝试重新拉取订阅。"
                             } else {
-                                "点击连接，右键查看详情 / 测速 / IP 检测"
-                            });
-                            let connect = response.clicked() && !auto_routing;
-                            if response.clicked() && auto_routing && !is_selected {
-                                status_msg = Some("自动选路中：出口由内核决定，要固定这个节点请右键「锁定为出口」".into());
-                            }
-                            let node_id = node.id.clone();
-                            let node_name = node.name.clone();
-                            response.context_menu(|ui| {
-                                if ui.button("查看详情").clicked() {
-                                    menu_action = Some(NodeCardAction::ShowDetail(node_id.clone()));
-                                    ui.close_menu();
+                                "可尝试清除地区过滤、清空搜索词，或切换至「全部」策略组。"
+                            };
+                            ui.label(RichText::new(hint).small().color(theme::muted()));
+                            ui.add_space(12.0);
+                            ui.horizontal(|ui| {
+                                if !self.proxy_search.is_empty() || self.proxy_region_filter != "all" {
+                                    if ui.button("清除筛选与搜索").clicked() {
+                                        self.proxy_search.clear();
+                                        self.proxy_region_filter = "all".into();
+                                    }
                                 }
-                                if ui
-                                    .add_enabled(!is_busy, egui::Button::new("测速节点"))
-                                    .clicked()
-                                {
-                                    menu_action = Some(NodeCardAction::Speedtest(node_id.clone()));
-                                    ui.close_menu();
-                                }
-                                if ui.button("IP 检测").clicked() {
-                                    menu_action = Some(NodeCardAction::CheckIpRisk(node_id.clone()));
-                                    ui.close_menu();
-                                }
-                                if auto_routing && !is_selected {
-                                    ui.separator();
-                                    if ui.button("锁定为出口（关闭自动选路）").clicked() {
-                                        locked = Some((node_id.clone(), node_name.clone()));
-                                        ui.close_menu();
+                                if self.proxy_selected_group != "全部" {
+                                    if ui.button("查看全部节点").clicked() {
+                                        self.proxy_selected_group = "全部".into();
                                     }
                                 }
                             });
-                            if connect && !is_selected {
-                                selected = Some((node.id.clone(), node.name.clone()));
-                            }
-                        }
+                            ui.add_space(10.0);
+                        });
                     });
-                    ui.add_space(8.0);
-                }
-            });
+                });
+        } else {
+            let total_card_rows = (view.rows.len() + columns - 1) / columns;
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show_rows(ui, 68.0, total_card_rows, |ui, row_range| {
+                    for row_idx in row_range {
+                        let start = row_idx * columns;
+                        let end = (start + columns).min(view.rows.len());
+                        let row = &view.rows[start..end];
+                        ui.columns(columns, |column_uis| {
+                            for (column_index, column_ui) in column_uis.iter_mut().enumerate() {
+                                let Some(entry) = row.get(column_index) else {
+                                    continue;
+                                };
+                                let node = &self.proxy_nodes[entry.index];
+
+                                // 选中高亮判定：优先匹配当前策略组活跃出口，或者全局选中节点
+                                let is_selected = if let Some(ref now) = current_group_now {
+                                    now == &node.name
+                                } else if is_auto {
+                                    self.kernel_egress_name().as_deref() == Some(node.name.as_str())
+                                } else {
+                                    selected_id.as_deref() == Some(&node.id)
+                                };
+                                let is_switching = switching_id.as_deref() == Some(&node.id);
+
+                                let card_tip = if self.proxy_selected_group != "全部" && self.proxy_selected_group != "PROXY" {
+                                    "点击将该节点设为当前策略组出口，右键查看详情 / 测速 / IP 检测"
+                                } else if is_auto {
+                                    "自动选路中：出口由内核决定。右键可「锁定为出口」（会关掉自动选路）/ 查看详情 / 测速 / IP 检测"
+                                } else {
+                                    "点击连接，右键查看详情 / 测速 / IP 检测"
+                                };
+
+                                let response = compact_node_card(
+                                    column_ui,
+                                    node,
+                                    is_selected,
+                                    is_switching,
+                                )
+                                .on_hover_text(card_tip);
+
+                                if response.clicked() {
+                                    if self.proxy_selected_group == "全部" || self.proxy_selected_group == "PROXY" {
+                                        if !is_auto {
+                                            if !is_selected {
+                                                selected = Some((node.id.clone(), node.name.clone()));
+                                            }
+                                        } else if !is_selected {
+                                            status_msg = Some("自动选路中：出口由内核决定，要固定这个节点请右键「锁定为出口」".into());
+                                        }
+                                    } else {
+                                        // 针对特定策略组点击切换出口
+                                        if running {
+                                            group_switch_member = Some((self.proxy_selected_group.clone(), node.name.clone()));
+                                        } else {
+                                            selected = Some((node.id.clone(), node.name.clone()));
+                                        }
+                                    }
+                                }
+
+                                let node_id = node.id.clone();
+                                let node_name = node.name.clone();
+                                response.context_menu(|ui| {
+                                    if ui.button("查看详情").clicked() {
+                                        menu_action = Some(NodeCardAction::ShowDetail(node_id.clone()));
+                                        ui.close_menu();
+                                    }
+                                    if ui
+                                        .add_enabled(!is_busy, egui::Button::new("测速节点"))
+                                        .clicked()
+                                    {
+                                        menu_action = Some(NodeCardAction::Speedtest(node_id.clone()));
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("IP 检测").clicked() {
+                                        menu_action = Some(NodeCardAction::CheckIpRisk(node_id.clone()));
+                                        ui.close_menu();
+                                    }
+                                    if (is_auto || self.proxy_selected_group != "全部") && !is_selected {
+                                        ui.separator();
+                                        if ui.button("锁定为出口（关闭自动选路）").clicked() {
+                                            locked = Some((node_id.clone(), node_name.clone()));
+                                            ui.close_menu();
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                        ui.add_space(8.0);
+                    }
+                });
+        }
+
         if let Some(msg) = status_msg {
             self.status = msg;
         }
@@ -1190,6 +1389,9 @@ impl VpnApp {
                 NodeCardAction::Delete(id) => self.delete_node(id),
                 NodeCardAction::Connect { id, name } => self.switch_proxy_node(id, name, "手动切换"),
             }
+        }
+        if let Some((grp, member)) = group_switch_member {
+            self.select_kernel_member(grp, member);
         }
         if let Some((id, name)) = selected {
             self.switch_proxy_node(id, name, "手动切换");
@@ -3026,10 +3228,88 @@ impl VpnApp {
     }
 }
 
-/// 重建控制台「可用节点」网格：过滤 + 排序一次，并把每帧都要重复算的东西（国家猜测、
-/// 小写名）预先算好；比较器只用已经算好的键，不再一边比较一边分配字符串。
+/// 判断节点是否属于指定的分流策略组
+pub fn node_matches_group(
+    node: &NodeSummary,
+    group_name: &str,
+    kernel_groups: &[KernelGroup],
+) -> bool {
+    node_matches_group_depth(node, group_name, kernel_groups, 0)
+}
+
+fn node_matches_group_depth(
+    node: &NodeSummary,
+    group_name: &str,
+    kernel_groups: &[KernelGroup],
+    depth: usize,
+) -> bool {
+    if depth > 4 {
+        return false;
+    }
+    if group_name == "全部" || group_name == "PROXY" {
+        return true;
+    }
+
+    let country = node
+        .country
+        .clone()
+        .or_else(|| crate::parser::guess_country(&node.name))
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let lower_name = node.name.to_lowercase();
+
+    // 针对内置知名策略组做精准语义过滤
+    match group_name {
+        "美国节点" | "US" => {
+            return country == "US"
+                || lower_name.contains("us")
+                || lower_name.contains("united states")
+                || node.name.contains("美");
+        }
+        "AI分组" | "AI" => {
+            return matches!(country.as_str(), "US" | "JP" | "SG" | "TW" | "KR" | "GB" | "DE")
+                || lower_name.contains("ai")
+                || lower_name.contains("openai")
+                || lower_name.contains("chatgpt")
+                || lower_name.contains("claude")
+                || lower_name.contains("grok")
+                || country == "US";
+        }
+        "多线并发下载" | "下载" | "普通代理" => {
+            return true;
+        }
+        _ => {}
+    }
+
+    // 1. 若内核正在运行且上报了该策略组成员列表：优先按真实内核成员匹配
+    if let Some(group) = kernel_groups.iter().find(|g| g.name == group_name) {
+        if !group.members.is_empty() {
+            if group.members.iter().any(|m| m == &node.name || m == &node.server) {
+                return true;
+            }
+            // 嵌套策略组展开（例如 AI分组 的 members 包含 "美国节点"）
+            let sub_matched = group.members.iter().any(|m| {
+                if m != group_name && m != "DIRECT" && m != "REJECT" && m != "PROXY" {
+                    node_matches_group_depth(node, m, kernel_groups, depth + 1)
+                } else {
+                    false
+                }
+            });
+            if sub_matched {
+                return true;
+            }
+        }
+    }
+
+    let lower_group = group_name.to_lowercase();
+    lower_name.contains(&lower_group) || country.to_lowercase() == lower_group
+}
+
+/// 重建控制台「可用节点」网格：按分流策略组、地区、搜索词过滤并排序
 fn build_proxy_view(
     all: &[NodeSummary],
+    group_name: &str,
+    kernel_groups: &[KernelGroup],
     region: &str,
     search: &str,
     sort: ProxySortBy,
@@ -3038,6 +3318,9 @@ fn build_proxy_view(
     const REGIONS: [&str; 8] = ["HK", "JP", "US", "SG", "TW", "KR", "GB", "DE"];
     let mut rows: Vec<ProxyViewRow> = Vec::with_capacity(all.len());
     for (index, node) in all.iter().enumerate() {
+        if !node_matches_group(node, group_name, kernel_groups) {
+            continue;
+        }
         let country = node
             .country
             .clone()
@@ -3087,6 +3370,7 @@ fn build_proxy_view(
     }
     ProxyView {
         rev,
+        group: group_name.to_owned(),
         region: region.to_owned(),
         search: search.to_owned(),
         sort,
@@ -3732,5 +4016,100 @@ mod status_button_style_tests {
             rects[0].2, rects[2].2,
             "主按钮和普通按钮同色了 —— 那这排就没人看得出哪个是主操作"
         );
+    }
+}
+
+#[cfg(test)]
+mod policy_group_filter_tests {
+    use super::node_matches_group;
+    use crate::gui::types::KernelGroup;
+    use crate::models::NodeSummary;
+
+    fn sample_node(name: &str, country: Option<&str>, server: &str) -> NodeSummary {
+        NodeSummary {
+            id: name.to_string(),
+            source_id: Some("src1".to_string()),
+            protocol: "vless".to_string(),
+            name: name.to_string(),
+            server: server.to_string(),
+            port: 443,
+            country: country.map(|c| c.to_string()),
+            latency_ms: Some(120),
+            latency_ok: Some(true),
+            download_kbps: Some(5000.0),
+            latency_kernel: Some("mihomo".to_string()),
+            latency_test_kind: Some("google_proxy".to_string()),
+            latency_tested_at: None,
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn test_all_group_matches_everything() {
+        let us = sample_node("US-Node-01", Some("US"), "1.1.1.1");
+        let hk = sample_node("HK-Node-01", Some("HK"), "2.2.2.2");
+        assert!(node_matches_group(&us, "全部", &[]));
+        assert!(node_matches_group(&hk, "全部", &[]));
+        assert!(node_matches_group(&us, "PROXY", &[]));
+        assert!(node_matches_group(&hk, "PROXY", &[]));
+    }
+
+    #[test]
+    fn test_us_group_matches_only_us() {
+        let us = sample_node("洛杉矶精品专线", Some("US"), "1.1.1.1");
+        let hk = sample_node("香港高速直连", Some("HK"), "2.2.2.2");
+        let jp = sample_node("东京软银", Some("JP"), "3.3.3.3");
+        assert!(node_matches_group(&us, "美国节点", &[]));
+        assert!(!node_matches_group(&hk, "美国节点", &[]));
+        assert!(!node_matches_group(&jp, "美国节点", &[]));
+    }
+
+    #[test]
+    fn test_ai_group_matches_ai_regions_and_keywords() {
+        let us = sample_node("美国节点", Some("US"), "1.1.1.1");
+        let jp = sample_node("日本东京", Some("JP"), "2.2.2.2");
+        let sg = sample_node("新加坡", Some("SG"), "3.3.3.3");
+        let custom_ai = sample_node("OpenAI 专线解锁", None, "4.4.4.4");
+        let cn = sample_node("国内直连", Some("CN"), "5.5.5.5");
+
+        assert!(node_matches_group(&us, "AI分组", &[]));
+        assert!(node_matches_group(&jp, "AI分组", &[]));
+        assert!(node_matches_group(&sg, "AI分组", &[]));
+        assert!(node_matches_group(&custom_ai, "AI分组", &[]));
+        assert!(!node_matches_group(&cn, "AI分组", &[]));
+    }
+
+    #[test]
+    fn test_kernel_groups_members_matching_and_cycle_guard() {
+        let n1 = sample_node("专线节点A", None, "1.1.1.1");
+        let n2 = sample_node("专线节点B", None, "2.2.2.2");
+
+        let kg = vec![
+            KernelGroup {
+                name: "自定义分组".to_string(),
+                kind: "select".to_string(),
+                now: Some("专线节点A".to_string()),
+                members: vec!["专线节点A".to_string()],
+            },
+            // 环形依赖测试
+            KernelGroup {
+                name: "GroupLoopA".to_string(),
+                kind: "select".to_string(),
+                now: None,
+                members: vec!["GroupLoopB".to_string()],
+            },
+            KernelGroup {
+                name: "GroupLoopB".to_string(),
+                kind: "select".to_string(),
+                now: None,
+                members: vec!["GroupLoopA".to_string()],
+            },
+        ];
+
+        assert!(node_matches_group(&n1, "自定义分组", &kg));
+        assert!(!node_matches_group(&n2, "自定义分组", &kg));
+
+        // 环形嵌套不应陷入无限循环或栈溢出
+        assert!(!node_matches_group(&n1, "GroupLoopA", &kg));
     }
 }

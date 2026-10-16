@@ -25,9 +25,9 @@ impl Database {
         let pool = self.open_node_pool(scope).await?;
         let rows = sqlx::query(
             r#"SELECT protocol, COUNT(*) AS c,
-                      SUM(CASE WHEN latency_ok IS NOT NULL AND latency_test_kind = 'google_proxy'
+                      SUM(CASE WHEN latency_ok IS NOT NULL
                           THEN 1 ELSE 0 END) AS tested,
-                      SUM(CASE WHEN latency_ok = 1 AND latency_test_kind = 'google_proxy'
+                      SUM(CASE WHEN latency_ok = 1
                           THEN 1 ELSE 0 END) AS alive
                FROM nodes GROUP BY protocol"#,
         )
@@ -114,12 +114,12 @@ impl Database {
             return Ok((scope.clone(), 0, 0));
         }
         let pool = self.open_node_pool(scope.as_deref()).await?;
-        let group_sql = format!(
-            r#"SELECT COUNT(*) AS total,
-                      COALESCE(SUM(CASE WHEN latency_ok = 1 AND latency_test_kind = 'google_proxy'
-                          THEN 1 ELSE 0 END), 0) AS alive
-               FROM nodes {where_sql}"#
-        );
+	        let group_sql = format!(
+	            r#"SELECT COUNT(*) AS total,
+	                      COALESCE(SUM(CASE WHEN latency_ok = 1
+	                          THEN 1 ELSE 0 END), 0) AS alive
+	               FROM nodes {where_sql}"#
+	        );
         let mut query = sqlx::query(&group_sql);
         for bind in binds {
             query = query.bind(bind);
@@ -154,7 +154,7 @@ impl Database {
         }
         match latency.map(|value| value.to_ascii_lowercase()) {
             Some(ref value) if value == "alive" => {
-                where_sql.push_str(" AND latency_ok = 1 AND latency_test_kind = 'google_proxy'");
+                where_sql.push_str(" AND latency_ok = 1");
             }
             Some(ref value) if value == "dead" => where_sql.push_str(" AND latency_ok = 0"),
             Some(ref value) if value == "untested" => where_sql.push_str(" AND latency_ok IS NULL"),

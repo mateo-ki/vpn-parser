@@ -2,7 +2,7 @@ use crate::gui::icons::{self, icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::types::{BgMsg, SettingsTab};
 use crate::gui::widgets::{
-    card_frame, normalize_api_base, panel_tab, primary_btn, section_title, status_badge,
+    card_frame, normalize_api_base, panel_tab, primary_btn, status_badge,
 };
 
 /// 系统设置表头右侧动作组（保存设置 + 重置修改 + 状态）预留宽度。
@@ -20,23 +20,7 @@ impl VpnApp {
             ui,
             "settings:header",
             SETTINGS_ACTIONS_WIDTH,
-            |ui| {
-                ui.label(
-                    RichText::new("系统设置")
-                        .strong()
-                        .size(17.0)
-                        .color(theme::text_primary()),
-                );
-                ui.add_space(4.0);
-                ui.add(
-                    egui::Label::new(
-                        RichText::new("应用行为 · 定时拉取 · 测速参数 · 网络与自愈服务")
-                            .small()
-                            .color(theme::muted()),
-                    )
-                    .truncate(),
-                );
-            },
+            |_ui| {},
             |ui| {
                 let dirty = self.settings_dirty();
                 if ui
@@ -1002,7 +986,6 @@ impl VpnApp {
     }
 
     pub(crate) fn ui_api(&mut self, ui: &mut Ui) {
-        section_title(ui, "HTTP API", "点击路径复制完整 URL · GET 可浏览器打开");
         let is_running = self.api_controller.is_running();
         ui.horizontal(|ui| {
             if is_running {

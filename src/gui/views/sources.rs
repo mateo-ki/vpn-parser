@@ -2,7 +2,7 @@ use crate::gui::icons::{self, icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::types::SourcesPanel;
 use crate::gui::widgets::{
-    card_frame, header_cell, primary_btn, render_fetch_ticks, section_title, source_status_failed,
+    card_frame, header_cell, primary_btn, render_fetch_ticks, source_status_failed,
     status_badge,
 };
 use crate::gui::VpnApp;
@@ -10,7 +10,6 @@ use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
 
 impl VpnApp {
     pub(crate) fn ui_sources(&mut self, ui: &mut Ui) {
-        section_title(ui, "订阅源", "增删改查 · 单源/全部拉取");
         ui.horizontal(|ui| {
             if ui
                 .selectable_label(self.sources_panel == SourcesPanel::List, "订阅列表")

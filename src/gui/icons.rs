@@ -36,13 +36,15 @@ pub enum Icon {
     Package,
     Info,
     Appearance,
+    Brand,
 }
 
 pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
     let center = rect.center();
     let s = rect.width().min(rect.height());
-    let stroke = Stroke::new((s * 0.1).clamp(1.2, 2.4), color);
-    let fine_stroke = Stroke::new((s * 0.08).clamp(1.0, 1.8), color);
+    let stroke = Stroke::new((s * 0.09).clamp(1.3, 2.2), color);
+    let fine_stroke = Stroke::new((s * 0.075).clamp(1.1, 1.8), color);
+    let bold_stroke = Stroke::new((s * 0.11).clamp(1.5, 2.5), color);
 
     match icon {
         Icon::Dashboard => {
@@ -263,7 +265,7 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
         }
         Icon::Globe => {
             // Globe sphere
-            let r = s * 0.40;
+            let r = s * 0.38;
             painter.circle_stroke(center, r, stroke);
             // Equator horizontal line
             painter.line_segment(
@@ -271,16 +273,29 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
                     Pos2::new(center.x - r, center.y),
                     Pos2::new(center.x + r, center.y),
                 ],
-                fine_stroke,
+                stroke,
             );
-            // Meridian vertical ellipse line
+            // Meridian vertical line
             painter.line_segment(
                 [
                     Pos2::new(center.x, center.y - r),
                     Pos2::new(center.x, center.y + r),
                 ],
-                fine_stroke,
+                stroke,
             );
+            // Curved longitude arcs
+            let inner_rx = r * 0.52;
+            let mut arc_pts_r = Vec::with_capacity(9);
+            let mut arc_pts_l = Vec::with_capacity(9);
+            for i in -4..=4 {
+                let t = (i as f32) / 4.0;
+                let y = center.y + t * r;
+                let x_offset = (1.0 - t * t).max(0.0).sqrt() * inner_rx;
+                arc_pts_r.push(Pos2::new(center.x + x_offset, y));
+                arc_pts_l.push(Pos2::new(center.x - x_offset, y));
+            }
+            painter.add(egui::epaint::PathShape::line(arc_pts_r, fine_stroke));
+            painter.add(egui::epaint::PathShape::line(arc_pts_l, fine_stroke));
         }
         Icon::Cpu => {
             // Microprocessor chip
@@ -603,35 +618,35 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
         }
         Icon::Shield => {
             // Shield outline
-            let p_top = Pos2::new(center.x, center.y - s * 0.40);
-            let p_tr = Pos2::new(center.x + s * 0.36, center.y - s * 0.24);
-            let p_bot = Pos2::new(center.x, center.y + s * 0.42);
-            let p_tl = Pos2::new(center.x - s * 0.36, center.y - s * 0.24);
+            let p_top = Pos2::new(center.x, center.y - s * 0.38);
+            let p_tr = Pos2::new(center.x + s * 0.34, center.y - s * 0.22);
+            let p_bot = Pos2::new(center.x, center.y + s * 0.40);
+            let p_tl = Pos2::new(center.x - s * 0.34, center.y - s * 0.22);
 
             let pts = vec![
                 p_top,
                 p_tr,
-                Pos2::new(center.x + s * 0.30, center.y + s * 0.16),
+                Pos2::new(center.x + s * 0.28, center.y + s * 0.14),
                 p_bot,
-                Pos2::new(center.x - s * 0.30, center.y + s * 0.16),
+                Pos2::new(center.x - s * 0.28, center.y + s * 0.14),
                 p_tl,
             ];
-            painter.add(egui::epaint::PathShape::line(pts, stroke));
+            painter.add(egui::epaint::PathShape::closed_line(pts, stroke));
         }
         Icon::Check => {
             // Bold clean checkmark
-            let p1 = Pos2::new(center.x - s * 0.36, center.y);
-            let p2 = Pos2::new(center.x - s * 0.08, center.y + s * 0.28);
-            let p3 = Pos2::new(center.x + s * 0.38, center.y - s * 0.28);
-            painter.line_segment([p1, p2], stroke);
-            painter.line_segment([p2, p3], stroke);
+            let p1 = Pos2::new(center.x - s * 0.32, center.y);
+            let p2 = Pos2::new(center.x - s * 0.08, center.y + s * 0.24);
+            let p3 = Pos2::new(center.x + s * 0.34, center.y - s * 0.26);
+            painter.line_segment([p1, p2], bold_stroke);
+            painter.line_segment([p2, p3], bold_stroke);
         }
         Icon::Alert => {
             // Alert triangle
             let p1 = Pos2::new(center.x, center.y - s * 0.40);
             let p2 = Pos2::new(center.x + s * 0.40, center.y + s * 0.36);
             let p3 = Pos2::new(center.x - s * 0.40, center.y + s * 0.36);
-            painter.add(egui::epaint::PathShape::line(vec![p1, p2, p3, p1], stroke));
+            painter.add(egui::epaint::PathShape::closed_line(vec![p1, p2, p3], stroke));
             // Exclamation mark line & dot
             painter.line_segment(
                 [
@@ -640,7 +655,7 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
                 ],
                 stroke,
             );
-            painter.circle_filled(Pos2::new(center.x, center.y + s * 0.24), s * 0.04, color);
+            painter.circle_filled(Pos2::new(center.x, center.y + s * 0.24), s * 0.045, color);
         }
         Icon::Search => {
             // Magnifying glass: circle + angled handle
@@ -648,11 +663,8 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
             let c = Pos2::new(center.x - s * 0.08, center.y - s * 0.08);
             painter.circle_stroke(c, r, stroke);
             let handle_start = Pos2::new(c.x + r * 0.707, c.y + r * 0.707);
-            let handle_end = Pos2::new(center.x + s * 0.38, center.y + s * 0.38);
-            painter.line_segment(
-                [handle_start, handle_end],
-                Stroke::new((s * 0.12).clamp(1.5, 2.8), color),
-            );
+            let handle_end = Pos2::new(center.x + s * 0.36, center.y + s * 0.36);
+            painter.line_segment([handle_start, handle_end], bold_stroke);
         }
         Icon::Plus => {
             // Plus sign
@@ -800,34 +812,75 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
             );
         }
         Icon::Info => {
-            // 圆圈里一个 "i" —— 侧栏「关于」和关于页自己用的那个符号
-            painter.circle_stroke(center, s * 0.38, stroke);
-            painter.circle_filled(Pos2::new(center.x, center.y - s * 0.17), s * 0.055, color);
+            // 圆圈里一个 "i" —— 侧栏「关于」和关于页用的符号
+            let r = s * 0.38;
+            painter.circle_stroke(center, r, stroke);
+            painter.circle_filled(Pos2::new(center.x, center.y - s * 0.16), s * 0.055, color);
             painter.line_segment(
                 [
                     Pos2::new(center.x, center.y - s * 0.04),
-                    Pos2::new(center.x, center.y + s * 0.21),
+                    Pos2::new(center.x, center.y + s * 0.20),
                 ],
-                Stroke::new((s * 0.12).clamp(1.5, 2.6), color),
+                bold_stroke,
             );
         }
         Icon::Appearance => {
-            // 右半边实心的圆 —— 深浅/外观那类设置通用的符号
-            painter.circle_stroke(center, s * 0.38, stroke);
-            let mut half = Vec::new();
+            // 右半边实心的圆 —— 深浅/外观通用的统一符号
+            let r = s * 0.38;
+            painter.circle_stroke(center, r, stroke);
+            let mut half = Vec::with_capacity(15);
+            half.push(Pos2::new(center.x, center.y - r));
             for step in 0..=12 {
                 let angle =
                     std::f32::consts::PI * (step as f32 / 12.0) - std::f32::consts::FRAC_PI_2;
                 half.push(Pos2::new(
-                    center.x + angle.cos() * s * 0.33,
-                    center.y + angle.sin() * s * 0.33,
+                    center.x + angle.cos() * r,
+                    center.y + angle.sin() * r,
                 ));
             }
+            half.push(Pos2::new(center.x, center.y + r));
             painter.add(egui::epaint::PathShape::convex_polygon(
                 half,
                 color,
                 Stroke::NONE,
             ));
+            painter.line_segment(
+                [Pos2::new(center.x, center.y - r), Pos2::new(center.x, center.y + r)],
+                stroke,
+            );
+        }
+        Icon::Brand => {
+            // 全新品牌 "V" 动态双翼几何图标
+            let left_pts = vec![
+                Pos2::new(center.x - s * 0.36, center.y - s * 0.26),
+                Pos2::new(center.x - s * 0.14, center.y - s * 0.38),
+                Pos2::new(center.x, center.y + s * 0.10),
+                Pos2::new(center.x, center.y + s * 0.38),
+            ];
+            painter.add(egui::epaint::PathShape::convex_polygon(
+                left_pts,
+                color,
+                Stroke::NONE,
+            ));
+            let right_pts = vec![
+                Pos2::new(center.x + s * 0.36, center.y - s * 0.26),
+                Pos2::new(center.x + s * 0.14, center.y - s * 0.38),
+                Pos2::new(center.x, center.y + s * 0.10),
+                Pos2::new(center.x, center.y + s * 0.38),
+            ];
+            painter.add(egui::epaint::PathShape::convex_polygon(
+                right_pts,
+                color.gamma_multiply(0.72),
+                Stroke::NONE,
+            ));
+            // 中缝立体反光切面
+            painter.line_segment(
+                [
+                    Pos2::new(center.x, center.y + s * 0.10),
+                    Pos2::new(center.x, center.y + s * 0.38),
+                ],
+                fine_stroke,
+            );
         }
     }
 }
@@ -1111,6 +1164,7 @@ mod tests {
                 Icon::Plug,
                 Icon::Info,
                 Icon::Appearance,
+                Icon::Brand,
             ] {
                 let before = ctx.graphics_mut(|g| g.entry(layer).all_entries().len());
                 draw_icon(
