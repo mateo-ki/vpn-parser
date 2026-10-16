@@ -55,6 +55,7 @@ impl VpnApp {
             },
         ];
         for (label, panel) in [
+            ("分流策略组", ProxyPanel::Groups),
             ("活跃连接", ProxyPanel::Connections),
             ("分流规则", ProxyPanel::Rules),
             ("DNS / TUN", ProxyPanel::Network),

@@ -34,6 +34,67 @@ const STARTUP_SYSTEM_PROXY_RESERVE: Duration = Duration::from_millis(250);
 const STARTUP_PORT_CONNECT_TIMEOUT: Duration = Duration::from_millis(60);
 const VERIFY_CONNECTIVITY_ON_START: bool = true;
 const STARTUP_PROXY_VERIFY_URLS: [&str; 1] = [PROXY_CONNECTIVITY_TEST_URL];
+pub const SMART_ROUTING_PREPEND_RULES: &[&str] = &[
+    "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
+    "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve",
+    "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
+    "IP-CIDR6,fc00::/7,DIRECT,no-resolve",
+    "IP-CIDR6,fe80::/10,DIRECT,no-resolve",
+    "DST-PORT,22,DIRECT",
+    // AI 视频服务
+    "DOMAIN-SUFFIX,runwayml.com,AI分组",
+    "DOMAIN-KEYWORD,runwayml,AI分组",
+    "DOMAIN-SUFFIX,runway.com,AI分组",
+    "DOMAIN-SUFFIX,muse.ai,AI分组",
+    // Google & YouTube 走美国节点
+    "DOMAIN,gemini.google.com,美国节点",
+    "DOMAIN-SUFFIX,google.com,美国节点",
+    "DOMAIN-SUFFIX,google.com.hk,美国节点",
+    "DOMAIN-SUFFIX,google.co.jp,美国节点",
+    "DOMAIN-SUFFIX,google.dev,美国节点",
+    "DOMAIN-SUFFIX,gstatic.com,美国节点",
+    "DOMAIN-SUFFIX,googleapis.com,美国节点",
+    "DOMAIN-SUFFIX,googleusercontent.com,美国节点",
+    "DOMAIN-SUFFIX,youtube.com,美国节点",
+    "DOMAIN-SUFFIX,youtu.be,美国节点",
+    "DOMAIN-SUFFIX,ytimg.com,美国节点",
+    "DOMAIN-SUFFIX,googlevideo.com,美国节点",
+    "GEOSITE,google,美国节点",
+    "GEOSITE,youtube,美国节点",
+    "GEOIP,google,美国节点,no-resolve",
+    // 主流 AI 服务
+    "DOMAIN-SUFFIX,openai.com,AI分组",
+    "DOMAIN-SUFFIX,chatgpt.com,AI分组",
+    "DOMAIN-SUFFIX,oaistatic.com,AI分组",
+    "DOMAIN-SUFFIX,oaiusercontent.com,AI分组",
+    "DOMAIN-SUFFIX,anthropic.com,AI分组",
+    "DOMAIN-SUFFIX,claude.ai,AI分组",
+    "DOMAIN-SUFFIX,claudeusercontent.com,AI分组",
+    "DOMAIN-SUFFIX,x.com,AI分组",
+    "DOMAIN-SUFFIX,grok.com,AI分组",
+    "DOMAIN-SUFFIX,perplexity.ai,AI分组",
+    "DOMAIN-SUFFIX,poe.com,AI分组",
+    "DOMAIN-SUFFIX,character.ai,AI分组",
+    "DOMAIN-SUFFIX,stability.ai,AI分组",
+    "DOMAIN-SUFFIX,huggingface.co,AI分组",
+    "DOMAIN-SUFFIX,replicate.com,AI分组",
+    "DOMAIN-SUFFIX,ai.com,AI分组",
+    "DOMAIN-SUFFIX,midjourney.com,美国节点",
+    "DOMAIN-SUFFIX,capcut.com,美国节点",
+    // 国内直连
+    "DOMAIN-SUFFIX,bing.com,DIRECT",
+    "DOMAIN-SUFFIX,feishu.cn,DIRECT",
+    "PROCESS-NAME,steam.exe,DIRECT",
+    "PROCESS-NAME,BaiduNetdisk.exe,DIRECT",
+    "PROCESS-NAME,QQ.exe,DIRECT",
+    "PROCESS-NAME,Weixin.exe,DIRECT",
+    // 下载器多线并发
+    "PROCESS-NAME,fdm.exe,多线并发下载",
+    "PROCESS-NAME,PikPak.exe,多线并发下载",
+    "PROCESS-NAME,IDMan.exe,多线并发下载",
+    "PROCESS-NAME,Motrix.exe,多线并发下载",
+    "PROCESS-NAME,Thunder.exe,多线并发下载",
+];
 
 pub fn is_node_connectivity_failure(message: &str) -> bool {
     message.contains("节点连通性验证失败")
@@ -122,6 +183,12 @@ pub struct MihomoConfigOptions {
     /// 不持久化。
     #[serde(default, skip)]
     pub url_test_nodes: Vec<Value>,
+    /// 智能分流策略组体系（AI分组 / 美国节点 / 多线并发下载 / 普通代理）
+    #[serde(default)]
+    pub smart_routing: bool,
+    /// 用户自定义配置覆写（YAML 或 脚本扩展片段）
+    #[serde(default)]
+    pub override_yaml: Option<String>,
 }
 
 fn default_url_test_size() -> u16 {
@@ -146,6 +213,8 @@ impl Default for MihomoConfigOptions {
             url_test_size: default_url_test_size(),
             terminal_proxy: false,
             url_test_nodes: Vec::new(),
+            smart_routing: false,
+            override_yaml: None,
         }
     }
 }
@@ -307,7 +376,78 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
     }
     rules.push(format!("MATCH,{match_target}"));
 
-    let proxy_groups = if url_test_active {
+    let mut smart_groups: Vec<Value> = Vec::new();
+    if options.smart_routing {
+        let mut us_candidates: Vec<String> = Vec::new();
+        let mut download_candidates: Vec<String> = Vec::new();
+        for name in &candidate_names {
+            let lower = name.to_lowercase();
+            if lower.contains("美")
+                || lower.contains("us")
+                || lower.contains("usa")
+                || lower.contains("america")
+                || lower.contains("united states")
+                || lower.contains("los angeles")
+                || lower.contains("san jose")
+                || lower.contains("seattle")
+                || lower.contains("chicago")
+                || lower.contains("dallas")
+                || lower.contains("new york")
+                || lower.contains("virginia")
+                || lower.contains("washington")
+            {
+                us_candidates.push(name.clone());
+            }
+            let is_high_multiplier = lower.contains("2x")
+                || lower.contains("3x")
+                || lower.contains("5x")
+                || lower.contains("10x")
+                || lower.contains("链式");
+            if !is_high_multiplier {
+                download_candidates.push(name.clone());
+            }
+        }
+        if us_candidates.is_empty() {
+            us_candidates = candidate_names.clone();
+        }
+        if download_candidates.is_empty() {
+            download_candidates = candidate_names.clone();
+        }
+
+        smart_groups.push(json!({
+            "name": "多线并发下载",
+            "type": "load-balance",
+            "strategy": "round-robin",
+            "url": "https://cp.cloudflare.com/generate_204",
+            "interval": 300,
+            "timeout": 2000,
+            "lazy": true,
+            "proxies": download_candidates,
+        }));
+        smart_groups.push(json!({
+            "name": "美国节点",
+            "type": "url-test",
+            "url": "https://cp.cloudflare.com/generate_204",
+            "interval": 300,
+            "timeout": 2000,
+            "lazy": true,
+            "proxies": us_candidates,
+        }));
+        let mut normal_proxies = vec!["美国节点".to_string()];
+        normal_proxies.extend(candidate_names.iter().cloned());
+        smart_groups.push(json!({
+            "name": "普通代理",
+            "type": "select",
+            "proxies": normal_proxies,
+        }));
+        smart_groups.push(json!({
+            "name": "AI分组",
+            "type": "select",
+            "proxies": ["美国节点", "普通代理"],
+        }));
+    }
+
+    let mut proxy_groups = if url_test_active {
         let (group_type, extra_fields) = match options.auto_strategy {
             AutoRoutingStrategy::UrlTest => ("url-test", json!({
                 "tolerance": URL_TEST_TOLERANCE_MS,
@@ -336,18 +476,53 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
         }
         let mut proxy_members = vec![URL_TEST_GROUP.to_owned()];
         proxy_members.extend(candidate_names.iter().cloned());
-        json!([
-            { "name": "PROXY", "type": "select", "proxies": proxy_members },
+        vec![
+            json!({ "name": "PROXY", "type": "select", "proxies": proxy_members }),
             auto_group,
-            {
+            json!({
                 "name": FINAL_GROUP,
                 "type": "select",
                 "proxies": ["PROXY", URL_TEST_GROUP, "DIRECT", "REJECT"],
-            }
-        ])
+            }),
+        ]
     } else {
-        json!([{ "name": "PROXY", "type": "select", "proxies": candidate_names }])
+        vec![json!({ "name": "PROXY", "type": "select", "proxies": candidate_names })]
     };
+
+    if options.smart_routing {
+        smart_groups.extend(proxy_groups);
+        proxy_groups = smart_groups;
+    }
+
+    let mut final_rules: Vec<String> = Vec::new();
+    if options.smart_routing && matches!(options.routing_mode, RoutingMode::Rule | RoutingMode::ChinaDirect) {
+        for r in SMART_ROUTING_PREPEND_RULES {
+            final_rules.push(r.to_string());
+        }
+    }
+    final_rules.extend(rules);
+
+    if let Some(ref override_text) = options.override_yaml {
+        if !override_text.trim().is_empty() {
+            if let Ok(override_val) = serde_yaml::from_str::<Value>(override_text) {
+                if let Some(user_groups) = override_val.get("proxy-groups").and_then(Value::as_array) {
+                    for g in user_groups.iter().rev() {
+                        proxy_groups.insert(0, g.clone());
+                    }
+                }
+                if let Some(user_rules) = override_val.get("rules").and_then(Value::as_array) {
+                    let mut user_r = Vec::new();
+                    for r in user_rules {
+                        if let Some(s) = r.as_str() {
+                            user_r.push(s.to_string());
+                        }
+                    }
+                    user_r.extend(final_rules);
+                    final_rules = user_r;
+                }
+            }
+        }
+    }
 
     let mut config = json!({
         "mixed-port": options.mixed_port,
@@ -380,7 +555,7 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
                 "ntp.*.com"
             ]
         },
-        "rules": rules
+        "rules": final_rules
     });
     // 节点自身域名用独立的 DNS 列表解析，避免经 ISP 明文查询暴露代理用途。
     if !options.dns.proxy_server_nameserver.is_empty() {

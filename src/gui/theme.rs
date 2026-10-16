@@ -280,28 +280,26 @@ fn light_ink(accent: Color32) -> Ink {
     }
 }
 
-/// 夜间锚点：**从用户给的参考截图上逐像素量出来的**（2026-10-15，ChatGPT 深色）。
-/// 页面和侧栏同为纯黑（不分层，靠卡片浮起来分层），卡片 #1A1A1A，内层/hover #262626，
-/// 正文 #EDEDED，灰字 #C9C9C9，分隔线 #1B1B1B —— 整套**零蓝调**。
-/// 状态色是这套里没有的（那张图没有状态语义），按同一条规则现算：中性灰阶里只把
-/// "实测正常"留一点绿，警告/危险仍然是低彩度石墨，不给红/黄。
+/// 夜间锚点：现代化深色 Slate 调色板（高级深邃、低反差高层次感、层次分明）
+/// 页面采用深度深空色 (#0B0F19)，侧栏深暗灰蓝 (#111726)，卡片采用 Slate 深蓝灰 (#1A2333)，
+/// hover (#243046)，边框采用微光描边 (#2E3B55)，正文高对比冰白 (#F8FAFC)。
 fn dark_ink(accent: Color32) -> Ink {
     Ink {
-        page: rgb(0x00_00_00),
-        sidebar: rgb(0x00_00_00),
-        panel: rgb(0x1A_1A_1A),
-        panel_hover: rgb(0x26_26_26),
-        border: rgb(0x2A_2A_2A),
-        text: rgb(0xED_ED_ED),
-        text_secondary: rgb(0xC9_C9_C9),
-        muted: rgb(0x9A_9A_9A),
+        page: rgb(0x0B_0F_19),
+        sidebar: rgb(0x0B_0F_19),
+        panel: rgb(0x1A_23_33),
+        panel_hover: rgb(0x24_30_46),
+        border: rgb(0x2E_3B_55),
+        text: rgb(0xF8_FA_FC),
+        text_secondary: rgb(0xCB_D5_E1),
+        muted: rgb(0x94_A3_B8),
         accent,
         on_primary: rgb(0xFF_FF_FF),
-        // 主按钮仍然是"压深到白字 4.6:1"的那支强调色：纯黑底上一块实心色站得住。
+        // 主按钮保持清晰可见
         primary_btn: readable_on_white(accent),
         success: rgb(0x35_D1_96),
-        warning: rgb(0xB0_B0_B0),
-        danger: rgb(0xDC_DC_DC),
+        warning: rgb(0xB0_BA_C6),
+        danger: rgb(0xDC_E2_EA),
         light: false,
     }
 }
@@ -733,17 +731,17 @@ mod dark_mode_tests {
         assert!(!is_light(), "装了夜间，is_light() 还说自己是浅色");
         assert_eq!(
             ctx.style().visuals.panel_fill,
-            Color32::from_rgb(0x00, 0x00, 0x00),
+            Color32::from_rgb(0x0B, 0x0F, 0x19),
             "egui 的面板底色没跟着夜间走"
         );
         assert_eq!(
             panel(),
-            Color32::from_rgb(0x1A, 0x1A, 0x1A),
+            Color32::from_rgb(0x1A, 0x23, 0x33),
             "卡片色没跟着走"
         );
         assert_eq!(
             ctx.style().visuals.widgets.inactive.bg_fill,
-            Color32::from_rgb(0x1A, 0x1A, 0x1A),
+            Color32::from_rgb(0x1A, 0x23, 0x33),
             "原生控件的底色没跟着走"
         );
 

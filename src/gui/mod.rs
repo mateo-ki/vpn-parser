@@ -346,7 +346,10 @@ impl VpnApp {
             tasks,
             kernel_manager,
             proxy_status: ProxyRuntimeStatus::stopped(MihomoConfigOptions::default()),
-            proxy_config: MihomoConfigOptions::default(),
+            proxy_config: MihomoConfigOptions {
+                smart_routing: true,
+                ..MihomoConfigOptions::default()
+            },
             proxy_manager,
             api_controller,
             api_addr,
@@ -2965,7 +2968,7 @@ impl VpnApp {
                 }
                 if !matches!(
                     kind.as_str(),
-                    "select" | "selector" | "url-test" | "urltest"
+                    "select" | "selector" | "url-test" | "urltest" | "load-balance" | "loadbalance" | "fallback"
                 ) {
                     continue;
                 }

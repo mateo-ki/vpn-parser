@@ -33,6 +33,7 @@ pub enum SourcesPanel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProxyPanel {
     Nodes,
+    Groups,
     Connections,
     Rules,
     Network,
