@@ -447,7 +447,7 @@ pub async fn register_warp_masque_native(proxy_url: Option<&str>) -> anyhow::Res
         .map_err(|e| anyhow::anyhow!("随机数生成失败: {e}"))?;
     let serial_hex: String = serial_bytes.iter().map(|b| format!("{b:02x}")).collect();
 
-    let now_str = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let now_str = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false);
 
     // 1. POST /reg 注册设备
     let reg_body = json!({

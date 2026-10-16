@@ -224,6 +224,7 @@ impl KernelKind {
                     | "anytls"
                     | "wireguard"
                     | "wg"
+                    | "masque"
                     | "http"
                     | "https"
                     | "socks"

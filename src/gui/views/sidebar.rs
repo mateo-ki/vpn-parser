@@ -84,10 +84,9 @@ impl VpnApp {
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
             ui.add_space(6.0);
             Frame::NONE
-                // 侧栏本身是纯白，这块状态盒要用页面那档深一点的蓝灰，否则白上白看不见。
-                .fill(theme::page_bg())
-                .stroke(Stroke::new(1.0_f32, theme::border()))
-                .corner_radius(CornerRadius::same(6))
+                .fill(theme::panel())
+                .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                .corner_radius(CornerRadius::same(theme::RADIUS_CARD))
                 .inner_margin(Margin::symmetric(12, 10))
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());

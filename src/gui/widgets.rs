@@ -220,17 +220,16 @@ pub fn panel_tab<T: PartialEq + Copy>(
     } else {
         (theme::panel(), theme::text_secondary(), theme::muted())
     };
-    // 未选中不给灰底，给白底 + 一条冷调细边：页面上少一块块灰斑。
     let stroke = if selected {
         Stroke::new(1.0_f32, theme::accent())
     } else {
-        Stroke::new(1.0_f32, theme::border())
+        Stroke::new(1.0_f32, theme::border_subtle())
     };
     let resp = Frame::NONE
         .fill(fill)
         .stroke(stroke)
         .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
-        .inner_margin(Margin::symmetric(14, 8))
+        .inner_margin(Margin::symmetric(13, 6))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 icon_label(ui, icon, 14.0, icon_color);
@@ -267,18 +266,18 @@ pub fn status_badge(ui: &mut Ui, text: &str, color: Color32) -> egui::Response {
 }
 
 /// 协议小胶囊。**不再按协议分色**（用户 2026-10-06：页面上不要红/黄，颜色太乱）——
-/// 协议名本身就是信息，色相留给"状态"用。
+/// 协议小胶囊：磨砂微标设计，简洁科技感。
 pub fn protocol_pill(ui: &mut Ui, protocol: &str) {
     Frame::NONE
-        .fill(theme::page_bg())
-        .stroke(Stroke::new(1.0_f32, theme::border()))
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(Margin::symmetric(8, 3))
+        .fill(theme::border_subtle())
+        .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+        .corner_radius(CornerRadius::same(4))
+        .inner_margin(Margin::symmetric(6, 2))
         .show(ui, |ui| {
             ui.label(
                 RichText::new(protocol)
                     .strong()
-                    .small()
+                    .size(10.5)
                     .color(theme::text_secondary()),
             );
         });
@@ -297,15 +296,18 @@ pub fn compact_node_card(
     } else {
         (theme::panel(), Stroke::new(1.0_f32, theme::border_subtle()))
     };
-    Frame::NONE
+
+    let response = Frame::NONE
         .fill(fill)
         .stroke(stroke)
         .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
-        .inner_margin(Margin::symmetric(14, 11))
+        .inner_margin(Margin::symmetric(14, 10))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.set_min_height(58.0);
-            ui.vertical(|ui| {
+
+            // 第一行：标题 + 右侧状态标识
+            ui.horizontal(|ui| {
                 let name_color = if is_switching {
                     theme::warning()
                 } else if is_selected {
@@ -313,45 +315,62 @@ pub fn compact_node_card(
                 } else {
                     theme::text_primary()
                 };
-                let name_response = ui.add_sized(
-                    [ui.available_width(), 20.0],
-                    egui::Label::new(RichText::new(&node.name).strong().color(name_color))
-                        .truncate(),
-                );
-                name_response.on_hover_text(&node.name);
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    protocol_pill(ui, &node.protocol.to_uppercase());
 
-                    if let Some(country) = &node.country {
-                        let (flag, name) = country_flag_and_name(country);
-                        ui.label(
-                            RichText::new(format!("{flag} {name}"))
-                                .small()
-                                .color(theme::text_secondary()),
-                        );
-                    }
+                let clean_name = clean_node_display_name(&node.name);
+                let name_label = ui.add_sized(
+                    [ui.available_width() - if is_selected { 44.0 } else { 0.0 }, 18.0],
+                    egui::Label::new(RichText::new(clean_name).strong().size(13.0).color(name_color)).truncate(),
+                );
+                name_label.on_hover_text(&node.name);
+
+                if is_selected {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if is_switching {
-                            ui.horizontal(|ui| {
-                                icon_label(ui, Icon::Lightning, 12.0, theme::warning());
-                                ui.label(
-                                    RichText::new("切换中...")
-                                        .small()
-                                        .strong()
-                                        .color(theme::warning()),
-                                );
-                            });
-                        } else {
-                            ui.label(latency_text(node).small().strong());
-                        }
+                        ui.label(RichText::new("● 活跃").small().strong().color(theme::accent()));
                     });
+                }
+            });
+
+            ui.add_space(5.0);
+
+            // 第二行：协议标签 + 国旗与国家 + 右侧延迟
+            ui.horizontal(|ui| {
+                protocol_pill(ui, &node.protocol.to_uppercase());
+
+                if let Some(country) = &node.country {
+                    let (flag, name) = country_flag_and_name(country);
+                    ui.label(
+                        RichText::new(format!("{flag} {name}"))
+                            .small()
+                            .color(theme::text_secondary()),
+                    );
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if is_switching {
+                        ui.horizontal(|ui| {
+                            icon_label(ui, Icon::Lightning, 11.0, theme::warning());
+                            ui.label(RichText::new("切换中...").small().strong().color(theme::warning()));
+                        });
+                    } else {
+                        ui.label(latency_text(node).small().strong());
+                    }
                 });
             });
         })
         .response
         .interact(Sense::click())
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+
+    if response.hovered() && !is_selected && !is_switching {
+        ui.painter().rect_stroke(
+            response.rect,
+            CornerRadius::same(theme::RADIUS_BTN),
+            Stroke::new(1.0_f32, theme::accent().gamma_multiply(0.4)),
+            egui::StrokeKind::Inside,
+        );
+    }
+
+    response
 }
 
 pub fn header_cell(ui: &mut Ui, text: &str) {
@@ -775,35 +794,53 @@ pub fn ellipsize(ui: &Ui, text: &str, max_width: f32, font: egui::FontId) -> Str
     format!("{head}{ELLIPSIS}")
 }
 
+/// 清理订阅源常见的冗余前缀，让节点名称舒展通透、直奔主题
+pub fn clean_node_display_name(name: &str) -> &str {
+    let mut s = name.trim();
+    const NOISY_PREFIXES: &[&str] = &[
+        "地区随机 | ",
+        "地区随机|",
+        "Gslege优选 | ",
+        "Gslege优选|",
+        "全网优选 | ",
+        "全网优选|",
+        "自动优选 | ",
+        "自动优选|",
+        "优选节点 | ",
+        "优选节点|",
+        "VIP | ",
+        "VIP|",
+    ];
+    for p in NOISY_PREFIXES {
+        if let Some(rest) = s.strip_prefix(p) {
+            s = rest.trim();
+        }
+    }
+    s
+}
+
 pub fn latency_text(n: &NodeSummary) -> RichText {
     match (n.latency_ok, n.latency_test_kind.as_deref()) {
         (Some(true), Some(GOOGLE_PROXY_TEST_KIND)) => {
             let ms = n.latency_ms.unwrap_or(0);
-            // 延迟不再用红/黄分级：快 = 绿，其余只是"更深的墨"，慢不慢看数字。
-            let color = if ms < 200 {
+            let color = if ms < 300 {
                 theme::success()
             } else if ms < 800 {
                 theme::text_secondary()
             } else {
-                theme::text_primary()
+                theme::muted()
             };
-            let kernel = match n.latency_kernel.as_deref() {
-                Some("mihomo") => "Mihomo",
-                Some("sing_box") => "Sing-box",
-                Some(other) => other,
-                None => "代理",
-            };
-            RichText::new(format!("{ms} ms {kernel}")).color(color)
+            RichText::new(format!("{ms} ms")).color(color)
         }
         (Some(false), Some(GOOGLE_PROXY_TEST_KIND)) => {
-            RichText::new("代理失败").color(theme::danger())
+            RichText::new("超时").color(theme::danger())
         }
         (Some(true), _) => {
             let ms = n.latency_ms.unwrap_or(0);
-            RichText::new(format!("{ms} ms TCP")).color(theme::text_secondary())
+            RichText::new(format!("{ms} ms (TCP)")).color(theme::text_secondary())
         }
-        (Some(false), _) => RichText::new("TCP失败 · 未验证").color(theme::text_secondary()),
-        (None, _) => RichText::new("未测速").color(theme::text_secondary()),
+        (Some(false), _) => RichText::new("TCP 失败").color(theme::muted()),
+        (None, _) => RichText::new("未测速").color(theme::muted()),
     }
 }
 

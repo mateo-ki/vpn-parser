@@ -55,8 +55,6 @@ struct Ink {
     text_secondary: Color32,
     muted: Color32,
     accent: Color32,
-    on_primary: Color32,
-    primary_btn: Color32,
     success: Color32,
     warning: Color32,
     danger: Color32,
@@ -137,28 +135,28 @@ fn readable_on_dark(base: Color32, bg: Color32, target: f32) -> Color32 {
 impl Palette {
     fn from_ink(ink: Ink) -> Self {
         let accent_hover = if ink.light {
-            darken(ink.accent, 0.16)
+            darken(ink.accent, 0.10)
         } else {
-            lighten(ink.accent, 0.16)
+            lighten(ink.accent, 0.12)
         };
-        let button = ink.primary_btn;
-        let (soft_btn, soft_btn_hover, soft_btn_press) = if ink.light {
+        let button = readable_on_white(ink.accent);
+        let (primary_btn, primary_btn_hover, primary_btn_press) = if ink.light {
             (
-                mix(ink.page, ink.accent, 0.20),
-                mix(ink.page, ink.accent, 0.30),
-                mix(ink.page, ink.accent, 0.38),
+                button,
+                darken(button, 0.08),
+                darken(button, 0.16),
             )
         } else {
-            (button, mix(button, ink.text, 0.14), darken(button, 0.18))
+            (
+                button,
+                lighten(button, 0.10),
+                darken(button, 0.12),
+            )
         };
-        let soft_btn_text = if ink.light {
-            readable_on(ink.accent, soft_btn, 4.6)
-        } else {
-            ink.on_primary
-        };
-        // 淡强调底（选中项、胶囊、提示块）先算出来，"压在它上面的强调色文字"要按
-        // **这块底**去压深/提亮，不是按纯白 —— 按纯白算只有 3.49:1（浅色）/ 3.15:1（夜间）。
-        let accent_bg = mix(ink.page, ink.accent, if ink.light { 0.12 } else { 0.2 });
+        let on_primary = Color32::WHITE;
+
+        // 淡强调底（选中项、胶囊、高亮提示块）
+        let accent_bg = mix(ink.page, ink.accent, if ink.light { 0.12 } else { 0.20 });
         let accent_strong = if ink.light {
             readable_on(ink.accent, accent_bg, 4.6)
         } else {
@@ -178,18 +176,16 @@ impl Palette {
             accent_hover,
             accent_bg,
             accent_strong,
-            // 浅色主题下主按钮不再用实心深蓝：淡蓝底 + 压深后的强调色字。
-            // 文字必须按**这块淡蓝底**去压深，不是按纯白（按纯白算出来只有 3.49:1）。
-            primary_btn: soft_btn,
-            primary_btn_hover: soft_btn_hover,
-            primary_btn_press: soft_btn_press,
-            on_primary: soft_btn_text,
+            primary_btn,
+            primary_btn_hover,
+            primary_btn_press,
+            on_primary,
             success: ink.success,
             success_bg: mix(ink.page, ink.success, if ink.light { 0.12 } else { 0.18 }),
             warning: ink.warning,
-            warning_bg: mix(ink.page, ink.warning, if ink.light { 0.14 } else { 0.2 }),
+            warning_bg: mix(ink.page, ink.warning, if ink.light { 0.14 } else { 0.20 }),
             danger: ink.danger,
-            danger_bg: mix(ink.page, ink.danger, if ink.light { 0.12 } else { 0.2 }),
+            danger_bg: mix(ink.page, ink.danger, if ink.light { 0.12 } else { 0.20 }),
             danger_stroke: mix(ink.page, ink.danger, if ink.light { 0.55 } else { 0.42 }),
             sidebar_text: ink.text,
             sidebar_muted: ink.text_secondary,
@@ -207,33 +203,32 @@ pub struct Theme {
     pub accent: u32,
 }
 
-/// 顺序就是设置页里的顺序。深色那几套（obsidian / latte / midnight / mocha / rosepine /
-/// linear）2026-10-06 按用户要求全部删掉，只留"清爽浅白"这一个家族。
+/// 顺序就是设置页里的顺序。采用 Apple HIG 原生雅致高品质色系。
 pub const THEMES: [Theme; 5] = [
     Theme {
         id: "soft-cobalt",
-        name: "钴蓝（默认）",
-        accent: 0x2F_6F_EB,
+        name: "系统蓝（默认）",
+        accent: 0x00_71_E3,
     },
     Theme {
         id: "soft-teal",
-        name: "青绿",
-        accent: 0x00_A7_8D,
+        name: "薄荷绿",
+        accent: 0x00_A8_8F,
     },
     Theme {
         id: "soft-terracotta",
-        name: "陶土橙",
-        accent: 0xD9_77_2E,
+        name: "活力橙",
+        accent: 0xF5_63_00,
     },
     Theme {
         id: "soft-indigo",
-        name: "靛蓝紫",
-        accent: 0x5B_5B_D6,
+        name: "星空紫",
+        accent: 0x5E_5C_E6,
     },
     Theme {
         id: "soft-violet",
-        name: "紫罗兰",
-        accent: 0x7C_5C_FF,
+        name: "玫瑰粉",
+        accent: 0xE3_3E_5E,
     },
 ];
 
@@ -255,51 +250,49 @@ pub fn theme_by_id(id: &str) -> &'static Theme {
         .unwrap_or_else(|| &THEMES[0])
 }
 
-/// 浅色那套中性锚点：左侧菜单纯白，右侧内容页压深一档蓝灰，卡片再回到纯白 ——
-/// 分层靠"页面比卡片深"这一条，不靠描边（用户 2026-10-06：卡片和周围背景快分不开了，
-/// 菜单要更浅、内容要更深）。
+/// 方案 2：Apple / macOS 官方原生雅致调色板（温润中性灰白底、纯净通透、护眼耐看）：
+/// 页面采用柔和温润的纯净中性灰白 (#EBEEF2)，彻底告别脏冷塑料感；
+/// 侧边栏与卡片纯白 (#FFFFFF)，配合 Apple 经典极细边框 (#E5E5EA)，悬停 (#F8F9FA)；
+/// 正文采用 Apple SF Text 墨黑 (#1D1D1F)，次级文本 (#424245)，辅助灰 (#737377)；
+/// 语义色彩全面恢复鲜明生机：原生绿 (#1B7A3A)、原生琥珀橙 (#B45309)、原生珊瑚红 (#C92A2A)。
 fn light_ink(accent: Color32) -> Ink {
     Ink {
-        page: rgb(0xE8_EE_F7),
+        page: rgb(0xEB_EE_F2),
         sidebar: rgb(0xFF_FF_FF),
         panel: rgb(0xFF_FF_FF),
-        panel_hover: rgb(0xF1_F6_FD),
-        border: rgb(0xE9_F0_FA),
-        text: rgb(0x1A_20_28),
-        text_secondary: rgb(0x3F_4A_57),
-        muted: rgb(0x64_70_7E),
+        panel_hover: rgb(0xF8_F9_FA),
+        border: rgb(0xE5_E5_EA),
+        text: rgb(0x1D_1D_1F),
+        text_secondary: rgb(0x42_42_45),
+        muted: rgb(0x73_73_77),
         accent,
-        on_primary: rgb(0xFF_FF_FF),
-        primary_btn: readable_on_white(accent),
-        success: rgb(0x0E_6B_4C),
-        // 用户 2026-10-06：页面上不要红色和黄色。警告/危险改成石墨蓝灰，
-        // 严重度靠"字重 + 图标 + 措辞"表达，不靠颜色。绿色留给"实测正常/连通"。
-        warning: rgb(0x6B_74_80),
-        danger: rgb(0x2E_35_3D),
+        success: rgb(0x1B_7A_3A),
+        warning: rgb(0xB4_53_09),
+        danger: rgb(0xC9_2A_2A),
         light: true,
     }
 }
 
-/// 夜间锚点：现代化通透 Slate 调色板（通透轻盈、低压迫感、层次分明有呼吸感）
-/// 页面采用柔和 Slate 底色 (#131722)，卡片采用轻微浮起的舒适深灰蓝 (#1E2433)，
-/// hover (#283042)，边框采用柔化描边 (#323C50)，正文高对比冰白 (#F8FAFC)。
+/// 夜间模式（macOS / Linear 风格纯净深空暗黑调色板）：
+/// 页面采用纯正中性深空黑 (#121316)，彻底告别脏冷泛蓝塑料感；
+/// 侧栏一体纯净 (#121316)，卡片层柔和微浮起 (#1F2228)，hover 反馈 (#282B33)；
+/// 边框细腻克制中性微灰 (#2D313A)，不产生生硬割裂感；
+/// 正文采用温润高品质冰玉白 (#F0F1F3)，次级文本 (#9EA4B0)，辅助灰 (#828894)；
+/// 语义色彩全面恢复鲜活生机与警示辨识度：活力翠绿 (#34D399)、温暖琥珀金 (#FBBF24)、鲜明珊瑚红 (#F87171)。
 fn dark_ink(accent: Color32) -> Ink {
     Ink {
-        page: rgb(0x13_17_22),
-        sidebar: rgb(0x13_17_22),
-        panel: rgb(0x1E_24_33),
-        panel_hover: rgb(0x28_30_42),
-        border: rgb(0x32_3C_50),
-        text: rgb(0xF8_FA_FC),
-        text_secondary: rgb(0xCB_D5_E1),
-        muted: rgb(0x9E_AA_BA),
+        page: rgb(0x12_13_16),
+        sidebar: rgb(0x12_13_16),
+        panel: rgb(0x1F_22_28),
+        panel_hover: rgb(0x28_2B_33),
+        border: rgb(0x2D_31_3A),
+        text: rgb(0xF0_F1_F3),
+        text_secondary: rgb(0x9E_A4_B0),
+        muted: rgb(0x86_8C_98),
         accent,
-        on_primary: rgb(0xFF_FF_FF),
-        // 主按钮保持清晰可见
-        primary_btn: readable_on_white(accent),
-        success: rgb(0x35_D1_96),
-        warning: rgb(0xB0_BA_C6),
-        danger: rgb(0xDC_E2_EA),
+        success: rgb(0x34_D3_99),
+        warning: rgb(0xFB_BF_24),
+        danger: rgb(0xF8_71_71),
         light: false,
     }
 }
@@ -372,36 +365,31 @@ token_accessors! {
 // ---------------------------------------------------------------------------
 
 /// 卡片/弹框容器圆角。
-pub const RADIUS_CARD: u8 = 20;
+pub const RADIUS_CARD: u8 = 12;
 /// 导航项圆角。
-pub const RADIUS_NAV: u8 = 14;
+pub const RADIUS_NAV: u8 = 8;
 /// 按钮、标签页、状态胶囊圆角。
-pub const RADIUS_BTN: u8 = 16;
+pub const RADIUS_BTN: u8 = 8;
 /// 卡片内边距（`Margin` 在 egui 0.31 是 i8）。
 pub const PAD_CARD: i8 = 22;
 /// 导航项内边距（横向）。
 pub const PAD_NAV_X: i8 = 13;
 
-/// 卡片描边：浅色主题靠阴影分层，所以不要描边；深色主题阴影会糊成一团脏的，
-/// 反过来留一条 1px 边。
+/// 卡片描边：浅色与深色均保留 1px 精细边框，层次分明通透。
 #[inline]
 pub fn card_stroke() -> Stroke {
-    if is_light() {
-        Stroke::NONE
-    } else {
-        Stroke::new(1.0_f32, border())
-    }
+    Stroke::new(1.0_f32, border())
 }
 
-/// 卡片投影，配 [`card_stroke`] 使用；深色主题返回 NONE。
+/// 卡片投影，配 [`card_stroke`] 使用；浅色温和微浮起，深色无厚重漫射。
 #[inline]
 pub fn card_shadow() -> eframe::egui::Shadow {
     if is_light() {
         eframe::egui::Shadow {
-            offset: [0, 6],
-            blur: 24,
+            offset: [0, 2],
+            blur: 8,
             spread: 0,
-            color: Color32::from_rgba_unmultiplied(24, 44, 78, 16),
+            color: Color32::from_rgba_unmultiplied(0, 0, 0, 10),
         }
     } else {
         eframe::egui::Shadow::NONE
@@ -443,22 +431,29 @@ pub fn apply(ctx: &egui::Context, id: &str, dark: bool) {
     visuals.error_fg_color = pal.danger;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, pal.border_subtle);
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, pal.muted);
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(7);
     visuals.widgets.inactive.bg_fill = pal.panel;
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, pal.border);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(7);
     visuals.widgets.hovered.bg_fill = pal.panel_hover;
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, pal.accent);
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(7);
     visuals.widgets.active.bg_fill = pal.panel_hover;
     visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, pal.accent_hover);
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(7);
+    visuals.widgets.open.corner_radius = egui::CornerRadius::same(7);
+    visuals.menu_corner_radius = egui::CornerRadius::same(8);
+    visuals.window_corner_radius = egui::CornerRadius::same(12);
     visuals.selection.bg_fill = pal.accent_bg;
     visuals.selection.stroke = Stroke::new(1.0_f32, pal.accent);
     visuals.window_stroke = Stroke::new(1.0_f32, pal.border);
     // 浅色主题靠投影分层（卡片无描边）；深色主题投影会糊成脏的一片，只留很淡的一层。
     let shadow = if pal.light {
         egui::epaint::Shadow {
-            offset: [0, 6],
-            blur: 22,
+            offset: [0, 4],
+            blur: 14,
             spread: 0,
-            color: Color32::from_rgba_unmultiplied(24, 44, 78, 20),
+            color: Color32::from_rgba_unmultiplied(0, 0, 0, 16),
         }
     } else {
         egui::epaint::Shadow {
@@ -492,11 +487,16 @@ mod tests {
                 contrast(p.on_primary, p.primary_btn)
             );
             assert!(
-                p.danger.r() <= 90 && p.danger.g() <= 110 && p.warning.r() <= 130,
-                "{} 又混进红/黄调了：danger={:?} warning={:?}",
+                contrast(p.danger, p.panel) >= 3.0,
+                "{} 危险色在卡片底色上对比度 = {:.2}:1（要 >= 3:1）",
                 theme.name,
-                p.danger,
-                p.warning
+                contrast(p.danger, p.panel)
+            );
+            assert!(
+                contrast(p.warning, p.panel) >= 3.0,
+                "{} 警告色在卡片底色上对比度 = {:.2}:1（要 >= 3:1）",
+                theme.name,
+                contrast(p.warning, p.panel)
             );
             for (slot, bg) in [
                 ("success_bg", p.success_bg),
@@ -701,24 +701,36 @@ mod dark_mode_tests {
         }
     }
 
-    /// "页面上不要红/黄"这条在夜间仍然守着；反向对照用同一把尺子量真红，
-    /// 证明这个判据不是永远为真。
+    /// 夜间状态色全面恢复鲜活清晰的语义辨识度（绿通透、琥珀金明确、珊瑚红鲜明），
+    /// 不再是灰死一片的低彩度石墨灰，且对比度严格达标。
     #[test]
-    fn dark_state_colors_stay_graphite() {
+    fn dark_state_colors_stay_vibrant_and_legible() {
         for spec in THEMES {
             let p = palette_for(spec.id, true);
             assert!(
-                chroma(p.danger) <= 30 && chroma(p.warning) <= 30,
-                "{} 夜间混进了有彩度的状态色：danger={:?} warning={:?}",
+                chroma(p.danger) >= 80 && chroma(p.warning) >= 80 && chroma(p.success) >= 80,
+                "{} 夜间状态色失去了语义彩度：danger={:?} warning={:?} success={:?}",
                 spec.name,
                 p.danger,
-                p.warning
+                p.warning,
+                p.success
+            );
+            assert!(
+                contrast(p.danger, p.panel) >= 4.5,
+                "{} 危险色在夜间卡片底色上对比度不足",
+                spec.name
+            );
+            assert!(
+                contrast(p.warning, p.panel) >= 4.5,
+                "{} 警告色在夜间卡片底色上对比度不足",
+                spec.name
+            );
+            assert!(
+                contrast(p.success, p.panel) >= 4.5,
+                "{} 成功色在夜间卡片底色上对比度不足",
+                spec.name
             );
         }
-        assert!(
-            chroma(Color32::from_rgb(0xB3, 0x2A, 0x2A)) > 100,
-            "对照组失效：这把彩度尺子量不出真红，那上面那条断言就是白写的"
-        );
     }
 
     /// 接线检查：`apply(ctx, id, dark)` 那个参数真的传到底了 —— egui 自己的
@@ -731,17 +743,17 @@ mod dark_mode_tests {
         assert!(!is_light(), "装了夜间，is_light() 还说自己是浅色");
         assert_eq!(
             ctx.style().visuals.panel_fill,
-            Color32::from_rgb(0x13, 0x17, 0x22),
+            Color32::from_rgb(0x12, 0x13, 0x16),
             "egui 的面板底色没跟着夜间走"
         );
         assert_eq!(
             panel(),
-            Color32::from_rgb(0x1E, 0x24, 0x33),
+            Color32::from_rgb(0x1F, 0x22, 0x28),
             "卡片色没跟着走"
         );
         assert_eq!(
             ctx.style().visuals.widgets.inactive.bg_fill,
-            Color32::from_rgb(0x1E, 0x24, 0x33),
+            Color32::from_rgb(0x1F, 0x22, 0x28),
             "原生控件的底色没跟着走"
         );
 
@@ -749,7 +761,7 @@ mod dark_mode_tests {
         assert!(is_light(), "关掉夜间之后没回到浅白");
         assert_eq!(
             ctx.style().visuals.panel_fill,
-            Color32::from_rgb(0xE8, 0xEE, 0xF7),
+            Color32::from_rgb(0xEB, 0xEE, 0xF2),
             "回到浅色时面板底色没换回来"
         );
     }

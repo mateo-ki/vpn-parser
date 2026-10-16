@@ -18,7 +18,7 @@ use crate::proxy::{
     adblock_quic_rules, ai_service_rules, dev_mirrors_rules, game_platforms_rules,
     mihomo_dns_poison_overrides, optimize_traffic_rules, recommended_traffic_rules,
     social_telegram_rules, streaming_media_rules, AutoRoutingStrategy, DnsEnhancedMode, ProxyMode, ProxyState,
-    RoutingMode, RuleAction, TrafficRule, TunStack, FINAL_GROUP, URL_TEST_GROUP,
+    RoutingMode, RuleAction, TrafficRule, TunStack, URL_TEST_GROUP,
 };
 use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, Vec2};
 use std::sync::atomic::Ordering;
@@ -857,20 +857,13 @@ impl VpnApp {
             self.reload_proxy_nodes();
         }
 
-        // 流量图缩进顶部卡片第二行的右侧了，这一页不再画大图 —— tab 行直接顶上来。
-        ui.add_space(2.0);
-        // 地区筛选。原来的「一键连接最优」按钮按用户要求删了 —— 它和底部的「自动选路 url-test」
-        // 是同一件事的两种做法，留一个就够。
-        //
-        // 用 `horizontal_wrapped` 而不是 `horizontal`：动作条现在挂在这行末尾，
-        // 8 个地区药丸 + 4 个按钮在 960 的最小窗口宽度下放不下，不换行就会被裁掉
-        // ——「停止代理」被裁掉就等于没有。
-        ui.horizontal_wrapped(|ui| {
-            ui.label(
-                RichText::new("地区:")
-                    .small()
-                    .color(theme::text_secondary()),
-            );
+        // -------------------------------------------------------------------
+        // 现代化精炼控制条（由 4 行碎片合并为 2 行秩序分明的高级控制台）
+        // -------------------------------------------------------------------
+        ui.add_space(4.0);
+
+        // 第 1 行：地区胶囊分段条 (左) + 搜索框 & 统计微标 (右)
+        ui.horizontal(|ui| {
             let regions = [
                 ("all", "全部"),
                 ("HK", "香港"),
@@ -883,49 +876,29 @@ impl VpnApp {
             ];
             for (code, label) in regions {
                 let is_sel = self.proxy_region_filter == code;
-                let btn = if is_sel {
-                    egui::Button::new(RichText::new(label).small().color(theme::accent()).strong())
-                        .fill(theme::accent_bg())
-                        .stroke(Stroke::new(1.0_f32, theme::accent()))
+                let (fill, stroke, text_color) = if is_sel {
+                    (
+                        theme::accent_bg(),
+                        Stroke::new(1.0_f32, theme::accent()),
+                        theme::accent_strong(),
+                    )
                 } else {
-                    egui::Button::new(RichText::new(label).small().color(theme::muted()))
+                    (
+                        theme::panel(),
+                        Stroke::new(1.0_f32, theme::border_subtle()),
+                        theme::muted(),
+                    )
                 };
+                let btn = egui::Button::new(RichText::new(label).small().strong().color(text_color))
+                    .fill(fill)
+                    .stroke(stroke)
+                    .corner_radius(CornerRadius::same(theme::RADIUS_BTN));
                 if ui.add(btn).clicked() && !is_sel {
                     self.proxy_region_filter = code.to_string();
                 }
             }
-        });
-
-        ui.add_space(4.0);
-        // 行2：排序、节点数统计与搜索（独立行排列，彻底避免覆盖节点总数）
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("排序:").small().color(theme::muted()));
-            let is_lat = self.proxy_sort_by == ProxySortBy::Latency;
-            let is_name = self.proxy_sort_by == ProxySortBy::Name;
-            if ui
-                .add(icons::selectable_icon_btn(Icon::Lightning, "延迟", is_lat))
-                .clicked()
-            {
-                self.proxy_sort_by = ProxySortBy::Latency;
-            }
-            if ui
-                .add(icons::selectable_icon_btn(Icon::Sort, "名称", is_name))
-                .clicked()
-            {
-                self.proxy_sort_by = ProxySortBy::Name;
-            }
-
-            ui.separator();
-            ui.label(
-                RichText::new(format!("共 {} 个节点", self.proxy_nodes.len()))
-                    .small()
-                    .color(theme::muted()),
-            );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // X 必须每帧都占一个 id 槽位。以前它只在搜索框非空时才 add，于是敲下
-                // 第一个字符后这一行之后的控件 auto-id 整体位移，TextEdit 换了 id →
-                // 焦点被丢、微软拼音刚起的组合窗跟着消失，表现就是"输一个字就卡"。
                 let cleared = ui
                     .add_visible(
                         !self.proxy_search.is_empty(),
@@ -941,21 +914,41 @@ impl VpnApp {
                         let search_field = ui.add(
                             egui::TextEdit::singleline(&mut self.proxy_search)
                                 .hint_text("搜索节点...")
-                                .desired_width(120.0),
+                                .desired_width(130.0),
                         );
                         crate::gui::widgets::note_text_field(ui, &search_field);
                     });
                 });
+
+                Frame::NONE
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                    .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
+                    .inner_margin(Margin::symmetric(8, 4))
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(format!("{} 节点", self.proxy_nodes.len()))
+                                .small()
+                                .color(theme::muted()),
+                        );
+                    });
             });
         });
 
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("策略组:").small().color(theme::muted()));
-            let is_auto = self.proxy_config.url_test;
-            let current_strategy = self.proxy_config.auto_strategy;
-            let running = self.proxy_status.state == ProxyState::Running;
+        ui.add_space(6.0);
 
+        // 第 2 行：策略组模式 (左) + 实时选路出口 (中) + 排序与启动 (右)
+        let is_auto = self.proxy_config.url_test;
+        let current_strategy = self.proxy_config.auto_strategy;
+        let running = self.proxy_status.state == ProxyState::Running;
+
+        let proxy_now = self
+            .kernel_groups
+            .iter()
+            .find(|group| group.name == "PROXY")
+            .and_then(|group| group.now.clone());
+
+        ui.horizontal(|ui| {
             let is_url_test = is_auto && current_strategy == AutoRoutingStrategy::UrlTest;
             if ui
                 .add(icons::selectable_icon_btn(Icon::Lightning, "延迟选优", is_url_test))
@@ -1007,7 +1000,38 @@ impl VpnApp {
                 }
             }
 
-            if !running {
+            if running {
+                if let Some(ref now) = proxy_now {
+                    ui.separator();
+                    let clean = crate::gui::widgets::clean_node_display_name(now);
+                    let display_now = if clean.chars().count() > 22 {
+                        let mut s: String = clean.chars().take(22).collect();
+                        s.push('…');
+                        s
+                    } else {
+                        clean.to_string()
+                    };
+                    Frame::NONE
+                        .fill(theme::success_bg())
+                        .stroke(Stroke::new(1.0_f32, theme::success().gamma_multiply(0.4)))
+                        .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
+                        .inner_margin(Margin::symmetric(8, 4))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let (beacon, _) = ui.allocate_exact_size(Vec2::splat(6.0), Sense::hover());
+                                ui.painter().circle_filled(beacon.center(), 3.0, theme::success());
+                                ui.label(
+                                    RichText::new(format!("出口: {display_now}"))
+                                        .small()
+                                        .strong()
+                                        .color(theme::text_primary()),
+                                );
+                            });
+                        })
+                        .response
+                        .on_hover_text(format!("当前内核实际选路出口节点：\n{now}"));
+                }
+            } else {
                 ui.separator();
                 let has_candidate = self.selected_proxy_node_id.is_some()
                     || (self.proxy_config.url_test && (!self.proxy_nodes.is_empty() || !self.nodes.is_empty()));
@@ -1019,49 +1043,25 @@ impl VpnApp {
                     self.start_proxy();
                 }
             }
-        });
-        // 内核此刻到底在用谁：直接读 /proxies 的实测结果，不猜。
-        // 只把两个 `now` 取出来，不 clone 整个 groups —— 开了自动选路那是几十个成员名，
-        // 每帧深拷一遍纯浪费（这行每帧都画）。
-        let proxy_now = self
-            .kernel_groups
-            .iter()
-            .find(|group| group.name == "PROXY")
-            .and_then(|group| group.now.clone());
-        let final_now = self
-            .kernel_groups
-            .iter()
-            .find(|group| group.name == FINAL_GROUP)
-            .and_then(|group| group.now.clone());
-        if !self.kernel_groups.is_empty() {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("内核实际选路").small().color(theme::muted()));
-                match &proxy_now {
-                    Some(now) => {
-                        ui.label(
-                            RichText::new(format!("PROXY → {now}"))
-                                .small()
-                                .color(theme::text_secondary()),
-                        );
-                    }
-                    None => {
-                        ui.label(
-                            RichText::new("等待内核上报...")
-                                .small()
-                                .color(theme::muted()),
-                        );
-                    }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let is_name = self.proxy_sort_by == ProxySortBy::Name;
+                if ui
+                    .add(icons::selectable_icon_btn(Icon::Sort, "名称", is_name))
+                    .clicked()
+                {
+                    self.proxy_sort_by = ProxySortBy::Name;
                 }
-                if let Some(final_now) = &final_now {
-                    ui.label(
-                        RichText::new(format!("· 漏网之鱼 → {final_now}"))
-                            .small()
-                            .color(theme::muted()),
-                    );
+                let is_lat = self.proxy_sort_by == ProxySortBy::Latency;
+                if ui
+                    .add(icons::selectable_icon_btn(Icon::Lightning, "延迟", is_lat))
+                    .clicked()
+                {
+                    self.proxy_sort_by = ProxySortBy::Latency;
                 }
+                ui.label(RichText::new("排序:").small().color(theme::muted()));
             });
-        }
+        });
         ui.add_space(6.0);
 
         // 网格视图按 (数据版本, 地区, 搜索词, 排序) 缓存，只有这四样变了才重算 ——
@@ -1102,7 +1102,7 @@ impl VpnApp {
         let total_card_rows = (view.rows.len() + columns - 1) / columns;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show_rows(ui, 84.0, total_card_rows, |ui, row_range| {
+            .show_rows(ui, 68.0, total_card_rows, |ui, row_range| {
                 if view.rows.is_empty() {
                     card_frame().show(ui, |ui| {
                         ui.label(

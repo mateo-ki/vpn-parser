@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn udp_proxy_protocols_skip_tcp_prefilter() {
-        for protocol in ["hysteria", "hysteria2", "hy2", "tuic", "wireguard", "wg"] {
+        for protocol in ["hysteria", "hysteria2", "hy2", "tuic", "wireguard", "wg", "masque"] {
             assert!(pipeline::requires_proxy_without_tcp(protocol), "{protocol}");
         }
         for protocol in ["vless", "vmess", "trojan", "ss"] {

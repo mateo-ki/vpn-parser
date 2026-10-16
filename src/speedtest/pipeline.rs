@@ -20,7 +20,7 @@ use tracing::info;
 pub fn requires_proxy_without_tcp(protocol: &str) -> bool {
     matches!(
         protocol.to_ascii_lowercase().as_str(),
-        "hysteria" | "hysteria2" | "hy2" | "tuic" | "wireguard" | "wg"
+        "hysteria" | "hysteria2" | "hy2" | "tuic" | "wireguard" | "wg" | "masque"
     )
 }
 

@@ -22,6 +22,7 @@ logs/
 # IDE / Editor configuration
 .idea/
 .vscode/
+.workbuddy/
 *.swp
 *.swo
 .superpowers/
