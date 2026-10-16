@@ -766,11 +766,31 @@ mod tests {
 
         let dir = std::env::temp_dir().join(format!("vpn-orphan-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let spawn_named = |name: &str| -> std::process::Child {
-            let path = dir.join(name);
-            std::fs::copy("/bin/sleep", &path).unwrap();
+        // 每次 spawn 用各自的子目录，文件名保持精确的 `mihomo` —— 判据读的是
+        // `/proc/<pid>/exe` 的 basename，改名（`mihomo.1`）会让它认不出来，
+        // 而共用一个名字在 CI 上撞到过 `ETXTBSY`（写完立刻 exec）。
+        // 重试也只认这一个错误码，别把环境竞态伪装成产品失败。
+        let mut seq = 0_u32;
+        let mut spawn_named = |name: &str| -> std::process::Child {
+            seq += 1;
+            let slot = dir.join(seq.to_string());
+            std::fs::create_dir_all(&slot).unwrap();
+            let path = slot.join(name);
+            std::fs::write(&path, std::fs::read("/bin/sleep").unwrap()).unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-            Command::new(&path).arg("120").spawn().unwrap()
+            for attempt in 0..10 {
+                match Command::new(&path).arg("120").spawn() {
+                    Ok(child) => return child,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                            && attempt < 9 =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    Err(error) => panic!("起不了探针进程 {name}：{error}"),
+                }
+            }
+            unreachable!()
         };
 
         let mut core = spawn_named("mihomo");
