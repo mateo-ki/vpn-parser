@@ -244,6 +244,13 @@ impl VpnApp {
                             .strong()
                             .color(theme::text_secondary()),
                     );
+                } else if self.proxy_config.url_test {
+                    ui.label(
+                        RichText::new("⚡ 策略组自动选优已就绪 (启动时内核自动测速并分配出口)")
+                            .small()
+                            .strong()
+                            .color(theme::accent()),
+                    );
                 } else {
                     ui.label(
                         RichText::new("未选择节点 (请在下方列表选择)")
@@ -775,11 +782,14 @@ impl VpnApp {
                 self.check_ip_risk();
             }
         } else {
-            let can_start =
-                !self.proxy_busy && !transitioning && self.selected_proxy_node_id.is_some();
+            let has_executable_node = self.selected_proxy_node_id.is_some()
+                || (self.proxy_config.url_test && (!self.proxy_nodes.is_empty() || !self.nodes.is_empty()));
+            let can_start = !self.proxy_busy && !transitioning && has_executable_node;
             let start = ui.add_enabled(can_start, primary_btn("启动代理"));
-            let start = if self.selected_proxy_node_id.is_none() {
-                start.on_hover_text("先在节点列表里点一个节点作为出口，再启动")
+            let start = if !has_executable_node {
+                start.on_hover_text("节点列表为空，请先在订阅源拉取节点")
+            } else if self.selected_proxy_node_id.is_none() && self.proxy_config.url_test {
+                start.on_hover_text("点击以当前策略组自动选优启动")
             } else {
                 start
             };
@@ -994,6 +1004,19 @@ impl VpnApp {
                 self.proxy_config.url_test = false;
                 if running {
                     self.save_proxy_config();
+                }
+            }
+
+            if !running {
+                ui.separator();
+                let has_candidate = self.selected_proxy_node_id.is_some()
+                    || (self.proxy_config.url_test && (!self.proxy_nodes.is_empty() || !self.nodes.is_empty()));
+                if ui
+                    .add_enabled(has_candidate && !self.proxy_busy, primary_btn("🚀 启动代理"))
+                    .on_hover_text("以当前选中的策略组立即启动代理")
+                    .clicked()
+                {
+                    self.start_proxy();
                 }
             }
         });

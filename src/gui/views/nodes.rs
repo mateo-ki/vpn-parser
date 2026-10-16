@@ -180,7 +180,7 @@ impl VpnApp {
                 ui.separator();
                 ui.add_space(6.0);
 
-                // 第二行：地区与协议快速筛选胶囊行
+                // 第二行：地区快速筛选胶囊行
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("地区:").small().strong().color(theme::muted()));
                     for (val, lbl) in [
@@ -206,9 +206,12 @@ impl VpnApp {
                             filter_changed = true;
                         }
                     }
+                });
 
-                    ui.separator();
+                ui.add_space(4.0);
 
+                // 第三行：协议快速筛选胶囊行（放到下一行，界面宽敞清晰）
+                ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("协议:").small().strong().color(theme::muted()));
                     for (val, lbl) in [
                         ("", "全部"),
@@ -265,6 +268,12 @@ impl VpnApp {
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
+                            let is_all = selected_source_id.is_none();
+                            if ui.selectable_label(is_all, "全部订阅源").clicked() && !is_all {
+                                self.selected_node_source_id = None;
+                                self.page = 1;
+                                self.reload_nodes();
+                            }
                             for group in &self.node_groups {
                                 let key = node_group_key(group);
                                 let selected =

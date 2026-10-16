@@ -1622,10 +1622,10 @@ impl VpnApp {
     /// 一键接入 OpenRung 官方中继代理服务（https://github.com/openrung/openrung）
     pub(crate) fn add_openrung_source(&mut self) {
         let openrung_url = "https://broker.openrung.org/api/v1/relays";
-        let openrung_name = "OpenRung 官方中继 (VLESS-REALITY)";
+        let openrung_name = "OpenRung 专属节点服务";
         if let Some(existing) = self.sources.iter().find(|s| s.url_template == openrung_url) {
             let id = existing.id.clone();
-            self.status = format!("OpenRung 节点源已存在：{}，正在刷新...", existing.name);
+            self.status = format!("OpenRung 专用节点源已存在：{}，正在刷新...", existing.name);
             self.fetch_one(id);
             return;
         }
@@ -2722,7 +2722,13 @@ impl VpnApp {
                 let outcome = match db.top_verified_nodes(2, None).await {
                     Ok(nodes) => match nodes.into_iter().next() {
                         Some(node) => Ok((node.id, node.name)),
-                        None => Err("库里没有测速通过的节点，先跑一轮测速".to_string()),
+                        None => match db.list_nodes(None, None, None, None, None, 1, 1, None).await {
+                            Ok(page) => match page.items.into_iter().next() {
+                                Some(n) => Ok((n.id, n.name)),
+                                None => Err("库里没有可用节点，请先在「订阅源」拉取节点".to_string()),
+                            },
+                            Err(e) => Err(e.to_string()),
+                        },
                     },
                     Err(error) => Err(error.to_string()),
                 };

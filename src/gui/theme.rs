@@ -280,19 +280,19 @@ fn light_ink(accent: Color32) -> Ink {
     }
 }
 
-/// 夜间锚点：现代化深色 Slate 调色板（高级深邃、低反差高层次感、层次分明）
-/// 页面采用深度深空色 (#0B0F19)，侧栏深暗灰蓝 (#111726)，卡片采用 Slate 深蓝灰 (#1A2333)，
-/// hover (#243046)，边框采用微光描边 (#2E3B55)，正文高对比冰白 (#F8FAFC)。
+/// 夜间锚点：现代化通透 Slate 调色板（通透轻盈、低压迫感、层次分明有呼吸感）
+/// 页面采用柔和 Slate 底色 (#131722)，卡片采用轻微浮起的舒适深灰蓝 (#1E2433)，
+/// hover (#283042)，边框采用柔化描边 (#323C50)，正文高对比冰白 (#F8FAFC)。
 fn dark_ink(accent: Color32) -> Ink {
     Ink {
-        page: rgb(0x0B_0F_19),
-        sidebar: rgb(0x0B_0F_19),
-        panel: rgb(0x1A_23_33),
-        panel_hover: rgb(0x24_30_46),
-        border: rgb(0x2E_3B_55),
+        page: rgb(0x13_17_22),
+        sidebar: rgb(0x13_17_22),
+        panel: rgb(0x1E_24_33),
+        panel_hover: rgb(0x28_30_42),
+        border: rgb(0x32_3C_50),
         text: rgb(0xF8_FA_FC),
         text_secondary: rgb(0xCB_D5_E1),
-        muted: rgb(0x94_A3_B8),
+        muted: rgb(0x9E_AA_BA),
         accent,
         on_primary: rgb(0xFF_FF_FF),
         // 主按钮保持清晰可见
@@ -731,17 +731,17 @@ mod dark_mode_tests {
         assert!(!is_light(), "装了夜间，is_light() 还说自己是浅色");
         assert_eq!(
             ctx.style().visuals.panel_fill,
-            Color32::from_rgb(0x0B, 0x0F, 0x19),
+            Color32::from_rgb(0x13, 0x17, 0x22),
             "egui 的面板底色没跟着夜间走"
         );
         assert_eq!(
             panel(),
-            Color32::from_rgb(0x1A, 0x23, 0x33),
+            Color32::from_rgb(0x1E, 0x24, 0x33),
             "卡片色没跟着走"
         );
         assert_eq!(
             ctx.style().visuals.widgets.inactive.bg_fill,
-            Color32::from_rgb(0x1A, 0x23, 0x33),
+            Color32::from_rgb(0x1E, 0x24, 0x33),
             "原生控件的底色没跟着走"
         );
 

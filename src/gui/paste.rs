@@ -130,10 +130,15 @@ pub fn recognize(text: &str) -> Option<Detected> {
         return None;
     }
     if let Some(url) = first_url(trimmed) {
-        return Some(Detected::Subscription {
-            name: suggested_name(&url),
-            url,
-        });
+        let (name, url) = if url.to_ascii_lowercase().contains("openrung") {
+            (
+                "OpenRung 专属节点服务".to_string(),
+                "https://broker.openrung.org/api/v1/relays".to_string(),
+            )
+        } else {
+            (suggested_name(&url), url)
+        };
+        return Some(Detected::Subscription { name, url });
     }
     let nodes = node_link_count(trimmed);
     if nodes > 0 {
