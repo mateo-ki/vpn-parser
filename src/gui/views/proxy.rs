@@ -712,61 +712,66 @@ impl VpnApp {
                 }
             }
             GroupsTab::Config => {
-                // 自定义配置覆写 (YAML & Clash 脚本片段)
-                Frame::NONE
-                    .fill(theme::panel())
-                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
-                    .corner_radius(CornerRadius::same(10))
-                    .inner_margin(Margin::symmetric(14, 12))
+                // 自定义配置覆写 (YAML & Clash 脚本片段)，支持大文本平滑上下滚动
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            icon_label(ui, Icon::Terminal, 14.0, theme::text_secondary());
-                            ui.label(
-                                RichText::new("自定义配置覆写 (YAML & Clash 脚本片段)")
-                                    .strong()
-                                    .color(theme::text_primary()),
-                            );
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui
-                                    .button("⚡ 一键载入推荐 Clash Verge 分流规则")
-                                    .on_hover_text("填入经典的 AI、Google、多线下载与国内直连分流配置")
-                                    .clicked()
-                                {
-                                    self.proxy_config.override_yaml =
-                                        Some(CLASH_VERGE_RECOMMENDED_OVERRIDE.to_string());
-                                    self.save_proxy_config();
-                                }
-                                if ui.button("清空覆写").clicked() {
-                                    self.proxy_config.override_yaml = None;
+                        Frame::NONE
+                            .fill(theme::panel())
+                            .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                            .corner_radius(CornerRadius::same(10))
+                            .inner_margin(Margin::symmetric(14, 12))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    icon_label(ui, Icon::Terminal, 14.0, theme::text_secondary());
+                                    ui.label(
+                                        RichText::new("自定义配置覆写 (YAML & Clash 脚本片段)")
+                                            .strong()
+                                            .color(theme::text_primary()),
+                                    );
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui
+                                            .button("⚡ 一键载入推荐 Clash Verge 分流规则")
+                                            .on_hover_text("填入经典的 AI、Google、多线下载与国内直连分流配置")
+                                            .clicked()
+                                        {
+                                            self.proxy_config.override_yaml =
+                                                Some(CLASH_VERGE_RECOMMENDED_OVERRIDE.to_string());
+                                            self.save_proxy_config();
+                                        }
+                                        if ui.button("清空覆写").clicked() {
+                                            self.proxy_config.override_yaml = None;
+                                            self.save_proxy_config();
+                                        }
+                                    });
+                                });
+                                ui.add_space(6.0);
+                                ui.label(
+                                    RichText::new(
+                                        "支持直接粘贴 Clash Verge Rev 风格的 YAML 配置覆写（rules / proxy-groups 等），启动时将自动合并生效："
+                                    )
+                                    .small()
+                                    .color(theme::muted()),
+                                );
+                                ui.add_space(6.0);
+                                let mut text = self.proxy_config.override_yaml.clone().unwrap_or_default();
+                                let editor = ui.add(
+                                    egui::TextEdit::multiline(&mut text)
+                                        .font(egui::TextStyle::Monospace)
+                                        .desired_rows(18)
+                                        .desired_width(f32::INFINITY)
+                                        .hint_text("# 可在此处粘贴自定义 rules 或 proxy-groups YAML 片段\nrules:\n  - DOMAIN-SUFFIX,openai.com,AI分组\n  - PROCESS-NAME,IDMan.exe,多线并发下载"),
+                                );
+                                if editor.changed() {
+                                    self.proxy_config.override_yaml = if text.trim().is_empty() {
+                                        None
+                                    } else {
+                                        Some(text)
+                                    };
                                     self.save_proxy_config();
                                 }
                             });
-                        });
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new(
-                                "支持直接粘贴 Clash Verge Rev 风格的 YAML 配置覆写（rules / proxy-groups 等），启动时将自动合并生效："
-                            )
-                            .small()
-                            .color(theme::muted()),
-                        );
-                        ui.add_space(6.0);
-                        let mut text = self.proxy_config.override_yaml.clone().unwrap_or_default();
-                        let editor = ui.add(
-                            egui::TextEdit::multiline(&mut text)
-                                .font(egui::TextStyle::Monospace)
-                                .desired_rows(16)
-                                .desired_width(f32::INFINITY)
-                                .hint_text("# 可在此处粘贴自定义 rules 或 proxy-groups YAML 片段\nrules:\n  - DOMAIN-SUFFIX,openai.com,AI分组\n  - PROCESS-NAME,IDMan.exe,多线并发下载"),
-                        );
-                        if editor.changed() {
-                            self.proxy_config.override_yaml = if text.trim().is_empty() {
-                                None
-                            } else {
-                                Some(text)
-                            };
-                            self.save_proxy_config();
-                        }
+                        ui.add_space(10.0);
                     });
             }
         }
