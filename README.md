@@ -1,8 +1,13 @@
 # VPN Parser
 
-Rust + egui 写的桌面程序：采集订阅、解析节点、跑代理、把代理质量实测出来。
-Windows 是主目标（安装包 + 系统代理 + TUN）；Linux 已能编译、运行并自带 deb/rpm 打包，
-但目前只提供本地混合端口（把应用指向 `127.0.0.1` 的监听端口），TUN 还没接入。
+Rust + egui 编写的高性能现代化跨平台桌面代理工具：采集订阅、解析节点、驱动代理内核（Mihomo / sing-box / Xray），并实测代理可用性与延迟。
+
+<p align="center">
+  <img src="docs/images/dashboard.png" alt="VPN Parser 控制台主界面" width="100%">
+</p>
+
+- **Windows**：安装包（Inno Setup）+ 系统代理一键控制 + TUN 虚拟网卡模式（带管理员提权）
+- **Linux**：通用免安装 **AppImage**、Debian/Ubuntu **deb** 与 Fedora/RHEL **rpm** 全套发布包支持，提供本地混合代理端口（默认 `127.0.0.1:9980`）
 
 ## 功能
 
@@ -44,10 +49,25 @@ Windows 是主目标（安装包 + 系统代理 + TUN）；Linux 已能编译、
 
 ## 运行与打包
 
+### 直接运行与编译
 ```bash
 cargo run --release                 # 直接跑
-cargo build --release
-"<Inno Setup>\ISCC.exe" installer/vpn-parser.iss   # 安装包，产物在 dist/
+cargo build --release               # 编译 release 二进制
+```
+
+### Windows 安装包
+```powershell
+# 编译 Inno Setup 安装向导，产物输出至 dist/
+"<Inno Setup>\ISCC.exe" installer/vpn-parser.iss
+```
+
+### Linux 全套发行包 (AppImage / deb / rpm)
+```bash
+# 在 Linux / WSL 环境下一键生成全套 Linux 发布包并归档至 dist/
+bash scripts/build_linux_packages.sh
+
+# 或在 Windows 下调用 PowerShell 包装脚本自动化构建
+powershell scripts/build_linux_packages.ps1
 ```
 
 数据都在程序目录的 `data/` 下：主库 `vpn-parser.db`（订阅源、设置、遥测），节点按源分片存 `data/subscriptions/*.db`。
