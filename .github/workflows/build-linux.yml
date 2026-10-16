@@ -144,7 +144,17 @@ jobs:
           fi
           rpm -qp --queryformat '%{NAME}-%{VERSION}-%{RELEASE} %{ARCH}\n' "$rpm"
           rpm -qp --list "$rpm"
-          rpm -qp --queryformat '[%{FILEMODES:octal} %{FILENAMES}\n]' "$rpm" | grep -E '^0755 /usr/bin/vpn-parser$'
+          # FILEMODES:octal 打出来是**带文件类型位的完整模式**（`100755`），不是 `0755`：
+          # 第一次我按 `^0755 ` 去 grep，包是对的、断言是错的。所以这里只取**低 9 位**比对，
+          # 并把实际值原样打出来 —— 断言写错和包装错在日志里得一眼能分开。
+          rpm -qp --queryformat '[%{FILEMODES:octal} %{FILENAMES}\n]' "$rpm" > /tmp/rpm-modes.txt
+          cat /tmp/rpm-modes.txt
+          rpm_mode() { awk -v f="$1" '$2==f{print substr($1, length($1)-2); exit}' /tmp/rpm-modes.txt; }
+          bin_mode=$(rpm_mode /usr/bin/vpn-parser)
+          desktop_mode=$(rpm_mode /usr/share/applications/vpn-parser.desktop)
+          echo "实际低 9 位：/usr/bin/vpn-parser=${bin_mode:-缺失} /usr/share/applications/vpn-parser.desktop=${desktop_mode:-缺失}"
+          [ "${bin_mode:-0}" = "755" ] || { echo "期望 /usr/bin/vpn-parser 是 755，实得 ${bin_mode:-（清单里没有这个路径）}"; exit 1; }
+          [ "${desktop_mode:-0}" = "644" ] || { echo "期望 desktop 入口是 644，实得 ${desktop_mode:-（清单里没有这个路径）}"; exit 1; }
           echo "--- appimage ---"
           ls -lh "$appimage"
           file "$appimage"
