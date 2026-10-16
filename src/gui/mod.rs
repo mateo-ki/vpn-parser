@@ -2275,6 +2275,21 @@ impl VpnApp {
         });
     }
 
+    pub(crate) fn reset_seen_gists(&mut self) {
+        let db = self.db.clone();
+        let tx = self.tx.clone();
+        self.status = "正在重置 Gist 发现历史...".into();
+        self.rt.spawn(async move {
+            let res = db.clear_seen_gists().await;
+            let _ = tx.send(BgMsg::OpDone {
+                result: res
+                    .map(|count| format!("已清空 {count} 条已见 Gist 记录，现在可以重新发现全部节点"))
+                    .map_err(|e| e.to_string()),
+                unlock: false,
+            });
+        });
+    }
+
     pub(crate) fn speedtest_ids(&mut self, ids: Option<Vec<String>>, label: &str) {
         let st = self.speedtester.clone();
         let opts = self.speed_opts();

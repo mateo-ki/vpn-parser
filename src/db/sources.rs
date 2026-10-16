@@ -135,6 +135,11 @@ impl Database {
         }
         // 这个源的分片库已经没了，索引里那一截也必须跟着作废。
         self.invalidate_node_index().await;
+        // 如果删除的是 Gist 源，解除 seen_gists 记录，允许重新发现
+        let _ = sqlx::query("DELETE FROM seen_gists WHERE source_id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await;
         Ok(true)
     }
 
@@ -204,6 +209,14 @@ impl Database {
             .fetch_all(&self.pool)
             .await?;
         Ok(rows.into_iter().collect())
+    }
+
+    /// 清空全部已见 Gist 记录，允许重新从头发现全部 Gist 节点
+    pub async fn clear_seen_gists(&self) -> Result<u64> {
+        let res = sqlx::query("DELETE FROM seen_gists")
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected())
     }
 
     /// state: registered（已注册为源）/ unusable（无节点）/ pending（网络失败，下轮重试）

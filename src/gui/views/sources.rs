@@ -131,6 +131,13 @@ impl VpnApp {
             {
                 self.discover_gists();
             }
+            if ui
+                .add_enabled(!self.busy, egui::Button::new("重置历史"))
+                .on_hover_text("清空已扫描过的 Gist 记录黑名单，允许重新发现和拉取曾经删除过的 Gist 节点")
+                .clicked()
+            {
+                self.reset_seen_gists();
+            }
         });
         ui.add_space(8.0);
 
