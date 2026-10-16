@@ -758,7 +758,8 @@ mod tests {
     /// 运行时真验一次孤儿清理：起一个名叫 `mihomo` 的进程（用 `sleep` 的副本冒充），
     /// 调用 `kill_orphan_proxy_cores()`，要求它真的被收掉；同时名字不相干的进程**不许**被牵连。
     /// 反向判据取"诱饵还活着"而不是"返回 0"：后者在任何一台真跑着 mihomo 的机器上都会假失败。
-    #[cfg(not(windows))]
+    /// 该测试依赖 Linux 上的 /proc 文件系统，macOS 上无 /proc。
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_orphan_cleaner_kills_matching_processes_and_spares_others() {
         use std::os::unix::fs::PermissionsExt;

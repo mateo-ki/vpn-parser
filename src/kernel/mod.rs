@@ -550,10 +550,10 @@ pub fn classify_version_probe(
     code: Option<i32>,
     output: &str,
 ) -> Result<Option<String>, String> {
-    if let Some(line) = parse_version_output(output) {
-        return Ok(Some(line));
-    }
     if exit_ok {
+        if let Some(line) = parse_version_output(output) {
+            return Ok(Some(line));
+        }
         return Err("内核运行成功但没有任何输出".to_string());
     }
     let raw = code.unwrap_or(-1);
@@ -571,9 +571,16 @@ pub fn classify_version_probe(
     } else {
         format!(" —— {known}")
     };
-    Err(format!(
-        "内核无法执行（退出码 {raw} / 0x{unsigned:08X}），且没有任何输出{tail}。         也可能是被杀软拦掉了。"
-    ))
+    let detail = output.trim();
+    if detail.is_empty() {
+        Err(format!(
+            "内核无法执行（退出码 {raw} / 0x{unsigned:08X}），且没有任何输出{tail}。         也可能是被杀软拦掉了。"
+        ))
+    } else {
+        Err(format!(
+            "内核无法执行（退出码 {raw} / 0x{unsigned:08X}）{tail}：{detail}"
+        ))
+    }
 }
 
 /// Go 运行时的 CPU 特性总开关。虚拟机把 CPUID 报给访客、实际却执行不了那些指令时，

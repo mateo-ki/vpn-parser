@@ -1840,10 +1840,10 @@ mod tests {
     /// 三处各写一份 `cfg!(windows)` 迟早会漂，漂了就出现"界面说本地端口、状态说拥有系统代理"。
     #[test]
     fn the_system_proxy_capability_is_one_answer_for_three_consumers() {
-        // 与平台唯一对应：Windows 能，其它不能。
+        // 与平台唯一对应：Windows 和 macOS 能，其它不能。
         assert_eq!(
             crate::system_proxy::system_proxy_supported_on_this_platform(),
-            cfg!(windows)
+            cfg!(any(windows, target_os = "macos"))
         );
         // 平台实现同意同一个答案（不是各自另判一次）。
         assert_eq!(

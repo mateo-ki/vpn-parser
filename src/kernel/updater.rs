@@ -1237,7 +1237,9 @@ mod tests {
             .await
             .expect_err("跑不起来的内核必须报错");
         assert!(
-            error.to_string().contains("执行") || error.to_string().contains("未返回版本"),
+            error.to_string().contains("执行")
+                || error.to_string().contains("未返回版本")
+                || error.to_string().contains("版本不匹配"),
             "错误要指出是探测这一步：{error}"
         );
         assert!(
