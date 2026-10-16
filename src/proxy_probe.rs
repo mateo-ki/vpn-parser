@@ -15,6 +15,7 @@ use tokio::task::JoinSet;
 use uuid::Uuid;
 
 pub const PROXY_CONNECTIVITY_TEST_URL: &str = "https://www.google.com/generate_204";
+pub const PROXY_CONNECTIVITY_FALLBACK_URL: &str = "https://cp.cloudflare.com/generate_204";
 /// Concurrent delay probes through the single shared Mihomo instance. Each probe is a
 /// TLS request to generate_204 through a real proxy. Kept moderate: too many concurrent
 /// real-proxy connections saturate consumer NICs/routers.
@@ -257,7 +258,7 @@ async fn verify_nodes_with_mihomo_path(
                 };
                 let encoded = utf8_percent_encode(&proxy.name, NON_ALPHANUMERIC);
                 let url = format!("http://127.0.0.1:{controller_port}/proxies/{encoded}/delay");
-                let outcome = probe_mihomo_target(
+                let mut outcome = probe_mihomo_target(
                     &client,
                     &url,
                     timeout_ms.as_str(),
@@ -265,6 +266,20 @@ async fn verify_nodes_with_mihomo_path(
                     "Google",
                 )
                 .await;
+                if outcome.is_err() {
+                    // 交叉探活：Google 遇阻或偶发单次抖动时，走 Cloudflare 交叉复验
+                    if let Ok(cf_res) = probe_mihomo_target(
+                        &client,
+                        &url,
+                        timeout_ms.as_str(),
+                        PROXY_CONNECTIVITY_FALLBACK_URL,
+                        "Cloudflare",
+                    )
+                    .await
+                    {
+                        outcome = Ok(cf_res);
+                    }
+                }
                 let result = match outcome {
                     Ok((delay, target)) => ProxyProbeResult {
                         id: proxy.id,

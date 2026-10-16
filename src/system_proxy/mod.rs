@@ -35,7 +35,7 @@ pub trait SystemProxyControl: Send + Sync {
 
 /// 唯一一份"本平台能不能写系统代理"的判据，启动流程与界面共用。
 pub const fn system_proxy_supported_on_this_platform() -> bool {
-    cfg!(windows)
+    cfg!(any(windows, target_os = "macos"))
 }
 
 #[derive(Debug, Default)]
@@ -84,7 +84,90 @@ impl SystemProxyControl for PlatformSystemProxy {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+impl SystemProxyControl for PlatformSystemProxy {
+    fn capture(&self) -> Result<SystemProxySnapshot> {
+        let service = macos_primary_network_service().unwrap_or_else(|| "Wi-Fi".to_string());
+        let output = Command::new("networksetup")
+            .args(["-getwebproxy", &service])
+            .output()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let enabled = text.lines().any(|l| l.contains("Enabled: Yes"));
+        let server = text.lines().find_map(|l| {
+            if l.starts_with("Server: ") {
+                let s = l.trim_start_matches("Server: ").trim();
+                if !s.is_empty() {
+                    Some(s.to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+        Ok(SystemProxySnapshot {
+            enabled,
+            server,
+            override_list: None,
+        })
+    }
+
+    fn enable(&self, server: &str) -> Result<()> {
+        if crate::diag::enabled() {
+            return Err(anyhow!(crate::diag::BLOCKED));
+        }
+        let (host, port) = parse_host_port(server)?;
+        let service = macos_primary_network_service().unwrap_or_else(|| "Wi-Fi".to_string());
+        let _ = Command::new("networksetup")
+            .args(["-setwebproxy", &service, &host, &port.to_string()])
+            .output();
+        let _ = Command::new("networksetup")
+            .args(["-setsecurewebproxy", &service, &host, &port.to_string()])
+            .output();
+        let _ = Command::new("networksetup")
+            .args(["-setwebproxystate", &service, "on"])
+            .output();
+        let _ = Command::new("networksetup")
+            .args(["-setsecurewebproxystate", &service, "on"])
+            .output();
+        Ok(())
+    }
+
+    fn restore(&self, snapshot: &SystemProxySnapshot) -> Result<()> {
+        if crate::diag::enabled() {
+            return Err(anyhow!(crate::diag::BLOCKED));
+        }
+        let service = macos_primary_network_service().unwrap_or_else(|| "Wi-Fi".to_string());
+        if snapshot.enabled {
+            if let Some(server) = &snapshot.server {
+                if let Ok((host, port)) = parse_host_port(server) {
+                    let _ = Command::new("networksetup")
+                        .args(["-setwebproxy", &service, &host, &port.to_string()])
+                        .output();
+                    let _ = Command::new("networksetup")
+                        .args(["-setsecurewebproxy", &service, &host, &port.to_string()])
+                        .output();
+                    let _ = Command::new("networksetup")
+                        .args(["-setwebproxystate", &service, "on"])
+                        .output();
+                    let _ = Command::new("networksetup")
+                        .args(["-setsecurewebproxystate", &service, "on"])
+                        .output();
+                    return Ok(());
+                }
+            }
+        }
+        let _ = Command::new("networksetup")
+            .args(["-setwebproxystate", &service, "off"])
+            .output();
+        let _ = Command::new("networksetup")
+            .args(["-setsecurewebproxystate", &service, "off"])
+            .output();
+        Ok(())
+    }
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
 impl SystemProxyControl for PlatformSystemProxy {
     fn capture(&self) -> Result<SystemProxySnapshot> {
         Err(anyhow!("当前平台暂不支持系统代理设置"))
@@ -97,6 +180,54 @@ impl SystemProxyControl for PlatformSystemProxy {
     fn restore(&self, _snapshot: &SystemProxySnapshot) -> Result<()> {
         Err(anyhow!("当前平台暂不支持系统代理设置"))
     }
+}
+
+#[allow(dead_code)]
+fn parse_host_port(server: &str) -> Result<(String, u16)> {
+    let clean = server.trim_start_matches("http://").trim_start_matches("https://");
+    if let Some((host, port_str)) = clean.rsplit_once(':') {
+        let port: u16 = port_str.parse().map_err(|e| anyhow!("无效端口: {e}"))?;
+        Ok((host.to_string(), port))
+    } else {
+        Err(anyhow!("代理地址缺少端口: {server}"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_primary_network_service() -> Option<String> {
+    let output = Command::new("route")
+        .args(["-n", "get", "default"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let interface = text.lines().find_map(|line| {
+        let trimmed = line.trim();
+        if trimmed.starts_with("interface:") {
+            Some(trimmed.trim_start_matches("interface:").trim().to_string())
+        } else {
+            None
+        }
+    })?;
+
+    let order_out = Command::new("networksetup")
+        .args(["-listnetworkserviceorder"])
+        .output()
+        .ok()?;
+    let order_text = String::from_utf8_lossy(&order_out.stdout);
+    let mut current_service = None;
+    for line in order_text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('(') && trimmed.contains("Hardware Port:") {
+            if trimmed.contains(&format!("Device: {interface}")) {
+                return current_service;
+            }
+        } else if trimmed.starts_with('(') {
+            if let Some(pos) = trimmed.find(')') {
+                current_service = Some(trimmed[pos + 1..].trim().to_string());
+            }
+        }
+    }
+    current_service.or_else(|| Some("Wi-Fi".to_string()))
 }
 
 /// 读取 Windows 系统代理（v2rayN/Clash 等工具会写这里），返回 `http://host:port`。
@@ -469,5 +600,18 @@ mod tests {
         let output = "HKEY_CURRENT_USER\\Software\\Microsoft\n    Other    REG_SZ    value";
 
         assert_eq!(parse_reg_value(output, "ProxyServer"), None);
+    }
+
+    #[test]
+    fn parses_host_port_for_system_proxy() {
+        assert_eq!(
+            parse_host_port("127.0.0.1:9980").unwrap(),
+            ("127.0.0.1".into(), 9980)
+        );
+        assert_eq!(
+            parse_host_port("http://127.0.0.1:7890").unwrap(),
+            ("127.0.0.1".into(), 7890)
+        );
+        assert!(parse_host_port("invalid-no-port").is_err());
     }
 }

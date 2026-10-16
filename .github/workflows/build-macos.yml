@@ -1,0 +1,95 @@
+name: macOS
+
+# macOS 持续集成与发布流水线：
+# 1) 跑全量测试 (macos-latest runner)；
+# 2) 打 tag 或手动触发时编译 release 二进制并打包为 darwin tar.gz 归档；
+# 3) 计算 SHA-256 并自动并入 GitHub Release。
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: 测试 (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 stable 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 cargo 依赖和 target
+        uses: Swatinem/rust-cache@v2
+
+      - name: 跑全量测试
+        run: cargo test --bin vpn-parser
+
+  package:
+    name: 打包 macOS 发行版
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 核对 tag 与 Cargo.toml 的版本一致
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          declared=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)
+          from_tag=${GITHUB_REF_NAME#v}
+          if [ "$from_tag" != "$declared" ]; then
+            echo "tag $GITHUB_REF_NAME says $from_tag but Cargo.toml says $declared" >&2
+            exit 1
+          fi
+          echo "version matches tag: $declared"
+
+      - name: 装 stable 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 cargo 依赖和 target
+        uses: Swatinem/rust-cache@v2
+
+      - name: 编译 release 版
+        run: cargo build --release --bin vpn-parser
+
+      - name: 创建 macOS 归档包 (.tar.gz)
+        run: |
+          version=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)
+          arch=$(uname -m)
+          mkdir -p dist
+          tar_name="vpn-parser-${version}-darwin-${arch}.tar.gz"
+          tar -czf "dist/${tar_name}" -C target/release vpn-parser
+          cd dist
+          shasum -a 256 "${tar_name}" > "${tar_name}.sha256"
+          cat "${tar_name}.sha256"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-binary
+          path: dist/*
+          if-no-files-found: error
+
+      - name: 上传到 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          for f in dist/*.tar.gz dist/*.sha256; do
+            [ -f "$f" ] || continue
+            echo "Uploading $f to release $TAG..."
+            gh release upload "$TAG" "$f" --clobber
+          done

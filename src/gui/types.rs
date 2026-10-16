@@ -59,7 +59,7 @@ pub enum ProxySortBy {
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct ProxyViewRow {
-    pub node: NodeSummary,
+    pub index: usize,
     pub country: String,
     pub lower_name: String,
 }

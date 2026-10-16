@@ -1,6 +1,6 @@
 use crate::gui::icons::{self, Icon};
 use crate::gui::theme;
-use crate::gui::view_models::nodes_vm::NodesViewModel;
+use crate::gui::view_models::nodes_vm::{NodeCardAction, NodesViewModel};
 use crate::gui::widgets::{
     card_frame, compact_node_card, latency_label, node_group_key, panel_frame, primary_btn,
     region_label, section_title, sort_label,
@@ -33,6 +33,9 @@ impl VpnApp {
                             .hint_text("vmess..."),
                     );
                     crate::gui::widgets::note_text_field(ui, &protocol_field);
+                    if protocol_field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        filter_changed = true;
+                    }
 
                     ui.separator();
                     ui.label(
@@ -46,6 +49,9 @@ impl VpnApp {
                             .hint_text("名称/IP..."),
                     );
                     crate::gui::widgets::note_text_field(ui, &keyword_field);
+                    if keyword_field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        filter_changed = true;
+                    }
 
                     ui.separator();
                     ui.label(
@@ -351,7 +357,7 @@ impl VpnApp {
                     .strong()
                     .color(theme::text_secondary()),
             );
-            let groups = self.node_groups.clone();
+            let selected_source_id = self.selected_node_source_id.clone();
             let mut next_source = None;
             ui.scope(|ui| {
                 ui.style_mut().always_scroll_the_only_direction = true;
@@ -360,10 +366,10 @@ impl VpnApp {
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            for group in &groups {
+                            for group in &self.node_groups {
                                 let key = node_group_key(group);
                                 let selected =
-                                    self.selected_node_source_id.as_deref() == Some(&key);
+                                    selected_source_id.as_deref() == Some(&key);
                                 let label = format!(
                                     "{}  可用 {} / 共 {}",
                                     group.source_name, group.alive, group.total
@@ -413,26 +419,29 @@ impl VpnApp {
             return;
         }
 
+        let mut card_action: Option<NodeCardAction> = None;
         panel_frame().show(ui, |ui| {
             let (columns, total_card_rows) =
                 NodesViewModel::grid_layout(ui.available_width(), self.nodes.len());
-            let nodes = self.nodes.clone();
+            let selected_id = self.selected_proxy_node_id.clone();
+            let switching_id = self.switching_node_id.clone();
+            let is_busy = self.busy;
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show_rows(ui, 84.0, total_card_rows, |ui, row_range| {
                     for row_idx in row_range {
                         let start = row_idx * columns;
-                        let end = (start + columns).min(nodes.len());
-                        let row = &nodes[start..end];
+                        let end = (start + columns).min(self.nodes.len());
+                        let row = &self.nodes[start..end];
                         ui.columns(columns, |column_uis| {
                             for (column_index, column_ui) in column_uis.iter_mut().enumerate() {
                                 let Some(node) = row.get(column_index) else {
                                     continue;
                                 };
                                 let is_selected =
-                                    self.selected_proxy_node_id.as_deref() == Some(&node.id);
+                                    selected_id.as_deref() == Some(&node.id);
                                 let is_switching =
-                                    self.switching_node_id.as_deref() == Some(&node.id);
+                                    switching_id.as_deref() == Some(&node.id);
                                 let response =
                                     compact_node_card(column_ui, node, is_selected, is_switching)
                                         .on_hover_text(format!(
@@ -442,18 +451,18 @@ impl VpnApp {
                                 let connect = response.clicked();
                                 response.context_menu(|ui| {
                                     if ui
-                                        .add_enabled(!self.busy, egui::Button::new("测速节点"))
+                                        .add_enabled(!is_busy, egui::Button::new("测速节点"))
                                         .clicked()
                                     {
-                                        self.speedtest_one(node.id.clone());
+                                        card_action = Some(NodeCardAction::Speedtest(node.id.clone()));
                                         ui.close_menu();
                                     }
                                     if ui.button("查看详情").clicked() {
-                                        self.show_node(node.id.clone());
+                                        card_action = Some(NodeCardAction::ShowDetail(node.id.clone()));
                                         ui.close_menu();
                                     }
                                     if ui.button("IP 检测").clicked() {
-                                        self.check_ip_risk_for(&node.id);
+                                        card_action = Some(NodeCardAction::CheckIpRisk(node.id.clone()));
                                         ui.close_menu();
                                     }
                                     ui.separator();
@@ -461,16 +470,15 @@ impl VpnApp {
                                         .button(RichText::new("删除节点").color(theme::danger()))
                                         .clicked()
                                     {
-                                        self.delete_node(node.id.clone());
+                                        card_action = Some(NodeCardAction::Delete(node.id.clone()));
                                         ui.close_menu();
                                     }
                                 });
                                 if connect && !is_selected {
-                                    self.switch_proxy_node(
-                                        node.id.clone(),
-                                        node.name.clone(),
-                                        "手动切换",
-                                    );
+                                    card_action = Some(NodeCardAction::Connect {
+                                        id: node.id.clone(),
+                                        name: node.name.clone(),
+                                    });
                                 }
                             }
                         });
@@ -478,6 +486,17 @@ impl VpnApp {
                     }
                 });
         });
+        if let Some(action) = card_action {
+            match action {
+                NodeCardAction::Connect { id, name } => {
+                    self.switch_proxy_node(id, name, "手动切换");
+                }
+                NodeCardAction::Speedtest(id) => self.speedtest_one(id),
+                NodeCardAction::ShowDetail(id) => self.show_node(id),
+                NodeCardAction::CheckIpRisk(id) => self.check_ip_risk_for(&id),
+                NodeCardAction::Delete(id) => self.delete_node(id),
+            }
+        }
     }
 
     pub(crate) fn ui_detail(&mut self, ctx: &egui::Context) {

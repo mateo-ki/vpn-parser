@@ -3,10 +3,11 @@ use crate::gui::theme;
 use crate::gui::types::{
     ActiveConnectionInfo, ProxyPanel, ProxySortBy, ProxyView, ProxyViewRow, RuleDraftKind, RulesTab,
 };
+use crate::gui::view_models::nodes_vm::NodeCardAction;
 use crate::gui::widgets::{
-    card_frame, clock_of, compact_node_card, country_flag_and_name, danger_btn, dns_mode_label,
+    card_frame, compact_node_card, country_flag_and_name, danger_btn, dns_mode_label,
     format_bytes, format_speed, header_cell, panel_frame, panel_tab, primary_btn,
-    proxy_state_label, render_health_strip, render_traffic_sparkline, routing_mode_description,
+    render_health_strip, render_traffic_sparkline, routing_mode_description,
     routing_mode_detail, rule_action_label, rule_matcher_label, section_title, status_badge,
     tun_stack_label,
 };
@@ -16,7 +17,7 @@ use crate::models::NodeSummary;
 use crate::proxy::{
     adblock_quic_rules, ai_service_rules, dev_mirrors_rules, game_platforms_rules,
     mihomo_dns_poison_overrides, optimize_traffic_rules, recommended_traffic_rules,
-    social_telegram_rules, streaming_media_rules, DnsEnhancedMode, ProxyMode, ProxyState,
+    social_telegram_rules, streaming_media_rules, AutoRoutingStrategy, DnsEnhancedMode, ProxyMode, ProxyState,
     RoutingMode, RuleAction, TrafficRule, TunStack, FINAL_GROUP, URL_TEST_GROUP,
 };
 use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, Vec2};
@@ -62,74 +63,75 @@ impl VpnApp {
         ui.add_space(8.0);
 
         panel_frame().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                // 「预备」= 内核一个都没装上、代理也没在跑。这时候说"未运行"是废话，
-                // 该说的是它还没准备好（并且软件自己正在把内核下下来）。
-                let prepared = crate::gui::prepare::is_prepared(
-                    self.kernel_installed_cached(),
-                    matches!(
-                        self.proxy_status.state,
-                        ProxyState::Running | ProxyState::Degraded | ProxyState::Starting
-                    ),
-                );
-                let (state_text, state_color) = if prepared {
-                    // 徽章自己说清走到哪一步，不用他去翻状态栏：正在下 / 第几次失败。
-                    let text = if self.kernel_busy {
-                        format!(
-                            "预备 · 正在下载内核 ({}/{})",
-                            self.prepare_attempts,
-                            crate::gui::prepare::MAX_AUTO_ATTEMPTS
-                        )
-                    } else if self.prepare_error.is_some() {
-                        format!(
-                            "预备 · 下载失败 {}/{}",
-                            self.prepare_attempts,
-                            crate::gui::prepare::MAX_AUTO_ATTEMPTS
-                        )
-                    } else {
-                        "预备".to_string()
-                    };
-                    (text, theme::accent())
-                } else {
-                    let (label, color) = proxy_state_label(self.proxy_status.state);
-                    (label.to_string(), color)
-                };
-                let badge = status_badge(ui, &state_text, state_color);
-                if prepared {
-                    // 失败原因只在 hover 里：这行已经没有横向空间了，但"为什么没成功"
-                    // 必须查得到，不能只留一个"下载失败 2/3"。
-                    let why = match &self.prepare_error {
-                        Some(error) => format!(
-                            "预备状态自动下载 mihomo 失败（第 {}/{} 次，每次换一种下载方式）：{error}\n\
-                             三次预算依次试：ghfast → gh-proxy →（这台机器挂了本地代理才有这一档）走代理 → 官方直连。\n\
-                             全失败多半是这台机器到 GitHub 的路都不通；想立刻重来：按 Ctrl+K 搜「下载内核」自己选一种方式。",
-                            self.prepare_attempts,
-                            crate::gui::prepare::MAX_AUTO_ATTEMPTS
-                        ),
-                        None if self.kernel_busy => "预备状态：正在自动下载 mihomo…".to_string(),
-                        None => "预备状态：会自动下载 mihomo 内核（开关在系统设置里）".to_string(),
-                    };
-                    badge.on_hover_text(why);
-                }
+            let is_running = matches!(
+                self.proxy_status.state,
+                ProxyState::Running | ProxyState::Degraded
+            );
+            let is_starting = matches!(self.proxy_status.state, ProxyState::Starting);
+            let prepared = crate::gui::prepare::is_prepared(
+                self.kernel_installed_cached(),
+                matches!(
+                    self.proxy_status.state,
+                    ProxyState::Running | ProxyState::Degraded | ProxyState::Starting
+                ),
+            );
 
-                // 这里只报"界面上选了谁"；内核真正在用谁由下面那行「内核实际选路」按
-                // /proxies 的实测结果说，两处各说各的、不重复猜。
-                let node_name = self
-                    .selected_proxy_node_name
-                    .as_deref()
-                    .unwrap_or("未选择代理节点");
+            // 1. 顶部主控行：左侧状态与节点名，右侧核心动作组（启动/停止、模式切换、展开监控）
+            ui.horizontal(|ui| {
+                // 发光状态信标点
+                let beacon_color = if is_running {
+                    theme::success()
+                } else if is_starting || self.switching_node_id.is_some() {
+                    theme::warning()
+                } else if prepared {
+                    theme::accent()
+                } else {
+                    theme::muted()
+                };
+                let (beacon_rect, _) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
+                ui.painter().circle_filled(beacon_rect.center(), 6.5, beacon_color.gamma_multiply(0.25));
+                ui.painter().circle_filled(beacon_rect.center(), 3.5, beacon_color);
+                ui.add_space(2.0);
+
+                // 主标题与当前节点
+                let main_title = if is_running {
+                    "代理运行中"
+                } else if is_starting {
+                    "正在启动代理..."
+                } else if prepared {
+                    "预备中 (正在下载内核)"
+                } else {
+                    "代理已停止"
+                };
                 ui.label(
-                    RichText::new(node_name)
+                    RichText::new(main_title)
                         .strong()
                         .size(16.5)
                         .color(theme::text_primary()),
                 );
 
+                if let Some(node) = &selected_node {
+                    let (flag, country_name) =
+                        country_flag_and_name(node.country.as_deref().unwrap_or(""));
+                    ui.label(
+                        RichText::new(format!("{flag} {country_name} · {}", node.name))
+                            .small()
+                            .strong()
+                            .color(theme::text_secondary()),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new("未选择节点 (请在下方列表选择)")
+                            .small()
+                            .color(theme::muted()),
+                    );
+                }
+
                 if self.switching_node_id.is_some() {
                     ui.horizontal(|ui| {
                         icon_label(ui, Icon::Lightning, 12.0, theme::warning());
                         ui.label(
-                            RichText::new("异步切换中...")
+                            RichText::new("切换中...")
                                 .color(theme::warning())
                                 .strong()
                                 .small(),
@@ -137,116 +139,84 @@ impl VpnApp {
                     });
                 }
 
-                if let Some(node) = &selected_node {
-                    // 协议彩块只在节点卡片里出现一次；顶栏再放一块，整页就到处是色块了。
-                    let (flag, country_name) =
-                        country_flag_and_name(node.country.as_deref().unwrap_or(""));
-                    ui.label(
-                        RichText::new(format!(
-                            "{flag} {country_name} · {}:{}",
-                            node.server, node.port
-                        ))
-                        .small()
-                        .color(theme::text_secondary()),
-                    );
-                }
-
-                // 连通状态从第二行挪上来：第二行整条要让给迷你流量图。
-                // 宽度不够时只留图标、文字进 hover —— 宁可少一个字，也不能把它挤出卡片。
-                let is_initial_rule_loading =
-                    self.proxy_status
-                        .last_error
-                        .as_deref()
-                        .map_or(false, |err| {
-                            err.contains("规则加载中")
-                                || err.contains("自动建立连接")
-                                || err.contains("start initial configuration")
-                        });
-                let roomy = ui.available_width() > 260.0;
-                // 「已连通」从此以实测为准，不再只看 ProxyState：2026-10-06 那次内核日志里
-                // 全是 `dial tcp …: i/o timeout`，界面还挂着绿勾，就是这么骗过去的。
-                let latest = self.health_rows.first();
-                let status = if let Some(err) = self
-                    .proxy_status
-                    .last_error
-                    .as_deref()
-                    .filter(|_| !is_initial_rule_loading)
-                {
-                    Some((Icon::Alert, theme::danger(), err.to_string()))
-                } else if is_initial_rule_loading {
-                    Some((
-                        Icon::Check,
-                        theme::success(),
-                        "代理运行中 (正在建立连接)".to_string(),
-                    ))
-                } else if self.proxy_status.state == ProxyState::Running {
-                    match latest {
-                        Some(row) if row.ok == 1 => Some((
-                            Icon::Check,
-                            theme::success(),
-                            format!(
-                                "实测 {} ✓ {}",
-                                clock_of(&row.at),
-                                row.latency_ms
-                                    .map(|ms| format!("{ms} ms"))
-                                    .unwrap_or_else(|| "—".into())
-                            ),
-                        )),
-                        Some(row) => Some((
-                            Icon::Alert,
-                            // 和旁边那条健康带的"有不通"同一个红：带子红了、紧挨着的
-                            // 这句还是石墨灰，看着像只改了一半。
-                            crate::gui::widgets::health_failed_color(),
-                            format!(
-                                "实测 {} ✗ {}（连续 {} 次）",
-                                clock_of(&row.at),
-                                row.error.clone().unwrap_or_else(|| "不通".into()),
-                                self.health_fail_streak.max(1)
-                            ),
-                        )),
-                        None => Some((
-                            Icon::Radar,
-                            theme::muted(),
-                            "已启动 · 等待首次实测（≤60 秒）".to_string(),
-                        )),
-                    }
-                } else if self.proxy_status.state == ProxyState::Degraded {
-                    Some((Icon::Alert, theme::warning(), "降级运行中".to_string()))
-                } else {
-                    Some((Icon::Radar, theme::muted(), "未运行".to_string()))
-                };
-                if let Some((icon, color, text)) = status {
-                    ui.horizontal(|ui| {
-                        icon_label(ui, icon, 13.0, color);
-                        if roomy {
-                            ui.label(RichText::new(text).small().strong().color(color));
+                // 右侧动作组（自右向左对齐）
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // 主操作按钮：大尺寸、显眼核心
+                    if is_running {
+                        if ui
+                            .add_enabled(!self.proxy_busy, danger_btn("■  停止代理"))
+                            .on_hover_text("断开当前代理连接并释放网络")
+                            .clicked()
+                        {
+                            self.stop_proxy();
                         }
-                    });
-                }
-                if roomy
-                    && matches!(
-                        self.proxy_status.state,
-                        ProxyState::Running | ProxyState::Degraded
-                    )
-                {
-                    render_health_strip(ui, &self.health_buckets);
-                }
+                    } else {
+                        let can_start =
+                            !self.proxy_busy && !is_starting && self.selected_proxy_node_id.is_some();
+                        let start = ui
+                            .add_enabled(can_start, primary_btn("▶  启动代理"))
+                            .on_hover_text(if self.selected_proxy_node_id.is_none() {
+                                "先在下方节点列表中点击选中一个节点"
+                            } else {
+                                "启动代理核心并接管出海流量"
+                            });
+                        if start.clicked() {
+                            self.start_proxy();
+                        }
+                    }
+
+                    // 模式切换按钮：系统代理 vs TUN 虚拟网卡
+                    let mode_title = match self.proxy_config.mode {
+                        ProxyMode::System if crate::system_proxy::system_proxy_supported_on_this_platform() => {
+                            "🌐 系统代理"
+                        }
+                        ProxyMode::System => "🔌 本地端口",
+                        ProxyMode::Tun => "🛡️ TUN 模式",
+                    };
+                    let mode_resp = ui
+                        .add(status_btn(mode_title))
+                        .on_hover_text("点击切换 系统代理 / TUN 虚拟网卡模式");
+                    if mode_resp.clicked() {
+                        if self.proxy_status.config_editable() {
+                            self.proxy_config.mode = match self.proxy_config.mode {
+                                ProxyMode::System => ProxyMode::Tun,
+                                ProxyMode::Tun => ProxyMode::System,
+                            };
+                            self.save_proxy_config();
+                        } else {
+                            self.status = "请先停止代理后再切换工作模式".into();
+                        }
+                    }
+
+                    // 诊断展开折叠按钮
+                    let diag_btn_text = if self.proxy_diagnostics_open {
+                        "收起图表 ▲"
+                    } else {
+                        "网络诊断 ▼"
+                    };
+                    if ui
+                        .add(egui::Button::new(
+                            RichText::new(diag_btn_text).small().color(theme::text_secondary()),
+                        ))
+                        .on_hover_text("展开或折叠 24 小时连通性健康条与实时吞吐折线图")
+                        .clicked()
+                    {
+                        self.proxy_diagnostics_open = !self.proxy_diagnostics_open;
+                    }
+                });
             });
 
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(8.0);
+            ui.add_space(6.0);
 
-            // 第二行：读数在左，迷你流量图吃掉右边剩下的整条宽度。累计值不在这儿 ——
-            // 窗口底部状态栏一直显示会话总计。
+            // 2. 轻量指标胶囊栏：整洁单行，低噪高对比
             ui.horizontal(|ui| {
                 let lat_str = selected_node
                     .as_ref()
                     .and_then(|n| n.latency_ms)
                     .map(|ms| format!("{ms} ms"))
-                    .unwrap_or_else(|| "-".into());
+                    .unwrap_or_else(|| "—".into());
                 ui.horizontal(|ui| {
-                    icon_label(ui, Icon::Lightning, 13.0, theme::text_secondary());
+                    icon_label(ui, Icon::Lightning, 12.0, theme::text_secondary());
                     ui.label(
                         RichText::new(format!("延迟: {lat_str}"))
                             .small()
@@ -256,102 +226,125 @@ impl VpnApp {
                 });
                 ui.separator();
 
-                let running = self.proxy_status.state == ProxyState::Running;
-                if running {
+                let rate_color = if is_running {
+                    theme::text_primary()
+                } else {
+                    theme::muted()
+                };
+                icon_label(ui, Icon::ArrowDown, 11.0, theme::accent());
+                ui.label(
+                    RichText::new(format_speed(self.traffic_down_rate))
+                        .small()
+                        .strong()
+                        .color(rate_color),
+                );
+                icon_label(ui, Icon::ArrowUp, 11.0, theme::success());
+                ui.label(
+                    RichText::new(format_speed(self.traffic_up_rate))
+                        .small()
+                        .strong()
+                        .color(rate_color),
+                );
+                ui.separator();
+
+                if is_running {
                     let conns = self.active_connections.len();
-                    ui.horizontal(|ui| {
-                        icon_label(ui, Icon::Radar, 12.0, theme::text_secondary());
-                        ui.label(
-                            RichText::new(format!("活跃连接: {conns}"))
-                                .small()
-                                .color(theme::text_secondary()),
-                        );
-                    });
+                    icon_label(ui, Icon::Radar, 11.0, theme::text_secondary());
+                    ui.label(
+                        RichText::new(format!("活跃连接: {conns}"))
+                            .small()
+                            .color(theme::text_secondary()),
+                    );
                     ui.separator();
                 }
+
                 ui.label(
                     RichText::new(format!(
                         "端口: Mixed {} · Controller {}",
                         self.proxy_status.mixed_port, self.proxy_status.controller_port
                     ))
                     .small()
-                    .color(theme::text_secondary()),
-                );
-                render_traffic_sparkline(ui, &self.traffic_history, running);
-            });
-
-            ui.add_space(4.0);
-            // 自动切换状态 · 切换记录入口 · 上下行速率 · 会话累计，全在一行。
-            // 2026-10-08 他把读数挪到"查看切换记录"后面；整行改成恒定渲染，
-            // 开关关掉时读数还在，切换记录也不会因为开关关掉就点不开。
-            ui.horizontal(|ui| {
-                if self.auto_failover {
-                    icon_label(ui, Icon::Shield, 12.0, theme::success());
-                    let detail = self
-                        .failover_last_reason
-                        .as_deref()
-                        .unwrap_or("已开启，最近 60 秒内代理实测正常");
-                    // 一整行要装下速率和会话累计，理由动辄六七十字（节点名在里面）会把
-                    // 后面的读数折到第二行、被表头的高度裁掉。
-                    let detail: String = if detail.chars().count() > 30 {
-                        let mut s: String = detail.chars().take(30).collect();
-                        s.push('…');
-                        s
-                    } else {
-                        detail.to_string()
-                    };
-                    ui.label(
-                        RichText::new(format!(
-                            "自动切换: 本次运行已切换 {} 次 · {detail}",
-                            self.failover_switches
-                        ))
-                        .small()
-                        .color(theme::muted()),
-                    );
-                }
-                if ui
-                    .link(format!("查看切换记录（今日 {} 次）", self.switch_today))
-                    .clicked()
-                {
-                    self.show_switch_log = true;
-                    self.reload_egress_switches();
-                }
-                ui.separator();
-                let live = matches!(
-                    self.proxy_status.state,
-                    ProxyState::Running | ProxyState::Degraded
-                );
-                let color = if live {
-                    theme::text_primary()
-                } else {
-                    theme::muted()
-                };
-                icon_label(ui, Icon::ArrowDown, 12.0, theme::accent_hover());
-                ui.label(
-                    RichText::new(format_speed(self.traffic_down_rate))
-                        .small()
-                        .strong()
-                        .color(color),
-                );
-                icon_label(ui, Icon::ArrowUp, 12.0, theme::success());
-                ui.label(
-                    RichText::new(format_speed(self.traffic_up_rate))
-                        .small()
-                        .strong()
-                        .color(color),
-                );
-                ui.separator();
-                ui.label(
-                    RichText::new(format!(
-                        "会话 ↑ {} ↓ {}",
-                        format_bytes(self.traffic_up_total),
-                        format_bytes(self.traffic_down_total)
-                    ))
-                    .small()
                     .color(theme::muted()),
                 );
+
+                if let Some(err) = &self.proxy_status.last_error {
+                    ui.separator();
+                    icon_label(ui, Icon::Alert, 11.0, theme::warning());
+                    ui.label(
+                        RichText::new(err)
+                            .small()
+                            .color(theme::warning()),
+                    );
+                }
             });
+
+            // 3. 可折叠诊断抽屉：按需展开 24h 连通性柱状图与实时大折线图
+            if self.proxy_diagnostics_open {
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(6.0);
+
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("出海连通性 (24h) & 实时流量带宽")
+                            .small()
+                            .strong()
+                            .color(theme::text_secondary()),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(format!(
+                                "会话累计: ↑ {} ↓ {}",
+                                format_bytes(self.traffic_up_total),
+                                format_bytes(self.traffic_down_total)
+                            ))
+                            .small()
+                            .color(theme::muted()),
+                        );
+                    });
+                });
+
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    render_health_strip(ui, &self.health_buckets);
+                    render_traffic_sparkline(ui, &self.traffic_history, is_running);
+                });
+
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if self.auto_failover {
+                        icon_label(ui, Icon::Shield, 11.0, theme::success());
+                        let detail = self
+                            .failover_last_reason
+                            .as_deref()
+                            .unwrap_or("已开启，最近实测正常");
+                        let detail: String = if detail.chars().count() > 30 {
+                            let mut s: String = detail.chars().take(30).collect();
+                            s.push('…');
+                            s
+                        } else {
+                            detail.to_string()
+                        };
+                        ui.label(
+                            RichText::new(format!(
+                                "自动切换: 已切 {} 次 · {detail}",
+                                self.failover_switches
+                            ))
+                            .small()
+                            .color(theme::muted()),
+                        );
+                    }
+                    if ui
+                        .link(format!("查看切换记录（今日 {} 次）", self.switch_today))
+                        .clicked()
+                    {
+                        self.show_switch_log = true;
+                        self.reload_egress_switches();
+                    }
+                });
+            }
         });
+
 
         ui.add_space(10.0);
         ui.horizontal(|ui| {
@@ -609,6 +602,65 @@ impl VpnApp {
                 });
             });
         });
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("策略组:").small().color(theme::muted()));
+            let is_auto = self.proxy_config.url_test;
+            let current_strategy = self.proxy_config.auto_strategy;
+            let running = self.proxy_status.state == ProxyState::Running;
+
+            let is_url_test = is_auto && current_strategy == AutoRoutingStrategy::UrlTest;
+            if ui
+                .add(icons::selectable_icon_btn(Icon::Lightning, "延迟选优", is_url_test))
+                .on_hover_text(AutoRoutingStrategy::UrlTest.description())
+                .clicked()
+            {
+                self.proxy_config.url_test = true;
+                self.proxy_config.auto_strategy = AutoRoutingStrategy::UrlTest;
+                if running {
+                    self.save_proxy_config();
+                }
+            }
+
+            let is_fallback = is_auto && current_strategy == AutoRoutingStrategy::Fallback;
+            if ui
+                .add(icons::selectable_icon_btn(Icon::Shield, "故障转移", is_fallback))
+                .on_hover_text(AutoRoutingStrategy::Fallback.description())
+                .clicked()
+            {
+                self.proxy_config.url_test = true;
+                self.proxy_config.auto_strategy = AutoRoutingStrategy::Fallback;
+                if running {
+                    self.save_proxy_config();
+                }
+            }
+
+            let is_load_balance = is_auto && current_strategy == AutoRoutingStrategy::LoadBalance;
+            if ui
+                .add(icons::selectable_icon_btn(Icon::Rocket, "负载均衡", is_load_balance))
+                .on_hover_text(AutoRoutingStrategy::LoadBalance.description())
+                .clicked()
+            {
+                self.proxy_config.url_test = true;
+                self.proxy_config.auto_strategy = AutoRoutingStrategy::LoadBalance;
+                if running {
+                    self.save_proxy_config();
+                }
+            }
+
+            let is_manual = !is_auto;
+            if ui
+                .add(icons::selectable_icon_btn(Icon::Pin, "手动指定", is_manual))
+                .on_hover_text("锁定单节点通信，关闭策略组自动切换")
+                .clicked()
+            {
+                self.proxy_config.url_test = false;
+                if running {
+                    self.save_proxy_config();
+                }
+            }
+        });
         // 内核此刻到底在用谁：直接读 /proxies 的实测结果，不猜。
         // 只把两个 `now` 取出来，不 clone 整个 groups —— 开了自动选路那是几十个成员名，
         // 每帧深拷一遍纯浪费（这行每帧都画）。
@@ -675,6 +727,11 @@ impl VpnApp {
         let kernel_egress = auto_routing.then(|| self.kernel_egress_name()).flatten();
         let mut selected = None;
         let mut locked: Option<(String, String)> = None;
+        let mut menu_action: Option<NodeCardAction> = None;
+        let mut status_msg: Option<String> = None;
+        let selected_id = self.selected_proxy_node_id.clone();
+        let switching_id = self.switching_node_id.clone();
+        let is_busy = self.busy;
         let columns = if ui.available_width() >= 920.0 {
             4
         } else if ui.available_width() >= 660.0 {
@@ -705,15 +762,15 @@ impl VpnApp {
                             let Some(entry) = row.get(column_index) else {
                                 continue;
                             };
-                            let node = &entry.node;
+                            let node = &self.proxy_nodes[entry.index];
                             // 自动选路开着时，"当前用的是谁"由内核决定：高亮跟着内核的
                             // 出口走，左键点卡片不再改出口（要固定得右键显式锁定）。
                             let is_selected = if auto_routing {
                                 kernel_egress.as_deref() == Some(node.name.as_str())
                             } else {
-                                self.selected_proxy_node_id.as_deref() == Some(&node.id)
+                                selected_id.as_deref() == Some(&node.id)
                             };
-                            let is_switching = self.switching_node_id.as_deref() == Some(&node.id);
+                            let is_switching = switching_id.as_deref() == Some(&node.id);
                             let response = compact_node_card(
                                 column_ui,
                                 node,
@@ -727,24 +784,24 @@ impl VpnApp {
                             });
                             let connect = response.clicked() && !auto_routing;
                             if response.clicked() && auto_routing && !is_selected {
-                                self.status = "自动选路中：出口由内核决定，要固定这个节点请右键「锁定为出口」".into();
+                                status_msg = Some("自动选路中：出口由内核决定，要固定这个节点请右键「锁定为出口」".into());
                             }
                             let node_id = node.id.clone();
                             let node_name = node.name.clone();
                             response.context_menu(|ui| {
                                 if ui.button("查看详情").clicked() {
-                                    self.show_node(node_id.clone());
+                                    menu_action = Some(NodeCardAction::ShowDetail(node_id.clone()));
                                     ui.close_menu();
                                 }
                                 if ui
-                                    .add_enabled(!self.busy, egui::Button::new("测速节点"))
+                                    .add_enabled(!is_busy, egui::Button::new("测速节点"))
                                     .clicked()
                                 {
-                                    self.speedtest_one(node_id.clone());
+                                    menu_action = Some(NodeCardAction::Speedtest(node_id.clone()));
                                     ui.close_menu();
                                 }
                                 if ui.button("IP 检测").clicked() {
-                                    self.check_ip_risk_for(&node_id);
+                                    menu_action = Some(NodeCardAction::CheckIpRisk(node_id.clone()));
                                     ui.close_menu();
                                 }
                                 if auto_routing && !is_selected {
@@ -763,6 +820,18 @@ impl VpnApp {
                     ui.add_space(8.0);
                 }
             });
+        if let Some(msg) = status_msg {
+            self.status = msg;
+        }
+        if let Some(action) = menu_action {
+            match action {
+                NodeCardAction::ShowDetail(id) => self.show_node(id),
+                NodeCardAction::Speedtest(id) => self.speedtest_one(id),
+                NodeCardAction::CheckIpRisk(id) => self.check_ip_risk_for(&id),
+                NodeCardAction::Delete(id) => self.delete_node(id),
+                NodeCardAction::Connect { id, name } => self.switch_proxy_node(id, name, "手动切换"),
+            }
+        }
         if let Some((id, name)) = selected {
             self.switch_proxy_node(id, name, "手动切换");
         }
@@ -2609,7 +2678,7 @@ fn build_proxy_view(
 ) -> ProxyView {
     const REGIONS: [&str; 8] = ["HK", "JP", "US", "SG", "TW", "KR", "GB", "DE"];
     let mut rows: Vec<ProxyViewRow> = Vec::with_capacity(all.len());
-    for node in all {
+    for (index, node) in all.iter().enumerate() {
         let country = node
             .country
             .clone()
@@ -2635,7 +2704,7 @@ fn build_proxy_view(
             continue;
         }
         rows.push(ProxyViewRow {
-            node: node.clone(),
+            index,
             country,
             lower_name,
         });
@@ -2643,14 +2712,16 @@ fn build_proxy_view(
     match sort {
         ProxySortBy::Name => rows.sort_by(|a, b| a.lower_name.cmp(&b.lower_name)),
         ProxySortBy::Latency => rows.sort_by(|a, b| {
+            let node_a = &all[a.index];
+            let node_b = &all[b.index];
             (
-                a.node.latency_ok != Some(true),
-                a.node.latency_ms.unwrap_or(i64::MAX),
+                node_a.latency_ok != Some(true),
+                node_a.latency_ms.unwrap_or(i64::MAX),
                 &a.lower_name,
             )
                 .cmp(&(
-                    b.node.latency_ok != Some(true),
-                    b.node.latency_ms.unwrap_or(i64::MAX),
+                    node_b.latency_ok != Some(true),
+                    node_b.latency_ms.unwrap_or(i64::MAX),
                     &b.lower_name,
                 ))
         }),

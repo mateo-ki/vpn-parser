@@ -272,6 +272,7 @@ pub struct VpnApp {
     pub(crate) failover_from: Option<(String, String)>,
     /// 系统设置页的"显示高级设置"：只影响这一屏看不看得到那些数值调参，不入库。
     pub(crate) settings_advanced_open: bool,
+    pub(crate) proxy_diagnostics_open: bool,
     pub(crate) palette_open: bool,
     pub(crate) palette_query: String,
     pub(crate) palette_selected: usize,
@@ -517,6 +518,7 @@ impl VpnApp {
             failover_searching: false,
             failover_from: None,
             settings_advanced_open: false,
+            proxy_diagnostics_open: false,
             palette_open: false,
             palette_query: String::new(),
             palette_selected: 0,

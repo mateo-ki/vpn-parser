@@ -50,6 +50,7 @@ impl KernelPreference {
 pub enum KernelPlatform {
     Windows,
     Linux,
+    MacOS,
 }
 
 impl KernelPlatform {
@@ -59,11 +60,15 @@ impl KernelPlatform {
         {
             Self::Windows
         }
+        #[cfg(all(not(windows), target_os = "macos"))]
+        {
+            Self::MacOS
+        }
         #[cfg(all(not(windows), target_os = "linux"))]
         {
             Self::Linux
         }
-        #[cfg(not(any(windows, target_os = "linux")))]
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             Self::Linux
         }
@@ -131,9 +136,9 @@ impl KernelKind {
             (Self::Mihomo, KernelPlatform::Windows) => "mihomo.exe",
             (Self::Xray, KernelPlatform::Windows) => "xray.exe",
             (Self::SingBox, KernelPlatform::Windows) => "sing-box.exe",
-            (Self::Mihomo, KernelPlatform::Linux) => "mihomo",
-            (Self::Xray, KernelPlatform::Linux) => "xray",
-            (Self::SingBox, KernelPlatform::Linux) => "sing-box",
+            (Self::Mihomo, KernelPlatform::Linux | KernelPlatform::MacOS) => "mihomo",
+            (Self::Xray, KernelPlatform::Linux | KernelPlatform::MacOS) => "xray",
+            (Self::SingBox, KernelPlatform::Linux | KernelPlatform::MacOS) => "sing-box",
         }
     }
 
@@ -164,10 +169,10 @@ impl KernelKind {
         self.asset_name_for(KernelPlatform::current(), tag)
     }
 
-    /// 三个内核在 Linux 上发的容器**互不相同**（2026-10-15 拿 GitHub Release API 实测）：
-    /// mihomo = `mihomo-linux-amd64-<tag>.gz`（gzip 压的裸可执行文件），
-    /// sing-box = `sing-box-<ver>-linux-amd64.tar.gz`，xray = `Xray-linux-64.zip`。
-    /// 照 Windows 那套一律写成 `.zip` 会在下载那步直接 404。
+    /// 三个内核在各平台上发的容器格式：
+    /// mihomo: Windows (.zip), Linux (.gz), macOS (.gz)
+    /// xray: Windows (.zip), Linux (.zip), macOS (.zip)
+    /// sing-box: Windows (.zip), Linux (.tar.gz), macOS (.tar.gz)
     pub fn asset_name_for(self, platform: KernelPlatform, tag: &str) -> String {
         let version = tag.trim_start_matches('v');
         match (self, platform) {
@@ -180,6 +185,11 @@ impl KernelKind {
             (Self::Xray, KernelPlatform::Linux) => "Xray-linux-64.zip".into(),
             (Self::SingBox, KernelPlatform::Linux) => {
                 format!("sing-box-{version}-linux-amd64.tar.gz")
+            }
+            (Self::Mihomo, KernelPlatform::MacOS) => format!("mihomo-darwin-amd64-{tag}.gz"),
+            (Self::Xray, KernelPlatform::MacOS) => "Xray-macos-64.zip".into(),
+            (Self::SingBox, KernelPlatform::MacOS) => {
+                format!("sing-box-{version}-darwin-amd64.tar.gz")
             }
         }
     }
@@ -857,5 +867,33 @@ Use tags: with_gvisor
         for protocol in ["hysteria2", "tuic", "anytls", "wireguard"] {
             assert!(!KernelKind::Xray.supports_proxy_protocol(protocol));
         }
+    }
+
+    #[test]
+    fn macos_kernel_assets_and_executables() {
+        assert_eq!(
+            KernelKind::Mihomo.executable_name_for(KernelPlatform::MacOS),
+            "mihomo"
+        );
+        assert_eq!(
+            KernelKind::Xray.executable_name_for(KernelPlatform::MacOS),
+            "xray"
+        );
+        assert_eq!(
+            KernelKind::SingBox.executable_name_for(KernelPlatform::MacOS),
+            "sing-box"
+        );
+        assert_eq!(
+            KernelKind::Mihomo.asset_name_for(KernelPlatform::MacOS, "v1.18.0"),
+            "mihomo-darwin-amd64-v1.18.0.gz"
+        );
+        assert_eq!(
+            KernelKind::Xray.asset_name_for(KernelPlatform::MacOS, "v1.8.4"),
+            "Xray-macos-64.zip"
+        );
+        assert_eq!(
+            KernelKind::SingBox.asset_name_for(KernelPlatform::MacOS, "v1.8.0"),
+            "sing-box-1.8.0-darwin-amd64.tar.gz"
+        );
     }
 }

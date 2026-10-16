@@ -57,6 +57,35 @@ pub enum ProxyState {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoRoutingStrategy {
+    #[default]
+    UrlTest,
+    Fallback,
+    LoadBalance,
+}
+
+impl AutoRoutingStrategy {
+    pub const ALL: [Self; 3] = [Self::UrlTest, Self::Fallback, Self::LoadBalance];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::UrlTest => "⚡ 最低延迟 (Auto)",
+            Self::Fallback => "🛡️ 故障转移 (Fallback)",
+            Self::LoadBalance => "⚖️ 负载均衡 (LoadBalance)",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::UrlTest => "周期并发探活，将流量自动调度至实时延迟最低的健康节点",
+            Self::Fallback => "按健康顺位连接，当前主节点失活时立即无感重定向至下一存活节点",
+            Self::LoadBalance => "多节点并发流量哈希调度，分散网络负载并大幅提升突发并发吞吐",
+        }
+    }
+}
+
 // 不派生 Eq：url-test 候选里带着 Node（含浮点字段），只能做近似比较。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MihomoConfigOptions {
@@ -74,11 +103,14 @@ pub struct MihomoConfigOptions {
     /// mihomo `external-controller` 的一次性密钥，不落盘、不跨进程共享。
     #[serde(default, skip)]
     pub controller_secret: String,
-    /// 内核内自动选路：把测速前 N 名一起写进配置，交给 mihomo 的 url-test 组按延迟
+    /// 内核内自动选路：把测速前 N 名一起写进配置，交给 mihomo 的 url-test / fallback / load-balance 组按延迟
     /// 自己切换。切换就不再需要重写配置 + 热重载（那会掐断所有已建立的连接）。
     /// 仅 Mihomo 内核支持；sing-box / xray 仍按单节点生成。
     #[serde(default)]
     pub url_test: bool,
+    /// 自动选路策略（最低延迟 / 故障转移 / 负载均衡）
+    #[serde(default)]
+    pub auto_strategy: AutoRoutingStrategy,
     /// 写进 url-test 组的节点上限（含当前节点）。
     #[serde(default = "default_url_test_size")]
     pub url_test_size: u16,
@@ -110,6 +142,7 @@ impl Default for MihomoConfigOptions {
             kernel_preference: KernelPreference::Auto,
             controller_secret: String::new(),
             url_test: false,
+            auto_strategy: AutoRoutingStrategy::UrlTest,
             url_test_size: default_url_test_size(),
             terminal_proxy: false,
             url_test_nodes: Vec::new(),
@@ -275,23 +308,37 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
     rules.push(format!("MATCH,{match_target}"));
 
     let proxy_groups = if url_test_active {
-        // PROXY 的第一个成员是「自动选择」：默认就让内核按延迟自己挑，界面上选中
-        // 某个具体节点即等价于 PUT /proxies/PROXY，不需要重写配置。
+        let (group_type, extra_fields) = match options.auto_strategy {
+            AutoRoutingStrategy::UrlTest => ("url-test", json!({
+                "tolerance": URL_TEST_TOLERANCE_MS,
+                "max-failed": 3,
+            })),
+            AutoRoutingStrategy::Fallback => ("fallback", json!({})),
+            AutoRoutingStrategy::LoadBalance => ("load-balance", json!({
+                "strategy": "consistent-hashing",
+            })),
+        };
+        let mut auto_group = json!({
+            "name": URL_TEST_GROUP,
+            "type": group_type,
+            "url": crate::proxy_probe::PROXY_CONNECTIVITY_TEST_URL,
+            "interval": URL_TEST_INTERVAL_SECS,
+            "timeout": URL_TEST_TIMEOUT_MS,
+            "lazy": true,
+            "proxies": candidate_names,
+        });
+        if let Some(map) = auto_group.as_object_mut() {
+            if let Some(extra) = extra_fields.as_object() {
+                for (k, v) in extra {
+                    map.insert(k.clone(), v.clone());
+                }
+            }
+        }
         let mut proxy_members = vec![URL_TEST_GROUP.to_owned()];
         proxy_members.extend(candidate_names.iter().cloned());
         json!([
             { "name": "PROXY", "type": "select", "proxies": proxy_members },
-            {
-                "name": URL_TEST_GROUP,
-                "type": "url-test",
-                "url": crate::proxy_probe::PROXY_CONNECTIVITY_TEST_URL,
-                "interval": URL_TEST_INTERVAL_SECS,
-                "tolerance": URL_TEST_TOLERANCE_MS,
-                "timeout": URL_TEST_TIMEOUT_MS,
-                "max-failed": 3,
-                "lazy": true,
-                "proxies": candidate_names,
-            },
+            auto_group,
             {
                 "name": FINAL_GROUP,
                 "type": "select",
@@ -316,7 +363,22 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
             "ipv6": options.dns.ipv6,
             "enhanced-mode": options.dns.enhanced_mode.as_mihomo_value(),
             "fake-ip-range": "198.18.0.1/16",
-            "nameserver": options.dns.nameservers
+            "default-nameserver": [
+                "223.5.5.5",
+                "119.29.29.29",
+                "1.1.1.1",
+                "8.8.8.8"
+            ],
+            "nameserver": options.dns.nameservers,
+            "fake-ip-filter": [
+                "*.lan",
+                "*.local",
+                "localhost.ptlogin2.qq.com",
+                "+.msftconnecttest.com",
+                "+.msftncsi.com",
+                "time.*.com",
+                "ntp.*.com"
+            ]
         },
         "rules": rules
     });
@@ -388,7 +450,9 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
             "stack": options.tun.stack.as_mihomo_value(),
             "dns-hijack": options.tun.dns_hijack,
             "auto-route": options.tun.auto_route,
-            "auto-detect-interface": options.tun.auto_detect_interface
+            "auto-detect-interface": options.tun.auto_detect_interface,
+            "strict-route": true,
+            "endpoint-independent-nat": true
         });
     }
 
@@ -592,12 +656,24 @@ impl ProxyManager {
             })
             .map_err(|error| error.to_string());
         let ok = match built {
-            Ok(client) => client
-                .get(crate::proxy_probe::PROXY_CONNECTIVITY_TEST_URL)
-                .send()
-                .await
-                .map(|response| response.status().is_success())
-                .unwrap_or(false),
+            Ok(client) => {
+                let google_ok = client
+                    .get(crate::proxy_probe::PROXY_CONNECTIVITY_TEST_URL)
+                    .send()
+                    .await
+                    .map(|response| response.status().is_success())
+                    .unwrap_or(false);
+                if google_ok {
+                    true
+                } else {
+                    client
+                        .get(crate::proxy_probe::PROXY_CONNECTIVITY_FALLBACK_URL)
+                        .send()
+                        .await
+                        .map(|response| response.status().is_success())
+                        .unwrap_or(false)
+                }
+            }
             Err(_) => false,
         };
         (ok, started.elapsed().as_millis() as u64)
@@ -2038,6 +2114,35 @@ mod tests {
         assert_eq!(config["proxies"].as_array().unwrap().len(), 2);
     }
 
+    #[test]
+    fn auto_routing_strategies_emit_matching_group_types() {
+        let current = node(
+            "vless",
+            json!({"server": "1.2.3.4", "port": 443, "uuid": "u1", "network": "ws", "security": "tls"}),
+        );
+        let candidate = node(
+            "vless",
+            json!({"server": "5.6.7.8", "port": 443, "uuid": "u2", "network": "ws", "security": "tls"}),
+        );
+        for (strategy, expected_type) in [
+            (AutoRoutingStrategy::UrlTest, "url-test"),
+            (AutoRoutingStrategy::Fallback, "fallback"),
+            (AutoRoutingStrategy::LoadBalance, "load-balance"),
+        ] {
+            let mut options = MihomoConfigOptions {
+                routing_mode: RoutingMode::ChinaDirect,
+                url_test: true,
+                auto_strategy: strategy,
+                ..MihomoConfigOptions::default()
+            };
+            options.url_test_nodes =
+                crate::export::nodes_to_clash_proxies(std::slice::from_ref(&candidate));
+            let config = build_mihomo_config(&current, options).unwrap();
+            let groups = config["proxy-groups"].as_array().unwrap();
+            assert_eq!(groups[1]["type"], expected_type);
+        }
+    }
+
     /// 候选注入 → runtime.options → 配置生成 这条链以前是静默断的（SQL 拼参报错被
     /// 吞掉），所以把三段接起来测一次。
     #[tokio::test]
@@ -2224,8 +2329,10 @@ mod tests {
 
         assert_eq!(config["tun"]["enable"], true);
         assert_eq!(config["tun"]["stack"], "mixed");
+        assert_eq!(config["tun"]["strict-route"], true);
         assert_eq!(config["tun"]["dns-hijack"][0], "any:53");
         assert_eq!(config["dns"]["enhanced-mode"], "fake-ip");
+        assert_eq!(config["dns"]["default-nameserver"][0], "223.5.5.5");
         assert_eq!(config["dns"]["nameserver"][0], DEFAULT_DNS_PRIMARY);
         assert_eq!(config["dns"]["nameserver"][1], DEFAULT_DNS_SECONDARY);
         assert_eq!(config["geodata-mode"], true);

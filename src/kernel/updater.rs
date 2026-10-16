@@ -1102,7 +1102,7 @@ mod tests {
         // 写死任何一个都会在另一个平台上变成"下得来但校验必挂"。
         let (want_size, want_suffix) = match KernelPlatform::current() {
             KernelPlatform::Windows => (22_492_402, ".zip"),
-            KernelPlatform::Linux => (22_846_526, ".gz"),
+            KernelPlatform::Linux | KernelPlatform::MacOS => (22_846_526, ".gz"),
         };
         assert_eq!(asset.size, want_size, "兜底大小要对得上当前平台的资产");
         assert!(
