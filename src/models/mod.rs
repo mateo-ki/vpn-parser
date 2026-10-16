@@ -258,6 +258,9 @@ pub struct AppSettings {
     /// 界面配色主题 id（见 `gui::theme::THEMES`）。未知 id 会退回默认。
     #[serde(default = "default_ui_theme")]
     pub ui_theme: String,
+    /// 界面语言代码（见 `i18n::Language`），默认 "zh-CN"。
+    #[serde(default = "default_ui_language")]
+    pub ui_language: String,
     /// 字体/界面大小，1.0 = 100%。界面上绝大多数文字写死了 `.size(..)`，只改
     /// `Style::text_styles` 会一半大一半小，所以这条走 `pixels_per_point` 整屏一起缩。
     #[serde(default = "default_ui_scale")]
@@ -320,6 +323,35 @@ fn default_ui_theme() -> String {
     "soft-cobalt".to_string()
 }
 
+fn default_ui_language() -> String {
+    // 环境变量优先检测（AppImageHub CI 在 C/en_US 环境运行，非中文环境默认回退英文）
+    for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Ok(val) = std::env::var(var) {
+            let lower = val.to_lowercase();
+            if lower.starts_with("zh_tw") || lower.starts_with("zh_hk") || lower.contains("hant") {
+                return "zh-TW".to_string();
+            }
+            if lower.starts_with("zh") {
+                return "zh-CN".to_string();
+            }
+            if lower.starts_with("ja") {
+                return "ja-JP".to_string();
+            }
+            if lower.starts_with("en") || lower == "c" || lower == "posix" {
+                return "en-US".to_string();
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "zh-CN".to_string()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "en-US".to_string()
+    }
+}
+
 /// 字体/界面大小的默认值：1.0 = 不缩放。老库里没这一列时（`ensure_column` 给的也是 1.0）
 /// 行为要和升级前完全一致。
 fn default_ui_scale() -> f32 {
@@ -377,6 +409,7 @@ impl Default for AppSettings {
             publisher_api: String::new(),
             publisher_token: String::new(),
             ui_theme: default_ui_theme(),
+            ui_language: default_ui_language(),
             ui_scale: default_ui_scale(),
             ui_dark: true,
             kernel_source: default_kernel_source(),
@@ -421,6 +454,7 @@ pub struct UpdateSettings {
     pub publisher_api: Option<String>,
     pub publisher_token: Option<String>,
     pub ui_theme: Option<String>,
+    pub ui_language: Option<String>,
     pub ui_scale: Option<f32>,
     pub ui_dark: Option<bool>,
     pub kernel_source: Option<String>,

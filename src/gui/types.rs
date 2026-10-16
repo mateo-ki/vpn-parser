@@ -16,18 +16,43 @@ pub enum Tab {
     About,
 }
 
-/// 系统设置页顶部的两个分区。卡片按"改的是软件行为"还是"改的是长什么样"分。
+/// 系统设置页的分区标签：通用设置、界面外观、订阅与测速、自愈网络、外部接口。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsTab {
     #[default]
     General,
     Appearance,
+    Automation,
+    Network,
+    Api,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SourcesPanel {
     List,
     Results,
+}
+
+/// 订阅列表的「状态」筛选。每个选项都对得上表格里**已经画出来**的那一格，不发明第三种状态：
+/// 启用/停用 = 状态列那枚徽章，拉取失败 = 同一列那行状态文字（判据就是列表里"重试"按钮
+/// 用的 `source_status_failed`），无节点 = 健康列的「无节点」。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SourceStatusFilter {
+    All,
+    Enabled,
+    Disabled,
+    Failed,
+    NoNodes,
+}
+
+impl SourceStatusFilter {
+    pub const ALL: [Self; 5] = [
+        Self::All,
+        Self::Enabled,
+        Self::Disabled,
+        Self::Failed,
+        Self::NoNodes,
+    ];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -411,6 +436,7 @@ pub struct SettingsEditState {
     pub bandwidth_guard: bool,
     pub bandwidth_min_kbps: u32,
     pub ui_theme: String,
+    pub ui_language: String,
     pub ui_scale: f32,
     pub ui_dark: bool,
     /// 参与预发：检查更新时也看 GitHub 上标了 prerelease 的 beta（在「关于」页里勾）。
@@ -449,6 +475,7 @@ impl SettingsEditState {
             bandwidth_guard: s.bandwidth_guard,
             bandwidth_min_kbps: s.bandwidth_min_kbps,
             ui_theme: s.ui_theme.clone(),
+            ui_language: s.ui_language.clone(),
             ui_scale: s.ui_scale,
             ui_dark: s.ui_dark,
             insider_channel: s.insider_channel,
@@ -489,6 +516,7 @@ impl SettingsEditState {
             // save_settings 才看起来正常）。它们能放进来靠的是 `settings_seeded` —— 第一次
             // 加载设置会无条件把库里的值灌进编辑态，否则启动时一比就脏，同步永远不发生。
             || self.ui_theme != s.ui_theme
+            || self.ui_language != s.ui_language
             || (self.ui_scale - s.ui_scale).abs() > 0.001
             || self.ui_dark != s.ui_dark
             || self.insider_channel != s.insider_channel

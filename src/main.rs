@@ -11,6 +11,7 @@ mod geo;
 #[cfg(feature = "gui")]
 mod gui;
 mod hostutil;
+mod i18n;
 mod ip_risk;
 mod kernel;
 mod models;
@@ -440,9 +441,8 @@ fn main() -> Result<()> {
                 // 系统标题栏去掉，换成 gui::VpnApp::ui_title_bar 自绘的一条
                 // （最小化 / 最大化 / 关闭 + 拖动 + 8 向缩放手）。
                 .with_decorations(false)
-                // 1280 → 1330：设置页表头那排右对齐按钮（保存设置）在 1280 宽时
-                // 会被窗口右边缘裁掉，用户 2026-10-07 要求加宽 50px。
-                .with_inner_size([1330.0, 800.0])
+                // 1440 × 880：用户要求宽高增加，提供更充裕的操作栏、节点表格与设置纵向可视空间。
+                .with_inner_size([1440.0, 880.0])
                 .with_min_inner_size([960.0, 600.0])
                 .with_title("VPN Parser")
                 .with_icon(app_icon.clone())

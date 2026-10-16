@@ -230,7 +230,14 @@ impl VpnApp {
     fn apply_palette_action(&mut self, action: crate::gui::types::PaletteAction) {
         use crate::gui::types::PaletteAction;
         match action {
-            PaletteAction::Goto(tab) => self.tab = tab,
+            PaletteAction::Goto(tab) => {
+                if tab == Tab::Api {
+                    self.tab = Tab::Settings;
+                    self.settings_tab = crate::gui::types::SettingsTab::Api;
+                } else {
+                    self.tab = tab;
+                }
+            }
             PaletteAction::GotoProxyPanel(panel) => {
                 self.tab = Tab::Proxy;
                 self.proxy_panel = panel;

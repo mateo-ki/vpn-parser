@@ -60,6 +60,9 @@ pub struct VpnApp {
 
     pub(crate) tab: Tab,
     pub(crate) sources_panel: SourcesPanel,
+    /// 订阅列表的过滤条件：名称子串 + 状态（都是"当场过滤表格"，不落库）。
+    pub(crate) source_name_filter: String,
+    pub(crate) source_status_filter: SourceStatusFilter,
     pub(crate) proxy_panel: ProxyPanel,
     pub(crate) status: String,
     /// 上一帧量到的"状态栏右侧动作组"宽度。状态文本照它让位，长日志才不会压到按钮上面。
@@ -122,6 +125,8 @@ pub struct VpnApp {
     pub(crate) new_rule_value: String,
     pub(crate) new_rule_action: RuleAction,
     pub(crate) show_recommended_rules_confirm: bool,
+    pub(crate) show_clear_sources_confirm: bool,
+    pub(crate) show_gist_config_modal: bool,
     /// 分流规则面板的分区（配置 / 命中记录）。
     pub(crate) rules_tab: RulesTab,
     /// 分流策略组面板的分区（视图 / 配置）。
@@ -275,6 +280,7 @@ pub struct VpnApp {
     /// 复检期间记着"从哪个节点切走"，好把没切成的那一次也写进切换历史。
     pub(crate) failover_from: Option<(String, String)>,
     /// 系统设置页的"显示高级设置"：只影响这一屏看不看得到那些数值调参，不入库。
+    #[allow(dead_code)]
     pub(crate) settings_advanced_open: bool,
     pub(crate) proxy_diagnostics_open: bool,
     pub(crate) palette_open: bool,
@@ -286,6 +292,7 @@ pub struct VpnApp {
     pub(crate) edit_bandwidth_guard: bool,
     pub(crate) edit_bandwidth_min_kbps: u32,
     pub(crate) edit_ui_theme: String,
+    pub(crate) edit_ui_language: String,
     /// 字体/界面大小（1.0 = 100%），落库后乘在系统缩放上当 pixels_per_point。
     pub(crate) edit_ui_scale: f32,
     /// 夜间模式（编辑态）：和强调色正交的一个开关。
@@ -364,6 +371,8 @@ impl VpnApp {
             publisher_seeded: false,
             tab: Tab::Proxy,
             sources_panel: SourcesPanel::List,
+            source_name_filter: String::new(),
+            source_status_filter: SourceStatusFilter::All,
             proxy_panel: ProxyPanel::Nodes,
             status: "就绪".into(),
             status_actions_width: 0.0,
@@ -420,6 +429,8 @@ impl VpnApp {
             new_rule_value: String::new(),
             new_rule_action: RuleAction::Proxy,
             show_recommended_rules_confirm: false,
+            show_clear_sources_confirm: false,
+            show_gist_config_modal: false,
             rules_tab: RulesTab::default(),
             groups_tab: GroupsTab::default(),
             show_rule_import: false,
@@ -536,6 +547,7 @@ impl VpnApp {
             edit_bandwidth_guard: false,
             edit_bandwidth_min_kbps: 0,
             edit_ui_theme: theme::DEFAULT_THEME.to_string(),
+            edit_ui_language: "zh-CN".to_string(),
             edit_ui_scale: 1.0,
             edit_ui_dark: false,
             edit_insider_channel: false,
@@ -1790,6 +1802,23 @@ impl VpnApp {
                         "订阅源不存在".into()
                     }
                 })
+                .map_err(|e| e.to_string());
+            let _ = tx.send(BgMsg::OpDone {
+                result: res,
+                unlock: false,
+            });
+        });
+    }
+
+    pub(crate) fn clear_all_sources(&mut self) {
+        let db = self.db.clone();
+        let tx = self.tx.clone();
+        self.status = "正在清空全部订阅源...".into();
+        self.rt.spawn(async move {
+            let res = db
+                .clear_all_sources()
+                .await
+                .map(|count| format!("已清空全部 {} 个订阅源及关联节点", count))
                 .map_err(|e| e.to_string());
             let _ = tx.send(BgMsg::OpDone {
                 result: res,
@@ -3172,18 +3201,22 @@ impl VpnApp {
         self.rt.spawn(async move {
             let client = reqwest::Client::new();
             let url = format!("http://127.0.0.1:{port}/proxies/{group}");
-            let result = crate::proxy::with_controller_auth(client.put(&url), &secret)
+            let response_res = crate::proxy::with_controller_auth(client.put(&url), &secret)
                 .json(&serde_json::json!({ "name": target }))
                 .send()
-                .await
-                .map_err(|error| error.to_string())
-                .and_then(|response| {
+                .await;
+            let result = match response_res {
+                Ok(response) => {
                     if response.status().is_success() {
                         Ok(())
                     } else {
-                        Err(format!("内核拒绝切换: {}", response.status()))
+                        let status = response.status();
+                        let body = response.text().await.unwrap_or_default();
+                        Err(format!("内核拒绝切换策略组 {group} ({status}): {body}"))
                     }
-                });
+                }
+                Err(error) => Err(error.to_string()),
+            };
             let _ = tx.send(BgMsg::OpDone {
                 result: result.map(|_| format!("已切换 {group} → {target}")),
                 unlock: false,
@@ -3561,6 +3594,7 @@ impl VpnApp {
     pub(crate) fn settings_edit_state(&self) -> SettingsEditState {
         SettingsEditState {
             ui_theme: self.edit_ui_theme.clone(),
+            ui_language: self.edit_ui_language.clone(),
             ui_scale: self.edit_ui_scale,
             ui_dark: self.edit_ui_dark,
             insider_channel: self.edit_insider_channel,
@@ -3636,6 +3670,7 @@ impl VpnApp {
         self.edit_bandwidth_guard = state.bandwidth_guard;
         self.edit_bandwidth_min_kbps = state.bandwidth_min_kbps;
         self.edit_ui_theme = state.ui_theme.clone();
+        self.edit_ui_language = state.ui_language.clone();
         self.edit_ui_scale = state.ui_scale;
         self.edit_ui_dark = state.ui_dark;
         self.edit_insider_channel = state.insider_channel;
@@ -3672,6 +3707,7 @@ impl VpnApp {
             bandwidth_guard: Some(self.edit_bandwidth_guard),
             bandwidth_min_kbps: Some(self.edit_bandwidth_min_kbps),
             ui_theme: Some(self.edit_ui_theme.clone()),
+            ui_language: Some(self.edit_ui_language.clone()),
             ui_scale: Some(crate::models::clamp_ui_scale(self.edit_ui_scale)),
             ui_dark: Some(self.edit_ui_dark),
             insider_channel: Some(self.edit_insider_channel),
@@ -3764,6 +3800,14 @@ impl VpnApp {
         });
         crate::platform::trim_working_set();
         self.memory_trimmed_status = Some("已深度整理进程内存，工作集已释放".into());
+    }
+
+    pub(crate) fn lang(&self) -> crate::i18n::Language {
+        crate::i18n::Language::from_code(&self.edit_ui_language)
+    }
+
+    pub(crate) fn tr<'a>(&self, key: &'a str) -> &'a str {
+        crate::i18n::tr(self.lang(), key)
     }
 }
 
@@ -4045,7 +4089,11 @@ impl eframe::App for VpnApp {
                     Tab::Nodes => self.ui_nodes(ui),
                     Tab::Proxy => self.ui_proxy(ui),
                     Tab::Settings => self.ui_settings(ui),
-                    Tab::Api => self.ui_api(ui),
+                    Tab::Api => {
+                        self.tab = Tab::Settings;
+                        self.settings_tab = SettingsTab::Api;
+                        self.ui_settings(ui);
+                    }
                     Tab::About => self.ui_about(ui),
                 }
             });

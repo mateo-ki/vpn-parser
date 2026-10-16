@@ -1,6 +1,6 @@
 use crate::gui::icons::{self, icon_label, Icon};
 use crate::gui::theme;
-use crate::gui::types::SourcesPanel;
+use crate::gui::types::{SourceStatusFilter, SourcesPanel};
 use crate::gui::widgets::{
     card_frame, header_cell, primary_btn, render_fetch_ticks, source_status_failed,
     status_badge,
@@ -10,80 +10,124 @@ use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
 
 impl VpnApp {
     pub(crate) fn ui_sources(&mut self, ui: &mut Ui) {
+        self.ui_clear_sources_confirm(ui.ctx());
+        self.ui_gist_config_modal(ui.ctx());
+
         ui.horizontal(|ui| {
             if ui
-                .selectable_label(self.sources_panel == SourcesPanel::List, "订阅列表")
+                .selectable_label(self.sources_panel == SourcesPanel::List, self.tr("订阅列表"))
                 .clicked()
             {
                 self.sources_panel = SourcesPanel::List;
             }
             if ui
-                .selectable_label(self.sources_panel == SourcesPanel::Results, "订阅拉取结果")
+                .selectable_label(self.sources_panel == SourcesPanel::Results, self.tr("订阅拉取结果"))
                 .clicked()
             {
                 self.sources_panel = SourcesPanel::Results;
             }
 
-            if self.sources_panel == SourcesPanel::List {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("🔄 刷新").clicked() {
-                        self.reload_all();
-                    }
-                    if ui
-                        .add_enabled(!self.busy, primary_btn("拉取全部启用源"))
-                        .on_hover_text("后台拉取全部启用源")
-                        .clicked()
-                    {
-                        self.fetch_all();
-                    }
-                    if ui.add(primary_btn("新增订阅源")).clicked() {
-                        self.open_create_form();
-                    }
-                });
-            }
+            // 「刷新」原来钉在这一行的最右，现在跟着过滤条件走（见第 3 行）。
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self.settings.auto_fetch_enabled {
+                    ui.horizontal(|ui| {
+                        icon_label(ui, Icon::Sync, 12.0, theme::success());
+                        ui.label(
+                            RichText::new(format!(
+                                "自动拉取 每 {} 分钟",
+                                self.settings.auto_fetch_interval_min
+                            ))
+                            .color(theme::success())
+                            .small(),
+                        );
+                    });
+                }
+            });
         });
         ui.add_space(6.0);
         if self.sources_panel == SourcesPanel::Results {
             self.ui_fetch_results(ui);
             return;
         }
-        ui.horizontal_wrapped(|ui| {
+
+        // 第 1 行：新建 拉取全部 代理拉取全部 导入订阅 导出订阅 清空全部
+        ui.horizontal(|ui| {
+            if ui.add(primary_btn(self.tr("新建"))).on_hover_text("新增订阅源配置").clicked() {
+                self.open_create_form();
+            }
             if ui
-                .add_enabled(!self.busy, egui::Button::new("🌐 接入 OpenRung 节点"))
+                .add_enabled(!self.busy, egui::Button::new(self.tr("拉取全部")))
+                .on_hover_text("后台拉取全部已启用的订阅源")
+                .clicked()
+            {
+                self.fetch_all();
+            }
+            if ui
+                .add_enabled(!self.busy, egui::Button::new(self.tr("代理拉取全部")))
+                .on_hover_text("通过当前运行中的本地代理拉取全部启用源（防止 GitHub / Raw 阻断）")
+                .clicked()
+            {
+                self.fetch_all_via_proxy();
+            }
+            if ui
+                .add_enabled(!self.busy, egui::Button::new(self.tr("导入订阅")))
+                .on_hover_text("从剪贴板导入 JSON 格式订阅源，自动跳过重复项")
+                .clicked()
+            {
+                self.import_sources_from_clipboard();
+            }
+            if ui
+                .button(self.tr("导出订阅"))
+                .on_hover_text("导出全部订阅源至剪贴板")
+                .clicked()
+            {
+                self.export_sources_to_clipboard();
+            }
+            if ui
+                .add_enabled(
+                    !self.busy && !self.sources.is_empty(),
+                    icons::danger_icon_btn(Icon::Trash, self.tr("清空全部")),
+                )
+                .on_hover_text("清空全部订阅源及关联节点数据库分片")
+                .clicked()
+            {
+                self.show_clear_sources_confirm = true;
+            }
+        });
+
+        ui.add_space(6.0);
+
+        // 第 2 行：接入openRung节点 原生注册warp节点 gist节点 gist配置
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(!self.busy, egui::Button::new(format!("🌐 {}", self.tr("接入 OpenRung 节点"))))
                 .on_hover_text("一键接入 https://github.com/openrung/openrung 官方中继服务，实时获取健康 VLESS-REALITY 节点")
                 .clicked()
             {
                 self.add_openrung_source();
             }
             if ui
-                .add_enabled(!self.busy, egui::Button::new("⚡ 原生注册 WARP 节点"))
+                .add_enabled(!self.busy, egui::Button::new(format!("⚡ {}", self.tr("原生注册 WARP 节点"))))
                 .on_hover_text("原生向 Cloudflare 注册并获取 57 个 WARP MASQUE 节点（免任何 GitHub 账号与仓库）")
                 .clicked()
             {
                 self.fetch_warp_masque_native();
             }
             if ui
-                .add_enabled(!self.busy, egui::Button::new("导入订阅源"))
-                .on_hover_text("从剪贴板导入 JSON 格式订阅源，自动跳过重复项")
+                .add_enabled(!self.busy, egui::Button::new(format!("🔍 {}", self.tr("Gist 节点"))))
+                .on_hover_text("扫描 gist.github.com 搜索结果（按配置的协议词），能解析出节点的 gist 自动注册为订阅源")
                 .clicked()
             {
-                self.import_sources_from_clipboard();
+                self.discover_gists();
             }
-            if ui.button("导出订阅源").clicked() {
-                self.export_sources_to_clipboard();
+            if ui
+                .button(format!("⚙️ {}", self.tr("Gist 配置")))
+                .on_hover_text("弹框选择 Gist 抓取协议类型、扫描页数与历史记录重置")
+                .clicked()
+            {
+                self.show_gist_config_modal = true;
             }
-            if self.subscription_proxy_url().is_some() {
-                if ui
-                    .add_enabled(
-                        !self.busy,
-                        egui::Button::new("代理拉取全部"),
-                    )
-                    .on_hover_text("通过当前运行中的本地代理拉取全部启用源")
-                    .clicked()
-                {
-                    self.fetch_all_via_proxy();
-                }
-            }
+
             let prune_enabled = !self.busy && !self.homogeneity_busy;
             let prune_clicked = if self.homogeneity_busy {
                 ui.add_enabled(false, icons::button_with_icon(Icon::Search, "分析中...", theme::muted())).clicked()
@@ -98,57 +142,63 @@ impl VpnApp {
             if prune_clicked {
                 self.analyze_source_homogeneity();
             }
-            if self.settings.auto_fetch_enabled {
-                ui.horizontal(|ui| {
-                    icon_label(ui, Icon::Sync, 12.0, theme::success());
-                    ui.label(
-                        RichText::new(format!(
-                            "自动拉取 每 {} 分钟",
-                            self.settings.auto_fetch_interval_min
-                        ))
-                        .color(theme::success())
-                        .small(),
-                    );
-                });
-            }
         });
-        ui.add_space(4.0);
+
+        ui.add_space(6.0);
+
+        // 第 3 行：名称 + 状态过滤。「刷新」从页签那一行挪到这里，跟在状态筛选后面。
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Gist 发现").weak());
-            for (query, checked) in crate::collector::GIST_DISCOVERY_QUERIES
-                .iter()
-                .zip(self.gist_query_flags.iter_mut())
-            {
-                ui.add_enabled(
-                    !self.busy,
-                    egui::Checkbox::new(checked, query.trim_end_matches("//")),
-                )
-                .on_hover_text(format!("Gist 发现搜索词“{query}”，按勾选的词逐个扫描"));
+            icon_label(ui, Icon::Search, 13.0, theme::muted());
+            let name_hint = self.tr("按名称过滤");
+            let name_field = ui.add(
+                egui::TextEdit::singleline(&mut self.source_name_filter)
+                    .desired_width(180.0)
+                    .hint_text(name_hint),
+            );
+            crate::gui::widgets::note_text_field(ui, &name_field);
+            for filter in SourceStatusFilter::ALL {
+                let label = match filter {
+                    SourceStatusFilter::All => self.tr("全部"),
+                    SourceStatusFilter::Enabled => self.tr("启用"),
+                    SourceStatusFilter::Disabled => self.tr("停用"),
+                    SourceStatusFilter::Failed => self.tr("拉取失败"),
+                    SourceStatusFilter::NoNodes => self.tr("无节点"),
+                };
+                if ui
+                    .selectable_label(self.source_status_filter == filter, label)
+                    .clicked()
+                {
+                    self.source_status_filter = filter;
+                }
             }
-            ui.add(
-                egui::DragValue::new(&mut self.gist_pages)
-                    .range(1..=300)
-                    .suffix(" 页"),
-            )
-            .on_hover_text("Gist 发现最多扫描的页数（搜索结果每页 10 条，按最近更新排序，每个勾选的查询词各扫这么多页）");
-            if ui
-                .add_enabled(!self.busy, egui::Button::new("发现 Gist 节点"))
-                .on_hover_text("扫描 gist.github.com 搜索结果（按勾选的查询词），能解析出节点的 gist 自动注册为订阅源，节点进节点列表；已见过的自动跳过，删掉的源不会复活")
-                .clicked()
-            {
-                self.discover_gists();
-            }
-            if ui
-                .add_enabled(!self.busy, egui::Button::new("重置历史"))
-                .on_hover_text("清空已扫描过的 Gist 记录黑名单，允许重新发现和拉取曾经删除过的 Gist 节点")
-                .clicked()
-            {
-                self.reset_seen_gists();
+            if ui.button(format!("🔄 {}", self.tr("刷新"))).clicked() {
+                self.reload_all();
             }
         });
         ui.add_space(8.0);
 
+        // 过滤只作用于这张表：底下那行会说"没有匹配"，不会去动库里的源。
+        let visible_sources: Vec<crate::models::Source> = self
+            .sources
+            .iter()
+            .filter(|source| {
+                source_passes_filter(
+                    source,
+                    &self.source_name_filter,
+                    self.source_status_filter,
+                )
+            })
+            .cloned()
+            .collect();
+
         card_frame().show(ui, |ui| {
+            if visible_sources.is_empty() && !self.sources.is_empty() {
+                ui.label(
+                    RichText::new(self.tr("当前过滤条件下没有匹配的订阅源"))
+                        .color(theme::muted()),
+                );
+                return;
+            }
             egui::ScrollArea::both()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -165,8 +215,7 @@ impl VpnApp {
                             header_cell(ui, "操作");
                             ui.end_row();
 
-                            let sources = self.sources.clone();
-                            for s in sources {
+                            for s in &visible_sources {
                                 let source_active = self.active_source_fetches.contains(&s.id)
                                     || self.tasks.is_source_active(&s.id);
                                 let fetch_operation_allowed =
@@ -648,6 +697,147 @@ impl VpnApp {
         }
     }
 
+    pub(crate) fn ui_clear_sources_confirm(&mut self, ctx: &egui::Context) {
+        if !self.show_clear_sources_confirm {
+            return;
+        }
+
+        let modal = egui::Modal::new(egui::Id::new("clear_sources_confirm")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.heading("清空全部订阅源");
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new("确定要清空全部订阅源及关联节点吗？\n此操作将删除所有订阅源和对应节点数据库分片，不可恢复。")
+                    .color(theme::warning()),
+            );
+            ui.add_space(14.0);
+            ui.horizontal(|ui| {
+                if ui.button("取消").clicked() {
+                    Some(false)
+                } else if ui
+                    .add(icons::danger_icon_btn(Icon::Trash, "确认清空全部"))
+                    .clicked()
+                {
+                    Some(true)
+                } else {
+                    None
+                }
+            })
+            .inner
+        });
+
+        match modal.inner {
+            Some(true) => {
+                self.show_clear_sources_confirm = false;
+                self.clear_all_sources();
+            }
+            Some(false) => self.show_clear_sources_confirm = false,
+            None if modal.should_close() => self.show_clear_sources_confirm = false,
+            None => {}
+        }
+    }
+
+    pub(crate) fn ui_gist_config_modal(&mut self, ctx: &egui::Context) {
+        if !self.show_gist_config_modal {
+            return;
+        }
+
+        let modal = egui::Modal::new(egui::Id::new("gist_config_modal")).show(ctx, |ui| {
+            ui.set_width(440.0);
+            ui.heading("Gist 节点发现与协议配置");
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("选择扫描 GitHub Gist 节点时匹配的协议，以及爬取深度页数。")
+                    .small()
+                    .color(theme::muted()),
+            );
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.label(RichText::new("扫描协议类型：").strong());
+            ui.add_space(4.0);
+
+            let queries = crate::collector::GIST_DISCOVERY_QUERIES;
+            let labels = [
+                "VLESS 协议 (vless://)",
+                "VMess 协议 (vmess://)",
+                "Shadowsocks 协议 (ss://)",
+                "Trojan 协议 (trojan://)",
+                "Hysteria2 协议 (hy2://)",
+                "Socks5 协议 (socks5://)",
+                "Clash 代理配置 (clash/proxies)",
+            ];
+
+            for (idx, (query, label)) in queries.iter().zip(labels.iter()).enumerate() {
+                if idx < self.gist_query_flags.len() {
+                    ui.checkbox(&mut self.gist_query_flags[idx], *label)
+                        .on_hover_text(format!("搜索词：{}", query));
+                }
+            }
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.small_button("全选").clicked() {
+                    for flag in &mut self.gist_query_flags {
+                        *flag = true;
+                    }
+                }
+                if ui.small_button("清空勾选").clicked() {
+                    for flag in &mut self.gist_query_flags {
+                        *flag = false;
+                    }
+                }
+            });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("最多扫描页数：").strong());
+                ui.add(
+                    egui::DragValue::new(&mut self.gist_pages)
+                        .range(1..=300)
+                        .suffix(" 页"),
+                )
+                .on_hover_text("搜索结果每页 10 条，按最近更新排序，每个勾选的查询词各扫这么多页");
+                ui.label(RichText::new("（建议 5~20 页）").small().color(theme::muted()));
+            });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("历史记录重置：").strong());
+                if ui
+                    .add_enabled(!self.busy, egui::Button::new("重置 Gist 历史"))
+                    .on_hover_text("清空已扫描过的 Gist 记录黑名单，允许重新发现和拉取曾经删除过的 Gist 节点")
+                    .clicked()
+                {
+                    self.reset_seen_gists();
+                }
+            });
+
+            ui.add_space(14.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(primary_btn("完成")).clicked() {
+                    Some(true)
+                } else {
+                    None
+                }
+            })
+            .inner
+        });
+
+        match modal.inner {
+            Some(true) => self.show_gist_config_modal = false,
+            _ if modal.should_close() => self.show_gist_config_modal = false,
+            _ => {}
+        }
+    }
+
     /// Ctrl+V 识别结果的弹框（任何页面按 Ctrl+V 都可能弹出来）。
     /// 内容和按钮都在 `paste::dialog_body` 里 —— 那边有离屏渲染和文案断言，这里只管状态。
     pub(crate) fn ui_paste_dialog(&mut self, ctx: &egui::Context) {
@@ -663,5 +853,143 @@ impl VpnApp {
             }
             None => {}
         }
+    }
+}
+
+/// 订阅列表这一行该不该显示。**状态判据全部复用表格里已经在用的那几个**：
+/// 「拉取失败」= 状态列那行文字（`source_status_failed`，也就是行尾"重试"按钮用的同一判据），
+/// 「无节点」= 健康列的「无节点」（`last_node_count == 0`）。没有第三种状态。
+fn source_passes_filter(
+    source: &crate::models::Source,
+    name_filter: &str,
+    status: SourceStatusFilter,
+) -> bool {
+    let needle = name_filter.trim().to_lowercase();
+    if !needle.is_empty() && !source.name.to_lowercase().contains(&needle) {
+        return false;
+    }
+    match status {
+        SourceStatusFilter::All => true,
+        SourceStatusFilter::Enabled => source.enabled,
+        SourceStatusFilter::Disabled => !source.enabled,
+        SourceStatusFilter::Failed => source
+            .last_status
+            .as_deref()
+            .is_some_and(source_status_failed),
+        SourceStatusFilter::NoNodes => source.last_node_count == 0,
+    }
+}
+
+#[cfg(test)]
+mod source_filter_tests {
+    use super::source_passes_filter;
+    use crate::gui::types::SourceStatusFilter;
+    use crate::models::Source;
+
+    fn source(name: &str, enabled: bool, status: Option<&str>, nodes: i64) -> Source {
+        let mut source = Source::scratch("s1", name, "https://example.invalid/sub");
+        source.enabled = enabled;
+        source.last_status = status.map(str::to_string);
+        source.last_node_count = nodes;
+        source
+    }
+
+    #[test]
+    fn test_name_filter_is_a_case_insensitive_substring() {
+        let s = source("Solara 订阅", true, Some("ok"), 12);
+        assert!(source_passes_filter(&s, "solara", SourceStatusFilter::All));
+        assert!(source_passes_filter(&s, "  订阅  ", SourceStatusFilter::All));
+        assert!(!source_passes_filter(&s, "v2ray", SourceStatusFilter::All));
+        // 名称留空 = 名称这一维不过滤（状态那一维照旧要过，两维是"与"）
+        assert!(source_passes_filter(&s, "   ", SourceStatusFilter::All));
+        assert!(!source_passes_filter(&s, "", SourceStatusFilter::Failed));
+    }
+
+    #[test]
+    fn test_status_filter_reuses_the_columns_own_predicates() {
+        let ok = source("活", true, Some("ok"), 12);
+        let failed = source("死", true, Some("error: timeout"), 0);
+        let off = source("停用且没节点", false, None, 0);
+
+        assert!(source_passes_filter(&ok, "", SourceStatusFilter::Enabled));
+        assert!(!source_passes_filter(&ok, "", SourceStatusFilter::Disabled));
+        assert!(!source_passes_filter(&ok, "", SourceStatusFilter::Failed));
+        // "ok" / "not modified" 都不算失败 —— 判据就是行尾那颗"重试"按钮的判据
+        assert!(!source_passes_filter(
+            &source("x", true, Some("Not Modified"), 3),
+            "",
+            SourceStatusFilter::Failed
+        ));
+        assert!(source_passes_filter(
+            &failed,
+            "",
+            SourceStatusFilter::Failed
+        ));
+        assert!(source_passes_filter(&failed, "", SourceStatusFilter::NoNodes));
+        assert!(source_passes_filter(&off, "", SourceStatusFilter::Disabled));
+        assert!(source_passes_filter(&off, "", SourceStatusFilter::NoNodes));
+        assert!(!source_passes_filter(&off, "", SourceStatusFilter::Failed));
+
+        // 反向判据：全部 = 一条不漏
+        for s in [&ok, &failed, &off] {
+            assert!(source_passes_filter(s, "", SourceStatusFilter::All));
+        }
+    }
+
+    #[test]
+    fn test_name_and_status_are_anded() {
+        let a = source("AI 订阅", true, Some("ok"), 4);
+        let b = source("AI 备用", false, Some("boom"), 0);
+        assert!(source_passes_filter(&b, "ai 备用", SourceStatusFilter::Failed));
+        assert!(!source_passes_filter(&b, "ai", SourceStatusFilter::Enabled));
+        assert!(!source_passes_filter(&a, "ai", SourceStatusFilter::NoNodes));
+    }
+
+    /// 这一行是"一行摆平"的（`ui.horizontal`，不换行），所以量一下它在**最小窗口宽度**下
+    /// 会不会顶出内容区。图标用一枚等宽标签近似。
+    #[test]
+    fn test_the_filter_row_fits_the_min_window_width() {
+        use eframe::egui::{CentralPanel, Context, Margin, RawInput, Rect, SidePanel, Vec2};
+
+        let ctx = Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(Rect::from_min_size(
+            eframe::egui::Pos2::ZERO,
+            Vec2::new(960.0, 600.0),
+        ));
+        let mut panel = Rect::NOTHING;
+        let mut row_right = 0.0_f32;
+        let _ = ctx.run(input, |ctx| {
+            SidePanel::left("sidebar")
+                .exact_width(220.0)
+                .show(ctx, |ui| {
+                    let _ = ui.label("导航");
+                });
+            CentralPanel::default()
+                .frame(eframe::egui::Frame::NONE.inner_margin(Margin::symmetric(18, 14)))
+                .show(ctx, |ui| {
+                    panel = ui.max_rect();
+                    let _ = ui.horizontal(|ui| {
+                        let _ = ui.label("🔍");
+                        let mut name = String::new();
+                        let _ = ui.add(
+                            eframe::egui::TextEdit::singleline(&mut name)
+                                .desired_width(180.0)
+                                .hint_text("按名称过滤"),
+                        );
+                        for label in ["全部", "启用", "停用", "拉取失败", "无节点"] {
+                            let _ = ui.selectable_label(false, label);
+                        }
+                        let _ = ui.button("🔄 刷新");
+                        row_right = ui.min_rect().right();
+                    });
+                });
+        });
+        assert!(panel.width() > 600.0, "探针窗口没铺开：{panel:?}");
+        assert!(
+            row_right <= panel.right(),
+            "过滤行右边界 {row_right:.0} 顶出了内容区（右边界 {}）",
+            panel.right()
+        );
     }
 }

@@ -186,6 +186,8 @@ impl Database {
             .await?;
         self.ensure_column("settings", "ui_theme", "TEXT NOT NULL DEFAULT 'obsidian'")
             .await?;
+        self.ensure_column("settings", "ui_language", "TEXT NOT NULL DEFAULT 'zh-CN'")
+            .await?;
         // 字体/界面大小（1.0 = 不缩放）。老库升级上来的这一列就是 1.0，行为不变。
         self.ensure_column("settings", "ui_scale", "REAL NOT NULL DEFAULT 1.0")
             .await?;

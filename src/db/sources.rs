@@ -143,6 +143,16 @@ impl Database {
         Ok(true)
     }
 
+    /// 清空全部订阅源及关联节点数据库分片与 Gist 历史
+    pub async fn clear_all_sources(&self) -> Result<usize> {
+        let sources = self.list_sources().await?;
+        let count = sources.len();
+        for s in &sources {
+            let _ = self.delete_source(&s.id).await;
+        }
+        Ok(count)
+    }
+
     pub async fn mark_source_fetched(&self, id: &str, status: &str, node_count: i64) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         sqlx::query(

@@ -58,7 +58,7 @@ impl Database {
                        speedtest_parallel_kernels, speedtest_persistent_kernel,
                        speedtest_reuse_minutes, speedtest_conditional_isolation,
                        speedtest_download_top_n, speedtest_dedup_egress, speedtest_tcp_ping_only, bandwidth_guard, bandwidth_min_kbps,
-                       publisher_api, publisher_token, ui_theme, ui_scale, ui_dark, kernel_source, firewall_auto_allow,
+                       publisher_api, publisher_token, ui_theme, ui_language, ui_scale, ui_dark, kernel_source, firewall_auto_allow,
                        auto_failover, insider_channel, speedtest_auto_refill,
                        auto_prepare_kernel, speedtest_added_source,
                        auto_rearm_system_proxy,
@@ -130,6 +130,8 @@ impl Database {
             publisher_token: sqlx::Row::get::<String, _>(&row, "publisher_token"),
             ui_theme: sqlx::Row::try_get::<String, _>(&row, "ui_theme")
                 .unwrap_or_else(|_| crate::models::AppSettings::default().ui_theme),
+            ui_language: sqlx::Row::try_get::<String, _>(&row, "ui_language")
+                .unwrap_or_else(|_| crate::models::AppSettings::default().ui_language),
             ui_scale: sqlx::Row::try_get::<f64, _>(&row, "ui_scale")
                 .map(|value| crate::models::clamp_ui_scale(value as f32))
                 .unwrap_or_else(|_| crate::models::AppSettings::default().ui_scale),
@@ -245,6 +247,12 @@ impl Database {
                 s.ui_theme = v;
             }
         }
+        if let Some(v) = input.ui_language {
+            let v = v.trim().to_string();
+            if !v.is_empty() {
+                s.ui_language = v;
+            }
+        }
         if let Some(v) = input.ui_scale {
             s.ui_scale = crate::models::clamp_ui_scale(v);
         }
@@ -305,6 +313,7 @@ impl Database {
                  publisher_api=?,
                  publisher_token=?,
                  ui_theme=?,
+                 ui_language=?,
                  ui_scale=?,
                  ui_dark=?,
                  kernel_source=?,
@@ -342,6 +351,7 @@ impl Database {
         .bind(&s.publisher_api)
         .bind(&s.publisher_token)
         .bind(&s.ui_theme)
+        .bind(&s.ui_language)
         .bind(s.ui_scale as f64)
         .bind(s.ui_dark as i64)
         .bind(&s.kernel_source)

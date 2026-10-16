@@ -87,21 +87,23 @@ jobs:
           # tag 里带 -alpha./-beta./-rc. 就发成预发布版：GitHub 的 /releases/latest 会跳过
           # prerelease，稳定通道的用户收不到它，只有「关于」里勾了「参与预发」的人才拿得到。
           $pre = $env:TAG -match '-(alpha|beta|rc)\.'
+          $versionClean = $env:TAG.TrimStart('v')
+          $notesValid = (Test-Path "RELEASE_NOTES.md") -and ((Get-Content "RELEASE_NOTES.md" -Raw) -match [regex]::Escape($versionClean))
           if (gh release view "$env:TAG" 2>$null) {
             Write-Host "Release $env:TAG already exists, updating assets with --clobber..."
             gh release upload "$env:TAG" $exe dist/sha256.txt --clobber
-            if (Test-Path "RELEASE_NOTES.md") {
+            if ($notesValid) {
               gh release edit "$env:TAG" --notes-file RELEASE_NOTES.md
             }
             if ($pre) { gh release edit "$env:TAG" --prerelease } else { gh release edit "$env:TAG" --prerelease=false }
           } elseif ($pre) {
-            if (Test-Path "RELEASE_NOTES.md") {
+            if ($notesValid) {
               gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG（预发）" --notes-file RELEASE_NOTES.md --prerelease
             } else {
               gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG（预发）" --generate-notes --prerelease
             }
           } else {
-            if (Test-Path "RELEASE_NOTES.md") {
+            if ($notesValid) {
               gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG" --notes-file RELEASE_NOTES.md
             } else {
               gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG" --generate-notes

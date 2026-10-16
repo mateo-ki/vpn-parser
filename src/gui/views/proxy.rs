@@ -447,26 +447,32 @@ impl VpnApp {
 
 
         ui.add_space(10.0);
+        let tr_nodes = self.tr("可用节点");
+        let tr_groups = self.tr("分流策略组");
+        let tr_conns = self.tr("活跃连接");
+        let tr_rules = self.tr("分流规则");
+        let tr_network = self.tr("DNS / TUN");
+        let conn_label = if self.active_connections.is_empty() {
+            tr_conns.to_string()
+        } else {
+            format!("{} ({})", tr_conns, self.active_connections.len())
+        };
+
         ui.horizontal(|ui| {
             panel_tab(
                 ui,
                 &mut self.proxy_panel,
                 ProxyPanel::Nodes,
                 Icon::Pin,
-                "可用节点",
+                tr_nodes,
             );
             panel_tab(
                 ui,
                 &mut self.proxy_panel,
                 ProxyPanel::Groups,
                 Icon::Shield,
-                "分流策略组 🌟",
+                tr_groups,
             );
-            let conn_label = if self.active_connections.is_empty() {
-                "活跃连接".to_string()
-            } else {
-                format!("活跃连接 ({})", self.active_connections.len())
-            };
             panel_tab(
                 ui,
                 &mut self.proxy_panel,
@@ -479,14 +485,14 @@ impl VpnApp {
                 &mut self.proxy_panel,
                 ProxyPanel::Rules,
                 Icon::Rules,
-                "分流规则",
+                tr_rules,
             );
             panel_tab(
                 ui,
                 &mut self.proxy_panel,
                 ProxyPanel::Network,
                 Icon::Globe,
-                "DNS / TUN",
+                tr_network,
             );
             panel_tab(
                 ui,
@@ -546,7 +552,7 @@ impl VpnApp {
                         ui.horizontal(|ui| {
                             icon_label(ui, Icon::Shield, 15.0, theme::accent());
                             ui.label(
-                                RichText::new("智能分流策略组体系（AI / 美国 / 多线下载 / 常用直连）")
+                                RichText::new("智能分流策略组（开箱即用，自动按场景分流）")
                                     .strong()
                                     .color(theme::text_primary()),
                             );
@@ -563,10 +569,12 @@ impl VpnApp {
                         ui.add_space(4.0);
                         ui.label(
                             RichText::new(
-                                "• 🤖 AI 分组：专供 ChatGPT、Claude、Midjourney、Grok 等 AI，优先保证美国/原生 IP 解锁。\n\
-                                 • 🇺🇸 美国节点：url-test 周期测速，实时挑选最低延迟节点供给 Google 与 YouTube。\n\
-                                 • ⚡ 多线并发下载：load-balance 负载均衡，聚合低倍率节点并发加速 IDM / 迅雷 / 网盘。\n\
-                                 • 🌐 普通代理：常规网页出海兜底；国内服务与常用应用（微信/QQ/Steam）已自动配置直连。"
+                                "💡 怎么用：无需手动配置！直接在「可用节点」一键连接并启动代理，内核会自动接管分流：\n\
+                                 • 🤖 AI 分组：访问 ChatGPT、Claude、Midjourney 等 AI 服务时自动走此组，保障原生 IP 解锁。\n\
+                                 • 🇺🇸 美国节点：访问 Google、YouTube 等服务时自动选优走低延迟美国出口。\n\
+                                 • ⚡ 多线并发下载：进行大文件并发下载（IDM/迅雷/网盘）时多节点并发聚合加速。\n\
+                                 • 🌐 普通代理：常规网页与出海兜底；国内服务与常用软件已自动配置 DIRECT 直连不耗流量。\n\
+                                 若需指定某个策略组的出口节点，在下方对应卡片中点击切换；高级玩家可在「配置」Tab 覆写 YAML。"
                             )
                             .small()
                             .color(theme::text_secondary()),
@@ -924,33 +932,50 @@ impl VpnApp {
         // -------------------------------------------------------------------
         // 第 1 栏：分流策略组切换胶囊条（搬迁并集成到可用节点）
         // -------------------------------------------------------------------
-        let mut group_pills: Vec<(String, &'static str, Icon)> = vec![
-            ("全部".to_string(), "所有节点", Icon::Globe),
-            ("AI分组".to_string(), "AI 专用", Icon::Lightning),
-            ("美国节点".to_string(), "US 选优", Icon::Globe),
-            ("多线并发下载".to_string(), "并发加速", Icon::ArrowDown),
-            ("普通代理".to_string(), "出海兜底", Icon::Shield),
-        ];
-
-        // 引入内核实时同步的其他策略组（若已启动内核且有自定义或其它策略组）
-        for kg in &self.kernel_groups {
-            if matches!(kg.name.as_str(), "GLOBAL" | "DIRECT" | "REJECT" | "PASS") {
-                continue;
-            }
-            if !group_pills.iter().any(|(name, _, _)| name == &kg.name) {
-                let (tag, icon) = match kg.kind.to_lowercase().as_str() {
-                    "url-test" | "urltest" => ("自动选优", Icon::Lightning),
-                    "load-balance" | "loadbalance" => ("负载均衡", Icon::ArrowDown),
-                    "fallback" => ("故障转移", Icon::Shield),
-                    _ => ("手动选择", Icon::Radar),
-                };
-                group_pills.push((kg.name.clone(), tag, icon));
-            }
+        // 默认只挂「全部」；其余组只有配置里真的有它才出现（内置四组看 smart_routing，
+        // 覆写 YAML 里定义的组看 proxy_config.override_yaml，跑着的内核上报的组看 kernel_groups）。
+        let visible_names = visible_group_names(
+            self.proxy_config.smart_routing,
+            self.proxy_config.override_yaml.as_deref(),
+            &self.kernel_groups,
+        );
+        // 选中的组从配置里消失了就回到「全部」—— 不许留一个看不见却生效的选中态。
+        if !visible_names.iter().any(|name| name == &self.proxy_selected_group) {
+            self.proxy_selected_group = "全部".to_string();
         }
+        let group_pills: Vec<(String, &'static str, Icon)> = visible_names
+            .into_iter()
+            .map(|name| {
+                let (tag, icon) = match name.as_str() {
+                    "全部" => ("所有节点", Icon::Globe),
+                    "AI分组" => ("AI 专用", Icon::Lightning),
+                    "美国节点" => ("US 选优", Icon::Globe),
+                    "多线并发下载" => ("并发加速", Icon::ArrowDown),
+                    "普通代理" => ("出海兜底", Icon::Shield),
+                    _ => {
+                        let kind = self
+                            .kernel_groups
+                            .iter()
+                            .find(|group| group.name == name)
+                            .map(|group| group.kind.to_lowercase());
+                        match kind.as_deref() {
+                            Some("url-test") | Some("urltest") => ("自动选优", Icon::Lightning),
+                            Some("load-balance") | Some("loadbalance") => {
+                                ("负载均衡", Icon::ArrowDown)
+                            }
+                            Some("fallback") => ("故障转移", Icon::Shield),
+                            _ => ("手动选择", Icon::Radar),
+                        }
+                    }
+                };
+                (name, tag, icon)
+            })
+            .collect();
 
         ui.horizontal_wrapped(|ui| {
             icon_label(ui, Icon::Shield, 13.0, theme::accent());
-            ui.label(RichText::new("分流策略组:").small().strong().color(theme::text_primary()));
+            ui.label(RichText::new("分流策略组:").small().strong().color(theme::text_primary()))
+                .on_hover_text("智能分流策略组：点击可快速筛选对应场景的节点列表；平时保持「全部」即可，内核全自动智能分流。");
 
             for (name, _tag, _icon) in &group_pills {
                 let is_selected = self.proxy_selected_group == *name;
@@ -1386,20 +1411,23 @@ impl VpnApp {
                                 .on_hover_text(card_tip);
 
                                 if response.clicked() {
-                                    if self.proxy_selected_group == "全部" || self.proxy_selected_group == "PROXY" {
-                                        if !is_auto {
-                                            if !is_selected {
-                                                selected = Some((node.id.clone(), node.name.clone()));
-                                            }
-                                        } else if !is_selected {
-                                            status_msg = Some("自动选路中：出口由内核决定，要固定这个节点请右键「锁定为出口」".into());
-                                        }
-                                    } else {
-                                        // 针对特定策略组点击切换出口
-                                        if running {
-                                            group_switch_member = Some((self.proxy_selected_group.clone(), node.name.clone()));
-                                        } else {
+                                    if !is_auto {
+                                        if !is_selected {
                                             selected = Some((node.id.clone(), node.name.clone()));
+                                        }
+                                    } else if !is_selected {
+                                        status_msg = Some("自动选路中：出口由内核决定，要固定这个节点请右键「锁定为出口」".into());
+                                    }
+
+                                    // 若当前过滤的策略组是可手动选择的 Selector 组且包含该节点，也同步让内核切换该策略组
+                                    if running && self.proxy_selected_group != "全部" && self.proxy_selected_group != "PROXY" {
+                                        let is_select_group = self.kernel_groups.iter().any(|g| {
+                                            g.name == self.proxy_selected_group
+                                                && (g.kind.eq_ignore_ascii_case("select") || g.kind.eq_ignore_ascii_case("selector"))
+                                                && g.members.iter().any(|m| m == &node.name)
+                                        });
+                                        if is_select_group {
+                                            group_switch_member = Some((self.proxy_selected_group.clone(), node.name.clone()));
                                         }
                                     }
                                 }
@@ -3365,6 +3393,73 @@ fn node_matches_group_depth(
     lower_name.contains(&lower_group) || country.to_lowercase() == lower_group
 }
 
+/// 内置智能策略组的名字。它们**只有**在 `smart_routing` 开着时才会被写进生成的配置
+/// （`proxy` 侧那几处 `if options.smart_routing`），所以胶囊条也照这个判在不在。
+const SMART_ROUTING_GROUPS: [&str; 4] = ["AI分组", "美国节点", "多线并发下载", "普通代理"];
+
+/// 自定义覆写 YAML 里真的定义了哪些组。两种写法都认（整份文档带 `proxy-groups:`，
+/// 或者直接给一个组数组 —— 与 `proxy` 侧应用覆写时的分叉一致）。解析不动就当没有。
+fn override_group_names(override_yaml: Option<&str>) -> Vec<String> {
+    let Some(text) = override_yaml.filter(|raw| !raw.trim().is_empty()) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(text) else {
+        return Vec::new();
+    };
+    let groups = value
+        .get("proxy-groups")
+        .and_then(serde_yaml::Value::as_sequence)
+        .or_else(|| value.as_sequence())
+        .cloned()
+        .unwrap_or_default();
+    groups
+        .iter()
+        .filter_map(|group| group.get("name").and_then(|name| name.as_str()))
+        .map(str::to_string)
+        .collect()
+}
+
+/// 策略组胶囊条该显示谁：**默认只有「全部」**，其余的组只有"配置里真的有它"才出现。
+/// 三个来源 —— ① `smart_routing` 打开的内置四组；② 覆写 YAML 里定义的组；
+/// ③ 内核上报且成员非空的组。
+///
+/// 注意这里刻意**不**用"能不能筛出节点"当判据：内置的 `普通代理`/`多线并发下载` 走的是
+/// 语义兜底匹配，任何一台机器上都能匹配到全部节点，那样等于永远显示。
+fn visible_group_names(
+    smart_routing: bool,
+    override_yaml: Option<&str>,
+    kernel_groups: &[KernelGroup],
+) -> Vec<String> {
+    let mut names: Vec<String> = vec!["全部".to_string()];
+    let defined = override_group_names(override_yaml);
+    let reported = |name: &str| {
+        kernel_groups
+            .iter()
+            .any(|group| group.name == name && !group.members.is_empty())
+    };
+
+    for name in SMART_ROUTING_GROUPS {
+        if smart_routing || defined.iter().any(|d| d == name) || reported(name) {
+            names.push(name.to_string());
+        }
+    }
+    for name in &defined {
+        if !names.iter().any(|shown| shown == name) {
+            names.push(name.clone());
+        }
+    }
+    for group in kernel_groups {
+        if group.members.is_empty()
+            || matches!(group.name.as_str(), "GLOBAL" | "DIRECT" | "REJECT" | "PASS")
+            || names.iter().any(|shown| *shown == group.name)
+        {
+            continue;
+        }
+        names.push(group.name.clone());
+    }
+    names
+}
+
 /// 重建控制台「可用节点」网格：按分流策略组、地区、搜索词过滤并排序
 fn build_proxy_view(
     all: &[NodeSummary],
@@ -4171,5 +4266,76 @@ mod policy_group_filter_tests {
 
         // 环形嵌套不应陷入无限循环或栈溢出
         assert!(!node_matches_group(&n1, "GroupLoopA", &kg));
+    }
+
+    fn kernel_group(name: &str, kind: &str, members: &[&str]) -> KernelGroup {
+        KernelGroup {
+            name: name.to_string(),
+            kind: kind.to_string(),
+            now: None,
+            members: members.iter().map(|member| member.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn test_the_pill_bar_defaults_to_all_only() {
+        use super::visible_group_names;
+
+        // 什么都没配：整条胶囊只有「全部」。
+        assert_eq!(visible_group_names(false, None, &[]), vec!["全部".to_string()]);
+
+        // 反向判据：内置的「普通代理」按节点匹配能命中每一个节点，
+        // 但配置里没有它就不该出现 —— 否则这条改动等于没做。
+        let any_node = sample_node("任意节点", Some("HK"), "1.2.3.4");
+        assert!(node_matches_group(&any_node, "普通代理", &[]));
+        assert!(!visible_group_names(false, None, &[])
+            .iter()
+            .any(|name| name == "普通代理"));
+
+        // 打开内置智能策略组 ⇒ 四组都出现。
+        let smart = visible_group_names(true, None, &[]);
+        assert_eq!(smart.len(), 5);
+        for name in ["AI分组", "美国节点", "多线并发下载", "普通代理"] {
+            assert!(smart.iter().any(|shown| shown == name), "{name} 该在");
+        }
+
+        // 内核上报的组：成员非空才算数，保留名不算组。
+        let kernel = vec![
+            kernel_group("我的分组", "url-test", &["a"]),
+            kernel_group("空分组", "select", &[]),
+            kernel_group("GLOBAL", "select", &["a"]),
+        ];
+        let shown = visible_group_names(false, None, &kernel);
+        assert!(shown.iter().any(|name| name == "我的分组"));
+        assert!(!shown.iter().any(|name| name == "空分组"));
+        assert!(!shown.iter().any(|name| name == "GLOBAL"));
+
+        // 内核真上报了内置组的名字（比如覆写里自己定义的），关着 smart_routing 也要显示。
+        let reported = vec![kernel_group("普通代理", "select", &["a"])];
+        assert!(visible_group_names(false, None, &reported)
+            .iter()
+            .any(|name| name == "普通代理"));
+    }
+
+    #[test]
+    fn test_override_yaml_groups_count_as_configured() {
+        use super::{override_group_names, visible_group_names};
+
+        let document = "proxy-groups:\n  - name: 我的分组\n    type: select\n    proxies: [DIRECT]\n";
+        assert_eq!(
+            override_group_names(Some(document)),
+            vec!["我的分组".to_string()]
+        );
+        // 覆写也允许直接给一个组数组（与 proxy 侧应用覆写时的分叉一致）。
+        let bare = "- name: 裸数组分组\n  type: url-test\n";
+        assert_eq!(override_group_names(Some(bare)), vec!["裸数组分组".to_string()]);
+        assert!(override_group_names(None).is_empty());
+        assert!(override_group_names(Some("   ")).is_empty());
+        // 坏 YAML 不许带崩界面：按"没有覆写组"处理。
+        assert!(override_group_names(Some("proxy-groups: [:::")).is_empty());
+
+        assert!(visible_group_names(false, Some(document), &[])
+            .iter()
+            .any(|name| name == "我的分组"));
     }
 }

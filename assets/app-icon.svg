@@ -6,12 +6,12 @@
     </linearGradient>
   </defs>
 
-  <!-- Deep Obsidian Squircle Base -->
-  <rect x="14" y="14" width="228" height="228" rx="54" fill="url(#bgGrad)"/>
-  <rect x="14" y="14" width="228" height="228" rx="54" fill="none" stroke="#2e323d" stroke-width="2"/>
+  <!-- Deep Obsidian Squircle Base - Maximized to edges for bold taskbar/tray presence -->
+  <rect x="2" y="2" width="252" height="252" rx="56" fill="url(#bgGrad)"/>
+  <rect x="2" y="2" width="252" height="252" rx="56" fill="none" stroke="#2e323d" stroke-width="2"/>
 
   <!-- Minimalist Precision White "V" Lettermark -->
-  <path d="M 56,72 L 128,196 L 200,72 L 166,72 L 128,140 L 90,72 Z"
+  <path d="M 52,66 L 128,198 L 204,66 L 168,66 L 128,138 L 88,66 Z"
         fill="#ffffff"
         stroke="#ffffff"
         stroke-width="5"

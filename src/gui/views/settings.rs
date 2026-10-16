@@ -18,6 +18,14 @@ impl VpnApp {
         let mut reset_clicked = false;
         let dirty = self.settings_dirty();
         let saving = self.settings_saving;
+        let tr_general = self.tr("通用");
+        let tr_appearance = self.tr("外观");
+        let tr_automation = self.tr("订阅与测速");
+        let tr_network = self.tr("自愈网络");
+        let tr_api = self.tr("外部接口");
+        let tr_save = self.tr("保存设置");
+        let tr_reset = self.tr("重置修改");
+        let tr_synced = self.tr("已同步");
 
         crate::gui::widgets::split_row(
             ui,
@@ -29,25 +37,46 @@ impl VpnApp {
                     &mut tab,
                     SettingsTab::General,
                     Icon::Gear,
-                    "通用",
+                    tr_general,
                 );
                 panel_tab(
                     ui,
                     &mut tab,
                     SettingsTab::Appearance,
                     Icon::Appearance,
-                    "外观",
+                    tr_appearance,
+                );
+                panel_tab(
+                    ui,
+                    &mut tab,
+                    SettingsTab::Automation,
+                    Icon::Lightning,
+                    tr_automation,
+                );
+                panel_tab(
+                    ui,
+                    &mut tab,
+                    SettingsTab::Network,
+                    Icon::Shield,
+                    tr_network,
+                );
+                panel_tab(
+                    ui,
+                    &mut tab,
+                    SettingsTab::Api,
+                    Icon::Plug,
+                    tr_api,
                 );
             },
             |ui| {
                 if ui
-                    .add_enabled(!saving, primary_btn("保存设置"))
+                    .add_enabled(!saving, primary_btn(tr_save))
                     .clicked()
                 {
                     save_clicked = true;
                 }
                 if ui
-                    .button("重置修改")
+                    .button(tr_reset)
                     .on_hover_text("恢复为当前已保存的配置")
                     .clicked()
                 {
@@ -63,7 +92,7 @@ impl VpnApp {
                             .small(),
                     );
                 } else {
-                    ui.label(RichText::new("✓ 已同步").color(theme::success()).small());
+                    ui.label(RichText::new(format!("✓ {}", tr_synced)).color(theme::success()).small());
                 }
             },
         );
@@ -82,8 +111,11 @@ impl VpnApp {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| match self.settings_tab {
-                SettingsTab::General => self.ui_settings_cards(ui),
+                SettingsTab::General => self.ui_settings_general(ui),
                 SettingsTab::Appearance => self.ui_settings_appearance(ui),
+                SettingsTab::Automation => self.ui_settings_automation(ui),
+                SettingsTab::Network => self.ui_settings_network(ui),
+                SettingsTab::Api => self.ui_api(ui),
             });
     }
 
@@ -108,6 +140,27 @@ impl VpnApp {
                     .color(theme::muted()),
             );
             ui.add_space(10.0);
+
+            ui.label(RichText::new("界面语言 (Interface Language)").strong());
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                for lang in crate::i18n::Language::ALL {
+                    if ui
+                        .selectable_value(
+                            &mut self.edit_ui_language,
+                            lang.code().to_string(),
+                            lang.display_name(),
+                        )
+                        .clicked()
+                    {
+                        auto_save = true;
+                    }
+                }
+            });
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(8.0);
 
             ui.label(RichText::new("界面配色主题").strong());
             ui.add_space(4.0);
@@ -205,89 +258,57 @@ impl VpnApp {
         }
     }
 
-    fn ui_settings_cards(&mut self, ui: &mut Ui) {
-        // 高级设置默认收起：那些数值调参只在出问题才会动，常驻在页面上只是挡路。
-        // 收起时留着的是：自动拉取、同步周期、故障切换阈值、防火墙放行。
-        let mut advanced = self.settings_advanced_open;
-        ui.horizontal(|ui| {
-            if ui.checkbox(&mut advanced, "显示高级设置").changed() {
-                self.settings_advanced_open = advanced;
-            }
-            if !advanced {
-                ui.label(
-                    RichText::new("只留常用的 5 类；订阅并发、测速参数、测速优化这些收在里面")
-                        .small()
-                        .color(theme::muted()),
-                );
-            }
-        });
-        ui.add_space(6.0);
+    /// 通用设置：桌面窗口生命周期、托盘行为、系统物理内存释放与 Windows 防火墙规则。
+    fn ui_settings_general(&mut self, ui: &mut Ui) {
         let mut auto_save = false;
 
-        // ==========================================
-        // 1. 常规偏好与窗口行为 (General & Window Behavior)
-        // ==========================================
+        // 1. 桌面窗口与生命周期
         card_frame().show(ui, |ui| {
             ui.horizontal(|ui| {
                 icon_label(ui, Icon::Gear, 16.0, theme::accent());
-                ui.label(RichText::new("常规偏好与窗口行为").strong().size(15.0));
+                ui.label(RichText::new("桌面窗口与运行模式").strong().size(15.0));
+                let tray_badge = if self.edit_close_to_tray {
+                    ("托盘常驻", theme::success())
+                } else {
+                    ("直接退出", theme::muted())
+                };
+                status_badge(ui, tray_badge.0, tray_badge.1);
             });
             ui.add_space(2.0);
             ui.label(
-                RichText::new("管理桌面应用程序的关闭逻辑、托盘常驻行为以及系统物理内存回收。")
+                RichText::new("配置程序关闭行为、系统托盘常驻逻辑与首次运行内核自动化下载。")
                     .small()
                     .color(theme::muted()),
             );
             ui.add_space(8.0);
 
-            // 2026-10-08 他要的「预备状态」：新装的机器上一次内核都没有，软件自己
-            // 就该把 mihomo 下下来，不用人再点一遍下载。关掉它就不会自己动。
+            ui.label(RichText::new("点击主窗口关闭按钮 (X) 时：").strong());
+            ui.add_space(4.0);
             if ui
-                .checkbox(
-                    &mut self.edit_auto_prepare_kernel,
-                    "预备状态（一个内核都没装）时自动下载 mihomo 内核",
-                )
-                .on_hover_text(
-                    "用你在下载内核时选的那种方式下载；一次运行只自己动一次，失败了不反复重试。                     关掉它就只在你点「下载内核」时才下。",
+                .radio_value(
+                    &mut self.edit_close_to_tray,
+                    true,
+                    "最小化到系统托盘 (推荐：后台保持代理与定时自动化运行)",
                 )
                 .changed()
             {
                 auto_save = true;
             }
-            ui.add_space(6.0);
-
-            // Setting row 1: Close window behavior
-            ui.label(RichText::new("点击主窗口关闭按钮 (X) 时：").strong());
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if ui
-                    .radio_value(
-                        &mut self.edit_close_to_tray,
-                        true,
-                        "最小化到系统托盘 (推荐：后台保持代理与定时自动化运行)",
-                    )
-                    .changed()
-                {
-                    auto_save = true;
-                }
-            });
-            ui.horizontal(|ui| {
-                if ui
-                    .radio_value(
-                        &mut self.edit_close_to_tray,
-                        false,
-                        "直接退出程序 (停止所有网络连接并彻底退出软件)",
-                    )
-                    .changed()
-                {
-                    auto_save = true;
-                }
-            });
+            if ui
+                .radio_value(
+                    &mut self.edit_close_to_tray,
+                    false,
+                    "直接退出程序 (停止所有网络连接并彻底退出软件)",
+                )
+                .changed()
+            {
+                auto_save = true;
+            }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 icon_label(ui, Icon::Lightbulb, 12.0, theme::muted());
                 ui.label(
-                    RichText::new("提示：最小化到托盘后，可通过任务栏托盘图标右键菜单退出程序，或双击托盘图标/再次运行程序唤出界面。")
+                    RichText::new("提示：最小化到托盘后，可通过任务栏托盘图标右键菜单退出程序，或双击托盘图标唤出界面。")
                         .small()
                         .color(theme::muted()),
                 );
@@ -295,15 +316,50 @@ impl VpnApp {
 
             ui.add_space(8.0);
             ui.separator();
-            ui.add_space(6.0);
+            ui.add_space(8.0);
 
-            // Setting row 2: Memory trim
-            // 描述与按钮分两行：横向并排时长描述会把按钮顶出可视区（裁掉后看不见）。
+            if ui
+                .checkbox(
+                    &mut self.edit_auto_prepare_kernel,
+                    "预备状态（未安装内核）时自动下载 Mihomo 内核",
+                )
+                .on_hover_text(
+                    "首次安装或重置后，检测到一个内核都没装时自动下载官方内核；关掉后仅在手动点击时下载。",
+                )
+                .changed()
+            {
+                auto_save = true;
+            }
+        });
+
+        ui.add_space(10.0);
+
+        // 2. 资源优化与系统安全
+        card_frame().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                icon_label(ui, Icon::Shield, 16.0, theme::accent());
+                ui.label(RichText::new("系统资源与防火墙放行").strong().size(15.0));
+                let elevated = crate::platform::is_elevated();
+                let perm_badge = if elevated {
+                    ("管理员权限", theme::success())
+                } else {
+                    ("标准用户权限", theme::muted())
+                };
+                status_badge(ui, perm_badge.0, perm_badge.1);
+            });
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new("管理进程常驻内存释放，以及 Windows 本地回环端口防火墙放行规则。")
+                    .small()
+                    .color(theme::muted()),
+            );
+            ui.add_space(8.0);
+
             ui.label(RichText::new("进程内存深度整理").strong());
             ui.add(
                 egui::Label::new(
                     RichText::new(
-                        "主动释放 SQLite 缓存连接池与 Windows 物理工作集，显著降低常驻内存。",
+                        "主动释放 SQLite 连接池缓存与 Windows 物理工作集，显著降低程序与后台服务常驻内存。",
                     )
                     .small()
                     .color(theme::muted()),
@@ -323,17 +379,71 @@ impl VpnApp {
                     ui.label(RichText::new(status).small().color(theme::success()));
                 }
             });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.label(RichText::new("Windows 防火墙放行").strong());
+            ui.add(
+                egui::Label::new(
+                    RichText::new(
+                        "放行程序与代理内核的本地回环监听端口，避免代理启动后 9980 端口无响应或被系统拦截。",
+                    )
+                    .small()
+                    .color(theme::muted()),
+                )
+                .wrap(),
+            );
+            ui.add_space(4.0);
+            if ui
+                .checkbox(
+                    &mut self.edit_firewall_auto_allow,
+                    "软件启动时自动加入防火墙放行规则",
+                )
+                .changed()
+            {
+                auto_save = true;
+                if self.edit_firewall_auto_allow && crate::platform::is_elevated() {
+                    self.apply_firewall_rules();
+                }
+            }
+            ui.add_space(4.0);
+            let elevated = crate::platform::is_elevated();
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(elevated, primary_btn("立即写入防火墙规则"))
+                    .on_hover_text("对本程序和已下载到 managed kernels 目录的内核 exe 逐条写入允许规则")
+                    .clicked()
+                {
+                    self.apply_firewall_rules();
+                }
+                if let Some(status) = self.firewall_status.clone() {
+                    ui.label(RichText::new(status).small().color(theme::text_secondary()));
+                } else if !elevated {
+                    ui.label(
+                        RichText::new("（当前非管理员权限：勾选后在提权启动时自动补上）")
+                            .small()
+                            .color(theme::muted()),
+                    );
+                }
+            });
         });
 
-        ui.add_space(10.0);
+        if auto_save && self.settings_dirty() {
+            self.save_settings();
+        }
+    }
 
-        // ==========================================
-        // 2. 订阅自动拉取 (Subscription Automation)
-        // ==========================================
+    /// 订阅与测速：订阅源定时拉取策略、全协议测速并发与参数、落地剪枝优化。
+    fn ui_settings_automation(&mut self, ui: &mut Ui) {
+        let mut auto_save = false;
+
+        // 1. 订阅源定时同步
         card_frame().show(ui, |ui| {
             ui.horizontal(|ui| {
                 icon_label(ui, Icon::Subscription, 16.0, theme::accent());
-                ui.label(RichText::new("订阅定时拉取").strong().size(15.0));
+                ui.label(RichText::new("订阅源定时同步").strong().size(15.0));
                 let (badge_text, badge_color) = if self.edit_auto_fetch {
                     ("自动同步已开启", theme::success())
                 } else {
@@ -343,11 +453,11 @@ impl VpnApp {
             });
             ui.add_space(2.0);
             ui.label(
-                RichText::new("在后台周期性拉取已启用的订阅源，自动解析更新节点池。")
+                RichText::new("在后台周期性拉取已启用的订阅源，自动解析、解密并更新本地节点池。")
                     .small()
                     .color(theme::muted()),
             );
-            ui.add_space(6.0);
+            ui.add_space(8.0);
 
             if ui
                 .checkbox(
@@ -360,7 +470,6 @@ impl VpnApp {
             }
             ui.add_space(6.0);
 
-            // 3 Column Grid for Parameters
             ui.horizontal(|ui| {
                 ui.group(|ui| {
                     ui.vertical(|ui| {
@@ -380,52 +489,44 @@ impl VpnApp {
                         );
                     });
                 });
-                if self.settings_advanced_open {
-                    ui.add_space(8.0);
-                    ui.group(|ui| {
-                        ui.vertical(|ui| {
-                            ui.label(RichText::new("🔗 订阅并发任务").strong());
-                            let r2 = ui.add(
-                                egui::DragValue::new(&mut self.edit_fetch_concurrency)
-                                    .range(1..=8)
-                                    .suffix(" 并发"),
-                            );
-                            if r2.drag_stopped() || r2.lost_focus() {
-                                auto_save = true;
-                            }
-                            ui.label(
-                                RichText::new("建议 2~4，避免上游封禁")
-                                    .small()
-                                    .color(theme::muted()),
-                            );
-                        });
+                ui.add_space(8.0);
+                ui.group(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("🔗 订阅并发任务").strong());
+                        let r2 = ui.add(
+                            egui::DragValue::new(&mut self.edit_fetch_concurrency)
+                                .range(1..=8)
+                                .suffix(" 并发"),
+                        );
+                        if r2.drag_stopped() || r2.lost_focus() {
+                            auto_save = true;
+                        }
+                        ui.label(
+                            RichText::new("建议 2~4，避免上游封禁")
+                                .small()
+                                .color(theme::muted()),
+                        );
                     });
-                    ui.add_space(8.0);
-                    ui.group(|ui| {
-                        ui.vertical(|ui| {
-                            ui.label(RichText::new("⏳ 单源请求超时").strong());
-                            let r3 = ui.add(
-                                egui::DragValue::new(&mut self.edit_fetch_timeout_secs)
-                                    .range(10..=120)
-                                    .suffix(" 秒"),
-                            );
-                            if r3.drag_stopped() || r3.lost_focus() {
-                                auto_save = true;
-                            }
-                            ui.label(
-                                RichText::new("网络较差时可调高至 45")
-                                    .small()
-                                    .color(theme::muted()),
-                            );
-                        });
+                });
+                ui.add_space(8.0);
+                ui.group(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("⏳ 单源请求超时").strong());
+                        let r3 = ui.add(
+                            egui::DragValue::new(&mut self.edit_fetch_timeout_secs)
+                                .range(10..=120)
+                                .suffix(" 秒"),
+                        );
+                        if r3.drag_stopped() || r3.lost_focus() {
+                            auto_save = true;
+                        }
+                        ui.label(
+                            RichText::new("单源超时，建议 30 秒")
+                                .small()
+                                .color(theme::muted()),
+                        );
                     });
-                } else {
-                    ui.label(
-                        RichText::new("已收起：订阅并发、单源请求超时")
-                            .small()
-                            .color(theme::muted()),
-                    );
-                }
+                });
             });
 
             ui.add_space(6.0);
@@ -449,9 +550,7 @@ impl VpnApp {
 
         ui.add_space(10.0);
 
-        // ==========================================
-        // 3. 节点测速管理 (Speedtest Configuration)
-        // ==========================================
+        // 2. 节点测速与质量检验
         card_frame().show(ui, |ui| {
             ui.horizontal(|ui| {
                 icon_label(ui, Icon::Lightning, 16.0, theme::accent());
@@ -465,78 +564,51 @@ impl VpnApp {
             });
             ui.add_space(2.0);
             ui.label(
-                RichText::new("配置全协议节点真实握手、TCP 预筛与下载带宽探测策略。")
+                RichText::new("配置全协议节点真实握手、TCP 预筛、下载带宽探测与自动化测速策略。")
                     .small()
                     .color(theme::muted()),
             );
-            ui.add_space(6.0);
+            ui.add_space(8.0);
 
+            ui.label(RichText::new("自动测速触发条件").strong());
+            ui.add_space(4.0);
             if ui
                 .checkbox(&mut self.edit_auto_speed, "订阅拉取完成后自动执行批量测速")
                 .changed()
             {
                 auto_save = true;
             }
-            // 加完一个源就当场知道它好不好用：先拉一次，拉成功再只测这个源的节点。
             if ui
                 .checkbox(
                     &mut self.edit_speedtest_added_source,
                     "添加订阅源后自动拉取它，并只测速这个源",
                 )
                 .on_hover_text(
-                    "只对你手动新增的源生效（Gist/频道批量发现不触发，免得一次登记八个源就八轮测速）。                     测速并发用上面的设置值。",
+                    "只对手动新增的源生效（Gist/频道批量发现不触发，免得一次登记多个源引发连续测速）。",
                 )
                 .changed()
             {
                 auto_save = true;
             }
-
-            // 2026-10-08：故障转移的替补是从"测通"那批里捞的。他库里出现过 8349 个节点
-            // 只有 15 个测通的情况 —— 那时自动切换等于没有退路。这个开关让后台在
-            // 测通数低于 20 时自己补一轮全量测速（并发固定 8、不测下载吞吐）。
             if ui
                 .checkbox(
                     &mut self.edit_speedtest_auto_refill,
                     "测通节点少于 20 个时，后台自动补一轮全量测速",
                 )
                 .on_hover_text(
-                    "只在后台跑：并发固定 8（不占用你设置的测速并发），不探测下载吞吐，\
-                     距上次自动测速至少隔 30 分钟才会再跑一轮。一轮可能要几十分钟。",
+                    "只在后台跑：并发固定 8，不探测下载吞吐，距上次自动测速至少隔 30 分钟才会跑一轮。",
                 )
                 .changed()
             {
                 auto_save = true;
             }
-            // 系统代理归属：程序写的 `ProxyEnable` 会被 Windows 设置、别的代理工具或脚本改掉，
-            // 之后界面仍然显示"代理运行中"（2026-10-08 实测过一遍）。核对一直在做，
-            // 要不要"发现被关掉就自动写回"由这条决定 —— 默认关，因为它动的是用户 HKCU。
-            if ui
-                .checkbox(
-                    &mut self.edit_auto_rearm_system_proxy,
-                    "系统代理被外部关闭时，自动写回本程序的代理地址",
-                )
-                .on_hover_text(
-                    "每 30 秒核对一次注册表。关掉时界面只提示不动手；开着才会把 \
-                     ProxyEnable / ProxyServer 写回本程序的 127.0.0.1:混合端口。\
-                     和别的代理工具共存时建议保持关闭，否则两边会互相抢。",
-                )
-                .changed()
-            {
-                auto_save = true;
-            }
-            if self.settings_advanced_open {
-            if ui
-                .checkbox(
-                    &mut self.edit_speedtest_download,
-                    "额外探测节点真实下载速度（进行真实数据包吞吐测试，耗时较长）",
-                )
-                .changed()
-            {
-                auto_save = true;
-            }
-            ui.add_space(6.0);
 
-            // 3 Column Grid for Parameters
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.label(RichText::new("测速并发与阈值参数").strong());
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.group(|ui| {
                     ui.vertical(|ui| {
@@ -583,22 +655,83 @@ impl VpnApp {
                     });
                 });
             });
-            } else {
-                ui.label(RichText::new("已收起：下载吞吐探测、测速并发、连接超时阈值、下载探测时长")
-                    .small()
-                    .color(theme::muted()));
-            }
 
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new(
-                    "说明：所有节点测速均通过当前代理内核完成握手和 Google Generate 204 访问；批量测速会自动进行 TCP 预筛以提升整体效率。导出功能只读取既有测速结果，不会触发额外网络请求。",
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.label(RichText::new("测速加速与剪枝优化").strong());
+            ui.add_space(4.0);
+            if ui
+                .checkbox(
+                    &mut self.edit_speedtest_download,
+                    "额外探测节点真实下载速度（进行真实数据包吞吐测试，耗时较长）",
                 )
-                .small()
-                .color(theme::muted()),
-            );
+                .changed()
+            {
+                auto_save = true;
+            }
+            if ui
+                .checkbox(
+                    &mut self.edit_speedtest_dedup_egress,
+                    "同物理落地剪枝（多节点解析到相同目标 IP:Port 时只测 1 次，大幅提速）",
+                )
+                .changed()
+            {
+                auto_save = true;
+            }
+            if ui
+                .checkbox(
+                    &mut self.edit_speedtest_tcp_ping_only,
+                    "⚡ 仅 TCP Ping 快速粗筛（跳过内核真实代理握手，数千节点可在数秒内初筛完成）",
+                )
+                .changed()
+            {
+                auto_save = true;
+            }
+            if ui
+                .checkbox(
+                    &mut self.edit_speedtest_parallel_kernels,
+                    "三内核并行验证（墙钟约 1/3，峰值内存约 3 倍）",
+                )
+                .changed()
+            {
+                auto_save = true;
+            }
+            if ui
+                .checkbox(
+                    &mut self.edit_speedtest_persistent_kernel,
+                    "复用常驻内核，用控制器接口切换待测节点（省去冷启动时间）",
+                )
+                .changed()
+            {
+                auto_save = true;
+            }
+            if ui
+                .checkbox(
+                    &mut self.edit_speedtest_conditional_isolation,
+                    "只对可疑的失败节点做隔离复测（默认全部复测）",
+                )
+                .changed()
+            {
+                auto_save = true;
+            }
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("沿用已验证结果:").small().color(theme::muted()));
+                let r7 = ui.add(
+                    egui::DragValue::new(&mut self.edit_speedtest_reuse_minutes)
+                        .range(0..=1440)
+                        .speed(5)
+                        .suffix(" 分钟"),
+                );
+                if r7.drag_stopped() || r7.lost_focus() {
+                    auto_save = true;
+                }
+                ui.label(RichText::new("0 = 每轮全部重测").small().color(theme::muted()));
+            });
+
             if let Some(t) = self.settings.last_auto_speedtest_at {
-                ui.add_space(2.0);
+                ui.add_space(6.0);
                 ui.label(
                     RichText::new(format!(
                         "上次自动测速执行时间: {}",
@@ -610,104 +743,139 @@ impl VpnApp {
             }
         });
 
-        ui.add_space(10.0);
+        if auto_save && self.settings_dirty() {
+            self.save_settings();
+        }
+    }
 
-        // ==========================================
-        // 4. 代理自愈与服务接口 (Runtime & Network Services)
-        // ==========================================
+    /// 自愈网络：节点故障自动切换 (Failover)、系统代理看门狗、Geo 规则与本地 HTTP API 服务。
+    fn ui_settings_network(&mut self, ui: &mut Ui) {
+        let mut auto_save = false;
+
+        // 1. 节点故障自愈与系统代理守护
         card_frame().show(ui, |ui| {
             ui.horizontal(|ui| {
                 icon_label(ui, Icon::Shield, 16.0, theme::accent());
-                ui.label(RichText::new("代理自愈与网络服务").strong().size(15.0));
-                let is_running = self.api_controller.is_running();
-                let (badge_text, badge_color) = if is_running {
-                    ("HTTP 服务运行中", theme::success())
+                ui.label(RichText::new("节点故障自愈与代理守护").strong().size(15.0));
+                let (badge_text, badge_color) = if self.auto_failover {
+                    ("自动切换已开启", theme::success())
                 } else {
-                    ("HTTP 服务已停止", theme::muted())
+                    ("自动切换已关闭", theme::muted())
                 };
                 status_badge(ui, badge_text, badge_color);
             });
             ui.add_space(2.0);
             ui.label(
-                RichText::new("管理断连自动切换 (Failover)、分流规则数据库以及供外部调用的 RESTful API。")
+                RichText::new("实时监测当前代理出口可用性，在断连或延迟严重劣化时秒级切换至最优备选节点。")
                     .small()
                     .color(theme::muted()),
             );
             ui.add_space(8.0);
 
-            // Sub-item 1: Failover
+            // Failover
             if ui
                 .checkbox(
                     &mut self.auto_failover,
-                    "节点故障自动切换（Failover）：每 60 秒经当前代理实测一次，交给选路调度器判定",
+                    "节点故障自动切换（Failover）：每 60 秒经当前代理实测一次，由调度器判定",
                 )
                 .on_hover_text(
-                    "调度器规则：EWMA 平滑延迟；连续 2 次验证失败开断路器并拉黑 5 分钟；
-                     候选必须比当前节点好 25% 以上才切（滞后），且两次切换至少隔 2 分钟。
-                     切之前会对待补节点先做一次 TCP 复检，不再拿过期测速数据直接跳。",
+                    "调度器规则：EWMA 平滑延迟；连续 2 次验证失败开断路器并拉黑 5 分钟；\
+                     候选必须比当前节点好 25% 以上才切（滞后），且两次切换至少隔 2 分钟。",
                 )
                 .changed()
             {
                 let on = self.auto_failover;
                 self.set_auto_failover(on);
                 self.status = if on {
-                    "节点故障自动切换已开启，这个选择会保存，重启后仍然生效".into()
+                    "节点故障自动切换已开启，设置已保存".into()
                 } else {
-                    "节点故障自动切换已关闭（探测照跑，只是不自动换出口）".into()
+                    "节点故障自动切换已关闭（探测照跑，不自动换出口）".into()
                 };
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("切换延迟阈值:").small().color(theme::muted()));
-                ui.add(
+                let r1 = ui.add(
                     egui::DragValue::new(&mut self.edit_failover_latency_ms)
                         .range(200..=15_000)
                         .speed(50)
                         .suffix(" ms"),
                 );
+                if r1.drag_stopped() || r1.lost_focus() {
+                    auto_save = true;
+                }
                 ui.label(
-                    RichText::new(
-                        "实测是穿过当前代理的一次完整 HTTPS 请求，境外节点正常也在 300-900ms；\
-                         超过阈值需连续三次才切换（验证失败立即切，两次自动切换间隔至少 3 分钟）",
-                    )
-                    .small()
-                    .color(theme::muted()),
+                    RichText::new("实测为穿过当前代理的完整 HTTPS 请求；连续三次超阈值触发切换")
+                        .small()
+                        .color(theme::muted()),
                 );
             });
-            if self.settings_advanced_open {
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.edit_bandwidth_guard, "带宽保护");
-                ui.add(
+                if ui.checkbox(&mut self.edit_bandwidth_guard, "启用带宽保护").changed() {
+                    auto_save = true;
+                }
+                let r2 = ui.add(
                     egui::DragValue::new(&mut self.edit_bandwidth_min_kbps)
                         .range(0..=10000)
                         .speed(10)
                         .suffix(" KB/s"),
                 );
+                if r2.drag_stopped() || r2.lost_focus() {
+                    auto_save = true;
+                }
                 ui.label(
-                    RichText::new("当前出口下行持续低于该值也算劣化（需先勾选上面的自动切换）")
+                    RichText::new("当前出口下行持续低于该值也算劣化（需开启自动切换）")
                         .small()
                         .color(theme::muted()),
                 );
             });
-            } else {
-                ui.label(RichText::new("已收起：带宽保护（下行低于该值也算劣化）")
-                    .small()
-                    .color(theme::muted()));
-            }
             if let Some(reason) = &self.failover_last_reason {
-                ui.label(RichText::new(format!("最近一次: {reason}")).small().color(theme::accent()));
+                ui.add_space(4.0);
+                ui.label(RichText::new(format!("最近切换原因: {reason}")).small().color(theme::accent()));
             }
 
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.separator();
-            ui.add_space(6.0);
+            ui.add_space(8.0);
 
-            // 节点关键词黑名单
-            ui.label(RichText::new("节点关键词排除").strong());
+            // 系统代理守护
+            ui.label(RichText::new("系统代理注册表守护").strong());
             ui.add(
                 egui::Label::new(
                     RichText::new(
-                        "多个词用逗号、分号或空格分隔（大小写不敏感，子串匹配）。命中的节点不会成为“一键连接最优”和自动切换的候选，也不参与推送与导出；节点列表仍可见。",
+                        "防止系统代理被外部工具或系统设置意外关闭。开启后每 30 秒自动核对并写回本程序代理地址。",
+                    )
+                    .small()
+                    .color(theme::muted()),
+                )
+                .wrap(),
+            );
+            ui.add_space(4.0);
+            if ui
+                .checkbox(
+                    &mut self.edit_auto_rearm_system_proxy,
+                    "系统代理被外部关闭时，自动写回本程序的代理地址",
+                )
+                .on_hover_text(
+                    "每 30 秒核对一次注册表 ProxyEnable / ProxyServer。\
+                     和别的代理工具共存时建议保持关闭，否则两边会互相抢。",
+                )
+                .changed()
+            {
+                auto_save = true;
+            }
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            // 节点关键词黑名单
+            ui.label(RichText::new("节点关键词排除（黑名单）").strong());
+            ui.add(
+                egui::Label::new(
+                    RichText::new(
+                        "多个词用逗号、分号或空格分隔。命中的节点不会成为“一键连接最优”和自动切换的候选，也不参与推送与导出。",
                     )
                     .small()
                     .color(theme::muted()),
@@ -720,85 +888,36 @@ impl VpnApp {
                     .hint_text("例如：到期, 限速, ×3, 未验证")
                     .desired_width(ui.available_width()),
             );
+            if exclude_field.lost_focus() {
+                auto_save = true;
+            }
             crate::gui::widgets::note_text_field(ui, &exclude_field);
+        });
 
-            ui.add_space(6.0);
-            ui.separator();
-            ui.add_space(6.0);
+        ui.add_space(10.0);
 
-            ui.add_space(6.0);
-            ui.separator();
-            ui.add_space(6.0);
-
-            if self.settings_advanced_open {
-            // Sub-item: 测速优化。每一项都会改变严格程度或资源占用，默认全部关闭。
-            ui.label(RichText::new("测速优化（默认全部关闭）").strong());
-            ui.add(
-                egui::Label::new(
-                    RichText::new(
-                        "关闭时行为与之前完全一致：内核串行验证、每批冷启动新内核、每轮全部重测、                         失败节点一律隔离复测。",
-                    )
+        // 2. 分流规则与外部服务接口
+        card_frame().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                icon_label(ui, Icon::Rules, 16.0, theme::accent());
+                ui.label(RichText::new("分流规则与外部服务接口").strong().size(15.0));
+                let is_running = self.api_controller.is_running();
+                let (badge_text, badge_color) = if is_running {
+                    ("HTTP 服务运行中", theme::success())
+                } else {
+                    ("HTTP 服务已停止", theme::muted())
+                };
+                status_badge(ui, badge_text, badge_color);
+            });
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new("热重载 GeoIP / GeoSite 路由规则数据库，以及管理供外部调用的 RESTful API。")
                     .small()
                     .color(theme::muted()),
-                )
-                .wrap(),
             );
-            ui.add_space(4.0);
-            ui.checkbox(
-                &mut self.edit_speedtest_parallel_kernels,
-                "三个内核并行验证（墙钟约 1/3，峰值内存约 3 倍）",
-            );
-            ui.checkbox(
-                &mut self.edit_speedtest_persistent_kernel,
-                "复用常驻内核，用控制器接口切换待测节点（省掉每批 1-3 秒冷启动）",
-            );
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("沿用已验证结果:").small().color(theme::muted()));
-                ui.add(
-                    egui::DragValue::new(&mut self.edit_speedtest_reuse_minutes)
-                        .range(0..=1440)
-                        .speed(5)
-                        .suffix(" 分钟"),
-                );
-                ui.label(RichText::new("0 = 每轮全部重测").small().color(theme::muted()));
-            });
-            ui.checkbox(
-                &mut self.edit_speedtest_dedup_egress,
-                "同物理落地剪枝 (落地去重)",
-            )
-            .on_hover_text("多源或同源多个节点解析到相同目标 IP:Port 时，只对 1 个物理代表节点进行真实内核握手并共享结果，大幅提速并防止打死 VPS");
+            ui.add_space(8.0);
 
-            ui.checkbox(
-                &mut self.edit_speedtest_tcp_ping_only,
-                "⚡ 仅 TCP Ping 快速粗筛（跳过内核真实代理握手）",
-            )
-            .on_hover_text("仅测试节点 TCP 端口的往返时延，数千个节点可在 2~3 秒内完成粗筛。不启动内核也不向目标发真实请求。选定主力节点前建议取消此项进行深度校验。");
-
-            ui.checkbox(
-                &mut self.edit_speedtest_conditional_isolation,
-                "只对可疑的失败节点做 mihomo -t 隔离复测（默认全部复测）",
-            );
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("下载测速只做延迟前:").small().color(theme::muted()));
-                ui.add(
-                    egui::DragValue::new(&mut self.edit_speedtest_download_top_n)
-                        .range(0..=1000)
-                        .speed(5)
-                        .suffix(" 个"),
-                );
-                ui.label(
-                    RichText::new("0 = 所有 TCP 可达节点都测（很慢）；需先勾选上方“测下载速率”")
-                        .small()
-                        .color(theme::muted()),
-                );
-            });
-            } else {
-                ui.label(RichText::new("已收起：三内核并行、常驻内核、沿用已验证结果、条件隔离复测、下载测速 TopN")
-                    .small()
-                    .color(theme::muted()));
-            }
-
-            // Sub-item 2: Geo Rules
+            // Geo Database
             ui.label(RichText::new("分流规则数据库 (GeoIP / GeoSite)").strong());
             ui.add(
                 egui::Label::new(
@@ -829,11 +948,11 @@ impl VpnApp {
                 }
             });
 
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.separator();
-            ui.add_space(6.0);
+            ui.add_space(8.0);
 
-            // Sub-item 3: HTTP API Server
+            // HTTP API Server
             ui.label(RichText::new("本地 HTTP API 服务与端口管理").strong());
             ui.add(
                 egui::Label::new(
@@ -874,116 +993,6 @@ impl VpnApp {
                 .changed()
             {
                 auto_save = true;
-            }
-        });
-
-        ui.add_space(14.0);
-
-        // ==========================================
-        // 5. Windows 防火墙放行 (Firewall Allow Rules)
-        // ==========================================
-        card_frame().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                icon_label(ui, Icon::Shield, 16.0, theme::accent());
-                ui.label(RichText::new("Windows 防火墙放行").strong().size(15.0));
-                let (badge_text, badge_color) = if self.edit_firewall_auto_allow {
-                    ("启动时自动放行", theme::success())
-                } else {
-                    ("已关闭", theme::muted())
-                };
-                status_badge(ui, badge_text, badge_color);
-            });
-            ui.add_space(2.0);
-            ui.add(
-                egui::Label::new(
-                    RichText::new(
-                        "防火墙会拦掉发到本程序与内核监听端口的回环连接（表现为代理点了没反应、9980 无响应）。规则按程序路径放行，重编译或换内核版本后路径不变，规则照样有效。",
-                    )
-                    .small()
-                    .color(theme::muted()),
-                )
-                .wrap(),
-            );
-            ui.add_space(8.0);
-            if ui
-                .checkbox(
-                    &mut self.edit_firewall_auto_allow,
-                    RichText::new("软件启动时自动加入允许应用").size(13.0),
-                )
-                .changed()
-            {
-                auto_save = true;
-                // 勾上就立刻试一次，让他当场看到成没成；非管理员只记住，提权启动时再补。
-                if self.edit_firewall_auto_allow && crate::platform::is_elevated() {
-                    self.apply_firewall_rules();
-                }
-            }
-            ui.add_space(6.0);
-            let elevated = crate::platform::is_elevated();
-            ui.label(
-                RichText::new(if elevated {
-                    "当前是管理员权限，可以立即写入规则"
-                } else {
-                    "当前非管理员：勾选只记住，提权启动时再自动补上"
-                })
-                .small()
-                .color(if elevated {
-                    theme::success()
-                } else {
-                    theme::warning()
-                }),
-            );
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(elevated, primary_btn("现在加入"))
-                    .on_hover_text("对本程序和已下载到 managed kernels 目录的内核 exe 逐条写入允许规则")
-                    .clicked()
-                {
-                    self.apply_firewall_rules();
-                }
-                if let Some(status) = self.firewall_status.clone() {
-                    ui.label(RichText::new(status).small().color(theme::text_secondary()));
-                }
-            });
-        });
-
-        ui.add_space(14.0);
-
-        // ==========================================
-        // 底部保存与同步状态栏 (Bottom Action Bar)
-        // ==========================================
-        ui.horizontal(|ui| {
-            let dirty = self.settings_dirty();
-            if ui
-                .add_enabled(!self.settings_saving, primary_btn("保存所有设置"))
-                .clicked()
-            {
-                self.save_settings();
-            }
-            if ui.button("重新加载").clicked() {
-                self.sync_edit_settings();
-                self.reload_settings();
-            }
-            if self.settings_saving {
-                ui.spinner();
-                ui.label(
-                    RichText::new("正在保存到数据库...")
-                        .color(theme::accent())
-                        .small(),
-                );
-            } else if dirty {
-                ui.label(
-                    RichText::new("⚠ 有未保存修改（切换页面将自动保存）")
-                        .color(theme::warning())
-                        .small(),
-                );
-            } else {
-                ui.label(
-                    RichText::new("✓ 设置已保存并同步")
-                        .color(theme::success())
-                        .small(),
-                );
             }
         });
 
