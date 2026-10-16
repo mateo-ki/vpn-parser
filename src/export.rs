@@ -115,6 +115,11 @@ fn node_to_clash_proxy(node: &Node) -> Option<Value> {
             ensure_server_port_name(&mut cfg, node);
             Some(cfg)
         }
+        "masque" => {
+            set_type(&mut cfg, "masque");
+            ensure_server_port_name(&mut cfg, node);
+            Some(cfg)
+        }
         _ => None,
     }
 }
@@ -568,6 +573,7 @@ fn node_to_share_uri(node: &Node) -> Option<String> {
         "hysteria2" | "hy2" => rebuild_hysteria2_uri(cfg, node),
         "socks5" | "socks" => rebuild_socks_uri(cfg, node),
         "http" | "https" => rebuild_http_uri(cfg, node),
+        "masque" => crate::parser::warp_masque::rebuild_masque_uri(cfg, node),
         _ => None,
     } {
         return Some(uri);
@@ -592,6 +598,7 @@ fn raw_scheme_matches_protocol(raw: &str, protocol: &str) -> bool {
         "hysteria2" | "hy2" => lower.starts_with("hysteria2://") || lower.starts_with("hy2://"),
         "socks5" | "socks" => lower.starts_with("socks5://") || lower.starts_with("socks://"),
         "http" | "https" => lower.starts_with("http://") || lower.starts_with("https://"),
+        "masque" => lower.starts_with("masque://"),
         _ => false,
     }
 }

@@ -36,6 +36,9 @@ pub fn parse_uri(uri: &str, source_id: Option<&str>) -> Option<Node> {
     if lower.starts_with("socks5://") || lower.starts_with("socks://") {
         return parse_socks(&uri, source_id);
     }
+    if lower.starts_with("masque://") {
+        return super::warp_masque::parse_masque_uri(&uri, source_id);
+    }
     if lower.starts_with("http://") || lower.starts_with("https://") {
         // Only treat as proxy URI when it has userinfo (proxy auth style)
         if let Ok(u) = Url::parse(&uri) {

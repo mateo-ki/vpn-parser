@@ -2,6 +2,7 @@ mod clash;
 mod common;
 pub mod openrung;
 mod uri;
+pub mod warp_masque;
 
 pub use clash::parse_clash_yaml;
 pub use common::{
@@ -9,6 +10,7 @@ pub use common::{
 };
 pub use openrung::parse_openrung_json;
 pub use uri::parse_uri;
+pub use warp_masque::parse_warp_masque_json;
 
 use crate::models::Node;
 use chrono::Utc;
@@ -36,6 +38,19 @@ pub fn parse_subscription(content: &str, source_id: Option<&str>) -> Vec<Node> {
         && (content.contains("\"relays\"") || content.contains("reality_public_key"))
     {
         if let Some(nodes) = parse_openrung_json(content, source_id) {
+            if !nodes.is_empty() {
+                return dedup_nodes(nodes);
+            }
+        }
+    }
+
+    // 0.1) Try WARP MASQUE JSON (usque-config.json or WARP registration credentials)
+    if content.starts_with('{')
+        && (content.contains("endpoint_pub_key")
+            || content.contains("peerPublicKey")
+            || (content.contains("private_key") && content.contains("ipv4")))
+    {
+        if let Some(nodes) = parse_warp_masque_json(content, source_id) {
             if !nodes.is_empty() {
                 return dedup_nodes(nodes);
             }
@@ -131,6 +146,14 @@ fn credential_token(protocol: &str, config: &serde_json::Value) -> String {
         }
         "socks5" | "http" => format!("{}:{}", s(&["username", "user"]), s(&["password", "pass"])),
         "wireguard" => s(&["private-key", "private_key", "public-key", "public_key"]),
+        "masque" => s(&[
+            "private-key",
+            "private_key",
+            "public-key",
+            "public_key",
+            "publicKey",
+            "privateKey",
+        ]),
         _ => {
             // Fallback: hash a few stable fields if present.
             let parts = [

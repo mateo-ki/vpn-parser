@@ -220,6 +220,7 @@ impl VpnApp {
                         ("trojan", "Trojan"),
                         ("ss", "SS"),
                         ("hysteria2", "HY2"),
+                        ("masque", "MASQUE"),
                     ] {
                         let is_active = self.protocol_filter.eq_ignore_ascii_case(val);
                         let text_color = if is_active { theme::accent_strong() } else { theme::text_secondary() };

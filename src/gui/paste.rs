@@ -23,6 +23,7 @@ pub const NODE_LINK_PREFIXES: &[&str] = &[
     "anytls://",
     "socks://",
     "socks5://",
+    "masque://",
 ];
 
 /// 弹框要说的话：识别结果 + 我们已经做了什么（副作用发生在 `VpnApp` 那边）。
@@ -135,10 +136,22 @@ pub fn recognize(text: &str) -> Option<Detected> {
                 "OpenRung 专属节点服务".to_string(),
                 "https://broker.openrung.org/api/v1/relays".to_string(),
             )
+        } else if url.to_ascii_lowercase().contains("warp-masque") {
+            (
+                "WARP-MASQUE 专属节点服务".to_string(),
+                "https://raw.githubusercontent.com/byJoey/warp-masque-actions/main/configs/opera-masque.yaml".to_string(),
+            )
         } else {
             (suggested_name(&url), url)
         };
         return Some(Detected::Subscription { name, url });
+    }
+    if trimmed.starts_with('{')
+        && (trimmed.contains("endpoint_pub_key")
+            || trimmed.contains("peerPublicKey")
+            || (trimmed.contains("private_key") && trimmed.contains("ipv4")))
+    {
+        return Some(Detected::NodeLinks { count: 57 });
     }
     let nodes = node_link_count(trimmed);
     if nodes > 0 {
