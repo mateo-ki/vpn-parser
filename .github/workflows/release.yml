@@ -90,9 +90,20 @@ jobs:
           if (gh release view "$env:TAG" 2>$null) {
             Write-Host "Release $env:TAG already exists, updating assets with --clobber..."
             gh release upload "$env:TAG" $exe dist/sha256.txt --clobber
+            if (Test-Path "RELEASE_NOTES.md") {
+              gh release edit "$env:TAG" --notes-file RELEASE_NOTES.md
+            }
             if ($pre) { gh release edit "$env:TAG" --prerelease } else { gh release edit "$env:TAG" --prerelease=false }
           } elseif ($pre) {
-            gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG（预发）" --generate-notes --prerelease
+            if (Test-Path "RELEASE_NOTES.md") {
+              gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG（预发）" --notes-file RELEASE_NOTES.md --prerelease
+            } else {
+              gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG（预发）" --generate-notes --prerelease
+            }
           } else {
-            gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG" --generate-notes
+            if (Test-Path "RELEASE_NOTES.md") {
+              gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG" --notes-file RELEASE_NOTES.md
+            } else {
+              gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG" --generate-notes
+            }
           }

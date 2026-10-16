@@ -10,7 +10,7 @@
 
 # 一次性取证脚本：里面写死了这台机器的用户名、装机路径和临时抓取的数据样本。
 # 要进版本库的话，先把绝对路径换成 `scripts/local_paths.py` 里读（那个文件也别提交）。
-/scripts/
+/scripts/*
 !/scripts/build_linux_packages.sh
 !/scripts/build_linux_packages.ps1
 /.cache/

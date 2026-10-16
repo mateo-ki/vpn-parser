@@ -36,4 +36,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "`n>> 打包完成！输出文件如下：" -ForegroundColor Green
-Get-ChildItem -Path "$Workspace\dist" -Filter "vpn-parser*1.6.2*" | Select-Object Name, Length, LastWriteTime | Format-Table -AutoSize
+Get-ChildItem -Path "$Workspace\dist" -Filter "vpn-parser*" | Select-Object Name, Length, LastWriteTime | Format-Table -AutoSize
