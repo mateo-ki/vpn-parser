@@ -1099,10 +1099,23 @@ impl VpnApp {
                                     result.source_name, result.node_count
                                 ),
                                 Ok(result) => {
-                                    format!(
-                                        "订阅“{}”拉取失败：{}",
-                                        result.source_name, result.message
-                                    )
+                                    let msg = &result.message;
+                                    if msg.contains("request failed")
+                                        || msg.contains("timed out")
+                                        || msg.contains("timeout")
+                                        || msg.contains("connection")
+                                        || msg.contains("error sending request")
+                                    {
+                                        format!(
+                                            "订阅“{}”拉取失败（海外服务直连阻断）：{}；建议启动代理后点击「代理拉取」",
+                                            result.source_name, msg
+                                        )
+                                    } else {
+                                        format!(
+                                            "订阅“{}”拉取失败：{}",
+                                            result.source_name, msg
+                                        )
+                                    }
                                 }
                                 Err(error) => format!("单源拉取失败: {error}"),
                             };
@@ -1901,10 +1914,24 @@ impl VpnApp {
         }
         let collector = self.collector.clone();
         let tx = self.tx.clone();
+        let proxy_url = self.subscription_proxy_url();
         self.active_source_fetches.insert(id.clone());
         self.status = "正在拉取订阅源...".into();
         self.rt.spawn(async move {
-            let res = collector.fetch_one(&id).await.map_err(|e| e.to_string());
+            let mut res = collector.fetch_one(&id).await.map_err(|e| e.to_string());
+            if let Some(proxy_url) = proxy_url {
+                let should_fallback = match &res {
+                    Ok(f) => !f.success,
+                    Err(_) => true,
+                };
+                if should_fallback {
+                    if let Ok(proxy_res) = collector.fetch_one_with_proxy(&id, &proxy_url).await {
+                        if proxy_res.success {
+                            res = Ok(proxy_res);
+                        }
+                    }
+                }
+            }
             let _ = tx.send(BgMsg::FetchOneDone {
                 source_id: id,
                 result: res,
@@ -1940,16 +1967,37 @@ impl VpnApp {
     pub(crate) fn fetch_all(&mut self) {
         let collector = self.collector.clone();
         let tx = self.tx.clone();
+        let proxy_url = self.subscription_proxy_url();
         self.busy = true;
         self.status = "正在拉取全部启用源...".into();
         self.rt.spawn(async move {
             let progress_tx = tx.clone();
-            let res = collector
+            let mut res = collector
                 .fetch_all_enabled_with_progress(Some(move |done, total| {
                     let _ = progress_tx.send(BgMsg::FetchProgress { done, total });
                 }))
                 .await
                 .map_err(|e| e.to_string());
+            if let Some(proxy_url) = proxy_url {
+                let should_fallback = match &res {
+                    Ok(list) => list.iter().any(|item| !item.success),
+                    Err(_) => true,
+                };
+                if should_fallback {
+                    let progress_tx = tx.clone();
+                    if let Ok(proxy_res) = collector
+                        .fetch_all_enabled_with_proxy(
+                            &proxy_url,
+                            Some(move |done, total| {
+                                let _ = progress_tx.send(BgMsg::FetchProgress { done, total });
+                            }),
+                        )
+                        .await
+                    {
+                        res = Ok(proxy_res);
+                    }
+                }
+            }
             let _ = tx.send(BgMsg::FetchAllDone(res));
         });
     }
