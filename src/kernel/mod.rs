@@ -503,17 +503,6 @@ pub fn kernel_candidates(
             );
         }
     }
-    #[cfg(unix)]
-    {
-        for prefix in ["/usr/bin", "/usr/local/bin", "/usr/sbin", "/bin"] {
-            candidates.push(PathBuf::from(prefix).join(kind.executable_name()));
-        }
-        if let Some(path_var) = std::env::var_os("PATH") {
-            for dir in std::env::split_paths(&path_var) {
-                candidates.push(dir.join(kind.executable_name()));
-            }
-        }
-    }
     candidates
 }
 
@@ -545,11 +534,33 @@ pub fn find_kernel_executable(kind: KernelKind) -> Option<PathBuf> {
 
     let current_exe = std::env::current_exe().ok();
     let current_dir = std::env::current_dir().ok();
-    find_first_existing_candidate(kernel_candidates(
+    if let Some(candidate) = find_first_existing_candidate(kernel_candidates(
         kind,
         current_exe.as_deref(),
         current_dir.as_deref(),
-    ))
+    )) {
+        return Some(candidate);
+    }
+
+    #[cfg(unix)]
+    {
+        for prefix in ["/usr/bin", "/usr/local/bin", "/usr/sbin", "/bin"] {
+            let p = PathBuf::from(prefix).join(kind.executable_name());
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+        if let Some(path_var) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path_var) {
+                let p = dir.join(kind.executable_name());
+                if p.is_file() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// 路径一律按分量拼。写成 `join("data/kernels")` 也能用，但显示出来就是
