@@ -471,37 +471,55 @@ pub fn render_node_cards_grid(
                             let response =
                                 compact_node_card(column_ui, node, is_selected, is_switching)
                                     .on_hover_text(format!(
-                                        "{}:{}\n点击连接，右键管理",
+                                        "{}:{}\n左键点击选中，右键设为活动节点",
                                         node.server, node.port
                                     ));
-                            let connect = response.clicked();
+                            let clicked = response.clicked();
+                            let double_clicked = response.double_clicked();
                             response.context_menu(|ui| {
+                                if !is_selected {
+                                    if ui.button("🚀 设为活动节点").clicked() {
+                                        card_action = Some(NodeCardAction::Connect {
+                                            id: node.id.clone(),
+                                            name: node.name.clone(),
+                                        });
+                                        ui.close_menu();
+                                    }
+                                } else {
+                                    ui.label(RichText::new("✓ 当前活动节点").small().color(theme::success()));
+                                }
+                                ui.separator();
                                 if ui
-                                    .add_enabled(!is_busy, egui::Button::new("测速节点"))
+                                    .add_enabled(!is_busy, egui::Button::new("⚡ 测速节点"))
                                     .clicked()
                                 {
                                     card_action = Some(NodeCardAction::Speedtest(node.id.clone()));
                                     ui.close_menu();
                                 }
-                                if ui.button("查看详情").clicked() {
+                                if ui.button("ℹ️ 查看详情").clicked() {
                                     card_action = Some(NodeCardAction::ShowDetail(node.id.clone()));
                                     ui.close_menu();
                                 }
-                                if ui.button("IP 检测").clicked() {
+                                if ui.button("🛡️ IP 检测").clicked() {
                                     card_action = Some(NodeCardAction::CheckIpRisk(node.id.clone()));
                                     ui.close_menu();
                                 }
                                 ui.separator();
                                 if ui
-                                    .button(RichText::new("删除节点").color(theme::danger()))
+                                    .button(RichText::new("🗑️ 删除节点").color(theme::danger()))
                                     .clicked()
                                 {
                                     card_action = Some(NodeCardAction::Delete(node.id.clone()));
                                     ui.close_menu();
                                 }
                             });
-                            if connect && !is_selected {
+                            if double_clicked && !is_selected {
                                 card_action = Some(NodeCardAction::Connect {
+                                    id: node.id.clone(),
+                                    name: node.name.clone(),
+                                });
+                            } else if clicked && !is_selected {
+                                card_action = Some(NodeCardAction::Select {
                                     id: node.id.clone(),
                                     name: node.name.clone(),
                                 });

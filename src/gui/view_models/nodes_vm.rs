@@ -1,6 +1,7 @@
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeCardAction {
+    Select { id: String, name: String },
     Connect { id: String, name: String },
     Speedtest(String),
     ShowDetail(String),

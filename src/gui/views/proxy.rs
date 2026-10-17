@@ -1778,6 +1778,10 @@ impl VpnApp {
         }
         if let Some(action) = menu_action {
             match action {
+                NodeCardAction::Select { id, name } => {
+                    self.selected_proxy_node_id = Some(id);
+                    self.selected_proxy_node_name = Some(name);
+                }
                 NodeCardAction::ShowDetail(id) => self.show_node(id),
                 NodeCardAction::Speedtest(id) => self.speedtest_one(id),
                 NodeCardAction::CheckIpRisk(id) => self.check_ip_risk_for(&id),

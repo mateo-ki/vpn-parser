@@ -3672,8 +3672,13 @@ impl VpnApp {
 
     pub(crate) fn handle_node_card_action(&mut self, action: NodeCardAction) {
         match action {
+            NodeCardAction::Select { id, name } => {
+                self.selected_proxy_node_id = Some(id);
+                self.selected_proxy_node_name = Some(name.clone());
+                self.status = format!("已选中节点: {name}（右键设为活动节点）");
+            }
             NodeCardAction::Connect { id, name } => {
-                self.switch_proxy_node(id, name, "手动切换");
+                self.switch_proxy_node(id, name, "设为活动节点");
             }
             NodeCardAction::Speedtest(id) => self.speedtest_one(id),
             NodeCardAction::ShowDetail(id) => self.show_node(id),
