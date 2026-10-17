@@ -27,6 +27,13 @@
 - **macOS 原生红黄绿交通灯与调色板**：适配 macOS 原生风格的主题调色板与窗口控制细节；
 - **长页面自适应滚动**：DNS/TUN 设置页与内核管理页全卡片引入自适应上下滚动，避免下载进度条或复杂规则挤压隐藏底部内容。
 
+### 🐧 4. Linux 平台安全与系统级体验专项调优 (Fedora / GNOME / niri / DMS)
+- **进程清理安全隔离（杜绝误杀第三方客户端）**：内核清理增加 `/proc/<pid>/exe` 路径与 `cmdline` 特征强校验，严格仅清理本程序受管目录下的内核，绝不误杀 Clash Verge、v2rayA、nekoray 等第三方客户端内核；
+- **TUN 授权引导与 Wayland 崩溃修复**：严禁使用 `sudo` 启动 GUI，避免 Wayland 拒绝授权及数据目录错乱；改为向用户提供内核二进制文件的精确 `sudo setcap cap_net_admin,cap_net_raw+ep <kernel_path>` 授权方案；
+- **GSettings Linux 桌面系统代理原生支持**：为 Linux 平台实现基于 GSettings（`org.gnome.system.proxy`）的系统代理自动开启与无缝还原，让 Fedora / Ubuntu / Debian / niri / DMS 下的浏览器与桌面应用均能一键自动走代理；
+- **Unix Domain Socket 单实例互斥与平滑唤醒**：废弃粗暴终止旧实例的做法，改用 Unix Domain Socket 发送唤醒指令激活已有前台窗口并优雅退出，保护正在运行的代理与数据库写入；
+- **平铺窗口管理器（niri / Hyprland）自适应排版**：窗口最小保护尺寸优化为 `820 × 520`，控制台策略组与调度按钮支持响应式折行，避免半屏平铺时元素溢出。
+
 ---
 
 ## 📦 各平台下载指引

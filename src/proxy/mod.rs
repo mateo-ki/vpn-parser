@@ -1138,6 +1138,7 @@ impl ProxyManager {
         ) {
             return Err(anyhow!("代理正在运行或切换状态"));
         }
+        #[cfg(windows)]
         if runtime.options.mode == ProxyMode::Tun && !crate::platform::is_elevated() {
             return Err(anyhow!("TUN 模式需要管理员权限"));
         }

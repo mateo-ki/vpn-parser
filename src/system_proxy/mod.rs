@@ -34,8 +34,15 @@ pub trait SystemProxyControl: Send + Sync {
 }
 
 /// 唯一一份"本平台能不能写系统代理"的判据，启动流程与界面共用。
-pub const fn system_proxy_supported_on_this_platform() -> bool {
-    cfg!(any(windows, target_os = "macos"))
+pub fn system_proxy_supported_on_this_platform() -> bool {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        true
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        gsettings_available()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -168,17 +175,122 @@ impl SystemProxyControl for PlatformSystemProxy {
 }
 
 #[cfg(all(not(windows), not(target_os = "macos")))]
+fn gsettings_available() -> bool {
+    let Ok(output) = Command::new("gsettings")
+        .args(["get", "org.gnome.system.proxy", "mode"])
+        .output()
+    else {
+        return false;
+    };
+    output.status.success()
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
 impl SystemProxyControl for PlatformSystemProxy {
     fn capture(&self) -> Result<SystemProxySnapshot> {
-        Err(anyhow!("当前平台暂不支持系统代理设置"))
+        if !gsettings_available() {
+            return Err(anyhow!("当前桌面环境缺少 gsettings 工具，无法自动配置系统代理"));
+        }
+        let output = Command::new("gsettings")
+            .args(["get", "org.gnome.system.proxy", "mode"])
+            .output()?;
+        let mode_raw = String::from_utf8_lossy(&output.stdout);
+        let mode = mode_raw.trim().trim_matches('\'').to_string();
+        let enabled = mode != "none";
+
+        let host_out = Command::new("gsettings")
+            .args(["get", "org.gnome.system.proxy.http", "host"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().trim_matches('\'').to_string())
+            .unwrap_or_default();
+
+        let port_out = Command::new("gsettings")
+            .args(["get", "org.gnome.system.proxy.http", "port"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+
+        let server = if !host_out.is_empty() && port_out != "0" {
+            Some(format!("{host_out}:{port_out}"))
+        } else {
+            None
+        };
+
+        Ok(SystemProxySnapshot {
+            enabled,
+            server: Some(mode), // 使用 server 字段记录原有的 mode ('none', 'manual', 'auto')
+            override_list: server,
+        })
     }
 
-    fn enable(&self, _server: &str) -> Result<()> {
-        Err(anyhow!("当前平台暂不支持系统代理设置"))
+    fn enable(&self, server: &str) -> Result<()> {
+        if crate::diag::enabled() {
+            return Err(anyhow!(crate::diag::BLOCKED));
+        }
+        if !gsettings_available() {
+            return Err(anyhow!("当前桌面环境未安装 gsettings，请手动为应用程序设置代理 127.0.0.1:9980"));
+        }
+        let (host, port) = parse_host_port(server)?;
+
+        let host_arg = format!("'{host}'");
+        let port_arg = port.to_string();
+
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy.http", "host", &host_arg])
+            .output();
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy.http", "port", &port_arg])
+            .output();
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy.https", "host", &host_arg])
+            .output();
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy.https", "port", &port_arg])
+            .output();
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy.socks", "host", &host_arg])
+            .output();
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy.socks", "port", &port_arg])
+            .output();
+
+        let status = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy", "mode", "'manual'"])
+            .status()?;
+
+        if !status.success() {
+            return Err(anyhow!("执行 gsettings 设置系统代理失败"));
+        }
+
+        tracing::info!(host = %host, port = port, "已成功通过 GSettings 启用 Linux 桌面系统代理");
+        Ok(())
     }
 
-    fn restore(&self, _snapshot: &SystemProxySnapshot) -> Result<()> {
-        Err(anyhow!("当前平台暂不支持系统代理设置"))
+    fn restore(&self, snapshot: &SystemProxySnapshot) -> Result<()> {
+        if crate::diag::enabled() {
+            return Err(anyhow!(crate::diag::BLOCKED));
+        }
+        if !gsettings_available() {
+            return Ok(());
+        }
+
+        let original_mode = snapshot.server.as_deref().unwrap_or("none");
+        let mode_arg = format!("'{original_mode}'");
+
+        let status = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy", "mode", &mode_arg])
+            .status()?;
+
+        if !status.success() {
+            let _ = Command::new("gsettings")
+                .args(["set", "org.gnome.system.proxy", "mode", "'none'"])
+                .output();
+        }
+
+        tracing::info!(mode = %original_mode, "已成功通过 GSettings 恢复 Linux 桌面系统代理模式");
+        Ok(())
     }
 }
 

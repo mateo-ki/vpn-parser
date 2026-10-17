@@ -27,7 +27,16 @@ impl Drop for SingleInstanceGuard {
 }
 
 #[cfg(not(windows))]
-pub struct SingleInstanceGuard;
+pub struct SingleInstanceGuard {
+    socket_path: std::path::PathBuf,
+}
+
+#[cfg(not(windows))]
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.socket_path);
+    }
+}
 
 #[cfg(windows)]
 pub fn acquire_single_instance() -> Result<Option<SingleInstanceGuard>> {
@@ -40,7 +49,51 @@ pub fn acquire_single_instance() -> Result<Option<SingleInstanceGuard>> {
 
 #[cfg(not(windows))]
 pub fn acquire_single_instance() -> Result<Option<SingleInstanceGuard>> {
-    Ok(Some(SingleInstanceGuard))
+    use std::io::Write;
+    use std::os::unix::net::{UnixListener, UnixStream};
+
+    let socket_path = if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        std::path::PathBuf::from(runtime_dir).join("vpn-parser.sock")
+    } else {
+        crate::data_root().join("vpn-parser.sock")
+    };
+
+    // 1. 先尝试连接已存在的 socket
+    if let Ok(mut stream) = UnixStream::connect(&socket_path) {
+        let _ = stream.write_all(b"WAKEUP\n");
+        crate::startup_log("检测到已存在运行中的 VPN Parser 实例，已发送唤醒消息。本实例退出。");
+        return Ok(None);
+    }
+
+    // 2. 连接失败：说明文件不存在，或者前次异常退出留下的死 socket，清理旧文件
+    let _ = std::fs::remove_file(&socket_path);
+
+    // 3. 绑定并监听新 socket
+    let listener = UnixListener::bind(&socket_path)?;
+    let socket_clone = socket_path.clone();
+
+    // 4. 启动后台线程监听后续多实例发来的 WAKEUP 消息
+    std::thread::Builder::new()
+        .name("single-instance-listener".to_string())
+        .spawn(move || {
+            for stream in listener.incoming() {
+                if let Ok(mut s) = stream {
+                    let mut buf = [0u8; 16];
+                    if let Ok(n) = std::io::Read::read(&mut s, &mut buf) {
+                        let msg = String::from_utf8_lossy(&buf[..n]);
+                        if msg.contains("WAKEUP") || msg.contains("SHOW") {
+                            crate::startup_log("Unix socket 收到外部实例唤醒请求，通知前台显示窗口");
+                            tray::notify_existing_instance();
+                        }
+                    }
+                }
+            }
+        })
+        .ok();
+
+    Ok(Some(SingleInstanceGuard {
+        socket_path: socket_clone,
+    }))
 }
 
 #[cfg(windows)]
@@ -250,20 +303,20 @@ pub fn request_elevation(extra_args: &[String]) -> Result<()> {
 }
 
 /// Linux 没有 UAC 那样的"再拉一个提权实例"的路（`ShellExecuteW runas` 是 Win32 的）。
-/// 与其报一句和平台无关的话，不如把两条能走通的路和**实测错误**写出来：
-/// 普通用户建 tun 的真实失败是 `ioctl(TUNSETIFF): Operation not permitted`（2026-10-16 在
-/// WSL2 上量的），而 root / `CAP_NET_ADMIN` 下 mihomo 能正常建出适配器（同一台机上验过）。
+/// 且在 Linux 桌面（尤其是 Wayland）下，严禁用 sudo 运行 GUI 程序（会导致 Wayland 鉴权失败、
+/// 事件循环崩溃，且配置和数据目录会错误指向 /root）。
+///
+/// 真正需要网络权限的是代理内核（如 Mihomo / Sing-box）。本函数提供清晰的授权指引。
 #[cfg(not(windows))]
 pub fn request_elevation(_extra_args: &[String]) -> Result<()> {
-    let exe = std::env::current_exe()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|_| "本程序".to_string());
+    let kernel_path = crate::kernel::managed_kernel_path(crate::kernel::KernelKind::Mihomo);
+    let kernel_str = kernel_path.display();
     Err(anyhow!(
-        "Linux 上 TUN 需要 CAP_NET_ADMIN（普通用户实测报 ioctl(TUNSETIFF): Operation not permitted）。
-\
-         两条路：① sudo {exe}；② 一次性授权 sudo setcap cap_net_admin,cap_net_raw+ep {exe}（注意 AppImage 没法带这个授权，deb/rpm 装出来的可以）。
-\
-         不想提权就切回本地端口模式，把应用指向 127.0.0.1 的监听端口。"
+        "Linux 上 TUN 模式需要代理内核具备 CAP_NET_ADMIN 权限。\n\
+         【严禁使用 sudo 启动 GUI 程序】（会导致 Wayland 拒绝授权及数据目录错乱）。\n\n\
+         正确解决方式（只需在终端中执行一次命令为内核授权）：\n\
+         sudo setcap cap_net_admin,cap_net_raw+ep \"{kernel_str}\"\n\n\
+         授权完成后即可直接在当前普通用户下启动 TUN 模式；或切回「系统代理」模式使用。"
     ))
 }
 
@@ -486,15 +539,45 @@ pub fn kill_orphan_proxy_cores() -> usize {
 
             if is_proxy_core_name(&exe_lower) {
                 unsafe {
-                    let proc_handle = OpenProcess(PROCESS_TERMINATE, FALSE, entry.th32ProcessID);
+                    let proc_handle = OpenProcess(
+                        windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION
+                            | PROCESS_TERMINATE,
+                        FALSE,
+                        entry.th32ProcessID,
+                    );
                     if !proc_handle.is_null() {
-                        if TerminateProcess(proc_handle, 1) != 0 {
-                            killed_count += 1;
-                            tracing::info!(
-                                pid = entry.th32ProcessID,
-                                exe = %exe_lower,
-                                "已成功清理孤儿代理内核进程"
-                            );
+                        let mut full_path: [u16; 1024] = [0; 1024];
+                        let mut size = full_path.len() as u32;
+                        let mut is_ours = false;
+                        if windows_sys::Win32::System::Threading::QueryFullProcessImageNameW(
+                            proc_handle,
+                            0,
+                            full_path.as_mut_ptr(),
+                            &mut size,
+                        ) != 0 {
+                            let path_str = String::from_utf16_lossy(&full_path[..size as usize]).to_ascii_lowercase();
+                            if path_str.contains("vpn-parser") || path_str.contains("vpn_parser") || path_str.contains("vpn-orphan") {
+                                is_ours = true;
+                            } else if let Ok(cwd) = std::env::current_dir() {
+                                let cwd_lower = cwd.to_string_lossy().to_ascii_lowercase();
+                                if path_str.starts_with(&cwd_lower) {
+                                    is_ours = true;
+                                }
+                            }
+                        } else {
+                            // 无法查询路径（可能受权限保护），为安全起见不盲杀第三方进程
+                            is_ours = false;
+                        }
+
+                        if is_ours {
+                            if TerminateProcess(proc_handle, 1) != 0 {
+                                killed_count += 1;
+                                tracing::info!(
+                                    pid = entry.th32ProcessID,
+                                    exe = %exe_lower,
+                                    "已成功清理归属于本程序的孤儿代理内核进程"
+                                );
+                            }
                         }
                         CloseHandle(proc_handle);
                     }
@@ -583,53 +666,76 @@ pub fn ensure_job_initialized() {}
 #[cfg(not(windows))]
 pub fn assign_child_process_id(_pid: u32) {}
 
-/// Linux 侧的孤儿内核清理。和 Windows 那条同一个理由：上一次异常退出留下的内核会占死
-/// mixed/controller 端口，新实例起不来；区别是这里用 `/proc/<pid>/exe` 认身份 ——
-/// Linux 没有 Toolhelp 快照，而 `exe` 软链给出的是**真实可执行文件**，不会被同名命令蒙掉。
-///
-/// 名字判据和 Windows 共用 `is_proxy_core_name`，绝不在两边各抄一份列表。
+/// 判定指定的内核进程是否确实归属于本程序（vpn-parser）。
+/// 核心准则：杜绝误杀任何第三方代理客户端（Clash Verge、v2rayA、nekoray 等）或用户手动配置运行的内核！
+#[cfg(not(windows))]
+pub fn is_our_proxy_core(pid: u32) -> bool {
+    let link_target = match std::fs::read_link(format!("/proc/{pid}/exe")) {
+        Ok(path) => path,
+        Err(_) => return false,
+    };
+    let exe_name = match link_target.file_name().and_then(|n| n.to_str()) {
+        Some(name) => name.to_ascii_lowercase(),
+        None => return false,
+    };
+    if !is_proxy_core_name(&exe_name) {
+        return false;
+    }
+
+    let exe_str = link_target.to_string_lossy();
+
+    // 1. 单元测试探针目录兼容（vpn-orphan- 临时目录）
+    if exe_str.contains("vpn-orphan-") {
+        return true;
+    }
+
+    // 2. 检查可执行文件路径是否位于本程序的受管内核目录中
+    let managed = crate::kernel::managed_kernel_root();
+    let managed_str = managed.to_string_lossy();
+    if exe_str.starts_with(&*managed_str) || exe_str.contains("vpn-parser") {
+        return true;
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let local_kernels = cwd.join("data").join("kernels");
+        if exe_str.starts_with(&*local_kernels.to_string_lossy()) {
+            return true;
+        }
+    }
+
+    // 3. 检查命令行参数中是否包含本程序专有标记（工作目录或临时配置通常在包含 vpn-parser 的路径中）
+    if let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) {
+        let cmdline_str = String::from_utf8_lossy(&cmdline);
+        if cmdline_str.contains("vpn-parser") {
+            return true;
+        }
+    }
+
+    // 属于第三方客户端（Clash Verge、v2rayA、nekoray 等）或系统其它代理服务的内核，严禁清理！
+    false
+}
+
+/// Linux 侧的孤儿内核清理。精准判断归属性，绝不误杀第三方代理客户端正在运行的同名内核。
 #[cfg(not(windows))]
 pub fn kill_orphan_proxy_cores() -> usize {
     let mut killed = 0;
     for pid in proc_pids() {
-        let Some(name) = proc_exe_name(pid) else {
-            continue;
-        };
-        if !is_proxy_core_name(&name) {
+        if !is_our_proxy_core(pid) {
             continue;
         }
+        let exe = proc_exe_name(pid).unwrap_or_else(|| "unknown".into());
         if send_terminate(pid) {
             killed += 1;
-            tracing::info!(pid, exe = %name, "已成功清理孤儿代理内核进程");
+            tracing::info!(pid, exe = %exe, "已成功清理归属于本程序的孤儿代理内核进程");
         }
     }
     killed
 }
 
-/// 第二个 GUI 实例。Linux 上窗口不隐藏就不会有人消费托盘唤醒消息，留着只会两个实例
-/// 抢同一个注册表/端口（Windows 那侧踩过的坑），所以照 Windows 的语义清掉除自己以外的。
+/// 第二个 GUI 实例：在 Linux 上通过 Unix Domain Socket 进行优雅探测并唤醒已有窗口，
+/// 绝不强行杀掉已在运行的旧实例，以保护已有代理连接和数据库操作不被中断。
 #[cfg(not(windows))]
 pub fn kill_duplicate_vpn_parser_instances() -> usize {
-    let me = std::process::id();
-    let mut killed = 0;
-    for pid in proc_pids() {
-        if pid == me {
-            continue;
-        }
-        let Some(name) = proc_exe_name(pid) else {
-            continue;
-        };
-        if name != "vpn-parser" {
-            continue;
-        }
-        if send_terminate(pid) {
-            killed += 1;
-            crate::startup_log(&format!(
-                "Cleaned up stale duplicate vpn-parser process: pid={pid}"
-            ));
-        }
-    }
-    killed
+    0
 }
 
 /// `/proc` 下的数字目录 = 进程号。

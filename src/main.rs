@@ -446,7 +446,7 @@ fn main() -> Result<()> {
                 .with_decorations(false)
                 // 1440 × 880：用户要求宽高增加，提供更充裕的操作栏、节点表格与设置纵向可视空间。
                 .with_inner_size([1440.0, 880.0])
-                .with_min_inner_size([960.0, 600.0])
+                .with_min_inner_size([820.0, 520.0])
                 .with_title("VPN Parser")
                 .with_icon(app_icon.clone())
                 .with_visible(true)

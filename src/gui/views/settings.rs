@@ -369,7 +369,7 @@ impl VpnApp {
                 let tip = if self.tray.supported() {
                     "提示：最小化到托盘后，可通过任务栏托盘图标右键菜单退出程序，或双击托盘图标唤出界面。"
                 } else {
-                    "提示：当前系统环境（Linux）暂未接入系统托盘，关闭窗口将直接退出程序。"
+                    "提示：当前系统环境（Linux / Wayland）已接入单实例保护与标准桌面管理；若重复启动将自动激活唤醒已有窗口。"
                 };
                 ui.label(
                     RichText::new(tip)

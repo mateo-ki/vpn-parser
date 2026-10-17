@@ -777,8 +777,8 @@ impl VpnApp {
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.vertical(|ui| {
-                            // --- 第 1 行：分流策略组胶囊 ---
-                            ui.horizontal(|ui| {
+                            // --- 第 1 行：分流策略组胶囊（支持平铺窄窗口下自适应折行） ---
+                            ui.horizontal_wrapped(|ui| {
                                 icon_label(ui, Icon::Shield, 13.0, theme::accent());
                                 ui.label(
                                     RichText::new("策略组:")
@@ -846,8 +846,8 @@ impl VpnApp {
                             ui.separator();
                             ui.add_space(6.0);
 
-                            // --- 第 2 行：流量调度策略（选优/故障/负载均衡/手动指定） ---
-                            ui.horizontal(|ui| {
+                            // --- 第 2 行：流量调度策略（选优/故障/负载均衡/手动指定，支持窄窗口折行） ---
+                            ui.horizontal_wrapped(|ui| {
                                 icon_label(ui, Icon::Lightning, 12.0, theme::accent());
                                 ui.label(
                                     RichText::new("调度:")

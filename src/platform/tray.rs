@@ -68,7 +68,15 @@ impl TrayHandle {
         };
 
         #[cfg(not(windows))]
-        let _ = (event_tx, update_rx);
+        {
+            let _ = update_rx;
+            if let Ok(mut guard) = GLOBAL_NON_WINDOWS_WAKEUP.lock() {
+                *guard = Some(NonWindowsWakeupContext {
+                    event_tx,
+                    waker: waker.clone(),
+                });
+            }
+        }
 
         Self {
             update_tx,
@@ -207,9 +215,25 @@ pub fn notify_existing_instance() {
 }
 
 #[cfg(not(windows))]
-pub fn notify_existing_instance() {}
+struct NonWindowsWakeupContext {
+    event_tx: Sender<TrayEvent>,
+    waker: Arc<std::sync::Mutex<Option<TrayWaker>>>,
+}
 
-#[cfg(windows)]
+#[cfg(not(windows))]
+static GLOBAL_NON_WINDOWS_WAKEUP: std::sync::Mutex<Option<NonWindowsWakeupContext>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(not(windows))]
+pub fn notify_existing_instance() {
+    if let Ok(guard) = GLOBAL_NON_WINDOWS_WAKEUP.lock() {
+        if let Some(ctx) = guard.as_ref() {
+            let _ = ctx.event_tx.send(TrayEvent::ShowWindow);
+            trigger_waker(&ctx.waker);
+        }
+    }
+}
+
 fn trigger_waker(waker: &Arc<std::sync::Mutex<Option<TrayWaker>>>) {
     // 锁只用来把 Arc 取出来；回调必须在锁外调用 —— `request_repaint()` 会进 egui
     // 的内部状态，持锁调用会和 UI 线程每帧的 `set_waker` 形成锁序反转。

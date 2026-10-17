@@ -3129,6 +3129,19 @@ impl VpnApp {
                                 Err(anyhow::anyhow!(
                                     "{message}; 已将该节点标记为不可用，请切换节点"
                                 ))
+                            } else if mode == ProxyMode::Tun
+                                && (message.contains("Operation not permitted")
+                                    || message.contains("CAP_NET_ADMIN")
+                                    || message.contains("TUNSETIFF")
+                                    || message.contains("permission denied"))
+                            {
+                                let kernel_path = crate::kernel::managed_kernel_path(crate::kernel::KernelKind::Mihomo);
+                                Err(anyhow::anyhow!(
+                                    "TUN 模式启动失败：内核进程缺少 CAP_NET_ADMIN 权限。\n\
+                                     请在终端执行一次授权命令为内核授权：\n\
+                                     sudo setcap cap_net_admin,cap_net_raw+ep \"{}\"",
+                                    kernel_path.display()
+                                ))
                             } else {
                                 Err(error)
                             }
@@ -4427,9 +4440,13 @@ mod tests {
 
     #[test]
     fn tun_always_requests_elevation_for_non_admin_process() {
-        assert!(requires_tun_elevation(ProxyMode::Tun, false));
-        assert!(!requires_tun_elevation(ProxyMode::Tun, true));
-        assert!(!requires_tun_elevation(ProxyMode::System, false));
+        if cfg!(windows) {
+            assert!(requires_tun_elevation(ProxyMode::Tun, false));
+            assert!(!requires_tun_elevation(ProxyMode::Tun, true));
+            assert!(!requires_tun_elevation(ProxyMode::System, false));
+        } else {
+            assert!(!requires_tun_elevation(ProxyMode::Tun, false));
+        }
     }
 
     #[test]
