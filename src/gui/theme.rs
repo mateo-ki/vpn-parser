@@ -203,38 +203,38 @@ pub struct Theme {
     pub accent: u32,
 }
 
-/// 顺序就是设置页里的顺序。采用 Apple HIG 原生雅致高品质色系。
+/// 顺序就是设置页里的顺序。采用 macOS 官方原生风格雅致色系。
 pub const THEMES: [Theme; 5] = [
     Theme {
-        id: "soft-cobalt",
-        name: "系统蓝（默认）",
+        id: "mac-sequoia",
+        name: "Sequoia 冰晶蓝（默认）",
         accent: 0x00_71_E3,
     },
     Theme {
-        id: "soft-teal",
-        name: "薄荷绿",
-        accent: 0x00_A8_8F,
+        id: "mac-space-gray",
+        name: "Space Gray 深空蓝",
+        accent: 0x29_97_FF,
     },
     Theme {
-        id: "soft-terracotta",
-        name: "活力橙",
+        id: "mac-aurora",
+        name: "Cyber Aurora 极光紫",
+        accent: 0x79_28_CA,
+    },
+    Theme {
+        id: "mac-aqua",
+        name: "Classic Aqua 果冻青",
+        accent: 0x00_9E_B3,
+    },
+    Theme {
+        id: "mac-sonoma",
+        name: "Sonoma 暖阳橙",
         accent: 0xF5_63_00,
-    },
-    Theme {
-        id: "soft-indigo",
-        name: "星空紫",
-        accent: 0x5E_5C_E6,
-    },
-    Theme {
-        id: "soft-violet",
-        name: "玫瑰粉",
-        accent: 0xE3_3E_5E,
     },
 ];
 
-pub const DEFAULT_THEME: &str = "soft-cobalt";
+pub const DEFAULT_THEME: &str = "mac-sequoia";
 
-fn rgb(hex: u32) -> Color32 {
+pub fn rgb(hex: u32) -> Color32 {
     Color32::from_rgb(
         ((hex >> 16) & 0xFF) as u8,
         ((hex >> 8) & 0xFF) as u8,
@@ -243,11 +243,17 @@ fn rgb(hex: u32) -> Color32 {
 }
 
 pub fn theme_by_id(id: &str) -> &'static Theme {
-    THEMES
-        .iter()
-        .find(|theme| theme.id == id)
-        // 认不出的存值（旧主题 id、手改过的值）落到默认那套，而不是随便挑一套。
-        .unwrap_or_else(|| &THEMES[0])
+    match id {
+        "soft-cobalt" => &THEMES[0],
+        "soft-indigo" | "soft-violet" => &THEMES[2],
+        "soft-teal" => &THEMES[3],
+        "soft-terracotta" => &THEMES[4],
+        _ => THEMES
+            .iter()
+            .find(|theme| theme.id == id)
+            // 认不出的存值（旧主题 id、手改过的值）落到默认那套，而不是随便挑一套。
+            .unwrap_or_else(|| &THEMES[0]),
+    }
 }
 
 /// 方案 2：Apple / macOS 官方原生雅致调色板（温润中性灰白底、纯净通透、护眼耐看）：

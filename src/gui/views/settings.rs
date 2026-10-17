@@ -166,16 +166,75 @@ impl VpnApp {
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 for theme_spec in theme::THEMES {
-                    if ui
-                        .selectable_value(
-                            &mut self.edit_ui_theme,
-                            theme_spec.id.to_string(),
-                            theme_spec.name,
-                        )
-                        .clicked()
-                    {
-                        // 不在这里直接 apply：那是"还没保存成功的预览"。走一次设置保存，
-                        // 回来后由 update() 的 applied_theme_id 比较来装主题，界面和落盘一致。
+                    let selected = self.edit_ui_theme == theme_spec.id;
+                    let accent_col = theme::rgb(theme_spec.accent);
+                    let padding = egui::vec2(10.0, 5.0);
+                    let font = egui::FontId::proportional(12.5);
+                    let galley = ui.painter().layout_no_wrap(
+                        theme_spec.name.to_string(),
+                        font,
+                        if selected {
+                            theme::accent_strong()
+                        } else {
+                            theme::text_primary()
+                        },
+                    );
+                    let dot_size = 9.0;
+                    let gap = 6.0;
+                    let desired_size = egui::vec2(
+                        galley.size().x + dot_size + gap + padding.x * 2.0,
+                        galley.size().y.max(dot_size) + padding.y * 2.0,
+                    );
+                    let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click());
+                    if ui.is_rect_visible(rect) {
+                        let painter = ui.painter();
+                        let bg = if selected {
+                            theme::accent_bg()
+                        } else if response.hovered() {
+                            theme::panel_hover()
+                        } else {
+                            theme::panel()
+                        };
+                        let stroke = if selected {
+                            egui::Stroke::new(1.2_f32, accent_col)
+                        } else {
+                            egui::Stroke::new(1.0_f32, theme::border_subtle())
+                        };
+                        painter.rect(
+                            rect,
+                            egui::CornerRadius::same(7),
+                            bg,
+                            stroke,
+                            egui::StrokeKind::Inside,
+                        );
+
+                        let dot_center =
+                            egui::pos2(rect.min.x + padding.x + dot_size / 2.0, rect.center().y);
+                        painter.circle_filled(dot_center, dot_size / 2.0, accent_col);
+                        if selected {
+                            painter.circle_stroke(
+                                dot_center,
+                                dot_size / 2.0 + 2.0,
+                                egui::Stroke::new(1.0_f32, accent_col),
+                            );
+                        }
+
+                        let text_pos = egui::pos2(
+                            dot_center.x + dot_size / 2.0 + gap,
+                            rect.center().y - galley.size().y / 2.0,
+                        );
+                        painter.galley(
+                            text_pos,
+                            galley,
+                            if selected {
+                                theme::accent_strong()
+                            } else {
+                                theme::text_primary()
+                            },
+                        );
+                    }
+                    if response.clicked() {
+                        self.edit_ui_theme = theme_spec.id.to_string();
                         auto_save = true;
                     }
                 }

@@ -103,67 +103,230 @@ impl VpnApp {
                 // 高度恒等于 BAR_H，画到的和分给下面面板的永远是同一条边。
                 let bar = ui.max_rect();
                 ui.allocate_rect(bar, Sense::hover());
-                let buttons_left = bar.max.x - 3.0 * BTN_W;
+                #[cfg(target_os = "macos")]
+                {
+                    // macOS 经典原生左侧红黄绿胶囊交通灯（Traffic Lights）
+                    let lights_hovered = ui.input(|i| i.pointer.hover_pos()).is_some_and(|pos| {
+                        pos.x >= bar.min.x
+                            && pos.x <= bar.min.x + 72.0
+                            && pos.y >= bar.min.y
+                            && pos.y <= bar.max.y
+                    });
+                    let painter = ui.painter();
+                    let cy = bar.center().y;
+                    let radius = 5.75;
 
-                ui.painter().text(
-                    egui::pos2(bar.min.x + 14.0, bar.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    "VPN Parser",
-                    egui::FontId::proportional(12.5),
-                    theme::text_secondary(),
-                );
+                    // 1. 红色：关闭
+                    let red_c = egui::pos2(bar.min.x + 18.0, cy);
+                    let red_rect = egui::Rect::from_center_size(red_c, egui::vec2(14.0, 14.0));
+                    painter.circle_filled(red_c, radius, Color32::from_rgb(0xFF, 0x5F, 0x56));
+                    painter.circle_stroke(
+                        red_c,
+                        radius,
+                        egui::Stroke::new(0.5, Color32::from_rgb(0xE0, 0x44, 0x3E)),
+                    );
+                    if lights_hovered {
+                        let stroke = egui::Stroke::new(
+                            1.2,
+                            Color32::from_rgba_premultiplied(70, 0, 0, 180),
+                        );
+                        painter.line_segment(
+                            [red_c + egui::vec2(-2.5, -2.5), red_c + egui::vec2(2.5, 2.5)],
+                            stroke,
+                        );
+                        painter.line_segment(
+                            [red_c + egui::vec2(-2.5, 2.5), red_c + egui::vec2(2.5, -2.5)],
+                            stroke,
+                        );
+                    }
+                    if ui
+                        .interact(red_rect, ui.id().with("mac_close"), Sense::click())
+                        .on_hover_text("关闭（按设置在托盘里继续常驻）")
+                        .clicked()
+                    {
+                        action_close = true;
+                    }
 
-                // 除了右边三个按钮，整条都能拖动窗口；双击切换最大化。
-                let drag_rect =
-                    egui::Rect::from_min_max(bar.min, egui::pos2(buttons_left, bar.max.y));
-                let drag = ui.interact(drag_rect, ui.id().with("titlebar_drag"), Sense::drag());
-                if drag.drag_started() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                }
-                if drag.double_clicked() {
-                    action_toggle_max = true;
+                    // 2. 黄色：最小化
+                    let yellow_c = egui::pos2(bar.min.x + 36.0, cy);
+                    let yellow_rect =
+                        egui::Rect::from_center_size(yellow_c, egui::vec2(14.0, 14.0));
+                    painter.circle_filled(yellow_c, radius, Color32::from_rgb(0xFF, 0xBD, 0x2E));
+                    painter.circle_stroke(
+                        yellow_c,
+                        radius,
+                        egui::Stroke::new(0.5, Color32::from_rgb(0xDE, 0xA1, 0x23)),
+                    );
+                    if lights_hovered {
+                        let stroke = egui::Stroke::new(
+                            1.2,
+                            Color32::from_rgba_premultiplied(120, 70, 0, 180),
+                        );
+                        painter.line_segment(
+                            [
+                                yellow_c + egui::vec2(-2.8, 0.0),
+                                yellow_c + egui::vec2(2.8, 0.0),
+                            ],
+                            stroke,
+                        );
+                    }
+                    if ui
+                        .interact(yellow_rect, ui.id().with("mac_min"), Sense::click())
+                        .on_hover_text("最小化（按设置收进系统托盘）")
+                        .clicked()
+                    {
+                        action_minimize = true;
+                    }
+
+                    // 3. 绿色：最大化/还原
+                    let green_c = egui::pos2(bar.min.x + 54.0, cy);
+                    let green_rect = egui::Rect::from_center_size(green_c, egui::vec2(14.0, 14.0));
+                    painter.circle_filled(green_c, radius, Color32::from_rgb(0x27, 0xC9, 0x3F));
+                    painter.circle_stroke(
+                        green_c,
+                        radius,
+                        egui::Stroke::new(0.5, Color32::from_rgb(0x1A, 0xAB, 0x29)),
+                    );
+                    if lights_hovered {
+                        let stroke = egui::Stroke::new(
+                            1.0,
+                            Color32::from_rgba_premultiplied(0, 80, 20, 180),
+                        );
+                        painter.line_segment(
+                            [
+                                green_c + egui::vec2(-2.5, 2.5),
+                                green_c + egui::vec2(2.5, -2.5),
+                            ],
+                            stroke,
+                        );
+                        painter.line_segment(
+                            [
+                                green_c + egui::vec2(1.0, -2.5),
+                                green_c + egui::vec2(2.5, -2.5),
+                            ],
+                            stroke,
+                        );
+                        painter.line_segment(
+                            [
+                                green_c + egui::vec2(2.5, -1.0),
+                                green_c + egui::vec2(2.5, -2.5),
+                            ],
+                            stroke,
+                        );
+                        painter.line_segment(
+                            [
+                                green_c + egui::vec2(-1.0, 2.5),
+                                green_c + egui::vec2(-2.5, 2.5),
+                            ],
+                            stroke,
+                        );
+                        painter.line_segment(
+                            [
+                                green_c + egui::vec2(-2.5, 1.0),
+                                green_c + egui::vec2(-2.5, 2.5),
+                            ],
+                            stroke,
+                        );
+                    }
+                    if ui
+                        .interact(green_rect, ui.id().with("mac_max"), Sense::click())
+                        .on_hover_text(if maximized {
+                            "向下还原"
+                        } else {
+                            "最大化"
+                        })
+                        .clicked()
+                    {
+                        action_toggle_max = true;
+                    }
+
+                    // macOS 经典居中标题
+                    painter.text(
+                        bar.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "VPN Parser",
+                        egui::FontId::proportional(13.0),
+                        theme::text_primary(),
+                    );
+
+                    // 整条标题栏（除红黄绿区域）均可拖拽
+                    let drag_rect = egui::Rect::from_min_max(
+                        egui::pos2(bar.min.x + 72.0, bar.min.y),
+                        bar.max,
+                    );
+                    let drag = ui.interact(drag_rect, ui.id().with("titlebar_drag"), Sense::drag());
+                    if drag.drag_started() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+                    if drag.double_clicked() {
+                        action_toggle_max = true;
+                    }
                 }
 
-                let cell = |index: usize| {
-                    egui::Rect::from_min_max(
-                        egui::pos2(bar.max.x - (index as f32 + 1.0) * BTN_W, bar.min.y),
-                        egui::pos2(bar.max.x - index as f32 * BTN_W, bar.max.y),
-                    )
-                };
-                if title_button(
-                    ui,
-                    cell(0),
-                    "close",
-                    Glyph::Close,
-                    "关闭（按设置在托盘里继续常驻）",
-                ) {
-                    action_close = true;
-                }
-                if title_button(
-                    ui,
-                    cell(1),
-                    "maximize",
-                    if maximized {
-                        Glyph::Restore
-                    } else {
-                        Glyph::Maximize
-                    },
-                    if maximized {
-                        "向下还原"
-                    } else {
-                        "最大化"
-                    },
-                ) {
-                    action_toggle_max = true;
-                }
-                if title_button(
-                    ui,
-                    cell(2),
-                    "minimize",
-                    Glyph::Minimize,
-                    "最小化（按设置收进系统托盘）",
-                ) {
-                    action_minimize = true;
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let buttons_left = bar.max.x - 3.0 * BTN_W;
+
+                    ui.painter().text(
+                        egui::pos2(bar.min.x + 14.0, bar.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        "VPN Parser",
+                        egui::FontId::proportional(12.5),
+                        theme::text_secondary(),
+                    );
+
+                    // 除了右边三个按钮，整条都能拖动窗口；双击切换最大化。
+                    let drag_rect =
+                        egui::Rect::from_min_max(bar.min, egui::pos2(buttons_left, bar.max.y));
+                    let drag = ui.interact(drag_rect, ui.id().with("titlebar_drag"), Sense::drag());
+                    if drag.drag_started() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+                    if drag.double_clicked() {
+                        action_toggle_max = true;
+                    }
+
+                    let cell = |index: usize| {
+                        egui::Rect::from_min_max(
+                            egui::pos2(bar.max.x - (index as f32 + 1.0) * BTN_W, bar.min.y),
+                            egui::pos2(bar.max.x - index as f32 * BTN_W, bar.max.y),
+                        )
+                    };
+                    if title_button(
+                        ui,
+                        cell(0),
+                        "close",
+                        Glyph::Close,
+                        "关闭（按设置在托盘里继续常驻）",
+                    ) {
+                        action_close = true;
+                    }
+                    if title_button(
+                        ui,
+                        cell(1),
+                        "maximize",
+                        if maximized {
+                            Glyph::Restore
+                        } else {
+                            Glyph::Maximize
+                        },
+                        if maximized {
+                            "向下还原"
+                        } else {
+                            "最大化"
+                        },
+                    ) {
+                        action_toggle_max = true;
+                    }
+                    if title_button(
+                        ui,
+                        cell(2),
+                        "minimize",
+                        Glyph::Minimize,
+                        "最小化（按设置收进系统托盘）",
+                    ) {
+                        action_minimize = true;
+                    }
                 }
             });
 

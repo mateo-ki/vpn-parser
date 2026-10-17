@@ -320,7 +320,7 @@ fn default_kernel_source() -> String {
 fn default_ui_theme() -> String {
     // 字面量：models 不能反向依赖 gui（gui 是 feature-gated 的）。
     // gui::theme::DEFAULT_THEME 必须和这里一致，`theme::tests::models_default_theme_matches` 守着。
-    "soft-cobalt".to_string()
+    "mac-sequoia".to_string()
 }
 
 fn default_ui_language() -> String {
