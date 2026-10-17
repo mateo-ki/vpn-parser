@@ -8,7 +8,7 @@
 
 ### 🖥️ 1. 原生 OpenWrt LuCI Web 图形管理插件 (`luci-app-vpn-parser`)
 - **全架构通用安装包 (`Architecture: all`)**：
-  - 由纯静态 JS 视图组件、UCI 接口与 ubus 桥接器构成，一份 `luci-app-vpn-parser_<版本>_all.ipk` 通用兼容 x86_64、ARM64（NanoPi/友善/GL.iNet）及 MIPS 全架构设备；
+  - 由纯静态 JS 视图组件、UCI 接口与 ubus 桥接器构成，一份 `luci-app-vpn-parser_1.8.1_all.ipk` 通用兼容 x86_64、ARM64（NanoPi/友善/GL.iNet）及 MIPS 全架构设备；
 - **现代客户端渲染架构 (`luci.js`)**：
   - 基于 OpenWrt 21.02+ 现代标准客户端渲染引擎，彻底移除旧版 Lua CBI 的沉重负担与性能损耗；
 - **免跨域与零泄露设计 (rpcd ubus 桥接守护)**：
@@ -20,86 +20,40 @@
   3. **订阅源管理 (`Sources`)**：订阅源增删改查交互模态框（支持动态日期模板占位符）、单源即时抓取、全网 GitHub Gist 公开节点自动搜集与入库；
   4. **参数配置 (`Settings`)**：UCI 服务守护设置（开机自启、监听地址、数据库路径、Token）与测速引擎高级调优（并发数、纯 TCP Ping 节能探活模式、同出口 IP 去重等）一键保存并应用；
 - **自动化构建与发布**：
-  - CI/CD 流水线自动打包 `luci-app-vpn-parser_${VERSION}_all.ipk` 并自动发布至 GitHub Releases 资产。
+  - CI/CD 流水线自动打包 `luci-app-vpn-parser_1.8.1_all.ipk` 并自动发布至 GitHub Releases 资产。
 
 ---
 
-# 🚀 VPN Parser v1.8.0 发布说明 / Release Notes
+## 📦 各平台下载与安装指引
 
-🎉 欢迎使用 **VPN Parser v1.8.0**！这是一个具有里程碑意义的重大版本更新，**正式全面拥抱 OpenWrt 路由器生态**，支持一键构建和安装 OpenWrt 原生 `.ipk` 软件包，让 `vpn-parser` 能够直接作为高可用微服务常驻运行在软路由（x86_64）或大内存硬路由（ARM64）中！同时整合了极致内存调优、高检出率测速管道、以及全新的订阅源节点卡片弹窗交互。
+### 1. OpenWrt 路由器（极简安装）
 
----
+在 OpenWrt 终端中运行以下命令即可同时安装微服务守护进程与 LuCI 控制面板：
 
-## 🌟 新特性与核心更新
+```bash
+cd /tmp
+opkg update
+# 一键安装微服务守护进程与 LuCI 控制面板
+opkg install ./vpn-parser_1.8.1_*.ipk ./luci-app-vpn-parser_1.8.1_all.ipk
+```
+安装后刷新路由器 Web 管理后台，即可在 **「服务」➔「VPN Parser」** 中开始使用。
 
-### 🌐 1. OpenWrt 原生支持与微服务化守护
-- **官方 `.ipk` 原生软件包发布**：
-  - 新增标准 OpenWrt `opkg` 格式安装包，覆盖 **`x86_64`**（通用软路由、工控机、PVE/ESXi）与 **`aarch64_generic`**（主流 ARM64 软硬路由，NanoPi R2S/R4S/R5S、友善、GL.iNet 等）；
-- **OpenWrt `procd` 进程守护系统集成**：
-  - 提供开箱即用的 `/etc/init.d/vpn-parser` 脚本，支持 `start`、`stop`、`restart`、`reload`、`status`；
-  - 配备 `procd` 崩溃自愈保护（`respawn 3600 5 0`），异常退出 5 秒内自动拉起，保障微服务永久在线；
-  - 增加对 Unix **`SIGTERM`** 关停信号的捕获支持，停机时优雅终止代理与内核，释放网络端口与文件锁；
-- **UCI 统一配置系统支持 (`/etc/config/vpn-parser`)**：
-  - 支持通过 OpenWrt 原生 `uci` 命令行或后台修改监听地址、数据库路径与鉴权 Token；
-- **只读文件系统自适应与系统 `$PATH` 内核复用**：
-  - 完美适配 OpenWrt SquashFS 只读根目录，避免目录切换异常；
-  - 自动探测系统 `$PATH`（`/usr/bin` 等）中已由 `opkg` 安装的 `mihomo`、`sing-box`、`xray` 内核，无需重复下载内核，极大地节省了路由器的 Flash 存储空间；
-- **无缝衔接透明代理生态**：
-  - 路由器的 OpenClash、PassWall、SSR-Plus 等插件可直接将订阅地址填入本地回路 `http://127.0.0.1:8080/api/export/clash?quality_only=true&limit=50`，获取全天候自愈、保活、低延迟的优质纯净节点池。
-
----
-
-### 🚀 2. 极致内存瘦身与数据库连接自愈
-- **根治 `attempted to acquire a connection on a closed pool`**：
-  - 移除定时清理中的强制连接池关闭，改用非破坏性的 `PRAGMA shrink_memory;` 释放 SQLite 缓存页；
-  - 引入连接池 `!pool.is_closed()` 自愈重建机制，彻底解决并发测速与代理切换过程中的连接池失效问题；
-- **单分库精准定向路由**：
-  - 针对 `get_node(id)` 优先查询主库 `node_index` 索引定位所属订阅源，耗时骤降至 `<0.1ms`；
-- **零堆分配字节滑动窗口过滤**：
-  - 万级节点名称与服务器检索应用 ASCII 字节切片比较（`contains_ignore_ascii_case`），消除每次击键产生的大量堆内存开销；
-- **内存水位大幅压降**：
-  - 进程私有工作集内存自 174MB+ 压降至 **~20MB-30MB** 水平，极为适合路由器 RAM 资源受限环境。
-
----
-
-### ⚡ 3. 测速高吞吐、低误报与最大节点检出率
-- **双端回退探活机制 (Google -> Cloudflare 204)**：
-  - sing-box 与 xray 代理内核全面覆盖 Cloudflare 204 回退验证，杜绝单纯因 Google 连通性限制而误判健康节点为不可用；
-- **DNS 预解析去重与直连 IP 直通**：
-  - 探测阶段 IPv4/IPv6 地址直接直通，跳过异步 DNS 解析开销；按主机名聚合预解析，消除 80%~95% 冗余 DNS 流量；
-- **多候选 IP 预算平摊**：
-  - 多个解析 IP 均分连接超时预算，单死 IP 不再拖垮整体节点探测；Fast 强度测速宽限至 3000ms。
-
----
-
-### 🎨 4. 节点池与订阅源管理深度重构
-- **节点池专属全库视图**：
-  - 移除原节点池横向订阅源选项卡，节点池专注于全量节点的高效检索与分类过滤；
-- **订阅源名称点击弹出节点卡片列表**：
-  - 订阅源列表点击任意源名称，立即唤出专属浮层窗口；
-  - **完整复用节点卡片列表 (`render_node_cards_grid`)**：自适应网格排版，支持左键点击连接代理、右键菜单测速/详情/IP风险画像/删除节点，内置独立统计、翻页、搜索与一键测速该源全部节点；
-- **状态筛选控件统一**：
-  - 节点池与订阅源弹窗统一采用 **`🟢 仅看可用`** 胶囊按钮，移除搜索栏多余的复选框；
-- **Gist 发现配置持久化与回显**：
-  - 发现深度（页数）与协议检索条件持久化保存至 SQLite，应用重启与弹窗重开自动回选上次配置。
-
----
-
-## 📦 各平台下载指引
+### 2. 资产列表
 
 | 平台 / 架构 | 文件名 | 说明 |
 | :--- | :--- | :--- |
-| **OpenWrt (x86_64)** | `vpn-parser_1.8.0_x86_64.ipk` | 推荐，X86 软路由、工控机、PVE/ESXi 一键 `opkg install` |
-| **OpenWrt (aarch64)** | `vpn-parser_1.8.0_aarch64_generic.ipk` | 推荐，ARM64 路由（NanoPi R2S/R4S/R5S、友善等）一键安装 |
-| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.0_linux_x86_64_musl.tar.gz` | 纯静态 Musl 二进制包（含 init/config 脚本，解压即可运行） |
-| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.0_linux_aarch64_generic_musl.tar.gz` | ARM64 纯静态 Musl 二进制包 |
-| **Windows 64位** | `vpn-parser-1.8.0-windows-x64-setup.exe` | 推荐，双击运行向导自动安装升级（桌面完整版） |
-| **macOS (DMG)** | `vpn-parser-1.8.0-macos-x64.dmg` | 推荐，拖拽至 Applications 即可运行 |
-| **Linux 桌面 (通用)** | `vpn-parser-1.8.0-x86_64.AppImage` | 推荐，开箱即用，赋予可执行权限后双击运行 |
-| **Linux (Fedora/RHEL)** | `vpn-parser-1.8.0-1.x86_64.rpm` | `sudo dnf install ./vpn-parser-1.8.0-1.x86_64.rpm` |
-| **Linux (Debian/Ubuntu)** | `vpn-parser_1.8.0-1_amd64.deb` | `sudo dpkg -i vpn-parser_1.8.0-1_amd64.deb` |
-| **完整校验文件** | `sha256.txt` | 包含所有发布资产的官方 SHA-256 哈希值 |
+| **OpenWrt LuCI 控制面板** | `luci-app-vpn-parser_1.8.1_all.ipk` | 推荐，全架构通用 LuCI Web 图形界面 |
+| **OpenWrt 微服务 (x86_64)** | `vpn-parser_1.8.1_x86_64.ipk` | 推荐，X86 软路由、工控机、PVE/ESXi 一键安装 |
+| **OpenWrt 微服务 (aarch64)** | `vpn-parser_1.8.1_aarch64_generic.ipk` | 推荐，ARM64 路由（NanoPi R2S/R4S/R5S、友善等）一键安装 |
+| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.1_linux_x86_64_musl.tar.gz` | x86_64 纯静态 Musl 二进制包（含 init/config 脚本） |
+| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.1_linux_aarch64_generic_musl.tar.gz` | ARM64 纯静态 Musl 二进制包 |
+| **Windows 64位** | `vpn-parser-1.8.1-windows-x64-setup.exe` | 推荐，双击运行向导自动安装升级（桌面完整版） |
+| **macOS (Universal DMG)** | `vpn-parser-1.8.1-darwin-universal.dmg` | 推荐，兼容 Apple Silicon 与 Intel 架构 |
+| **Linux 桌面 (通用)** | `vpn-parser-1.8.1-x86_64.AppImage` | 推荐，开箱即用，赋予可执行权限后双击运行 |
+| **Linux (Fedora/RHEL)** | `vpn-parser-1.8.1-1.x86_64.rpm` | `sudo dnf install ./vpn-parser-1.8.1-1.x86_64.rpm` |
+| **Linux (Debian/Ubuntu)** | `vpn-parser_1.8.1-1_amd64.deb` | `sudo dpkg -i vpn-parser_1.8.1-1_amd64.deb` |
+| **校验文件** | `sha256.txt` | 包含所有发布资产的官方 SHA-256 校验和 |
 
 ---
 
-**Full Changelog**: https://github.com/mateo-ki/vpn-parser/compare/v1.7.5...v1.8.0
+**Full Changelog**: https://github.com/mateo-ki/vpn-parser/compare/v1.8.0...v1.8.1
