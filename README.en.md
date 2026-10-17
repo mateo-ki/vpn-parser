@@ -12,6 +12,7 @@ A high-performance, modern cross-platform proxy tool built with Rust and egui: c
 
 - **Windows**: Modern installer (Inno Setup) + one-click system proxy integration + TUN virtual adapter mode (with elevated privileges)
 - **Linux**: Universal **AppImage** (standalone portable bundle), Debian/Ubuntu **deb**, and Fedora/RHEL **rpm** desktop packages, providing local mixed proxy listener (default `127.0.0.1:9980`)
+- **OpenWrt**: Native **.ipk** package support (`x86_64` / `aarch64_generic`), integrated `procd` supervisor and UCI configuration, ultra-lightweight headless microservice (~20MB memory) for routers, see [OpenWrt Deployment Guide](docs/openwrt.md)
 - **macOS**: Native DMG / App packages with Apple Silicon and Intel architecture support
 
 ## Features
@@ -76,6 +77,15 @@ cargo build --release
 # Package AppImage, DEB, and RPM
 ./scripts/build_linux_packages.sh
 ```
+
+## OpenWrt Microservice Integration
+
+VPN Parser natively supports OpenWrt router environments (x86_64 soft routers and ARM64 hardware routers), running as an ultra-lightweight headless microservice (~20MB memory footprint), automatically supplying **OpenClash**, **PassWall**, and **SSR-Plus** with purified, auto-failover, low-latency node pools.
+
+- **Fast Installation**: Download the corresponding `.ipk` and run `opkg install ./vpn-parser_*.ipk` on your router;
+- **Procd & UCI Integration**: Configured via `/etc/config/vpn-parser`, auto-restarted by `procd` (`/etc/init.d/vpn-parser`) within 5 seconds upon crash;
+- **Router Plugins**: Point your OpenClash / PassWall subscription URL to `http://127.0.0.1:8080/api/export/clash?quality_only=true&limit=60` to enjoy continuous high-quality proxy node feeds;
+- **Complete Documentation**: See the detailed [OpenWrt Deployment Guide](docs/openwrt.md).
 
 ## License
 
