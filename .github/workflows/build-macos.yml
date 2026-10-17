@@ -61,19 +61,115 @@ jobs:
       - name: 缓存 cargo 依赖和 target
         uses: Swatinem/rust-cache@v2
 
-      - name: 编译 release 版
-        run: cargo build --release --bin vpn-parser
-
-      - name: 创建 macOS 归档包 (.tar.gz)
+      - name: 编译 release 版 (Universal / Native)
         run: |
+          set -euo pipefail
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin || true
+
+          build_universal=true
+          if ! cargo build --release --target aarch64-apple-darwin --bin vpn-parser; then
+            build_universal=false
+          fi
+          if ! cargo build --release --target x86_64-apple-darwin --bin vpn-parser; then
+            build_universal=false
+          fi
+
+          mkdir -p target/release
+          if [ "$build_universal" = "true" ] && command -v lipo >/dev/null 2>&1; then
+            echo "打包 Universal 二进制 (arm64 + x86_64)..."
+            lipo -create -output target/release/vpn-parser \
+              target/aarch64-apple-darwin/release/vpn-parser \
+              target/x86_64-apple-darwin/release/vpn-parser
+            echo "mac_arch=universal" >> "$GITHUB_ENV"
+          else
+            echo "打包 Native 二进制..."
+            cargo build --release --bin vpn-parser
+            echo "mac_arch=$(uname -m)" >> "$GITHUB_ENV"
+          fi
+
+      - name: 创建 macOS 应用包 (.app)、DMG 安装包 (.dmg) 与归档 (.tar.gz)
+        run: |
+          set -euo pipefail
           version=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)
-          arch=$(uname -m)
+          arch="${mac_arch:-$(uname -m)}"
           mkdir -p dist
+
+          # 1. 创建 .app 目录结构
+          APP_NAME="VPN Parser"
+          APP_DIR="${APP_NAME}.app"
+          rm -rf "${APP_DIR}"
+          mkdir -p "${APP_DIR}/Contents/MacOS"
+          mkdir -p "${APP_DIR}/Contents/Resources"
+
+          # 2. 拷贝二进制
+          cp target/release/vpn-parser "${APP_DIR}/Contents/MacOS/vpn-parser"
+          chmod +x "${APP_DIR}/Contents/MacOS/vpn-parser"
+
+          # 3. 写入 Info.plist
+          cat > "${APP_DIR}/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleName</key>
+    <string>VPN Parser</string>
+    <key>CFBundleDisplayName</key>
+    <string>VPN Parser</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.mateoki.vpn-parser</string>
+    <key>CFBundleVersion</key>
+    <string>${version}</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${version}</string>
+    <key>CFBundleExecutable</key>
+    <string>vpn-parser</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
+EOF
+
+          # 4. 生成 AppIcon.icns
+          if [ -f assets/app-icon.png ]; then
+            ICONSET="AppIcon.iconset"
+            rm -rf "${ICONSET}"
+            mkdir -p "${ICONSET}"
+            sips -z 16 16     assets/app-icon.png --out "${ICONSET}/icon_16x16.png" >/dev/null 2>&1 || true
+            sips -z 32 32     assets/app-icon.png --out "${ICONSET}/icon_16x16@2x.png" >/dev/null 2>&1 || true
+            sips -z 32 32     assets/app-icon.png --out "${ICONSET}/icon_32x32.png" >/dev/null 2>&1 || true
+            sips -z 64 64     assets/app-icon.png --out "${ICONSET}/icon_32x32@2x.png" >/dev/null 2>&1 || true
+            sips -z 128 128   assets/app-icon.png --out "${ICONSET}/icon_128x128.png" >/dev/null 2>&1 || true
+            sips -z 256 256   assets/app-icon.png --out "${ICONSET}/icon_128x128@2x.png" >/dev/null 2>&1 || true
+            sips -z 256 256   assets/app-icon.png --out "${ICONSET}/icon_256x256.png" >/dev/null 2>&1 || true
+            iconutil -c icns "${ICONSET}" -o "${APP_DIR}/Contents/Resources/AppIcon.icns" || true
+            rm -rf "${ICONSET}"
+          fi
+
+          # 5. 生成 DMG 安装包
+          DMG_STAGING="dmg_staging"
+          rm -rf "${DMG_STAGING}"
+          mkdir -p "${DMG_STAGING}"
+          cp -R "${APP_DIR}" "${DMG_STAGING}/"
+          ln -s /Applications "${DMG_STAGING}/Applications"
+          dmg_name="vpn-parser-${version}-darwin-${arch}.dmg"
+          hdiutil create -volname "VPN Parser" -srcfolder "${DMG_STAGING}" -ov -format UDZO "dist/${dmg_name}"
+          rm -rf "${DMG_STAGING}"
+
+          # 6. 生成命令行打包 (.tar.gz)
           tar_name="vpn-parser-${version}-darwin-${arch}.tar.gz"
           tar -czf "dist/${tar_name}" -C target/release vpn-parser
+
+          # 7. 计算哈希值
           cd dist
+          shasum -a 256 "${dmg_name}" > "${dmg_name}.sha256"
           shasum -a 256 "${tar_name}" > "${tar_name}.sha256"
-          cat "${tar_name}.sha256"
+          cat *.sha256
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
@@ -92,14 +188,15 @@ jobs:
           for i in $(seq 1 40); do
             if gh release view "$tag" >/dev/null 2>&1; then
               echo "release $tag 已存在（第 $i 次查到），上传 macOS 资产"
-              for f in dist/*.tar.gz dist/*.sha256; do
+              for f in dist/*.tar.gz dist/*.dmg dist/*.sha256; do
                 [ -f "$f" ] || continue
                 echo "Uploading $f to release $tag..."
                 gh release upload "$tag" "$f" --clobber
               done
               exit 0
             fi
+            echo "Waiting for release $tag to be created... ($i/40)"
             sleep 15
           done
-          echo "等 Release $tag 出现超时（10 分钟）—— 检查 release.yml 那次运行" >&2
-          exit 1
+          echo "Release 等待超时，尝试直接创建并上传资产..."
+          gh release create "$tag" dist/* --title "VPN Parser $tag" || true
