@@ -179,7 +179,7 @@ impl VpnApp {
         // ===================================================================
         // macOS 药丸分段选择条 (Segmented Control Bar)
         // ===================================================================
-        let tr_charts = self.tr("图表");
+        let tr_charts = self.tr("汇总图表");
         let tr_nodes = self.tr("可用节点");
         let tr_groups = self.tr("分流策略组");
         let tr_conns = self.tr("活跃连接");
