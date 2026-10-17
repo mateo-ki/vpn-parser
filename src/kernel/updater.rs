@@ -1007,24 +1007,31 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
     }
     const MIHOMO_TAG: &str = "v1.19.32";
     let (primary_name, primary_digest, primary_size, compat_name, compat_digest, compat_size) =
-        if KernelPlatform::current() == KernelPlatform::Windows {
-            (
+        match KernelPlatform::current() {
+            KernelPlatform::Windows => (
                 format!("mihomo-windows-amd64-{MIHOMO_TAG}.zip"),
                 "sha256:1ac84e795b5b915446e20139677fb6cc013a0778e876e8d4c96f994750b4c4a3",
                 22_492_402_u64,
                 format!("mihomo-windows-amd64-compatible-{MIHOMO_TAG}.zip"),
                 "sha256:974a4d7ad69aed27aa2e8f91d61113573c14dadb14562c63e58effabf59816f0",
                 22_525_067_u64,
-            )
-        } else {
-            (
+            ),
+            KernelPlatform::Linux => (
                 format!("mihomo-linux-amd64-{MIHOMO_TAG}.gz"),
                 "sha256:8451100836c9eda194331c2babfad490b2faf30cebc1a04b0e76fd8ac2d35d10",
                 22_846_526_u64,
                 format!("mihomo-linux-amd64-compatible-{MIHOMO_TAG}.gz"),
                 "sha256:ba3ce607747a07f948fc35780e108a4a7c7f552a38b9bd4d115f313ebcb89c20",
                 22_877_876_u64,
-            )
+            ),
+            KernelPlatform::MacOS => (
+                format!("mihomo-darwin-amd64-{MIHOMO_TAG}.gz"),
+                "sha256:b7de9fc46af2ca985ecfb302a6362170e04ff2023dee1e82addc54133e669bc9",
+                22_276_968_u64,
+                format!("mihomo-darwin-amd64-compatible-{MIHOMO_TAG}.gz"),
+                "sha256:18b382df77bded2ad0fb3db27db5636cb15b20729d5ba995a357eeb9b46bf507",
+                22_302_953_u64,
+            ),
         };
     Some(GithubRelease {
         tag_name: MIHOMO_TAG.to_string(),
@@ -1236,7 +1243,8 @@ mod tests {
         // 写死任何一个都会在另一个平台上变成"下得来但校验必挂"。
         let (want_size, want_suffix) = match KernelPlatform::current() {
             KernelPlatform::Windows => (22_492_402, ".zip"),
-            KernelPlatform::Linux | KernelPlatform::MacOS => (22_846_526, ".gz"),
+            KernelPlatform::Linux => (22_846_526, ".gz"),
+            KernelPlatform::MacOS => (22_276_968, ".gz"),
         };
         assert_eq!(asset.size, want_size, "兜底大小要对得上当前平台的资产");
         assert!(
