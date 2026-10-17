@@ -12,7 +12,7 @@ Rust + egui 编写的高性能现代化跨平台桌面代理工具：采集订�
 
 - **Windows**：安装包（Inno Setup）+ 系统代理一键控制 + TUN 虚拟网卡模式（带管理员提权）
 - **Linux**：通用免安装 **AppImage**、Debian/Ubuntu **deb** 与 Fedora/RHEL **rpm** 全套发布包支持，提供本地混合代理端口（默认 `127.0.0.1:9980`）
-- **OpenWrt**：原生 **.ipk** 软件包（x86_64 / aarch64_generic），集成 `procd` 守护与 UCI 配置，超轻量无头微服务常驻路由器（~20MB 内存），详见 [OpenWrt 部署指南](docs/openwrt.md)
+- **OpenWrt**：提供原生 **.ipk** 服务包（x86_64 / aarch64_generic）与通用 **LuCI Web 控制面板 (`luci-app-vpn-parser`)**，集成 `procd` 守护与 UCI 配置，超轻量无头微服务常驻路由器（~20MB 内存），详见 [OpenWrt 部署指南](docs/openwrt.md)
 - **macOS**：原生 DMG 拖拽安装包与便携归档（Apple Silicon 与 Intel 架构支持）
 
 ## 功能
@@ -91,7 +91,8 @@ cross build --release --no-default-features --target x86_64-unknown-linux-musl
 
 VPN Parser 原生支持 OpenWrt 路由器环境（X86 软路由及 ARM64 路由器），作为轻量级本地微服务运行（常驻私有工作集内存仅约 20MB ~ 30MB），自动为 **OpenClash**、**PassWall**、**SSR-Plus** 等插件提供纯净、低延迟、自动保活的优质节点池。
 
-- **快速安装**：下载对应架构的 `.ipk`，在路由器中执行 `opkg install ./vpn-parser_*.ipk`；
+- **快速安装**：下载对应架构的 `.ipk` 与通用 LuCI 插件包，在路由器中执行 `opkg install ./vpn-parser_*.ipk ./luci-app-vpn-parser_*.ipk`；
+- **原生 LuCI 管理面板**：安装后在路由器后台「服务」➔「VPN Parser」即可进行节点池监控、真握手测速、订阅增删与参数调优；
 - **配置与自启**：配置文件为 `/etc/config/vpn-parser`，由 `procd` 守护（`/etc/init.d/vpn-parser`）支持异常崩溃 5 秒自愈复活；
 - **插件联动**：在 OpenClash 订阅地址填入 `http://127.0.0.1:8080/api/export/clash?quality_only=true&limit=60`，即可自动拉取最高质量的实测可用节点；
 - **完整使用指南**：详见 [OpenWrt 部署与微服务联动指南](docs/openwrt.md)。

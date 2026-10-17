@@ -1,0 +1,44 @@
+{
+  "admin/services/vpn-parser": {
+    "title": "VPN Parser",
+    "action": {
+      "type": "alias",
+      "target": "admin/services/vpn-parser/overview"
+    },
+    "depends": {
+      "acl": [ "luci-app-vpn-parser" ]
+    }
+  },
+  "admin/services/vpn-parser/overview": {
+    "title": "服务概览",
+    "order": 10,
+    "action": {
+      "type": "view",
+      "path": "vpn-parser/overview"
+    }
+  },
+  "admin/services/vpn-parser/nodes": {
+    "title": "节点列表",
+    "order": 20,
+    "action": {
+      "type": "view",
+      "path": "vpn-parser/nodes"
+    }
+  },
+  "admin/services/vpn-parser/sources": {
+    "title": "订阅源管理",
+    "order": 30,
+    "action": {
+      "type": "view",
+      "path": "vpn-parser/sources"
+    }
+  },
+  "admin/services/vpn-parser/settings": {
+    "title": "参数配置",
+    "order": 40,
+    "action": {
+      "type": "view",
+      "path": "vpn-parser/settings"
+    }
+  }
+}

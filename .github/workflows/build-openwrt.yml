@@ -125,3 +125,55 @@ jobs:
           done
           echo "等 Release $tag 出现超时（10 分钟）" >&2
           exit 1
+
+  build-luci-ipk:
+    name: 构建 OpenWrt LuCI 控制面板 (luci-app-vpn-parser_all.ipk)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 获取版本号
+        id: get_version
+        run: |
+          set -euo pipefail
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Detected version: $version"
+
+      - name: 打包 luci-app-vpn-parser 通用 .ipk
+        run: |
+          set -euo pipefail
+          version="${{ steps.get_version.outputs.version }}"
+          mkdir -p dist
+          chmod +x packaging/openwrt-luci/make_luci_ipk.sh
+          ./packaging/openwrt-luci/make_luci_ipk.sh dist "$version"
+          ls -la dist/
+
+      - name: 上传 LuCI 构件
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-packages-luci-all
+          path: dist/*
+          if-no-files-found: error
+
+      - name: 追加 LuCI 资产到 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          for i in $(seq 1 40); do
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "release $tag 已存在（第 $i 次查到），上传 LuCI 资产"
+              for f in dist/*.ipk dist/*.sha256; do
+                [ -f "$f" ] || continue
+                echo "Uploading $f to release $tag..."
+                gh release upload "$tag" "$f" --clobber
+              done
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "等 Release $tag 出现超时（10 分钟）" >&2
+          exit 1

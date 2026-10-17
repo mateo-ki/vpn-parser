@@ -1,0 +1,38 @@
+{
+  "luci-app-vpn-parser": {
+    "description": "Grant access to VPN Parser service and APIs",
+    "read": {
+      "uci": [ "vpn-parser" ],
+      "ubus": {
+        "service": [ "list" ],
+        "luci.vpn-parser": [
+          "get_status",
+          "get_stats",
+          "get_tasks",
+          "list_nodes",
+          "list_sources",
+          "get_settings",
+          "get_export_links"
+        ]
+      }
+    },
+    "write": {
+      "uci": [ "vpn-parser" ],
+      "ubus": {
+        "luci.vpn-parser": [
+          "fetch_all",
+          "fetch_source",
+          "speedtest",
+          "speedtest_one",
+          "create_source",
+          "update_source",
+          "delete_source",
+          "delete_node",
+          "discover_gists",
+          "clean_nodes",
+          "update_settings"
+        ]
+      }
+    }
+  }
+}

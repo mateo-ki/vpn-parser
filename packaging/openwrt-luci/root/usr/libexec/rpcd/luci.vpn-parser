@@ -1,0 +1,199 @@
+#!/bin/sh
+#
+# rpcd ubus provider for luci-app-vpn-parser
+#
+
+. /lib/functions.sh
+
+get_backend_info() {
+    config_load "vpn-parser"
+    local listen token
+    config_get listen "main" "listen" "0.0.0.0:8080"
+    config_get token "main" "api_token" ""
+
+    local port="${listen##*:}"
+    [ -n "$port" ] || port="8080"
+    BACKEND_PORT="$port"
+    BACKEND_URL="http://127.0.0.1:$port"
+    API_TOKEN="$token"
+}
+
+api_call() {
+    local method="$1"
+    local path="$2"
+    local data="$3"
+
+    local auth=""
+    [ -n "$API_TOKEN" ] && auth="Authorization: Bearer $API_TOKEN"
+
+    if [ -n "$data" ]; then
+        curl -s -m 30 -X "$method" \
+            -H "Content-Type: application/json" \
+            ${auth:+-H "$auth"} \
+            -d "$data" \
+            "$BACKEND_URL$path" 2>/dev/null || echo '{"ok":false,"error":"无法连接后台微服务，请确认服务已启动"}'
+    else
+        curl -s -m 30 -X "$method" \
+            ${auth:+-H "$auth"} \
+            "$BACKEND_URL$path" 2>/dev/null || echo '{"ok":false,"error":"无法连接后台微服务，请确认服务已启动"}'
+    fi
+}
+
+case "$1" in
+    list)
+        cat << 'EOF'
+{
+    "get_status": {},
+    "get_stats": {},
+    "get_tasks": { "limit": 10 },
+    "list_nodes": { "page": 1, "page_size": 50, "latency": "str", "keyword": "str", "protocol": "str", "sort": "str" },
+    "list_sources": {},
+    "get_settings": {},
+    "get_export_links": { "host": "str" },
+    "fetch_all": {},
+    "fetch_source": { "id": "str" },
+    "speedtest": { "ids": [] },
+    "speedtest_one": { "id": "str" },
+    "create_source": { "name": "str", "url_template": "str", "enabled": true, "remark": "str" },
+    "update_source": { "id": "str", "name": "str", "url_template": "str", "enabled": true, "remark": "str" },
+    "delete_source": { "id": "str" },
+    "delete_node": { "id": "str" },
+    "discover_gists": { "query": "str", "max_pages": 100 },
+    "clean_nodes": { "action": "str" },
+    "update_settings": {}
+}
+EOF
+        ;;
+    call)
+        get_backend_info
+        case "$2" in
+            get_status)
+                pid=$(pgrep -f "vpn-parser --headless" | head -n 1)
+                res=$(api_call "GET" "/api/health")
+                if [ -n "$pid" ]; then
+                    echo "{\"running\":true,\"pid\":$pid,\"port\":$BACKEND_PORT,\"api\":$res}"
+                else
+                    echo "{\"running\":false,\"pid\":null,\"port\":$BACKEND_PORT,\"api\":$res}"
+                fi
+                ;;
+            get_stats)
+                api_call "GET" "/api/stats"
+                ;;
+            get_tasks)
+                read -r input
+                limit=$(echo "$input" | sed -n 's/.*"limit" *: *\([0-9]*\).*/\1/p')
+                [ -n "$limit" ] || limit=10
+                api_call "GET" "/api/tasks?limit=$limit"
+                ;;
+            list_nodes)
+                read -r input
+                page=1
+                page_size=50
+                params="page=1&page_size=50"
+                
+                # 简单解析 json 参数拼接 query string
+                p=$(echo "$input" | sed -n 's/.*"page" *: *\([0-9]*\).*/\1/p')
+                [ -n "$p" ] && params="page=$p"
+                ps=$(echo "$input" | sed -n 's/.*"page_size" *: *\([0-9]*\).*/\1/p')
+                [ -n "$ps" ] && params="$params&page_size=$ps"
+                lat=$(echo "$input" | sed -n 's/.*"latency" *: *"*\([^",}]*\)"*.*/\1/p')
+                [ -n "$lat" ] && params="$params&latency=$lat"
+                proto=$(echo "$input" | sed -n 's/.*"protocol" *: *"*\([^",}]*\)"*.*/\1/p')
+                [ -n "$proto" ] && params="$params&protocol=$proto"
+                kw=$(echo "$input" | sed -n 's/.*"keyword" *: *"*\([^",}]*\)"*.*/\1/p')
+                [ -n "$kw" ] && params="$params&keyword=$kw"
+                sort=$(echo "$input" | sed -n 's/.*"sort" *: *"*\([^",}]*\)"*.*/\1/p')
+                [ -n "$sort" ] && params="$params&sort=$sort"
+
+                api_call "GET" "/api/nodes?$params"
+                ;;
+            list_sources)
+                api_call "GET" "/api/sources"
+                ;;
+            get_settings)
+                api_call "GET" "/api/settings"
+                ;;
+            get_export_links)
+                read -r input
+                host=$(echo "$input" | sed -n 's/.*"host" *: *"*\([^",}]*\)"*.*/\1/p')
+                [ -n "$host" ] || host="127.0.0.1"
+                token_param=""
+                [ -n "$API_TOKEN" ] && token_param="&token=$API_TOKEN"
+                clash_url="http://${host}:${BACKEND_PORT}/api/export/clash?quality_only=true&limit=60${token_param}"
+                uri_url="http://${host}:${BACKEND_PORT}/api/export/uri?quality_only=true&limit=60${token_param}"
+                json_url="http://${host}:${BACKEND_PORT}/api/export/json?quality_only=true&limit=60${token_param}"
+                cat << EOF
+{
+    "clash": "$clash_url",
+    "uri": "$uri_url",
+    "json": "$json_url"
+}
+EOF
+                ;;
+            fetch_all)
+                api_call "POST" "/api/sources/fetch-all" "{}"
+                ;;
+            fetch_source)
+                read -r input
+                id=$(echo "$input" | sed -n 's/.*"id" *: *"*\([^",}]*\)"*.*/\1/p')
+                api_call "POST" "/api/sources/$id/fetch" "{}"
+                ;;
+            speedtest)
+                read -r input
+                [ -n "$input" ] || input="{}"
+                api_call "POST" "/api/nodes/speedtest" "$input"
+                ;;
+            speedtest_one)
+                read -r input
+                id=$(echo "$input" | sed -n 's/.*"id" *: *"*\([^",}]*\)"*.*/\1/p')
+                api_call "POST" "/api/nodes/$id/speedtest" "{}"
+                ;;
+            create_source)
+                read -r input
+                api_call "POST" "/api/sources" "$input"
+                ;;
+            update_source)
+                read -r input
+                id=$(echo "$input" | sed -n 's/.*"id" *: *"*\([^",}]*\)"*.*/\1/p')
+                api_call "PUT" "/api/sources/$id" "$input"
+                ;;
+            delete_source)
+                read -r input
+                id=$(echo "$input" | sed -n 's/.*"id" *: *"*\([^",}]*\)"*.*/\1/p')
+                api_call "DELETE" "/api/sources/$id" ""
+                ;;
+            delete_node)
+                read -r input
+                id=$(echo "$input" | sed -n 's/.*"id" *: *"*\([^",}]*\)"*.*/\1/p')
+                api_call "DELETE" "/api/nodes/$id" ""
+                ;;
+            discover_gists)
+                read -r input
+                [ -n "$input" ] || input='{"query":"vless//","max_pages":100}'
+                api_call "POST" "/api/gist/discover" "$input"
+                ;;
+            clean_nodes)
+                read -r input
+                action=$(echo "$input" | sed -n 's/.*"action" *: *"*\([^",}]*\)"*.*/\1/p')
+                case "$action" in
+                    dedupe)
+                        api_call "POST" "/api/nodes/dedupe" "{}"
+                        ;;
+                    clear)
+                        api_call "POST" "/api/nodes/clear" "{}"
+                        ;;
+                    *)
+                        api_call "POST" "/api/nodes/delete-dead" "{}"
+                        ;;
+                esac
+                ;;
+            update_settings)
+                read -r input
+                api_call "PUT" "/api/settings" "$input"
+                ;;
+            *)
+                echo '{"error":"Unsupported method"}'
+                ;;
+        esac
+        ;;
+esac

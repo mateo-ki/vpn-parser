@@ -22,6 +22,7 @@ VPN Parser 在 OpenWrt 上以**纯无头（Headless）高性能守护进程**形
 
 | 架构名称 | 适用设备 | 安装包文件名 |
 | :--- | :--- | :--- |
+| **LuCI 管理面板 (通用)** | **所有 OpenWrt 路由器（全架构通用）** | `luci-app-vpn-parser_<版本>_all.ipk` |
 | **x86_64** | 通用 X86 软路由、工控机、PVE / ESXi 虚拟机等 | `vpn-parser_<版本>_x86_64.ipk` |
 | **aarch64_generic** | 主流 ARM64 软硬路由（NanoPi R2S/R4S/R5S、友善、GL.iNet 等） | `vpn-parser_<版本>_aarch64_generic.ipk` |
 | **静态压缩包** | 通用 Linux / OpenWrt（解压即用） | `vpn-parser_<版本>_linux_<架构>_musl.tar.gz` |
@@ -32,16 +33,16 @@ VPN Parser 在 OpenWrt 上以**纯无头（Headless）高性能守护进程**形
 
 ### 1. 安装 `.ipk` 软件包（推荐）
 
-通过 SCP 或 SFTP 将下载好的 `.ipk` 上传到路由器的 `/tmp` 目录下，SSH 登录路由器执行：
+通过 SCP 或 SFTP 将下载好的核心服务 `.ipk` 与 LuCI 插件包上传到路由器的 `/tmp` 目录下，SSH 登录路由器执行：
 
 ```bash
 cd /tmp
-# 更新源并安装
+# 更新源并安装微服务核心与 LuCI 控制面板
 opkg update
-opkg install ./vpn-parser_*.ipk
+opkg install ./vpn-parser_*.ipk ./luci-app-vpn-parser_*.ipk
 ```
 
-安装完成后，服务会自动注册开机自启并立即启动。
+安装完成后，微服务会自动注册开机自启并立即启动，刷新浏览器即可在 OpenWrt 管理后台看到图形化菜单。
 
 ### 2. 手动解压安装（无 opkg 环境）
 
@@ -53,6 +54,36 @@ chmod +x /usr/bin/vpn-parser /etc/init.d/vpn-parser
 /etc/init.d/vpn-parser enable
 /etc/init.d/vpn-parser start
 ```
+
+---
+
+## 🖥️ LuCI Web 图形管理界面 (`luci-app-vpn-parser`)
+
+安装 `luci-app-vpn-parser_*.ipk` 后，登录 OpenWrt Web 管理界面，导航至 **「服务」 (Services) ➔ 「VPN Parser」**：
+
+### 1. 服务概览 (`Overview`)
+- **运行状态**：实时查看核心守护进程 PID、监听端口及健康状态；
+- **数据看板**：订阅源启用比例、节点存活率百分比、各协议（VLESS / VMess / Trojan / Shadowsocks / Hysteria2）分布药丸；
+- **快捷运维**：提供「⚡ 测速全部节点」、「🔄 拉取全部订阅」、「🧹 清理失效死节点」、「🔀 物理去重」一键执行；
+- **下游代理一键联动**：提供预设参数的 OpenClash (Clash YAML)、PassWall / SSR-Plus (Base64 URI) 及 JSON 纯净活节点订阅链接与一键复制按钮。
+
+### 2. 节点池管理 (`Nodes`)
+- **多维度筛选**：支持「全部状态 / 🟢 仅看可用 / 🔴 仅看失效 / ⚪ 未测速」快速切换，配合协议类型及关键字即时过滤；
+- **可视化节点明细**：彩色协议徽章、节点名、服务器与端口、国家地区、握手延迟与测速核心；
+- **单节点交互**：支持单个节点独立发起「⚡ 测速」、「📋 复制原始链接」及「🗑️ 删除」。
+
+### 3. 订阅源管理 (`Sources`)
+- **订阅源列表**：展示订阅名称、URL 模板、节点获取数、最近拉取时间与状态；
+- **增删改查**：提供新增/编辑订阅弹窗，完整支持日期动态模板占位符（如 `{Ymd}`, `{Y}`, `{m}`, `{d}`）；
+- **GitHub Gist 发现**：内置全网 Gist 公开节点自动挖掘工具，输入关键词与扫描页数即可后台全自动搜集入库。
+
+### 4. 参数配置 (`Settings`)
+- **系统服务守护 (UCI)**：网页端直观管理开机自启、API 监听地址、数据库存储路径与 API Token；
+- **微服务并发与调优**：
+  - 测速并发数（1~128，软路由建议 32~64，小内存硬路由建议 8~16）；
+  - **纯 TCP Ping 节能探活模式**：专为低功耗硬路由设计，仅测试握手延迟，CPU 占用极低，测速提速 5 倍以上；
+  - 同出口 IP 去重、自动定时拉取与测速周期、节点黑名单关键词过滤等；
+- **保存并应用**：一键原子化更新 UCI 配置文件并同步微服务内存配置。
 
 ---
 
