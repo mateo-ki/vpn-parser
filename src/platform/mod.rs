@@ -312,7 +312,7 @@ pub fn request_elevation(_extra_args: &[String]) -> Result<()> {
     let kernel_path = crate::kernel::managed_kernel_path(crate::kernel::KernelKind::Mihomo);
     let kernel_str = kernel_path.display();
     Err(anyhow!(
-        "Linux 上 TUN 模式需要代理内核具备 CAP_NET_ADMIN 权限。\n\
+        "Linux 上 TUN 模式需要代理内核具备 CAP_NET_ADMIN 权限（普通用户实测报 ioctl(TUNSETIFF): Operation not permitted）。\n\
          【严禁使用 sudo 启动 GUI 程序】（会导致 Wayland 拒绝授权及数据目录错乱）。\n\n\
          正确解决方式（只需在终端中执行一次命令为内核授权）：\n\
          sudo setcap cap_net_admin,cap_net_raw+ep \"{kernel_str}\"\n\n\
