@@ -95,6 +95,8 @@ pub struct VpnApp {
     pub(crate) page: u32,
     pub(crate) page_size: u32,
     pub(crate) protocol_filter: String,
+    pub(crate) source_filter: String,
+    pub(crate) source_search_query: String,
     pub(crate) keyword: String,
     pub(crate) latency_filter: String,
     pub(crate) region_filter: String,
@@ -428,6 +430,8 @@ impl VpnApp {
             page: 1,
             page_size: 50,
             protocol_filter: String::new(),
+            source_filter: String::new(),
+            source_search_query: String::new(),
             keyword: String::new(),
             latency_filter: "all".into(),
             region_filter: "all".into(),
@@ -783,6 +787,7 @@ impl VpnApp {
         let db = self.db.clone();
         let tx = self.tx.clone();
         let protocol = nonempty_opt(&self.protocol_filter);
+        let source_id = nonempty_opt(&self.source_filter);
         let keyword = nonempty_opt(&self.keyword);
         let latency = if self.only_available_nodes {
             Some("alive".to_string())
@@ -803,7 +808,7 @@ impl VpnApp {
             let res = db
                 .list_nodes(
                     protocol.as_deref(),
-                    None,
+                    source_id.as_deref(),
                     keyword.as_deref(),
                     latency.as_deref(),
                     country.as_deref(),
@@ -2582,6 +2587,75 @@ impl VpnApp {
         }
         let n = ids.len();
         self.speedtest_ids(Some(ids), &format!("正在真实代理验证本页 {n} 个节点..."));
+    }
+
+    pub(crate) fn speedtest_current_list(&mut self) {
+        let db = self.db.clone();
+        let source_id = nonempty_opt(&self.source_filter);
+        let protocol = nonempty_opt(&self.protocol_filter);
+        let keyword = nonempty_opt(&self.keyword);
+        let latency = if self.only_available_nodes {
+            Some("alive".to_string())
+        } else if self.latency_filter == "all" {
+            None
+        } else {
+            Some(self.latency_filter.clone())
+        };
+        let country = if self.region_filter == "all" {
+            None
+        } else {
+            Some(self.region_filter.clone())
+        };
+
+        let st = self.speedtester.clone();
+        let opts = self.speed_opts();
+        let tx = self.tx.clone();
+
+        self.busy = true;
+        self.status = "正在检索当前筛选节点列表...".into();
+
+        self.rt.spawn(async move {
+            let ids = match db
+                .list_filtered_node_ids(
+                    source_id.as_deref(),
+                    protocol.as_deref(),
+                    keyword.as_deref(),
+                    latency.as_deref(),
+                    country.as_deref(),
+                )
+                .await
+            {
+                Ok(ids) => ids,
+                Err(e) => {
+                    let _ = tx.send(BgMsg::OpDone {
+                        result: Err(format!("检索当前筛选节点失败: {e}")),
+                        unlock: true,
+                    });
+                    return;
+                }
+            };
+
+            if ids.is_empty() {
+                let _ = tx.send(BgMsg::OpDone {
+                    result: Ok("当前筛选条件下没有节点".to_string()),
+                    unlock: true,
+                });
+                return;
+            }
+
+            let progress_tx = tx.clone();
+            let res = st
+                .test_many_with_progress(
+                    Some(ids),
+                    opts,
+                    Some(move |progress| {
+                        let _ = progress_tx.send(BgMsg::SpeedProgress(progress));
+                    }),
+                )
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(BgMsg::SpeedDone(res));
+        });
     }
 
     pub(crate) fn speedtest_one(&mut self, id: String) {

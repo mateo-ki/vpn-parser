@@ -438,6 +438,20 @@ impl Database {
         })
     }
 
+    /// 检索符合当前多维筛选条件（订阅源、协议、关键词、延迟状态、国家地区）的所有节点 ID 列表（跨分页）
+    pub async fn list_filtered_node_ids(
+        &self,
+        source_id: Option<&str>,
+        protocol: Option<&str>,
+        keyword: Option<&str>,
+        latency: Option<&str>,
+        country: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let summaries = self.load_node_summaries(source_id).await?;
+        let filtered = Self::filter_node_summaries(summaries, protocol, keyword, latency, country);
+        Ok(filtered.into_iter().map(|node| node.id).collect())
+    }
+
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
         // 先查主库 node_index 索引表看它归属哪个 source_id，毫秒级直接命中分库，免去并发扫 40+ 个分片库
         let known_scope: Option<Option<String>> = sqlx::query_scalar("SELECT source_id FROM node_index WHERE id = ?")
@@ -1374,6 +1388,22 @@ mod tests {
         db.trim_cached_pools().await;
         let trim_elapsed = t_start.elapsed();
         println!("trim_cached_pools (含 PRAGMA shrink_memory) 执行耗时: {:.2?}", trim_elapsed);
+
+        // 测试 list_filtered_node_ids 精准过滤
+        let filtered_ids = db
+            .list_filtered_node_ids(
+                Some(&source_id),
+                Some("vless"),
+                Some("Bench-Node-1"),
+                Some("alive"),
+                Some("HK"),
+            )
+            .await
+            .unwrap();
+        assert!(!filtered_ids.is_empty());
+        for id in &filtered_ids {
+            assert!(id.starts_with("bench-"));
+        }
 
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);

@@ -119,12 +119,95 @@ impl VpnApp {
                     icon_label(ui, Icon::Search, 13.0, theme::text_secondary());
                     let search_field = ui.add(
                         egui::TextEdit::singleline(&mut self.keyword)
-                            .desired_width(180.0)
+                            .desired_width(140.0)
                             .hint_text("搜索名称、服务器 IP..."),
                     );
                     crate::gui::widgets::note_text_field(ui, &search_field);
                     if search_field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         filter_changed = true;
+                    }
+
+                    ui.separator();
+
+                    // 订阅源下拉筛选（支持下拉模糊搜索）
+                    ui.label(RichText::new("订阅源:").small().color(theme::muted()));
+                    let source_label = if self.source_filter.is_empty() {
+                        "全部订阅源".to_string()
+                    } else if let Some(s) = self.sources.iter().find(|s| s.id == self.source_filter) {
+                        let name = &s.name;
+                        if name.chars().count() > 8 {
+                            format!("源: {}…", name.chars().take(8).collect::<String>())
+                        } else {
+                            format!("源: {name}")
+                        }
+                    } else {
+                        "全部订阅源".to_string()
+                    };
+
+                    egui::ComboBox::from_id_salt("node_source_filter")
+                        .selected_text(source_label)
+                        .width(130.0)
+                        .show_ui(ui, |ui| {
+                            // 下拉框内嵌模糊搜索输入框
+                            ui.horizontal(|ui| {
+                                icon_label(ui, Icon::Search, 11.0, theme::muted());
+                                let search_edit = ui.add(
+                                    egui::TextEdit::singleline(&mut self.source_search_query)
+                                        .desired_width(140.0)
+                                        .hint_text("模糊搜索订阅源..."),
+                                );
+                                crate::gui::widgets::note_text_field(ui, &search_edit);
+                                if !self.source_search_query.is_empty() {
+                                    if ui.small_button("✕").clicked() {
+                                        self.source_search_query.clear();
+                                    }
+                                }
+                            });
+                            ui.separator();
+
+                            egui::ScrollArea::vertical()
+                                .max_height(220.0)
+                                .show(ui, |ui| {
+                                    if ui.selectable_label(self.source_filter.is_empty(), "全部订阅源").clicked() {
+                                        if !self.source_filter.is_empty() {
+                                            self.source_filter.clear();
+                                            filter_changed = true;
+                                        }
+                                    }
+
+                                    let q = self.source_search_query.trim().to_lowercase();
+                                    let mut matched = 0;
+                                    for s in &self.sources {
+                                        if !q.is_empty() {
+                                            let match_name = s.name.to_lowercase().contains(&q);
+                                            let match_remark = s.remark.as_deref().unwrap_or("").to_lowercase().contains(&q);
+                                            let match_url = s.url_template.to_lowercase().contains(&q);
+                                            if !match_name && !match_remark && !match_url {
+                                                continue;
+                                            }
+                                        }
+                                        matched += 1;
+                                        let is_selected = self.source_filter == s.id;
+                                        let label = format!("{} ({})", s.name, s.last_node_count);
+                                        if ui.selectable_label(is_selected, label).clicked() {
+                                            if self.source_filter != s.id {
+                                                self.source_filter = s.id.clone();
+                                                filter_changed = true;
+                                            }
+                                        }
+                                    }
+
+                                    if matched == 0 && !q.is_empty() {
+                                        ui.label(RichText::new("无匹配订阅源").small().color(theme::muted()));
+                                    }
+                                });
+                        });
+
+                    if !self.source_filter.is_empty() {
+                        if ui.small_button("✕").on_hover_text("清除订阅源筛选").clicked() {
+                            self.source_filter.clear();
+                            filter_changed = true;
+                        }
                     }
 
                     ui.separator();
@@ -221,11 +304,27 @@ impl VpnApp {
                         // 测速菜单
                         ui.add_enabled_ui(!self.busy, |ui| {
                             ui.menu_button("⚡ 批量测速 ▼", |ui| {
-                                if ui.button("⚡ 测速当前页").clicked() {
+                                if ui
+                                    .button("⚡ 测速当前页")
+                                    .on_hover_text("测试当前分页显示的节点")
+                                    .clicked()
+                                {
                                     self.speedtest_page();
                                     ui.close_menu();
                                 }
-                                if ui.button("⚡ 测速全库全部节点").clicked() {
+                                if ui
+                                    .button("⚡ 测速当前列表")
+                                    .on_hover_text("测试符合当前筛选条件的全部节点（跨越分页）")
+                                    .clicked()
+                                {
+                                    self.speedtest_current_list();
+                                    ui.close_menu();
+                                }
+                                if ui
+                                    .button("⚡ 测速全库全部节点")
+                                    .on_hover_text("忽略筛选条件，并发测速全库所有节点")
+                                    .clicked()
+                                {
                                     self.speedtest_all_sources();
                                     ui.close_menu();
                                 }

@@ -70,6 +70,53 @@ impl VpnApp {
         nav_item_icon_only(ui, target_tab, Tab::Sources, Icon::Subscription, &sources_tip, None);
         nav_item_icon_only(ui, target_tab, Tab::Settings, Icon::Gear, self.tr("系统设置"), None);
         nav_item_icon_only(ui, target_tab, Tab::About, Icon::Info, self.tr("关于"), None);
+
+        // 菜单栏最底部：日间 / 夜间主题切换
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+            ui.add_space(6.0);
+            let is_dark = self.settings.ui_dark;
+            let (symbol, tip) = if is_dark {
+                ("☀️", self.tr("切换至日间亮色模式"))
+            } else {
+                ("🌙", self.tr("切换至夜间深色模式"))
+            };
+
+            let item_size = egui::vec2(ui.available_width(), 38.0);
+            let (rect, resp) = ui.allocate_exact_size(item_size, Sense::click());
+            let resp = resp.on_hover_text(tip);
+
+            let painter = ui.painter_at(rect);
+            if resp.hovered() {
+                painter.rect_filled(
+                    rect,
+                    CornerRadius::same(theme::RADIUS_NAV),
+                    theme::panel().gamma_multiply(0.7),
+                );
+            }
+
+            let text_pos = egui::pos2(rect.center().x, rect.center().y);
+            painter.text(
+                text_pos,
+                egui::Align2::CENTER_CENTER,
+                symbol,
+                egui::FontId::proportional(17.0),
+                theme::sidebar_text(),
+            );
+
+            if resp.clicked() {
+                self.settings.ui_dark = !self.settings.ui_dark;
+                self.edit_ui_dark = self.settings.ui_dark;
+                self.save_settings();
+            }
+
+            ui.add_space(4.0);
+            let line_y = ui.cursor().top();
+            ui.painter().hline(
+                ui.max_rect().x_range(),
+                line_y,
+                Stroke::new(1.0_f32, theme::border_subtle()),
+            );
+        });
     }
 
     pub(crate) fn ui_task_panel(&self, ui: &mut Ui) {
