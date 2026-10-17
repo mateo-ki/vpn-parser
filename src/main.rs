@@ -701,8 +701,10 @@ fn setup_chinese_fonts(ctx: &egui::Context) {
             );
             loaded_names.push(font_name);
 
-            // 加载前 2 个可用中文字体作为主力与多级回退，既保证字形完备又避免内存过大
-            if loaded_names.len() >= 2 {
+            // 仅加载 1 个最优先的可用 CJK 字体。常规中文字体（如微软雅黑、苹方、文泉驿、Noto）
+            // 单个字库就包含完备的简体/繁体/日韩字形，避免同时载入多个动辄十数兆的字体文件
+            // 造成堆内存与纹理缓存膨胀（每个字体保留整份原始字节与字形表）。
+            if loaded_names.len() >= 1 {
                 break;
             }
         }

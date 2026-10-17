@@ -207,6 +207,10 @@ pub enum BgMsg {
     /// 出口 IP 画像，第一个字段是它属于哪个节点（自动查=当前运行节点，手动=被实测的节点）。
     IpEgress(String, Result<crate::ip_risk::IpRisk, String>),
     Nodes(Result<(Vec<NodeSummary>, i64), String>),
+    SourceModalNodes {
+        source_id: String,
+        result: Result<(Vec<NodeSummary>, i64), String>,
+    },
     NodeGroups(Result<Vec<NodeGroupSummary>, String>),
     ProxyNodeGroups(Result<Vec<NodeGroupSummary>, String>),
     ProxyNodes(Result<Vec<NodeSummary>, String>),

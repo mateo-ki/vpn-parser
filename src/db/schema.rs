@@ -284,6 +284,10 @@ impl Database {
         .await?;
         self.ensure_column("settings", "close_to_tray", "INTEGER NOT NULL DEFAULT 1")
             .await?;
+        self.ensure_column("settings", "gist_pages", "INTEGER NOT NULL DEFAULT 100")
+            .await?;
+        self.ensure_column("settings", "gist_queries", "TEXT NOT NULL DEFAULT 'vless//'")
+            .await?;
 
         self.migrate_legacy_nodes().await?;
 

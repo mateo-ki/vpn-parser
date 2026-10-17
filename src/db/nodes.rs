@@ -20,6 +20,22 @@ pub(crate) struct PreservedLatency {
     pub(crate) latency_tested_at: Option<String>,
 }
 
+#[inline]
+pub(crate) fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let needle_bytes = needle.as_bytes();
+    let n = needle_bytes.len();
+    if haystack.len() < n {
+        return false;
+    }
+    haystack
+        .as_bytes()
+        .windows(n)
+        .any(|w| w.eq_ignore_ascii_case(needle_bytes))
+}
+
 impl Database {
     pub(crate) async fn insert_node(
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -296,14 +312,13 @@ impl Database {
         latency: Option<&str>,
         country: Option<&str>,
     ) -> Vec<Node> {
-        // 关键字和状态各只小写一次：写在闭包里等于每个节点重新分配一遍（全库两万行）。
-        let needle = keyword.map(|value| value.to_ascii_lowercase());
+        let keyword = keyword.map(str::trim).filter(|s| !s.is_empty());
         let latency = latency.map(|value| value.to_ascii_lowercase());
         nodes.retain(|node| {
             protocol.is_none_or(|value| node.protocol == value)
-                && needle.as_deref().is_none_or(|value| {
-                    node.name.to_ascii_lowercase().contains(value)
-                        || node.server.to_ascii_lowercase().contains(value)
+                && keyword.is_none_or(|value| {
+                    contains_ignore_ascii_case(&node.name, value)
+                        || contains_ignore_ascii_case(&node.server, value)
                 })
                 && match latency.as_deref() {
                     Some("alive") => node.latency_ok == Some(true),
@@ -335,13 +350,13 @@ impl Database {
         latency: Option<&str>,
         country: Option<&str>,
     ) -> Vec<NodeSummary> {
-        let needle = keyword.map(|value| value.to_ascii_lowercase());
+        let keyword = keyword.map(str::trim).filter(|s| !s.is_empty());
         let latency = latency.map(|value| value.to_ascii_lowercase());
         nodes.retain(|node| {
             protocol.is_none_or(|value| node.protocol == value)
-                && needle.as_deref().is_none_or(|value| {
-                    node.name.to_ascii_lowercase().contains(value)
-                        || node.server.to_ascii_lowercase().contains(value)
+                && keyword.is_none_or(|value| {
+                    contains_ignore_ascii_case(&node.name, value)
+                        || contains_ignore_ascii_case(&node.server, value)
                 })
                 && match latency.as_deref() {
                     Some("alive") => node.latency_ok == Some(true),
@@ -424,7 +439,21 @@ impl Database {
     }
 
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
-        if let Some(pool) = self.find_node_pool(id).await? {
+        // 先查主库 node_index 索引表看它归属哪个 source_id，毫秒级直接命中分库，免去并发扫 40+ 个分片库
+        let known_scope: Option<Option<String>> = sqlx::query_scalar("SELECT source_id FROM node_index WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten();
+
+        let pool = if let Some(scope) = known_scope {
+            self.open_node_pool(scope.as_deref()).await.ok()
+        } else {
+            self.find_node_pool(id).await?
+        };
+
+        if let Some(pool) = pool {
             let row = sqlx::query(
                 r#"SELECT n.id, n.source_id, n.protocol, n.name, n.server, n.port,
                           COALESCE(NULLIF(p.raw, ''), n.raw, '') AS raw,
@@ -1233,3 +1262,121 @@ impl Database {
         Ok(stored)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_contains_ignore_ascii_case() {
+        assert!(contains_ignore_ascii_case("US-HK-Node-01", "hk"));
+        assert!(contains_ignore_ascii_case("US-HK-Node-01", "HK"));
+        assert!(contains_ignore_ascii_case("US-HK-Node-01", "node"));
+        assert!(contains_ignore_ascii_case("优质香港节点-01", "香港"));
+        assert!(contains_ignore_ascii_case("优质香港节点-01", "01"));
+        assert!(contains_ignore_ascii_case("anything", ""));
+        assert!(!contains_ignore_ascii_case("short", "longer_needle"));
+        assert!(!contains_ignore_ascii_case("US-Node", "jp"));
+    }
+
+    #[test]
+    fn bench_filter_node_summaries_20k() {
+        let nodes: Vec<NodeSummary> = (0..20_000)
+            .map(|i| NodeSummary {
+                id: format!("node-{i}"),
+                source_id: Some(format!("source-{}", i % 10)),
+                protocol: if i % 2 == 0 { "ss".into() } else { "vless".into() },
+                name: format!("香港-HK-Node-{i:05}-HighSpeed"),
+                server: format!("{}.example.com", i),
+                port: 443,
+                country: Some(if i % 3 == 0 { "HK".into() } else { "US".into() }),
+                latency_ms: if i % 4 == 0 { None } else { Some((i % 500) as i64) },
+                latency_ok: if i % 4 == 0 { None } else { Some(i % 5 != 0) },
+                download_kbps: None,
+                latency_kernel: None,
+                latency_test_kind: None,
+                latency_tested_at: None,
+                updated_at: Utc::now(),
+            })
+            .collect();
+
+        let start = std::time::Instant::now();
+        let filtered = Database::filter_node_summaries(
+            nodes.clone(),
+            Some("vless"),
+            Some("highspeed"),
+            Some("alive"),
+            Some("HK"),
+        );
+        let elapsed = start.elapsed();
+        println!("20,000 节点元数据过滤耗时: {:.2?}，命中: {} 条", elapsed, filtered.len());
+        assert!(!filtered.is_empty());
+        assert!(elapsed.as_millis() < 50, "20000 节点零内存分配过滤应在 50ms 内");
+    }
+
+    #[tokio::test]
+    async fn bench_database_operations_and_memory_reclaim() {
+        let dir = std::env::temp_dir().join(format!("vpn-bench-{}", Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&dir);
+        let db_path = dir.join("test.db");
+        let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
+
+        let source_id = db
+            .create_source(crate::models::CreateSource {
+                name: "Bench Source".into(),
+                url_template: "https://example.com/sub".into(),
+                enabled: true,
+                remark: None,
+            })
+            .await
+            .unwrap()
+            .id;
+
+        let test_nodes: Vec<Node> = (0..1000)
+            .map(|i| Node {
+                id: format!("bench-{i}"),
+                source_id: Some(source_id.clone()),
+                protocol: "vless".into(),
+                name: format!("Bench-Node-{i}"),
+                server: "127.0.0.1".into(),
+                port: 10000 + (i % 50000) as u16,
+                raw: "vless://...".into(),
+                config: "{}".into(),
+                country: Some("HK".into()),
+                latency_ms: Some(10 + (i % 200) as i64),
+                latency_ok: Some(true),
+                download_kbps: Some(1024.0),
+                latency_kernel: Some("mihomo".into()),
+                latency_test_kind: Some("google_proxy".into()),
+                latency_tested_at: Some(Utc::now()),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .collect();
+
+        let t_start = std::time::Instant::now();
+        db.replace_source_nodes(&source_id, &test_nodes).await.unwrap();
+        let write_elapsed = t_start.elapsed();
+        println!("1,000 条节点事务批量写入耗时: {:.2?}", write_elapsed);
+
+        let t_start = std::time::Instant::now();
+        let indexed = db.rebuild_node_index().await.unwrap();
+        let index_elapsed = t_start.elapsed();
+        println!("1,000 条节点索引重建耗时: {:.2?}，索引条数: {}", index_elapsed, indexed);
+
+        let t_start = std::time::Instant::now();
+        let top = db.top_verified_nodes(10, None).await.unwrap();
+        let query_elapsed = t_start.elapsed();
+        println!("Top 10 最低延迟节点检索耗时: {:.2?}，检索到: {} 条", query_elapsed, top.len());
+        assert_eq!(top.len(), 10);
+
+        let t_start = std::time::Instant::now();
+        db.trim_cached_pools().await;
+        let trim_elapsed = t_start.elapsed();
+        println!("trim_cached_pools (含 PRAGMA shrink_memory) 执行耗时: {:.2?}", trim_elapsed);
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+

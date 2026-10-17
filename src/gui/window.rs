@@ -337,6 +337,11 @@ impl VpnApp {
                 crate::startup_log("Title-bar minimize -> 最小化窗口");
                 self.was_minimized = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                let db = self.db.clone();
+                self.rt.spawn(async move {
+                    db.trim_cached_pools().await;
+                });
+                crate::platform::trim_working_set();
             }
         }
         if action_toggle_max {

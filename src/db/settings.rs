@@ -62,6 +62,7 @@ impl Database {
                        auto_failover, insider_channel, speedtest_auto_refill,
                        auto_prepare_kernel, speedtest_added_source,
                        auto_rearm_system_proxy,
+                       gist_pages, gist_queries,
                        last_auto_fetch_at, last_auto_speedtest_at
                 FROM settings WHERE id = 1"#,
         )
@@ -157,6 +158,9 @@ impl Database {
             speedtest_added_source: sqlx::Row::try_get::<i64, _>(&row, "speedtest_added_source")
                 .unwrap_or(1)
                 != 0,
+            gist_pages: sqlx::Row::try_get::<i64, _>(&row, "gist_pages").unwrap_or(100) as u32,
+            gist_queries: sqlx::Row::try_get::<String, _>(&row, "gist_queries")
+                .unwrap_or_else(|_| "vless//".to_string()),
             last_auto_fetch_at: sqlx::Row::get::<Option<String>, _>(&row, "last_auto_fetch_at")
                 .map(|s| super::parse_dt(&s)),
             last_auto_speedtest_at: sqlx::Row::get::<Option<String>, _>(
@@ -286,6 +290,15 @@ impl Database {
         if let Some(v) = input.speedtest_added_source {
             s.speedtest_added_source = v;
         }
+        if let Some(v) = input.gist_pages {
+            s.gist_pages = v.clamp(1, 300);
+        }
+        if let Some(v) = input.gist_queries {
+            let v = v.trim().to_string();
+            if !v.is_empty() {
+                s.gist_queries = v;
+            }
+        }
         sqlx::query(
             r#"UPDATE settings SET
                  auto_fetch_enabled=?,
@@ -323,7 +336,9 @@ impl Database {
                  speedtest_auto_refill=?,
                  auto_rearm_system_proxy=?,
                  auto_prepare_kernel=?,
-                 speedtest_added_source=?
+                 speedtest_added_source=?,
+                 gist_pages=?,
+                 gist_queries=?
                WHERE id=1"#,
         )
         .bind(s.auto_fetch_enabled as i64)
@@ -362,6 +377,8 @@ impl Database {
         .bind(s.auto_rearm_system_proxy as i64)
         .bind(s.auto_prepare_kernel as i64)
         .bind(s.speedtest_added_source as i64)
+        .bind(s.gist_pages as i64)
+        .bind(&s.gist_queries)
         .execute(&self.pool)
         .await?;
         self.get_settings().await

@@ -53,7 +53,7 @@ pub async fn run_speedtest_pipeline(
         .collect();
     let concurrency = opts.concurrency.clamp(1, 512) as usize;
     let (prefilter_timeout_ms, proxy_timeout_duration) = match opts.intensity {
-        SpeedtestIntensity::Fast => (opts.timeout_ms.clamp(600, 1500), Duration::from_millis(2000)),
+        SpeedtestIntensity::Fast => (opts.timeout_ms.clamp(800, 1500), Duration::from_millis(3000)),
         SpeedtestIntensity::Standard => (
             opts.timeout_ms.clamp(1200, TCP_PREFILTER_TIMEOUT_MS),
             Duration::from_millis(opts.timeout_ms.clamp(3_000, 15_000) as u64),

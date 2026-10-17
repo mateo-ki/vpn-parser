@@ -4,6 +4,7 @@ use crate::kernel::{
     find_kernel_executable, missing_kernel_for, KernelInfo, KernelKind, KernelManager,
     KernelReleaseInfo, KernelUpdateProgress,
 };
+use crate::gui::view_models::nodes_vm::NodeCardAction;
 use crate::models::{
     AppSettings, CreateSource, FetchResult, Node, NodeGroupSummary, NodeSummary, Source,
     SpeedTestSummary, Stats, UpdateSettings, UpdateSource, GOOGLE_PROXY_TEST_KIND,
@@ -78,7 +79,16 @@ pub struct VpnApp {
     pub(crate) fetch_results: Vec<FetchResult>,
     pub(crate) nodes: Vec<NodeSummary>,
     pub(crate) node_groups: Vec<NodeGroupSummary>,
-    pub(crate) selected_node_source_id: Option<String>,
+    pub(crate) source_modal_open: bool,
+    pub(crate) source_modal_source_id: Option<String>,
+    pub(crate) source_modal_source_name: String,
+    pub(crate) source_modal_nodes: Vec<NodeSummary>,
+    pub(crate) source_modal_total: i64,
+    pub(crate) source_modal_page: u32,
+    pub(crate) source_modal_page_size: u32,
+    pub(crate) source_modal_loading: bool,
+    pub(crate) source_modal_only_alive: bool,
+    pub(crate) source_modal_keyword: String,
     pub(crate) stats: Option<Stats>,
     pub(crate) settings: AppSettings,
     pub(crate) node_total: i64,
@@ -244,6 +254,8 @@ pub struct VpnApp {
     pub(crate) ip_risk_egress_error: Option<String>,
     pub(crate) reload_due: bool,
     pub(crate) last_full_reload: std::time::Instant,
+    pub(crate) startup_trim_done: bool,
+    pub(crate) last_auto_trim: std::time::Instant,
     pub(crate) geo_updating: bool,
     pub(crate) auto_failover: bool,
     pub(crate) edit_exclude_keywords: String,
@@ -400,7 +412,16 @@ impl VpnApp {
             fetch_results: vec![],
             nodes: vec![],
             node_groups: vec![],
-            selected_node_source_id: None,
+            source_modal_open: false,
+            source_modal_source_id: None,
+            source_modal_source_name: String::new(),
+            source_modal_nodes: vec![],
+            source_modal_total: 0,
+            source_modal_page: 1,
+            source_modal_page_size: 50,
+            source_modal_loading: false,
+            source_modal_only_alive: false,
+            source_modal_keyword: String::new(),
             stats: None,
             settings: AppSettings::default(),
             node_total: 0,
@@ -525,6 +546,8 @@ impl VpnApp {
             ip_risk_egress_error: None,
             reload_due: false,
             last_full_reload: std::time::Instant::now(),
+            startup_trim_done: false,
+            last_auto_trim: std::time::Instant::now(),
             geo_updating: false,
             auto_failover: false,
             edit_exclude_keywords: String::new(),
@@ -676,6 +699,9 @@ impl VpnApp {
         self.reload_rule_hits();
         self.reload_switch_counts();
         self.reload_fetch_history();
+        if self.source_modal_open {
+            self.reload_source_modal_nodes();
+        }
     }
 
     fn reload_fetch_history(&self) {
@@ -773,12 +799,11 @@ impl VpnApp {
         };
         let page = self.page;
         let page_size = self.page_size;
-        let source_id = self.selected_node_source_id.clone();
         self.rt.spawn(async move {
             let res = db
                 .list_nodes(
                     protocol.as_deref(),
-                    source_id.as_deref(),
+                    None,
                     keyword.as_deref(),
                     latency.as_deref(),
                     country.as_deref(),
@@ -900,22 +925,22 @@ impl VpnApp {
                             self.node_total = total;
                         }
                         BgMsg::Nodes(Err(e)) => self.status = format!("加载节点失败: {e}"),
+                        BgMsg::SourceModalNodes { source_id, result } => {
+                            if self.source_modal_source_id.as_deref() == Some(&source_id) {
+                                self.source_modal_loading = false;
+                                match result {
+                                    Ok((items, total)) => {
+                                        self.source_modal_nodes = items;
+                                        self.source_modal_total = total;
+                                    }
+                                    Err(e) => {
+                                        self.status = format!("加载订阅源节点失败: {e}");
+                                    }
+                                }
+                            }
+                        }
                         BgMsg::NodeGroups(Ok(groups)) => {
-                            let previous = self.selected_node_source_id.clone();
-                            let selection_is_valid = previous.is_none()
-                                || previous.as_ref().is_some_and(|selected| {
-                                    groups
-                                        .iter()
-                                        .any(|group| node_group_key(group) == *selected)
-                                });
-                            if !selection_is_valid {
-                                self.selected_node_source_id = None;
-                                self.page = 1;
-                            }
                             self.node_groups = groups;
-                            if self.selected_node_source_id != previous {
-                                self.reload_nodes();
-                            }
                         }
                         BgMsg::NodeGroups(Err(e)) => self.status = format!("加载节点分组失败: {e}"),
                         BgMsg::ProxyNodeGroups(Ok(groups)) => {
@@ -982,6 +1007,25 @@ impl VpnApp {
                         BgMsg::Stats(Err(e)) => self.status = format!("加载统计失败: {e}"),
                         BgMsg::Settings(Ok(s)) => {
                             self.settings = s;
+                            if self.settings.gist_pages > 0 {
+                                self.gist_pages = self.settings.gist_pages.clamp(1, 300) as usize;
+                            }
+                            let saved_queries: std::collections::HashSet<&str> = self
+                                .settings
+                                .gist_queries
+                                .split(',')
+                                .map(str::trim)
+                                .filter(|q| !q.is_empty())
+                                .collect();
+                            if !saved_queries.is_empty() {
+                                self.gist_query_flags = crate::collector::GIST_DISCOVERY_QUERIES
+                                    .iter()
+                                    .map(|query| saved_queries.contains(query))
+                                    .collect();
+                                if !self.gist_query_flags.iter().any(|&f| f) {
+                                    self.gist_query_flags[0] = true;
+                                }
+                            }
                             if !self.publisher_seeded {
                                 self.publisher_seeded = true;
                                 let stored = self.settings.publisher_api.trim().to_owned();
@@ -2245,8 +2289,36 @@ impl VpnApp {
             .then(|| format!("http://127.0.0.1:{}", self.proxy_status.mixed_port))
     }
 
+    /// 持久化 Gist 发现配置（选中协议与爬取页数）到数据库
+    pub(crate) fn save_gist_config(&mut self) {
+        let enabled_queries: Vec<&str> = crate::collector::GIST_DISCOVERY_QUERIES
+            .iter()
+            .zip(self.gist_query_flags.iter())
+            .filter_map(|(query, &flag)| flag.then_some(*query))
+            .collect();
+        let queries_str = if enabled_queries.is_empty() {
+            crate::collector::GIST_DISCOVERY_DEFAULT_QUERY.to_string()
+        } else {
+            enabled_queries.join(",")
+        };
+        let pages = self.gist_pages.clamp(1, 300) as u32;
+        self.settings.gist_pages = pages;
+        self.settings.gist_queries = queries_str.clone();
+        let db = self.db.clone();
+        self.rt.spawn(async move {
+            let _ = db
+                .update_settings(crate::models::UpdateSettings {
+                    gist_pages: Some(pages),
+                    gist_queries: Some(queries_str),
+                    ..Default::default()
+                })
+                .await;
+        });
+    }
+
     /// 独立的 Gist 发现：翻页拉取 gist 搜索结果，可用的 gist 注册为源、节点进节点列表。
     pub(crate) fn discover_gists(&mut self) {
+        self.save_gist_config();
         let pages = self.gist_pages.clamp(1, 300);
         let queries: Vec<String> = crate::collector::GIST_DISCOVERY_QUERIES
             .iter()
@@ -2463,53 +2535,6 @@ impl VpnApp {
                 )
                 .await
                 .map_err(|error| error.to_string());
-            let _ = tx.send(BgMsg::SpeedDone(result));
-        });
-    }
-
-    pub(crate) fn speedtest_group(&mut self, group: NodeGroupSummary) {
-        let db = self.db.clone();
-        let speedtester = self.speedtester.clone();
-        let opts = self.speed_opts();
-        let tx = self.tx.clone();
-        let protocol = nonempty_opt(&self.protocol_filter);
-        let keyword = nonempty_opt(&self.keyword);
-        let latency = if self.latency_filter == "all" {
-            None
-        } else {
-            Some(self.latency_filter.clone())
-        };
-        self.busy = true;
-        self.status = format!(
-            "正在测速订阅“{}”（{} 个节点）...",
-            group.source_name, group.total
-        );
-        self.rt.spawn(async move {
-            let result = async {
-                let ids = db
-                    .list_node_ids_for_group(
-                        group.source_id.as_deref(),
-                        protocol.as_deref(),
-                        keyword.as_deref(),
-                        latency.as_deref(),
-                    )
-                    .await?;
-                if ids.is_empty() {
-                    anyhow::bail!("当前分组没有符合筛选条件的节点");
-                }
-                let progress_tx = tx.clone();
-                speedtester
-                    .test_many_with_progress(
-                        Some(ids),
-                        opts,
-                        Some(move |progress| {
-                            let _ = progress_tx.send(BgMsg::SpeedProgress(progress));
-                        }),
-                    )
-                    .await
-            }
-            .await
-            .map_err(|error| error.to_string());
             let _ = tx.send(BgMsg::SpeedDone(result));
         });
     }
@@ -3571,6 +3596,101 @@ impl VpnApp {
         });
     }
 
+    pub(crate) fn handle_node_card_action(&mut self, action: NodeCardAction) {
+        match action {
+            NodeCardAction::Connect { id, name } => {
+                self.switch_proxy_node(id, name, "手动切换");
+            }
+            NodeCardAction::Speedtest(id) => self.speedtest_one(id),
+            NodeCardAction::ShowDetail(id) => self.show_node(id),
+            NodeCardAction::CheckIpRisk(id) => self.check_ip_risk_for(&id),
+            NodeCardAction::Delete(id) => self.delete_node(id),
+        }
+    }
+
+    pub(crate) fn open_source_nodes_modal(&mut self, source_id: &str, source_name: &str) {
+        self.source_modal_open = true;
+        self.source_modal_source_id = Some(source_id.to_string());
+        self.source_modal_source_name = source_name.to_string();
+        self.source_modal_page = 1;
+        self.source_modal_page_size = 50;
+        self.source_modal_keyword.clear();
+        self.source_modal_only_alive = false;
+        self.source_modal_nodes.clear();
+        self.source_modal_total = 0;
+        self.reload_source_modal_nodes();
+    }
+
+    pub(crate) fn reload_source_modal_nodes(&mut self) {
+        let Some(source_id) = self.source_modal_source_id.clone() else {
+            return;
+        };
+        let db = self.db.clone();
+        let tx = self.tx.clone();
+        let page = self.source_modal_page;
+        let page_size = self.source_modal_page_size;
+        let latency = if self.source_modal_only_alive {
+            Some("alive".to_string())
+        } else {
+            None
+        };
+        let keyword = nonempty_opt(&self.source_modal_keyword);
+        self.source_modal_loading = true;
+        self.rt.spawn(async move {
+            let res = db
+                .list_nodes(
+                    None,
+                    Some(&source_id),
+                    keyword.as_deref(),
+                    latency.as_deref(),
+                    None,
+                    page,
+                    page_size,
+                    Some("updated"),
+                )
+                .await
+                .map(|p| (p.items, p.total))
+                .map_err(|e| e.to_string());
+            let _ = tx.send(BgMsg::SourceModalNodes {
+                source_id,
+                result: res,
+            });
+        });
+    }
+
+    pub(crate) fn speedtest_source(&mut self, source_id: &str, source_name: &str) {
+        let db = self.db.clone();
+        let speedtester = self.speedtester.clone();
+        let opts = self.speed_opts();
+        let tx = self.tx.clone();
+        let sid = source_id.to_string();
+        self.busy = true;
+        self.status = format!("正在测速订阅“{source_name}”全部节点...");
+        self.rt.spawn(async move {
+            let result = async {
+                let ids = db
+                    .list_node_ids_for_group(Some(&sid), None, None, None)
+                    .await?;
+                if ids.is_empty() {
+                    anyhow::bail!("该订阅源没有节点");
+                }
+                let progress_tx = tx.clone();
+                speedtester
+                    .test_many_with_progress(
+                        Some(ids),
+                        opts,
+                        Some(move |progress| {
+                            let _ = progress_tx.send(BgMsg::SpeedProgress(progress));
+                        }),
+                    )
+                    .await
+            }
+            .await
+            .map_err(|error| error.to_string());
+            let _ = tx.send(BgMsg::SpeedDone(result));
+        });
+    }
+
     pub(crate) fn clear_nodes(&mut self) {
         let db = self.db.clone();
         let tx = self.tx.clone();
@@ -3836,6 +3956,8 @@ impl VpnApp {
             // 避免周期性设置保存把用户刚写的值覆盖回旧内存副本。
             publisher_api: None,
             publisher_token: None,
+            gist_pages: None,
+            gist_queries: None,
         }
     }
 
@@ -4107,6 +4229,30 @@ impl eframe::App for VpnApp {
             self.kernel_groups.clear();
         }
 
+        // 自动内存整理与工作集修剪：
+        // 1. 启动并完成首轮全量数据加载 4 秒后，修剪启动阶段由大量反序列化与字体栅格化产生的瞬态内存。
+        // 2. 进程闲置时每 5 分钟自动修剪一次，释放空闲 SQLite 缓存页与工作集，保持极致内存水位。
+        if !self.busy && !self.proxy_busy {
+            if !self.startup_trim_done
+                && self.last_full_reload.elapsed() >= std::time::Duration::from_secs(4)
+            {
+                self.startup_trim_done = true;
+                self.last_auto_trim = std::time::Instant::now();
+                let db = self.db.clone();
+                self.rt.spawn(async move {
+                    db.trim_cached_pools().await;
+                });
+                crate::platform::trim_working_set();
+            } else if self.last_auto_trim.elapsed() >= std::time::Duration::from_secs(300) {
+                self.last_auto_trim = std::time::Instant::now();
+                let db = self.db.clone();
+                self.rt.spawn(async move {
+                    db.trim_cached_pools().await;
+                });
+                crate::platform::trim_working_set();
+            }
+        }
+
         // Periodic heartbeat tick to keep background timers responsive.
         // 停放在托盘里时降到 5 秒一拍：这一拍只是"别让后台结果永远没人取"，不是刷新动画。
         // 注意不能省掉 —— eframe 的延后重绘到期会把 ControlFlow 设成 Poll，但窗口现在仍可绘制，
@@ -4263,6 +4409,7 @@ impl eframe::App for VpnApp {
         self.ui_switch_log(ctx);
         self.ui_command_palette(ctx);
         self.ui_paste_dialog(ctx);
+        self.ui_source_nodes_modal(ctx);
 
         // Ctrl+V 走的是这里，不是 Key 事件：egui-winit 一认出粘贴组合就把它换成
         // `Event::Paste(剪贴板内容)`，然后**直接 return，不再发 `Event::Key{V}`**

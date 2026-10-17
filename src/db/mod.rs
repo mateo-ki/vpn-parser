@@ -46,9 +46,9 @@ impl Database {
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(Duration::from_secs(10))
-            .pragma("cache_size", "-64000")
-            .pragma("temp_store", "2")
-            .pragma("mmap_size", "268435456");
+            .pragma("cache_size", "-4000")
+            .pragma("temp_store", "1")
+            .pragma("mmap_size", "0");
         let pool = SqlitePoolOptions::new()
             .max_connections(4)
             .connect_with(options)
@@ -67,6 +67,17 @@ impl Database {
         };
         std::fs::create_dir_all(&node_root)
             .with_context(|| format!("create subscription db dir {}", node_root.display()))?;
+        // 自动清理订阅目录下由于异常关机或崩溃遗留的历史临时文件，释放磁盘
+        if let Ok(entries) = std::fs::read_dir(&node_root) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with('.') && (name.ends_with(".tmp") || name.ends_with(".bak")) {
+                        let _ = std::fs::remove_file(p);
+                    }
+                }
+            }
+        }
         let db = Self {
             pool,
             node_root,
@@ -112,8 +123,15 @@ impl Database {
 
     pub(crate) async fn open_node_pool(&self, source_id: Option<&str>) -> Result<SqlitePool> {
         let key = Self::node_pool_cache_key(source_id);
-        if let Some(pool) = self.node_pools.lock().unwrap().get(&key) {
-            return Ok(pool.clone());
+        {
+            let mut pools = self.node_pools.lock().unwrap();
+            if let Some(pool) = pools.get(&key) {
+                if !pool.is_closed() {
+                    return Ok(pool.clone());
+                } else {
+                    pools.remove(&key);
+                }
+            }
         }
         let pool = Self::connect_node_pool(&self.node_db_path(source_id)).await?;
         self.node_pools.lock().unwrap().insert(key, pool.clone());
@@ -130,11 +148,11 @@ impl Database {
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(Duration::from_secs(10))
-            .pragma("cache_size", "-64000")
-            .pragma("temp_store", "2")
-            .pragma("mmap_size", "268435456");
+            .pragma("cache_size", "-2000")
+            .pragma("temp_store", "1")
+            .pragma("mmap_size", "0");
         let pool = SqlitePoolOptions::new()
-            .max_connections(2)
+            .max_connections(1)
             .connect_with(options)
             .await
             .with_context(|| format!("connect subscription sqlite {}", path.display()))?;
@@ -168,17 +186,21 @@ impl Database {
         }
     }
 
-    /// 清空所有缓存的节点库连接池，释放底层 SQLite 内存句柄。
-    /// 必须在 tokio 上下文里 await；同步调用 close() 只会创建后被丢弃的
-    /// future，连接根本不会关闭。
+    /// 整理所有缓存的节点库连接池，释放底层 SQLite 未使用的缓存页。
+    /// 注意：绝对不能破坏性地对连接池调用 pool.close()，否则其他并发查询（如启动代理、
+    /// 测速后刷新可用节点）会立即抛出 "attempted to acquire a connection on a closed pool"。
     pub async fn trim_cached_pools(&self) {
         let pools: Vec<SqlitePool> = {
-            let mut pools = self.node_pools.lock().unwrap();
-            pools.drain().map(|(_, pool)| pool).collect()
+            let pools = self.node_pools.lock().unwrap();
+            pools.values().cloned().collect()
         };
         for pool in pools {
-            let _ = pool.close().await;
+            if !pool.is_closed() {
+                let _ = sqlx::query("PRAGMA shrink_memory;").execute(&pool).await;
+            }
         }
+        // 同时释放主库连接池中未使用的缓存页
+        let _ = sqlx::query("PRAGMA shrink_memory;").execute(&self.pool).await;
     }
 
     pub(crate) async fn find_node_pool(&self, id: &str) -> Result<Option<SqlitePool>> {
@@ -447,6 +469,8 @@ mod tests {
                 auto_rearm_system_proxy: None,
                 auto_prepare_kernel: None,
                 speedtest_added_source: None,
+                gist_pages: None,
+                gist_queries: None,
             })
             .await
             .unwrap();
@@ -1377,6 +1401,37 @@ mod tests {
         let _ = std::fs::remove_file(format!("{}-shm", path.display()));
     }
 
+    #[tokio::test]
+    async fn gist_settings_survive_reopen_and_settings_save() {
+        let path = std::env::temp_dir().join(format!("vpn-parser-gist-settings-{}.db", Uuid::new_v4()));
+        let db = Database::connect(path.to_str().unwrap()).await.unwrap();
+        let defaults = db.get_settings().await.unwrap();
+        assert_eq!(defaults.gist_pages, 100);
+        assert_eq!(defaults.gist_queries, "vless//");
+
+        db.update_settings(UpdateSettings {
+            gist_pages: Some(42),
+            gist_queries: Some("vless//,vmess//,hy2//".to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        let updated = db.get_settings().await.unwrap();
+        assert_eq!(updated.gist_pages, 42);
+        assert_eq!(updated.gist_queries, "vless//,vmess//,hy2//");
+
+        drop(db);
+        let reopened = Database::connect(path.to_str().unwrap()).await.unwrap();
+        let reloaded = reopened.get_settings().await.unwrap();
+        assert_eq!(reloaded.gist_pages, 42);
+        assert_eq!(reloaded.gist_queries, "vless//,vmess//,hy2//");
+        drop(reopened);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
     /// 「测通节点太少时自动补一轮全量测速」：默认必须关（它会自己起一轮重活），
     /// 必须落库、扛得住别的设置保存和重开；`node_verification_counts` 要能跨分库
     /// 把"一共多少 / 测通多少"数对 —— 那是这个判定的唯一输入。
@@ -1585,42 +1640,8 @@ mod tests {
 
         // 其它设置的保存（这两项传 None）不能把发布配置冲掉。
         db.update_settings(UpdateSettings {
-            auto_fetch_enabled: None,
-            auto_fetch_interval_min: None,
-            auto_speedtest_enabled: None,
             fetch_concurrency: Some(6),
-            fetch_timeout_secs: None,
-            speedtest_concurrency: None,
-            speedtest_timeout_ms: None,
-            speedtest_download: None,
-            download_test_ms: None,
-            http_server_enabled: None,
-            close_to_tray: None,
-            exclude_keywords: None,
-            failover_latency_ms: None,
-            speedtest_parallel_kernels: None,
-            speedtest_persistent_kernel: None,
-            speedtest_reuse_minutes: None,
-            speedtest_conditional_isolation: None,
-            speedtest_download_top_n: None,
-            speedtest_dedup_egress: None,
-            speedtest_tcp_ping_only: None,
-            bandwidth_guard: None,
-            bandwidth_min_kbps: None,
-            publisher_api: None,
-            publisher_token: None,
-            ui_theme: None,
-            ui_language: None,
-            ui_scale: None,
-            ui_dark: None,
-            kernel_source: None,
-            firewall_auto_allow: None,
-            auto_failover: None,
-            insider_channel: None,
-            speedtest_auto_refill: None,
-            auto_rearm_system_proxy: None,
-            auto_prepare_kernel: None,
-            speedtest_added_source: None,
+            ..Default::default()
         })
         .await
         .unwrap();

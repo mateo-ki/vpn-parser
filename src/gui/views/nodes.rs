@@ -2,7 +2,7 @@ use crate::gui::icons::{icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::view_models::nodes_vm::{NodeCardAction, NodesViewModel};
 use crate::gui::widgets::{
-    card_frame, compact_node_card, node_group_key, panel_frame, sort_label,
+    card_frame, compact_node_card, panel_frame, sort_label,
 };
 use crate::gui::VpnApp;
 use crate::speedtest::SpeedtestIntensity;
@@ -146,16 +146,6 @@ impl VpnApp {
                             }
                         });
 
-                    ui.separator();
-
-                    if ui
-                        .checkbox(&mut self.only_available_nodes, "仅看可用")
-                        .on_hover_text("仅展示通过真实握手验证的节点")
-                        .changed()
-                    {
-                        filter_changed = true;
-                    }
-
                     // 右侧动作菜单组（自右向左排列）
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("🔄 刷新").clicked() {
@@ -235,15 +225,6 @@ impl VpnApp {
                                     self.speedtest_page();
                                     ui.close_menu();
                                 }
-                                let selected_group = self.node_groups.iter().find(|group| {
-                                    self.selected_node_source_id.as_deref() == Some(node_group_key(group).as_str())
-                                });
-                                if let Some(group) = selected_group.cloned() {
-                                    if ui.button("⚡ 测速当前订阅全部节点").clicked() {
-                                        self.speedtest_group(group);
-                                        ui.close_menu();
-                                    }
-                                }
                                 if ui.button("⚡ 测速全库全部节点").clicked() {
                                     self.speedtest_all_sources();
                                     ui.close_menu();
@@ -292,6 +273,11 @@ impl VpnApp {
                     }
                 });
             });
+        if filter_changed {
+            self.page = 1;
+            self.reload_nodes();
+        }
+
         if prune_stale {
             self.prune_stale_nodes();
         } else if delete_dead {
@@ -309,49 +295,6 @@ impl VpnApp {
         }
 
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("订阅")
-                    .strong()
-                    .color(theme::text_secondary()),
-            );
-            let selected_source_id = self.selected_node_source_id.clone();
-            let mut next_source = None;
-            ui.scope(|ui| {
-                ui.style_mut().always_scroll_the_only_direction = true;
-                egui::ScrollArea::horizontal()
-                    .id_salt("node_source_tabs")
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let is_all = selected_source_id.is_none();
-                            if ui.selectable_label(is_all, "全部订阅源").clicked() && !is_all {
-                                self.selected_node_source_id = None;
-                                self.page = 1;
-                                self.reload_nodes();
-                            }
-                            for group in &self.node_groups {
-                                let key = node_group_key(group);
-                                let selected =
-                                    selected_source_id.as_deref() == Some(&key);
-                                let label = format!(
-                                    "{}  可用 {} / 共 {}",
-                                    group.source_name, group.alive, group.total
-                                );
-                                if ui.selectable_label(selected, label).clicked() && !selected {
-                                    next_source = Some(key);
-                                }
-                            }
-                        });
-                    });
-            });
-            if let Some(source_id) = next_source {
-                self.selected_node_source_id = Some(source_id);
-                self.page = 1;
-                self.reload_nodes();
-            }
-        });
-        ui.add_space(4.0);
 
         ui.horizontal(|ui| {
             let pages = NodesViewModel::total_pages(self.node_total, self.page_size);
@@ -383,85 +326,94 @@ impl VpnApp {
             return;
         }
 
-        let mut card_action: Option<NodeCardAction> = None;
-        panel_frame().show(ui, |ui| {
-            let (columns, total_card_rows) =
-                NodesViewModel::grid_layout(ui.available_width(), self.nodes.len());
-            let selected_id = self.selected_proxy_node_id.clone();
-            let switching_id = self.switching_node_id.clone();
-            let is_busy = self.busy;
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show_rows(ui, 84.0, total_card_rows, |ui, row_range| {
-                    for row_idx in row_range {
-                        let start = row_idx * columns;
-                        let end = (start + columns).min(self.nodes.len());
-                        let row = &self.nodes[start..end];
-                        ui.columns(columns, |column_uis| {
-                            for (column_index, column_ui) in column_uis.iter_mut().enumerate() {
-                                let Some(node) = row.get(column_index) else {
-                                    continue;
-                                };
-                                let is_selected =
-                                    selected_id.as_deref() == Some(&node.id);
-                                let is_switching =
-                                    switching_id.as_deref() == Some(&node.id);
-                                let response =
-                                    compact_node_card(column_ui, node, is_selected, is_switching)
-                                        .on_hover_text(format!(
-                                            "{}:{}\n点击连接，右键管理",
-                                            node.server, node.port
-                                        ));
-                                let connect = response.clicked();
-                                response.context_menu(|ui| {
-                                    if ui
-                                        .add_enabled(!is_busy, egui::Button::new("测速节点"))
-                                        .clicked()
-                                    {
-                                        card_action = Some(NodeCardAction::Speedtest(node.id.clone()));
-                                        ui.close_menu();
-                                    }
-                                    if ui.button("查看详情").clicked() {
-                                        card_action = Some(NodeCardAction::ShowDetail(node.id.clone()));
-                                        ui.close_menu();
-                                    }
-                                    if ui.button("IP 检测").clicked() {
-                                        card_action = Some(NodeCardAction::CheckIpRisk(node.id.clone()));
-                                        ui.close_menu();
-                                    }
-                                    ui.separator();
-                                    if ui
-                                        .button(RichText::new("删除节点").color(theme::danger()))
-                                        .clicked()
-                                    {
-                                        card_action = Some(NodeCardAction::Delete(node.id.clone()));
-                                        ui.close_menu();
-                                    }
-                                });
-                                if connect && !is_selected {
-                                    card_action = Some(NodeCardAction::Connect {
-                                        id: node.id.clone(),
-                                        name: node.name.clone(),
-                                    });
-                                }
-                            }
-                        });
-                        ui.add_space(8.0);
-                    }
-                });
-        });
-        if let Some(action) = card_action {
-            match action {
-                NodeCardAction::Connect { id, name } => {
-                    self.switch_proxy_node(id, name, "手动切换");
-                }
-                NodeCardAction::Speedtest(id) => self.speedtest_one(id),
-                NodeCardAction::ShowDetail(id) => self.show_node(id),
-                NodeCardAction::CheckIpRisk(id) => self.check_ip_risk_for(&id),
-                NodeCardAction::Delete(id) => self.delete_node(id),
-            }
+        let action = render_node_cards_grid(
+            ui,
+            &self.nodes,
+            self.selected_proxy_node_id.as_deref(),
+            self.switching_node_id.as_deref(),
+            self.busy,
+        );
+        if let Some(action) = action {
+            self.handle_node_card_action(action);
         }
     }
+}
+
+pub fn render_node_cards_grid(
+    ui: &mut Ui,
+    nodes: &[crate::models::NodeSummary],
+    selected_proxy_node_id: Option<&str>,
+    switching_node_id: Option<&str>,
+    is_busy: bool,
+) -> Option<NodeCardAction> {
+    let mut card_action: Option<NodeCardAction> = None;
+    panel_frame().show(ui, |ui| {
+        let (columns, total_card_rows) =
+            NodesViewModel::grid_layout(ui.available_width(), nodes.len());
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show_rows(ui, 84.0, total_card_rows, |ui, row_range| {
+                for row_idx in row_range {
+                    let start = row_idx * columns;
+                    let end = (start + columns).min(nodes.len());
+                    let row = &nodes[start..end];
+                    ui.columns(columns, |column_uis| {
+                        for (column_index, column_ui) in column_uis.iter_mut().enumerate() {
+                            let Some(node) = row.get(column_index) else {
+                                continue;
+                            };
+                            let is_selected =
+                                selected_proxy_node_id == Some(&node.id);
+                            let is_switching =
+                                switching_node_id == Some(&node.id);
+                            let response =
+                                compact_node_card(column_ui, node, is_selected, is_switching)
+                                    .on_hover_text(format!(
+                                        "{}:{}\n点击连接，右键管理",
+                                        node.server, node.port
+                                    ));
+                            let connect = response.clicked();
+                            response.context_menu(|ui| {
+                                if ui
+                                    .add_enabled(!is_busy, egui::Button::new("测速节点"))
+                                    .clicked()
+                                {
+                                    card_action = Some(NodeCardAction::Speedtest(node.id.clone()));
+                                    ui.close_menu();
+                                }
+                                if ui.button("查看详情").clicked() {
+                                    card_action = Some(NodeCardAction::ShowDetail(node.id.clone()));
+                                    ui.close_menu();
+                                }
+                                if ui.button("IP 检测").clicked() {
+                                    card_action = Some(NodeCardAction::CheckIpRisk(node.id.clone()));
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                if ui
+                                    .button(RichText::new("删除节点").color(theme::danger()))
+                                    .clicked()
+                                {
+                                    card_action = Some(NodeCardAction::Delete(node.id.clone()));
+                                    ui.close_menu();
+                                }
+                            });
+                            if connect && !is_selected {
+                                card_action = Some(NodeCardAction::Connect {
+                                    id: node.id.clone(),
+                                    name: node.name.clone(),
+                                });
+                            }
+                        }
+                    });
+                    ui.add_space(8.0);
+                }
+            });
+    });
+    card_action
+}
+
+impl VpnApp {
 
     pub(crate) fn ui_detail(&mut self, ctx: &egui::Context) {
         if !self.show_detail {

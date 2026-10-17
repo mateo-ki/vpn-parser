@@ -3,7 +3,10 @@ use super::{
 };
 use crate::kernel::{find_kernel_executable, KernelKind};
 use crate::models::Node;
-use crate::proxy_probe::{ProxyProbeProgress, ProxyProbeResult, PROXY_CONNECTIVITY_TEST_URL};
+use crate::proxy_probe::{
+    ProxyProbeProgress, ProxyProbeResult, PROXY_CONNECTIVITY_FALLBACK_URL,
+    PROXY_CONNECTIVITY_TEST_URL,
+};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Map, Value};
 use std::process::Stdio;
@@ -181,30 +184,39 @@ async fn probe_batch(
                         .timeout(timeout)
                         .build()
                     {
-                        Ok(client) => client
-                            .get(PROXY_CONNECTIVITY_TEST_URL)
-                            .send()
-                            .await
-                            .map_err(|error| error.to_string())
-                            .and_then(|response| {
-                                if response.status() == reqwest::StatusCode::NO_CONTENT {
-                                    Ok(())
-                                } else {
-                                    Err(format!("HTTP {}", response.status()))
+                        Ok(client) => {
+                            let first = client.get(PROXY_CONNECTIVITY_TEST_URL).send().await;
+                            match first {
+                                Ok(resp) if resp.status() == reqwest::StatusCode::NO_CONTENT => {
+                                    Ok("Google")
                                 }
-                            }),
+                                _ => {
+                                    // 交叉复验：Google 失败后回退测试 Cloudflare 204
+                                    match client.get(PROXY_CONNECTIVITY_FALLBACK_URL).send().await {
+                                        Ok(resp) if resp.status() == reqwest::StatusCode::NO_CONTENT => {
+                                            Ok("Cloudflare")
+                                        }
+                                        Ok(resp) => Err(format!("HTTP {}", resp.status())),
+                                        Err(err) => Err(err.to_string()),
+                                    }
+                                }
+                            }
+                        }
                         Err(error) => Err(error.to_string()),
                     },
                     Err(error) => Err(error.to_string()),
                 },
             };
             match outcome {
-                Ok(()) => ProxyProbeResult {
-                    id: node.id,
-                    ok: true,
-                    latency_ms: Some(started.elapsed().as_millis().max(1) as i64),
-                    message: "Xray 真实代理可用".into(),
-                },
+                Ok(target) => {
+                    let latency = started.elapsed().as_millis().max(1) as i64;
+                    ProxyProbeResult {
+                        id: node.id,
+                        ok: true,
+                        latency_ms: Some(latency),
+                        message: format!("{latency} ms (Xray 真实代理 · {target})"),
+                    }
+                }
                 Err(error) => ProxyProbeResult {
                     id: node.id,
                     ok: false,

@@ -10,19 +10,28 @@ pub async fn connect_resolved(
 ) -> Result<(TcpStream, i64), String> {
     let start = Instant::now();
     let mut last_error = String::from("connect failed");
+    let total_candidates = addresses.len().min(2);
 
-    for addr in addresses.into_iter().take(2) {
-        let left = timeout.saturating_sub(start.elapsed());
-        if left.is_zero() {
+    for (idx, addr) in addresses.into_iter().take(2).enumerate() {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
             break;
         }
-        match tokio::time::timeout(left, TcpStream::connect(addr)).await {
+
+        // 多 IP（如 CDN / 双栈）时合理切分单 IP 超时预算，防止首个静默 IP 占满全部时间导致次选可用 IP 连尝试机会都没有
+        let per_addr_budget = if total_candidates > 1 && idx == 0 {
+            (timeout / 2).max(Duration::from_millis(600)).min(remaining)
+        } else {
+            remaining
+        };
+
+        match tokio::time::timeout(per_addr_budget, TcpStream::connect(addr)).await {
             Ok(Ok(stream)) => {
                 let latency_ms = start.elapsed().as_millis() as i64;
                 return Ok((stream, latency_ms.max(1)));
             }
             Ok(Err(e)) => last_error = format!("connect error: {e}"),
-            Err(_) => last_error = format!("timeout {}ms", timeout.as_millis()),
+            Err(_) => last_error = format!("timeout {}ms", per_addr_budget.as_millis()),
         }
     }
 

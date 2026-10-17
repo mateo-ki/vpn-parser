@@ -1,6 +1,7 @@
 use crate::gui::icons::{self, icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::types::{SourceStatusFilter, SourcesPanel};
+use crate::gui::view_models::nodes_vm::{NodeCardAction, NodesViewModel};
 use crate::gui::widgets::{
     card_frame, header_cell, primary_btn, render_fetch_ticks, render_mini_progress_bar,
     render_radial_metric, source_status_failed, status_badge,
@@ -279,7 +280,17 @@ impl VpnApp {
                                     !self.busy || self.tasks.has_active_fetch();
                                 let retry =
                                     s.last_status.as_deref().is_some_and(source_status_failed);
-                                ui.label(RichText::new(&s.name).strong());
+                                let name_resp = ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&s.name).strong().color(theme::accent()),
+                                    )
+                                    .sense(egui::Sense::click()),
+                                )
+                                .on_hover_text("点击查看此订阅源的节点列表")
+                                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                                if name_resp.clicked() {
+                                    self.open_source_nodes_modal(&s.id, &s.name);
+                                }
                                 ui.add(
                                     egui::Label::new(
                                         RichText::new(&s.url_template).small().color(theme::accent()),
@@ -895,8 +906,14 @@ impl VpnApp {
         });
 
         match modal.inner {
-            Some(true) => self.show_gist_config_modal = false,
-            _ if modal.should_close() => self.show_gist_config_modal = false,
+            Some(true) => {
+                self.save_gist_config();
+                self.show_gist_config_modal = false;
+            }
+            _ if modal.should_close() => {
+                self.save_gist_config();
+                self.show_gist_config_modal = false;
+            }
             _ => {}
         }
     }
@@ -915,6 +932,165 @@ impl VpnApp {
                 self.import_from_clipboard();
             }
             None => {}
+        }
+    }
+
+    pub(crate) fn ui_source_nodes_modal(&mut self, ctx: &egui::Context) {
+        if !self.source_modal_open {
+            return;
+        }
+        let Some(source_id) = self.source_modal_source_id.clone() else {
+            return;
+        };
+        let source_name = self.source_modal_source_name.clone();
+
+        let mut open = true;
+        let mut reload = false;
+        let mut test_source = false;
+
+        egui::Window::new(RichText::new(format!("订阅源节点 · {}", source_name)).strong())
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(840.0)
+            .default_height(580.0)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                // 顶部工具栏：统计、测速、刷新、筛选与搜索
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("共 {} 个节点", self.source_modal_total))
+                            .strong()
+                            .color(theme::text_primary()),
+                    );
+
+                    ui.separator();
+
+                    if ui
+                        .add_enabled(!self.busy, egui::Button::new("⚡ 测速此源全部节点"))
+                        .clicked()
+                    {
+                        test_source = true;
+                    }
+                    if ui.button("🔄 刷新").clicked() {
+                        reload = true;
+                    }
+
+                    ui.separator();
+
+                    let is_alive = self.source_modal_only_alive;
+                    let (color_alive, stroke_alive) = if is_alive {
+                        (theme::success_bg(), Stroke::new(1.0_f32, theme::success()))
+                    } else {
+                        (theme::sidebar(), Stroke::new(1.0_f32, theme::border_subtle()))
+                    };
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new("🟢 仅看可用").small().strong())
+                                .fill(color_alive)
+                                .stroke(stroke_alive)
+                                .corner_radius(CornerRadius::same(10)),
+                        )
+                        .on_hover_text("仅展示通过真实握手验证的节点")
+                        .clicked()
+                    {
+                        self.source_modal_only_alive = !self.source_modal_only_alive;
+                        self.source_modal_page = 1;
+                        reload = true;
+                    }
+
+                    // 搜索框
+                    ui.label(RichText::new("搜索:").small().color(theme::muted()));
+                    let search_resp = ui.add(
+                        egui::TextEdit::singleline(&mut self.source_modal_keyword)
+                            .hint_text("按名称/服务器搜索")
+                            .desired_width(140.0),
+                    );
+                    if search_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        self.source_modal_page = 1;
+                        reload = true;
+                    }
+                    if ui.button("🔍").clicked() {
+                        self.source_modal_page = 1;
+                        reload = true;
+                    }
+                });
+
+                ui.separator();
+
+                // 分页控制栏
+                let pages = NodesViewModel::total_pages(
+                    self.source_modal_total,
+                    self.source_modal_page_size,
+                );
+                ui.horizontal(|ui| {
+                    ui.label(format!(
+                        "第 {} / {} 页 · 共 {} 条",
+                        self.source_modal_page, pages, self.source_modal_total
+                    ));
+                    if ui
+                        .add_enabled(self.source_modal_page > 1, egui::Button::new("上一页"))
+                        .clicked()
+                    {
+                        self.source_modal_page -= 1;
+                        reload = true;
+                    }
+                    if ui
+                        .add_enabled(self.source_modal_page < pages, egui::Button::new("下一页"))
+                        .clicked()
+                    {
+                        self.source_modal_page += 1;
+                        reload = true;
+                    }
+                });
+
+                ui.add_space(4.0);
+
+                // 卡片网格展示
+                if self.source_modal_nodes.is_empty() {
+                    card_frame().show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(30.0);
+                            if self.source_modal_loading {
+                                ui.label(
+                                    RichText::new("正在加载节点...")
+                                        .color(theme::text_secondary()),
+                                );
+                            } else {
+                                ui.label(
+                                    RichText::new("该订阅源下暂无节点，可点击「拉取」更新。")
+                                        .color(theme::text_secondary()),
+                                );
+                            }
+                            ui.add_space(30.0);
+                        });
+                    });
+                } else {
+                    let action = crate::gui::views::nodes::render_node_cards_grid(
+                        ui,
+                        &self.source_modal_nodes,
+                        self.selected_proxy_node_id.as_deref(),
+                        self.switching_node_id.as_deref(),
+                        self.busy,
+                    );
+                    if let Some(action) = action {
+                        let is_delete = matches!(action, NodeCardAction::Delete(_));
+                        self.handle_node_card_action(action);
+                        if is_delete {
+                            reload = true;
+                        }
+                    }
+                }
+            });
+
+        if !open {
+            self.source_modal_open = false;
+        }
+        if test_source {
+            self.speedtest_source(&source_id, &source_name);
+        }
+        if reload {
+            self.reload_source_modal_nodes();
         }
     }
 }

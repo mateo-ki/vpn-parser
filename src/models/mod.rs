@@ -298,6 +298,12 @@ pub struct AppSettings {
     /// 新增订阅源后自动拉取它并只测这个源。同样默认开：他要的是"加完就知道好不好用"。
     #[serde(default = "default_true_setting")]
     pub speedtest_added_source: bool,
+    /// Gist 发现爬取页数，默认 100。
+    #[serde(default = "default_gist_pages")]
+    pub gist_pages: u32,
+    /// Gist 发现已勾选的协议查询词（逗号分隔），默认 "vless//"
+    #[serde(default = "default_gist_queries")]
+    pub gist_queries: String,
     pub last_auto_fetch_at: Option<DateTime<Utc>>,
     pub last_auto_speedtest_at: Option<DateTime<Utc>>,
 }
@@ -362,6 +368,14 @@ fn default_ui_dark() -> bool {
     true
 }
 
+fn default_gist_pages() -> u32 {
+    100
+}
+
+fn default_gist_queries() -> String {
+    "vless//".to_string()
+}
+
 /// 允许的字体/界面缩放区间。界面上是 85%~140% 的滑杆，但 API/旧库里的值不一定落在
 /// 这个范围里 —— 越界的值会让窗口内容算成 0 高或撑到屏外，所以只在这一处收口。
 pub fn clamp_ui_scale(value: f32) -> f32 {
@@ -420,6 +434,8 @@ impl Default for AppSettings {
             auto_rearm_system_proxy: false,
             auto_prepare_kernel: true,
             speedtest_added_source: true,
+            gist_pages: default_gist_pages(),
+            gist_queries: default_gist_queries(),
             last_auto_fetch_at: None,
             last_auto_speedtest_at: None,
         }
@@ -465,6 +481,8 @@ pub struct UpdateSettings {
     pub auto_rearm_system_proxy: Option<bool>,
     pub auto_prepare_kernel: Option<bool>,
     pub speedtest_added_source: Option<bool>,
+    pub gist_pages: Option<u32>,
+    pub gist_queries: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

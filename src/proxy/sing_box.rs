@@ -3,7 +3,10 @@ use super::{
 };
 use crate::kernel::{find_kernel_executable, KernelKind};
 use crate::models::Node;
-use crate::proxy_probe::{ProxyProbeProgress, ProxyProbeResult, PROXY_CONNECTIVITY_TEST_URL};
+use crate::proxy_probe::{
+    ProxyProbeProgress, ProxyProbeResult, PROXY_CONNECTIVITY_FALLBACK_URL,
+    PROXY_CONNECTIVITY_TEST_URL,
+};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
@@ -201,25 +204,42 @@ async fn probe_batch_with_sing_box(
                         .timeout(timeout)
                         .build()
                     {
-                        Ok(client) => probe_connectivity_target(
-                            &client,
-                            PROXY_CONNECTIVITY_TEST_URL,
-                            "Google",
-                        )
-                        .await
-                        .map(|_| ()),
+                        Ok(client) => {
+                            let mut probe = probe_connectivity_target(
+                                &client,
+                                PROXY_CONNECTIVITY_TEST_URL,
+                                "Google",
+                            )
+                            .await;
+                            if probe.is_err() {
+                                // 交叉探活：Google 遇阻或偶发单次抖动时，走 Cloudflare 交叉复验
+                                if let Ok(cf) = probe_connectivity_target(
+                                    &client,
+                                    PROXY_CONNECTIVITY_FALLBACK_URL,
+                                    "Cloudflare",
+                                )
+                                .await
+                                {
+                                    probe = Ok(cf);
+                                }
+                            }
+                            probe
+                        }
                         Err(error) => Err(error.to_string()),
                     },
                     Err(error) => Err(error.to_string()),
                 },
             };
             match outcome {
-                Ok(()) => ProxyProbeResult {
-                    id: node.id,
-                    ok: true,
-                    latency_ms: Some(started.elapsed().as_millis().max(1) as i64),
-                    message: "Sing-box 真实代理可用".into(),
-                },
+                Ok(target) => {
+                    let latency = started.elapsed().as_millis().max(1) as i64;
+                    ProxyProbeResult {
+                        id: node.id,
+                        ok: true,
+                        latency_ms: Some(latency),
+                        message: format!("{latency} ms (Sing-box 真实代理 · {target})"),
+                    }
+                }
                 Err(error) => ProxyProbeResult {
                     id: node.id,
                     ok: false,
