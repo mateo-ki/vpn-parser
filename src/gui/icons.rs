@@ -37,6 +37,8 @@ pub enum Icon {
     Info,
     Appearance,
     Brand,
+    Sun,
+    Moon,
 }
 
 pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -865,6 +867,40 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
                 Stroke::NONE,
             ));
         }
+        Icon::Sun => {
+            // Central sun disk + 8 crisp radiating rays
+            let r = s * 0.18;
+            painter.circle_stroke(center, r, stroke);
+            let ray_start = s * 0.26;
+            let ray_end = s * 0.40;
+            for i in 0..8 {
+                let angle = (i as f32) * std::f32::consts::PI / 4.0;
+                let (sin, cos) = angle.sin_cos();
+                let p1 = Pos2::new(center.x + cos * ray_start, center.y + sin * ray_start);
+                let p2 = Pos2::new(center.x + cos * ray_end, center.y + sin * ray_end);
+                painter.line_segment([p1, p2], fine_stroke);
+            }
+        }
+        Icon::Moon => {
+            // Crescent moon using an outer circle arc and an inner cutout arc
+            let r = s * 0.36;
+            let inner_r = s * 0.30;
+            let offset = s * 0.15;
+            let mut pts = Vec::with_capacity(26);
+            for step in 0..=12 {
+                let angle = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * (step as f32 / 12.0);
+                pts.push(Pos2::new(center.x + angle.cos() * r, center.y + angle.sin() * r));
+            }
+            for step in (0..=12).rev() {
+                let angle = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * (step as f32 / 12.0);
+                pts.push(Pos2::new(center.x + offset + angle.cos() * inner_r, center.y + angle.sin() * inner_r));
+            }
+            painter.add(egui::epaint::PathShape::convex_polygon(
+                pts,
+                color,
+                Stroke::NONE,
+            ));
+        }
     }
 }
 
@@ -1148,6 +1184,8 @@ mod tests {
                 Icon::Info,
                 Icon::Appearance,
                 Icon::Brand,
+                Icon::Sun,
+                Icon::Moon,
             ] {
                 let before = ctx.graphics_mut(|g| g.entry(layer).all_entries().len());
                 draw_icon(

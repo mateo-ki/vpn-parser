@@ -75,10 +75,10 @@ impl VpnApp {
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
             ui.add_space(6.0);
             let is_dark = self.settings.ui_dark;
-            let (symbol, tip) = if is_dark {
-                ("☀️", self.tr("切换至日间亮色模式"))
+            let (icon, tip) = if is_dark {
+                (Icon::Sun, self.tr("切换至日间亮色模式"))
             } else {
-                ("🌙", self.tr("切换至夜间深色模式"))
+                (Icon::Moon, self.tr("切换至夜间深色模式"))
             };
 
             let item_size = egui::vec2(ui.available_width(), 38.0);
@@ -94,14 +94,13 @@ impl VpnApp {
                 );
             }
 
-            let text_pos = egui::pos2(rect.center().x, rect.center().y);
-            painter.text(
-                text_pos,
-                egui::Align2::CENTER_CENTER,
-                symbol,
-                egui::FontId::proportional(17.0),
-                theme::sidebar_text(),
-            );
+            let icon_rect = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(18.0));
+            let icon_color = if resp.hovered() {
+                theme::accent()
+            } else {
+                theme::sidebar_muted()
+            };
+            crate::gui::icons::draw_icon(&painter, icon_rect, icon, icon_color);
 
             if resp.clicked() {
                 self.settings.ui_dark = !self.settings.ui_dark;
