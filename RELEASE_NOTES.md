@@ -1,3 +1,29 @@
+# 🚀 VPN Parser v1.8.1 发布说明 / Release Notes
+
+🎉 欢迎使用 **VPN Parser v1.8.1**！本次更新正式推出了 OpenWrt 官方原生 LuCI Web 图形管理插件 **`luci-app-vpn-parser`**，提供全架构通用的现代客户端图形交互界面，彻底打通路由器 Web 管理面板与后台微服务之间的所有壁垒！
+
+---
+
+## 🌟 新特性与核心更新
+
+### 🖥️ 1. 原生 OpenWrt LuCI Web 图形管理插件 (`luci-app-vpn-parser`)
+- **全架构通用安装包 (`Architecture: all`)**：
+  - 由纯静态 JS 视图组件、UCI 接口与 ubus 桥接器构成，一份 `luci-app-vpn-parser_<版本>_all.ipk` 通用兼容 x86_64、ARM64（NanoPi/友善/GL.iNet）及 MIPS 全架构设备；
+- **现代客户端渲染架构 (`luci.js`)**：
+  - 基于 OpenWrt 21.02+ 现代标准客户端渲染引擎，彻底移除旧版 Lua CBI 的沉重负担与性能损耗；
+- **免跨域与零泄露设计 (rpcd ubus 桥接守护)**：
+  - 核心通信经由路由器本地 `uhttpd` 的 `/cgi-bin/luci/rpc/ubus` 转发，完全免疫浏览器 CORS 跨域拦截与 HTTPS 混合内容限制；
+  - API Token 安全地保留在路由器本地读取与注入，无需在浏览器端明文暴露；
+- **四大核心控制面板**（位于路由器后台 **「服务 (Services)」➔「VPN Parser」**）：
+  1. **服务概览 (`Overview`)**：实时 PID 与端口守护徽章、订阅与节点质量看板、各协议分布药丸、一键全量测速/清理失效节点快捷按钮、预设下游插件一键复制订阅卡片（OpenClash YAML / PassWall Base64 URI / JSON）；
+  2. **节点池管理 (`Nodes`)**：多维状态过滤（全部/仅看可用/超时失效/未测速）、协议过滤、关键字即时检索，单节点独立真握手测速、分享链接复制与删除；
+  3. **订阅源管理 (`Sources`)**：订阅源增删改查交互模态框（支持动态日期模板占位符）、单源即时抓取、全网 GitHub Gist 公开节点自动搜集与入库；
+  4. **参数配置 (`Settings`)**：UCI 服务守护设置（开机自启、监听地址、数据库路径、Token）与测速引擎高级调优（并发数、纯 TCP Ping 节能探活模式、同出口 IP 去重等）一键保存并应用；
+- **自动化构建与发布**：
+  - CI/CD 流水线自动打包 `luci-app-vpn-parser_${VERSION}_all.ipk` 并自动发布至 GitHub Releases 资产。
+
+---
+
 # 🚀 VPN Parser v1.8.0 发布说明 / Release Notes
 
 🎉 欢迎使用 **VPN Parser v1.8.0**！这是一个具有里程碑意义的重大版本更新，**正式全面拥抱 OpenWrt 路由器生态**，支持一键构建和安装 OpenWrt 原生 `.ipk` 软件包，让 `vpn-parser` 能够直接作为高可用微服务常驻运行在软路由（x86_64）或大内存硬路由（ARM64）中！同时整合了极致内存调优、高检出率测速管道、以及全新的订阅源节点卡片弹窗交互。
