@@ -55,8 +55,10 @@ impl SourceStatusFilter {
     ];
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProxyPanel {
+    #[default]
+    Charts,
     Nodes,
     Groups,
     Connections,
@@ -81,6 +83,29 @@ pub enum RulesTab {
     #[default]
     Config,
     Hits,
+}
+
+/// 活跃连接监控面板里的三个分区：连接列表、连接进程、DNS 记录。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConnectionsTab {
+    #[default]
+    List,
+    Processes,
+    Dns,
+}
+
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+pub struct DnsRecord {
+    pub id: String,
+    pub host: String,
+    pub ip: String,
+    pub port: String,
+    pub process: String,
+    pub rule: String,
+    pub target: String,
+    pub network: String,
+    pub time_str: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

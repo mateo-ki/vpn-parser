@@ -1,15 +1,15 @@
 use crate::gui::icons::{self, icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::types::{
-    ActiveConnectionInfo, GroupsTab, KernelGroup, ProxyPanel, ProxySortBy, ProxyView, ProxyViewRow, RuleDraftKind, RulesTab,
+    ActiveConnectionInfo, ConnectionsTab, DnsRecord, GroupsTab, KernelGroup, ProxyPanel, ProxySortBy, ProxyView, ProxyViewRow, RuleDraftKind, RulesTab,
 };
 use crate::gui::view_models::nodes_vm::NodeCardAction;
 use crate::gui::widgets::{
     card_frame, compact_node_card, country_flag_and_name, danger_btn, dns_mode_label,
-    format_bytes, format_speed, header_cell, panel_frame, panel_tab, primary_btn,
-    render_health_strip, render_traffic_sparkline, routing_mode_description,
-    routing_mode_detail, rule_action_label, rule_matcher_label, section_title, status_badge,
-    tun_stack_label,
+    format_bytes, format_speed, header_cell, macos_segmented_tabs, panel_frame, panel_tab, primary_btn,
+    protocol_pill, render_health_strip, render_signal_bars, render_speedometer,
+    render_traffic_waveform_card, routing_mode_description, routing_mode_detail,
+    rule_action_label, rule_matcher_label, section_title, status_badge, tun_stack_label,
 };
 use crate::gui::VpnApp;
 use crate::kernel::{KernelKind, KernelPreference};
@@ -174,279 +174,12 @@ fn status_btn(text: &str) -> egui::Button<'_> {
 
 impl VpnApp {
     pub(crate) fn ui_proxy(&mut self, ui: &mut Ui) {
-        let selected_node = self
-            .selected_proxy_node_id
-            .as_ref()
-            .and_then(|id| {
-                self.proxy_nodes
-                    .iter()
-                    .chain(self.nodes.iter())
-                    .find(|node| &node.id == id)
-            })
-            .cloned();
+        ui.add_space(6.0);
 
-        ui.add_space(8.0);
-
-        panel_frame().show(ui, |ui| {
-            let is_running = matches!(
-                self.proxy_status.state,
-                ProxyState::Running | ProxyState::Degraded
-            );
-            let is_starting = matches!(self.proxy_status.state, ProxyState::Starting);
-            let prepared = crate::gui::prepare::is_prepared(
-                self.kernel_installed_cached(),
-                matches!(
-                    self.proxy_status.state,
-                    ProxyState::Running | ProxyState::Degraded | ProxyState::Starting
-                ),
-            );
-
-            // 1. 顶部主控行：左侧状态与节点名，右侧核心动作组（启动/停止、模式切换、展开监控）
-            ui.horizontal(|ui| {
-                // 发光状态信标点
-                let beacon_color = if is_running {
-                    theme::success()
-                } else if is_starting || self.switching_node_id.is_some() {
-                    theme::warning()
-                } else if prepared {
-                    theme::accent()
-                } else {
-                    theme::muted()
-                };
-                let (beacon_rect, _) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
-                ui.painter().circle_filled(beacon_rect.center(), 6.5, beacon_color.gamma_multiply(0.25));
-                ui.painter().circle_filled(beacon_rect.center(), 3.5, beacon_color);
-                ui.add_space(2.0);
-
-                // 主标题与当前节点
-                let main_title = if is_running {
-                    "代理运行中"
-                } else if is_starting {
-                    "正在启动代理..."
-                } else if prepared {
-                    "预备中 (正在下载内核)"
-                } else {
-                    "代理已停止"
-                };
-                ui.label(
-                    RichText::new(main_title)
-                        .strong()
-                        .size(16.5)
-                        .color(theme::text_primary()),
-                );
-
-                if let Some(node) = &selected_node {
-                    let (flag, country_name) =
-                        country_flag_and_name(node.country.as_deref().unwrap_or(""));
-                    ui.label(
-                        RichText::new(format!("{flag} {country_name} · {}", node.name))
-                            .small()
-                            .strong()
-                            .color(theme::text_secondary()),
-                    );
-                } else if self.proxy_config.url_test {
-                    ui.label(
-                        RichText::new("⚡ 策略组自动选优已就绪 (启动时内核自动测速并分配出口)")
-                            .small()
-                            .strong()
-                            .color(theme::accent()),
-                    );
-                } else {
-                    ui.label(
-                        RichText::new("未选择节点 (请在下方列表选择)")
-                            .small()
-                            .color(theme::muted()),
-                    );
-                }
-
-                if self.switching_node_id.is_some() {
-                    ui.horizontal(|ui| {
-                        icon_label(ui, Icon::Lightning, 12.0, theme::warning());
-                        ui.label(
-                            RichText::new("切换中...")
-                                .color(theme::warning())
-                                .strong()
-                                .small(),
-                        );
-                    });
-                }
-
-                // 右侧状态与工具项（自右向左对齐，去除重复控制按钮）
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // 诊断展开折叠按钮
-                    let diag_btn_text = if self.proxy_diagnostics_open {
-                        "收起图表 ▲"
-                    } else {
-                        "网络诊断 ▼"
-                    };
-                    if ui
-                        .add(egui::Button::new(
-                            RichText::new(diag_btn_text).small().color(theme::text_secondary()),
-                        ))
-                        .on_hover_text("展开或折叠 24 小时连通性健康条与实时吞吐折线图")
-                        .clicked()
-                    {
-                        self.proxy_diagnostics_open = !self.proxy_diagnostics_open;
-                    }
-
-                    // 优雅运行状态胶囊标签（只读状态展示，控制按钮集中在底部状态栏）
-                    let (status_text, status_color) = if is_running {
-                        let mode_tag = if self.proxy_config.mode == ProxyMode::Tun {
-                            "TUN 全局"
-                        } else {
-                            "系统代理"
-                        };
-                        (format!("● 运行中 ({mode_tag})"), theme::success())
-                    } else if is_starting {
-                        ("◐ 正在连接...".to_string(), theme::warning())
-                    } else {
-                        ("○ 未连接".to_string(), theme::muted())
-                    };
-                    ui.label(RichText::new(status_text).small().strong().color(status_color));
-                });
-            });
-
-            ui.add_space(6.0);
-
-            // 2. 轻量指标胶囊栏：整洁单行，低噪高对比
-            ui.horizontal(|ui| {
-                let lat_str = selected_node
-                    .as_ref()
-                    .and_then(|n| n.latency_ms)
-                    .map(|ms| format!("{ms} ms"))
-                    .unwrap_or_else(|| "—".into());
-                ui.horizontal(|ui| {
-                    icon_label(ui, Icon::Lightning, 12.0, theme::text_secondary());
-                    ui.label(
-                        RichText::new(format!("延迟: {lat_str}"))
-                            .small()
-                            .strong()
-                            .color(theme::text_secondary()),
-                    );
-                });
-                ui.separator();
-
-                let rate_color = if is_running {
-                    theme::text_primary()
-                } else {
-                    theme::muted()
-                };
-                icon_label(ui, Icon::ArrowDown, 11.0, theme::accent());
-                ui.label(
-                    RichText::new(format_speed(self.traffic_down_rate))
-                        .small()
-                        .strong()
-                        .color(rate_color),
-                );
-                icon_label(ui, Icon::ArrowUp, 11.0, theme::success());
-                ui.label(
-                    RichText::new(format_speed(self.traffic_up_rate))
-                        .small()
-                        .strong()
-                        .color(rate_color),
-                );
-                ui.separator();
-
-                if is_running {
-                    let conns = self.active_connections.len();
-                    icon_label(ui, Icon::Radar, 11.0, theme::text_secondary());
-                    ui.label(
-                        RichText::new(format!("活跃连接: {conns}"))
-                            .small()
-                            .color(theme::text_secondary()),
-                    );
-                    ui.separator();
-                }
-
-                ui.label(
-                    RichText::new(format!(
-                        "端口: Mixed {} · Controller {}",
-                        self.proxy_status.mixed_port, self.proxy_status.controller_port
-                    ))
-                    .small()
-                    .color(theme::muted()),
-                );
-
-                if let Some(err) = &self.proxy_status.last_error {
-                    ui.separator();
-                    icon_label(ui, Icon::Alert, 11.0, theme::warning());
-                    ui.label(
-                        RichText::new(err)
-                            .small()
-                            .color(theme::warning()),
-                    );
-                }
-            });
-
-            // 3. 可折叠诊断抽屉：按需展开 24h 连通性柱状图与实时大折线图
-            if self.proxy_diagnostics_open {
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(6.0);
-
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("出海连通性 (24h) & 实时流量带宽")
-                            .small()
-                            .strong()
-                            .color(theme::text_secondary()),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(format!(
-                                "会话累计: ↑ {} ↓ {}",
-                                format_bytes(self.traffic_up_total),
-                                format_bytes(self.traffic_down_total)
-                            ))
-                            .small()
-                            .color(theme::muted()),
-                        );
-                    });
-                });
-
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    render_health_strip(ui, &self.health_buckets);
-                    render_traffic_sparkline(ui, &self.traffic_history, is_running);
-                });
-
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if self.auto_failover {
-                        icon_label(ui, Icon::Shield, 11.0, theme::success());
-                        let detail = self
-                            .failover_last_reason
-                            .as_deref()
-                            .unwrap_or("已开启，最近实测正常");
-                        let detail: String = if detail.chars().count() > 30 {
-                            let mut s: String = detail.chars().take(30).collect();
-                            s.push('…');
-                            s
-                        } else {
-                            detail.to_string()
-                        };
-                        ui.label(
-                            RichText::new(format!(
-                                "自动切换: 已切 {} 次 · {detail}",
-                                self.failover_switches
-                            ))
-                            .small()
-                            .color(theme::muted()),
-                        );
-                    }
-                    if ui
-                        .link(format!("查看切换记录（今日 {} 次）", self.switch_today))
-                        .clicked()
-                    {
-                        self.show_switch_log = true;
-                        self.reload_egress_switches();
-                    }
-                });
-            }
-        });
-
-
-        ui.add_space(10.0);
+        // ===================================================================
+        // macOS 药丸分段选择条 (Segmented Control Bar)
+        // ===================================================================
+        let tr_charts = self.tr("图表");
         let tr_nodes = self.tr("可用节点");
         let tr_groups = self.tr("分流策略组");
         let tr_conns = self.tr("活跃连接");
@@ -458,61 +191,22 @@ impl VpnApp {
             format!("{} ({})", tr_conns, self.active_connections.len())
         };
 
-        ui.horizontal(|ui| {
-            panel_tab(
-                ui,
-                &mut self.proxy_panel,
-                ProxyPanel::Nodes,
-                Icon::Pin,
-                tr_nodes,
-            );
-            panel_tab(
-                ui,
-                &mut self.proxy_panel,
-                ProxyPanel::Groups,
-                Icon::Shield,
-                tr_groups,
-            );
-            panel_tab(
-                ui,
-                &mut self.proxy_panel,
-                ProxyPanel::Connections,
-                Icon::Radar,
-                &conn_label,
-            );
-            panel_tab(
-                ui,
-                &mut self.proxy_panel,
-                ProxyPanel::Rules,
-                Icon::Rules,
-                tr_rules,
-            );
-            panel_tab(
-                ui,
-                &mut self.proxy_panel,
-                ProxyPanel::Network,
-                Icon::Globe,
-                tr_network,
-            );
-            panel_tab(
-                ui,
-                &mut self.proxy_panel,
-                ProxyPanel::Kernels,
-                Icon::Cpu,
-                "内核管理",
-            );
-            panel_tab(
-                ui,
-                &mut self.proxy_panel,
-                ProxyPanel::Logs,
-                Icon::Terminal,
-                "运行日志",
-            );
-        });
-        ui.separator();
-        ui.add_space(6.0);
+        let tabs = [
+            (ProxyPanel::Charts, Icon::Dashboard, tr_charts),
+            (ProxyPanel::Nodes, Icon::Pin, tr_nodes),
+            (ProxyPanel::Groups, Icon::Shield, tr_groups),
+            (ProxyPanel::Connections, Icon::Radar, &conn_label),
+            (ProxyPanel::Rules, Icon::Rules, tr_rules),
+            (ProxyPanel::Network, Icon::Globe, tr_network),
+            (ProxyPanel::Kernels, Icon::Cpu, "内核管理"),
+            (ProxyPanel::Logs, Icon::Terminal, "运行日志"),
+        ];
+
+        macos_segmented_tabs(ui, &mut self.proxy_panel, &tabs);
+        ui.add_space(8.0);
 
         match self.proxy_panel {
+            ProxyPanel::Charts => self.ui_proxy_charts(ui),
             ProxyPanel::Nodes => self.ui_proxy_nodes(ui),
             ProxyPanel::Groups => self.ui_proxy_groups(ui),
             ProxyPanel::Connections => self.ui_proxy_connections(ui),
@@ -521,6 +215,748 @@ impl VpnApp {
             ProxyPanel::Kernels => self.ui_proxy_kernels(ui),
             ProxyPanel::Logs => self.ui_proxy_logs(ui),
         }
+    }
+
+    pub(crate) fn ui_proxy_charts(&mut self, ui: &mut Ui) {
+        let selected_node = self
+            .selected_proxy_node_id
+            .as_ref()
+            .and_then(|id| {
+                self.proxy_nodes
+                    .iter()
+                    .chain(self.nodes.iter())
+                    .find(|node| &node.id == id)
+            })
+            .cloned();
+
+        let is_running = matches!(
+            self.proxy_status.state,
+            ProxyState::Running | ProxyState::Degraded
+        );
+        let is_starting = matches!(self.proxy_status.state, ProxyState::Starting);
+        let prepared = crate::gui::prepare::is_prepared(
+            self.kernel_installed_cached(),
+            matches!(
+                self.proxy_status.state,
+                ProxyState::Running | ProxyState::Degraded | ProxyState::Starting
+            ),
+        );
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                // 1. 核心主控岛卡片（默认撑开固定高度，无论是否选中节点均保持稳定结构）
+                Frame::NONE
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                    .corner_radius(CornerRadius::same(14))
+                    .inner_margin(Margin::symmetric(18, 14))
+                    .show(ui, |ui| {
+                        ui.set_min_height(78.0);
+                        // --- 第 1 行：状态呼吸光环 + 标题与监听端口 ---
+                        ui.horizontal(|ui| {
+                            let (beacon_color, pulse_color) = if is_running {
+                                (theme::success(), theme::success().gamma_multiply(0.25))
+                            } else if is_starting || self.switching_node_id.is_some() {
+                                (theme::warning(), theme::warning().gamma_multiply(0.25))
+                            } else if prepared {
+                                (theme::accent(), theme::accent().gamma_multiply(0.25))
+                            } else {
+                                (theme::muted(), theme::border_subtle())
+                            };
+                            let (beacon_rect, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
+                            ui.painter().circle_filled(beacon_rect.center(), 8.0, pulse_color);
+                            ui.painter().circle_filled(beacon_rect.center(), 4.5, beacon_color);
+                            ui.add_space(4.0);
+
+                            ui.vertical(|ui| {
+                                let (status_title, status_desc) = if is_running {
+                                    let mode_tag = if self.proxy_config.mode == ProxyMode::Tun {
+                                        "TUN 全局虚拟网卡"
+                                    } else {
+                                        "系统代理"
+                                    };
+                                    (
+                                        "VPN 代理运行中",
+                                        format!("已接管流量 · 模式: {mode_tag} · 端口: Mixed {}", self.proxy_status.mixed_port),
+                                    )
+                                } else if is_starting {
+                                    (
+                                        "正在启动代理...",
+                                        "内核加载中，正在验证网络出口与路由规则...".to_string(),
+                                    )
+                                } else if prepared {
+                                    (
+                                        "预备中 (正在下载内核)",
+                                        "正在检测并下载最新代理核心执行文件...".to_string(),
+                                    )
+                                } else {
+                                    (
+                                        "代理服务已就绪",
+                                        format!("核心未运行 · 本地监听端口: Mixed {}", self.proxy_status.mixed_port),
+                                    )
+                                };
+
+                                ui.label(
+                                    RichText::new(status_title)
+                                        .strong()
+                                        .size(16.0)
+                                        .color(theme::text_primary()),
+                                );
+                                ui.label(
+                                    RichText::new(status_desc)
+                                        .small()
+                                        .color(theme::text_secondary()),
+                                );
+                            });
+                        });
+
+                        ui.add_space(8.0);
+
+                        // --- 第 2 行：当前出海出口节点微晶徽标卡片（默认撑开固定高度） ---
+                        Frame::NONE
+                            .fill(theme::sidebar())
+                            .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                            .corner_radius(CornerRadius::same(9))
+                            .inner_margin(Margin::symmetric(14, 8))
+                            .show(ui, |ui| {
+                                ui.set_min_height(24.0);
+                                ui.horizontal(|ui| {
+                                    if let Some(node) = &selected_node {
+                                        let (flag, country_name) =
+                                            country_flag_and_name(node.country.as_deref().unwrap_or(""));
+                                        ui.label(
+                                            RichText::new(format!("{flag} {country_name}"))
+                                                .strong()
+                                                .size(13.0)
+                                                .color(theme::text_primary()),
+                                        );
+                                        ui.separator();
+                                        protocol_pill(ui, &node.protocol.to_uppercase());
+                                        let clean_name = crate::gui::widgets::clean_node_display_name(&node.name);
+                                        ui.label(
+                                            RichText::new(clean_name)
+                                                .strong()
+                                                .size(12.5)
+                                                .color(theme::text_primary()),
+                                        )
+                                        .on_hover_text(&node.name);
+
+                                        if self.switching_node_id.is_some() {
+                                            icon_label(ui, Icon::Lightning, 11.0, theme::warning());
+                                            ui.label(RichText::new("切换中...").small().strong().color(theme::warning()));
+                                        }
+
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            let lat_str = node
+                                                .latency_ms
+                                                .map(|ms| format!("{ms} ms"))
+                                                .unwrap_or_else(|| "—".into());
+                                            ui.label(
+                                                RichText::new(lat_str)
+                                                    .small()
+                                                    .strong()
+                                                    .color(theme::text_secondary()),
+                                            );
+                                            ui.add_space(2.0);
+                                            render_signal_bars(ui, node.latency_ms);
+                                            ui.separator();
+                                            let conns = self.active_connections.len();
+                                            ui.label(
+                                                RichText::new(format!("活跃连接: {conns}"))
+                                                    .small()
+                                                    .color(theme::text_secondary()),
+                                            );
+                                            ui.separator();
+                                            ui.label(
+                                                RichText::new(format!("↑ {}", format_speed(self.traffic_up_rate)))
+                                                    .small()
+                                                    .color(theme::success()),
+                                            );
+                                            ui.label(
+                                                RichText::new(format!("↓ {}", format_speed(self.traffic_down_rate)))
+                                                    .small()
+                                                    .strong()
+                                                    .color(theme::accent()),
+                                            );
+                                        });
+                                    } else if self.proxy_config.url_test {
+                                        icon_label(ui, Icon::Lightning, 14.0, theme::accent());
+                                        ui.label(
+                                            RichText::new("⚡ 策略组自动选优已激活")
+                                                .strong()
+                                                .size(13.0)
+                                                .color(theme::accent()),
+                                        );
+                                        ui.label(
+                                            RichText::new("（内核自动测速并调度低延迟出口）")
+                                                .small()
+                                                .color(theme::muted()),
+                                        );
+
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            let conns = self.active_connections.len();
+                                            ui.label(
+                                                RichText::new(format!("活跃连接: {conns}"))
+                                                    .small()
+                                                    .color(theme::text_secondary()),
+                                            );
+                                            ui.separator();
+                                            ui.label(
+                                                RichText::new(format!("↑ {}", format_speed(self.traffic_up_rate)))
+                                                    .small()
+                                                    .color(theme::success()),
+                                            );
+                                            ui.label(
+                                                RichText::new(format!("↓ {}", format_speed(self.traffic_down_rate)))
+                                                    .small()
+                                                    .strong()
+                                                    .color(theme::accent()),
+                                            );
+                                        });
+                                    } else {
+                                        icon_label(ui, Icon::Globe, 13.0, theme::muted());
+                                        ui.label(
+                                            RichText::new("未选择出海出口节点")
+                                                .strong()
+                                                .size(13.0)
+                                                .color(theme::text_secondary()),
+                                        );
+                                        ui.separator();
+                                        ui.label(
+                                            RichText::new("可在「可用节点」列表手动挑选节点或在下方切换自动调度")
+                                                .small()
+                                                .color(theme::muted()),
+                                        );
+
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            ui.label(RichText::new("— ms").small().color(theme::muted()));
+                                            ui.add_space(2.0);
+                                            render_signal_bars(ui, None);
+                                            ui.separator();
+                                            ui.label(RichText::new("活跃连接: 0").small().color(theme::muted()));
+                                            ui.separator();
+                                            ui.label(RichText::new("↑ 0 B/s").small().color(theme::muted()));
+                                            ui.label(RichText::new("↓ 0 B/s").small().color(theme::muted()));
+                                        });
+                                    }
+                                });
+                            });
+                    });
+
+                ui.add_space(10.0);
+
+                // 2. 双翼网络实时活动监视器看板（测速仪表盘 + 流量大波形与健康带）
+                ui.horizontal(|ui| {
+                    // 左侧翼：半圆测速仪表盘卡片
+                    Frame::NONE
+                        .fill(theme::sidebar())
+                        .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                        .corner_radius(CornerRadius::same(10))
+                        .inner_margin(Margin::symmetric(14, 10))
+                        .show(ui, |ui| {
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    icon_label(ui, Icon::Radar, 13.0, theme::accent());
+                                    ui.label(
+                                        RichText::new("实时下行带宽")
+                                            .strong()
+                                            .small()
+                                            .color(theme::text_secondary()),
+                                    );
+                                });
+                                ui.add_space(4.0);
+                                render_speedometer(
+                                    ui,
+                                    self.traffic_down_rate,
+                                    self.traffic_up_rate,
+                                    is_running,
+                                );
+                            });
+                        });
+
+                    ui.add_space(8.0);
+
+                    // 右侧翼：实时平滑波形图与出海健康带
+                    Frame::NONE
+                        .fill(theme::sidebar())
+                        .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                        .corner_radius(CornerRadius::same(10))
+                        .inner_margin(Margin::symmetric(14, 10))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new("出海健康 (24h)")
+                                            .small()
+                                            .strong()
+                                            .color(theme::text_secondary()),
+                                    );
+                                    render_health_strip(ui, &self.health_buckets);
+
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "会话累计: ↑ {} ↓ {}",
+                                                    format_bytes(self.traffic_up_total),
+                                                    format_bytes(self.traffic_down_total)
+                                                ))
+                                                .small()
+                                                .color(theme::muted()),
+                                            );
+                                        },
+                                    );
+                                });
+
+                                ui.add_space(6.0);
+                                render_traffic_waveform_card(
+                                    ui,
+                                    &self.traffic_history,
+                                    is_running,
+                                    92.0,
+                                );
+
+                                if self.auto_failover {
+                                    ui.add_space(6.0);
+                                    ui.horizontal(|ui| {
+                                        icon_label(ui, Icon::Shield, 11.0, theme::success());
+                                        let detail = self
+                                            .failover_last_reason
+                                            .as_deref()
+                                            .unwrap_or("已开启，最近实测正常");
+                                        let detail: String = if detail.chars().count() > 30 {
+                                            let mut s: String = detail.chars().take(30).collect();
+                                            s.push('…');
+                                            s
+                                        } else {
+                                            detail.to_string()
+                                        };
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "自动切换: 已切 {} 次 · {detail}",
+                                                self.failover_switches
+                                            ))
+                                            .small()
+                                            .color(theme::muted()),
+                                        );
+                                        if ui
+                                            .link(format!("记录（今日 {} 次）", self.switch_today))
+                                            .clicked()
+                                        {
+                                            self.show_switch_log = true;
+                                            self.reload_egress_switches();
+                                        }
+                                    });
+                                }
+                            });
+                        });
+                });
+
+                ui.add_space(10.0);
+
+                // 3. 全网节点延迟频谱带 + 节点协议组成分布（一行并排，上下边缘与高度严格对齐）
+                if let Some(s) = &self.stats.clone() {
+                    let total_w = ui.available_width();
+                    let gap = 10.0;
+                    let left_w = ((total_w - gap) * 0.48).max(280.0);
+                    let row_h = 104.0_f32;
+                    let inner_h = row_h - 20.0; // 84.0_f32
+
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                        // 左翼卡片：全网延迟阶梯频谱分布
+                        Frame::NONE
+                            .fill(theme::panel())
+                            .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                            .corner_radius(CornerRadius::same(12))
+                            .inner_margin(Margin::symmetric(14, 10))
+                            .show(ui, |ui| {
+                                ui.set_width(left_w);
+                                ui.set_min_height(inner_h);
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        icon_label(ui, Icon::Lightning, 13.0, theme::accent());
+                                        ui.label(
+                                            RichText::new("全网延迟阶梯频谱分布")
+                                                .strong()
+                                                .small()
+                                                .color(theme::text_primary()),
+                                        );
+                                    });
+                                    ui.add_space(8.0);
+                                    let spectrum = crate::gui::widgets::LatencySpectrumStats::from_latencies(
+                                        self.nodes.iter().map(|n| n.latency_ms),
+                                    );
+                                    crate::gui::widgets::render_latency_spectrum(ui, &spectrum);
+                                    ui.add_space(8.0);
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new(format!("⚡ <100ms: {}", spectrum.ultra_fast)).small().strong().color(Color32::from_rgb(16, 185, 129)));
+                                        ui.separator();
+                                        ui.label(RichText::new(format!("🟢 100-200ms: {}", spectrum.fast)).small().strong().color(Color32::from_rgb(52, 211, 153)));
+                                        ui.separator();
+                                        ui.label(RichText::new(format!("🟡 200-400ms: {}", spectrum.medium)).small().strong().color(Color32::from_rgb(245, 158, 11)));
+                                        ui.separator();
+                                        ui.label(RichText::new(format!("🔴 >400ms: {}", spectrum.slow)).small().strong().color(Color32::from_rgb(239, 68, 68)));
+                                    });
+                                });
+                                let used = ui.min_rect().height();
+                                if used < inner_h {
+                                    ui.allocate_space(egui::vec2(left_w, inner_h - used));
+                                }
+                            });
+
+                        ui.add_space(gap);
+
+                        // 右翼卡片：节点协议组成分布（控制在最多两行，保持与左卡完全等高）
+                        Frame::NONE
+                            .fill(theme::panel())
+                            .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                            .corner_radius(CornerRadius::same(12))
+                            .inner_margin(Margin::symmetric(14, 10))
+                            .show(ui, |ui| {
+                                let right_w = ui.available_width();
+                                ui.set_width(right_w);
+                                ui.set_min_height(inner_h);
+                                ui.horizontal(|ui| {
+                                    crate::gui::widgets::render_protocol_donut_chart(ui, &s.protocol_stats, s.node_count);
+                                    ui.add_space(10.0);
+                                    ui.vertical(|ui| {
+                                        ui.horizontal(|ui| {
+                                            icon_label(ui, Icon::Radar, 13.0, theme::accent());
+                                            ui.label(
+                                                RichText::new("节点协议组成分布")
+                                                    .strong()
+                                                    .small()
+                                                    .color(theme::text_primary()),
+                                            );
+                                            ui.separator();
+                                            ui.label(
+                                                RichText::new(format!("收录: {} 个", s.node_count))
+                                                    .small()
+                                                    .color(theme::text_secondary()),
+                                            );
+                                            ui.separator();
+                                            ui.label(
+                                                RichText::new(format!("可用: {} 个", s.alive_count))
+                                                    .small()
+                                                    .strong()
+                                                    .color(theme::success()),
+                                            );
+                                        });
+                                        ui.add_space(6.0);
+
+                                        let mut all_stats: Vec<(String, i64, f64)> = s
+                                            .protocol_stats
+                                            .iter()
+                                            .map(|stat| {
+                                                let pct = if s.node_count > 0 {
+                                                    (stat.count as f64 / s.node_count as f64) * 100.0
+                                                } else {
+                                                    0.0
+                                                };
+                                                (stat.protocol.to_uppercase(), stat.count, pct)
+                                            })
+                                            .collect();
+
+                                        let other_pill: Option<(String, i64, f64, String)>;
+                                        let (row1, row2) = if all_stats.len() <= 3 {
+                                            other_pill = None;
+                                            (all_stats, vec![])
+                                        } else if all_stats.len() <= 5 {
+                                            other_pill = None;
+                                            let r2 = all_stats.split_off(3);
+                                            (all_stats, r2)
+                                        } else {
+                                            let remainder = &all_stats[4..];
+                                            let rest_count: i64 = remainder.iter().map(|item| item.1).sum();
+                                            let rest_pct = if s.node_count > 0 {
+                                                (rest_count as f64 / s.node_count as f64) * 100.0
+                                            } else {
+                                                0.0
+                                            };
+                                            let tip = remainder
+                                                .iter()
+                                                .map(|(p, c, pct)| format!("{p}: {c} ({pct:.0}%)"))
+                                                .collect::<Vec<_>>()
+                                                .join(" · ");
+                                            other_pill = Some(("其它".to_string(), rest_count, rest_pct, tip));
+
+                                            let r2: Vec<(String, i64, f64)> = all_stats[2..4].to_vec();
+                                            all_stats.truncate(2);
+                                            (all_stats, r2)
+                                        };
+
+                                        // 渲染第 1 行
+                                        ui.horizontal(|ui| {
+                                            for (proto, count, pct) in &row1 {
+                                                Frame::NONE
+                                                    .fill(theme::sidebar())
+                                                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                                                    .corner_radius(CornerRadius::same(6))
+                                                    .inner_margin(Margin::symmetric(6, 2))
+                                                    .show(ui, |ui| {
+                                                        ui.label(
+                                                            RichText::new(format!("{proto} {count} ({pct:.0}%)"))
+                                                                .small()
+                                                                .color(theme::text_primary()),
+                                                        );
+                                                    });
+                                                ui.add_space(4.0);
+                                            }
+                                        });
+
+                                        // 渲染第 2 行（若有）
+                                        if !row2.is_empty() || other_pill.is_some() {
+                                            ui.add_space(4.0);
+                                            ui.horizontal(|ui| {
+                                                for (proto, count, pct) in &row2 {
+                                                    Frame::NONE
+                                                        .fill(theme::sidebar())
+                                                        .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                                                        .corner_radius(CornerRadius::same(6))
+                                                        .inner_margin(Margin::symmetric(6, 2))
+                                                        .show(ui, |ui| {
+                                                            ui.label(
+                                                                RichText::new(format!("{proto} {count} ({pct:.0}%)"))
+                                                                    .small()
+                                                                    .color(theme::text_primary()),
+                                                            );
+                                                        });
+                                                    ui.add_space(4.0);
+                                                }
+                                                if let Some((name, count, pct, tip)) = other_pill {
+                                                    Frame::NONE
+                                                        .fill(theme::sidebar())
+                                                        .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                                                        .corner_radius(CornerRadius::same(6))
+                                                        .inner_margin(Margin::symmetric(6, 2))
+                                                        .show(ui, |ui| {
+                                                            ui.label(
+                                                                RichText::new(format!("{name} {count} ({pct:.0}%)"))
+                                                                    .small()
+                                                                    .color(theme::muted()),
+                                                            );
+                                                        })
+                                                        .response
+                                                        .on_hover_text(tip);
+                                                }
+                                            });
+                                        }
+                                    });
+                                });
+                                let used = ui.min_rect().height();
+                                if used < inner_h {
+                                    ui.allocate_space(egui::vec2(right_w, inner_h - used));
+                                }
+                            });
+                    });
+                }
+
+                ui.add_space(10.0);
+
+                // 5. 分流策略组与流量调度决策中心（搬迁至图表底部）
+                let visible_names = visible_group_names(
+                    self.proxy_config.smart_routing,
+                    self.proxy_config.override_yaml.as_deref(),
+                    &self.kernel_groups,
+                );
+                if !visible_names.iter().any(|name| name == &self.proxy_selected_group) {
+                    self.proxy_selected_group = "全部".to_string();
+                }
+
+                let is_auto = self.proxy_config.url_test;
+                let current_strategy = self.proxy_config.auto_strategy;
+
+                Frame::NONE
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                    .corner_radius(CornerRadius::same(12))
+                    .inner_margin(Margin::symmetric(16, 12))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.vertical(|ui| {
+                            // --- 第 1 行：分流策略组胶囊 ---
+                            ui.horizontal(|ui| {
+                                icon_label(ui, Icon::Shield, 13.0, theme::accent());
+                                ui.label(
+                                    RichText::new("策略组:")
+                                        .small()
+                                        .strong()
+                                        .color(theme::text_secondary()),
+                                )
+                                .on_hover_text("智能分流策略组：点击切换场景节点池");
+
+                                for name in &visible_names {
+                                    let is_selected = self.proxy_selected_group == *name;
+                                    let count = self
+                                        .proxy_nodes
+                                        .iter()
+                                        .filter(|n| node_matches_group(n, name, &self.kernel_groups))
+                                        .count();
+
+                                    let (fill, stroke, text_color) = if is_selected {
+                                        (
+                                            theme::accent_bg(),
+                                            Stroke::new(1.2_f32, theme::accent()),
+                                            theme::accent_strong(),
+                                        )
+                                    } else {
+                                        (
+                                            theme::sidebar(),
+                                            Stroke::new(1.0_f32, theme::border_subtle()),
+                                            theme::text_secondary(),
+                                        )
+                                    };
+
+                                    let pill_label = match name.as_str() {
+                                        "全部" => format!("🌐 {name} ({count})"),
+                                        "AI分组" => format!("🤖 {name} ({count})"),
+                                        "美国节点" => format!("🇺🇸 {name} ({count})"),
+                                        "多线并发下载" => format!("⚡ {name} ({count})"),
+                                        "普通代理" => format!("🔒 {name} ({count})"),
+                                        _ => format!("{name} ({count})"),
+                                    };
+
+                                    let btn = egui::Button::new(
+                                        RichText::new(&pill_label).small().strong().color(text_color),
+                                    )
+                                    .fill(fill)
+                                    .stroke(stroke)
+                                    .corner_radius(CornerRadius::same(12));
+
+                                    let tooltip = match name.as_str() {
+                                        "全部" => "展示全部可用节点，自由选择切换",
+                                        "AI分组" => "专供 ChatGPT、Claude、Midjourney、Grok 等 AI，优先保证美国/原生 IP 解锁",
+                                        "美国节点" => "url-test 周期测速，实时挑选最低延迟节点供给 Google 与 YouTube",
+                                        "多线并发下载" => "load-balance 负载均衡，聚合节点并发加速 IDM / 迅雷 / 网盘下载",
+                                        "普通代理" => "常规网页出海兜底；国内服务直连",
+                                        _ => "点击切换至该策略组",
+                                    };
+
+                                    let resp = ui.add(btn).on_hover_text(tooltip);
+                                    if resp.clicked() && !is_selected {
+                                        self.proxy_selected_group = name.clone();
+                                    }
+                                }
+                            });
+
+                            ui.add_space(6.0);
+                            ui.separator();
+                            ui.add_space(6.0);
+
+                            // --- 第 2 行：流量调度策略（选优/故障/负载均衡/手动指定） ---
+                            ui.horizontal(|ui| {
+                                icon_label(ui, Icon::Lightning, 12.0, theme::accent());
+                                ui.label(
+                                    RichText::new("调度:")
+                                        .small()
+                                        .strong()
+                                        .color(theme::text_secondary()),
+                                )
+                                .on_hover_text("流量路由调度策略：配置内核对多节点的选路决策规则");
+
+                                let is_url_test = is_auto && current_strategy == AutoRoutingStrategy::UrlTest;
+                                if ui
+                                    .add(icons::selectable_icon_btn(Icon::Lightning, "延迟选优", is_url_test))
+                                    .on_hover_text(format!("{}\n（点击自动激活并启动代理）", AutoRoutingStrategy::UrlTest.description()))
+                                    .clicked()
+                                {
+                                    self.proxy_config.url_test = true;
+                                    self.proxy_config.auto_strategy = AutoRoutingStrategy::UrlTest;
+                                    if self.selected_proxy_node_id.is_none() {
+                                        if let Some(node) = self.proxy_nodes.first().or(self.nodes.first()) {
+                                            self.selected_proxy_node_id = Some(node.id.clone());
+                                            self.selected_proxy_node_name = Some(node.name.clone());
+                                        }
+                                    }
+                                    let running = matches!(
+                                        self.proxy_status.state,
+                                        ProxyState::Running | ProxyState::Degraded
+                                    );
+                                    if running {
+                                        self.save_proxy_config();
+                                    } else {
+                                        self.proxy_busy = false;
+                                        self.start_proxy();
+                                    }
+                                }
+
+                                let is_fallback = is_auto && current_strategy == AutoRoutingStrategy::Fallback;
+                                if ui
+                                    .add(icons::selectable_icon_btn(Icon::Shield, "故障转移", is_fallback))
+                                    .on_hover_text(format!("{}\n（点击自动激活并启动代理）", AutoRoutingStrategy::Fallback.description()))
+                                    .clicked()
+                                {
+                                    self.proxy_config.url_test = true;
+                                    self.proxy_config.auto_strategy = AutoRoutingStrategy::Fallback;
+                                    if self.selected_proxy_node_id.is_none() {
+                                        if let Some(node) = self.proxy_nodes.first().or(self.nodes.first()) {
+                                            self.selected_proxy_node_id = Some(node.id.clone());
+                                            self.selected_proxy_node_name = Some(node.name.clone());
+                                        }
+                                    }
+                                    let running = matches!(
+                                        self.proxy_status.state,
+                                        ProxyState::Running | ProxyState::Degraded
+                                    );
+                                    if running {
+                                        self.save_proxy_config();
+                                    } else {
+                                        self.proxy_busy = false;
+                                        self.start_proxy();
+                                    }
+                                }
+
+                                let is_load_balance = is_auto && current_strategy == AutoRoutingStrategy::LoadBalance;
+                                if ui
+                                    .add(icons::selectable_icon_btn(Icon::Rocket, "负载均衡", is_load_balance))
+                                    .on_hover_text(format!("{}\n（点击自动激活并启动代理）", AutoRoutingStrategy::LoadBalance.description()))
+                                    .clicked()
+                                {
+                                    self.proxy_config.url_test = true;
+                                    self.proxy_config.auto_strategy = AutoRoutingStrategy::LoadBalance;
+                                    if self.selected_proxy_node_id.is_none() {
+                                        if let Some(node) = self.proxy_nodes.first().or(self.nodes.first()) {
+                                            self.selected_proxy_node_id = Some(node.id.clone());
+                                            self.selected_proxy_node_name = Some(node.name.clone());
+                                        }
+                                    }
+                                    let running = matches!(
+                                        self.proxy_status.state,
+                                        ProxyState::Running | ProxyState::Degraded
+                                    );
+                                    if running {
+                                        self.save_proxy_config();
+                                    } else {
+                                        self.proxy_busy = false;
+                                        self.start_proxy();
+                                    }
+                                }
+
+                                let is_manual = !is_auto;
+                                if ui
+                                    .add(icons::selectable_icon_btn(Icon::Pin, "手动指定", is_manual))
+                                    .on_hover_text("点击切换为手动指定，并立即跳转至可用节点列表挑选节点")
+                                    .clicked()
+                                {
+                                    self.proxy_config.url_test = false;
+                                    let running = matches!(
+                                        self.proxy_status.state,
+                                        ProxyState::Running | ProxyState::Degraded
+                                    );
+                                    if running {
+                                        self.save_proxy_config();
+                                    }
+                                    self.proxy_panel = ProxyPanel::Nodes;
+                                }
+                            });
+                        });
+                    });
+
+                ui.add_space(16.0);
+            });
     }
 
     pub(crate) fn ui_proxy_groups(&mut self, ui: &mut Ui) {
@@ -542,17 +978,17 @@ impl VpnApp {
 
         match self.groups_tab {
             GroupsTab::View => {
-                // 1. 顶部科普横幅
+                // 1. 顶部智能分流路由拓扑指示卡
                 Frame::NONE
                     .fill(theme::panel())
                     .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
-                    .corner_radius(CornerRadius::same(10))
+                    .corner_radius(CornerRadius::same(12))
                     .inner_margin(Margin::symmetric(14, 10))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             icon_label(ui, Icon::Shield, 15.0, theme::accent());
                             ui.label(
-                                RichText::new("智能分流策略组（开箱即用，自动按场景分流）")
+                                RichText::new("智能分流路由拓扑（场景自适应调度）")
                                     .strong()
                                     .color(theme::text_primary()),
                             );
@@ -566,19 +1002,41 @@ impl VpnApp {
                                 }
                             });
                         });
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new(
-                                "💡 怎么用：无需手动配置！直接在「可用节点」一键连接并启动代理，内核会自动接管分流：\n\
-                                 • 🤖 AI 分组：访问 ChatGPT、Claude、Midjourney 等 AI 服务时自动走此组，保障原生 IP 解锁。\n\
-                                 • 🇺🇸 美国节点：访问 Google、YouTube 等服务时自动选优走低延迟美国出口。\n\
-                                 • ⚡ 多线并发下载：进行大文件并发下载（IDM/迅雷/网盘）时多节点并发聚合加速。\n\
-                                 • 🌐 普通代理：常规网页与出海兜底；国内服务与常用软件已自动配置 DIRECT 直连不耗流量。\n\
-                                 若需指定某个策略组的出口节点，在下方对应卡片中点击切换；高级玩家可在「配置」Tab 覆写 YAML。"
-                            )
-                            .small()
-                            .color(theme::text_secondary()),
-                        );
+
+                        ui.add_space(8.0);
+
+                        // 4 路由拓扑晶体微卡片
+                        let routes = [
+                            ("🤖 AI 分组", "专线原生 IP", "ChatGPT · Claude · Grok", theme::accent()),
+                            ("🇺🇸 美国专线", "URL-Test 选优", "Google · YouTube · 选优", Color32::from_rgb(52, 199, 89)),
+                            ("⚡ 并发加速", "Load-Balance", "多路并发 · 迅雷 · 网盘下载", Color32::from_rgb(245, 158, 11)),
+                            ("🇨🇳 国内直连", "DIRECT 放行", "微信 · 淘宝 · B站 (0消耗)", theme::text_secondary()),
+                        ];
+
+                        ui.columns(4, |cols| {
+                            for (i, (title, badge, desc, col)) in routes.iter().enumerate() {
+                                Frame::NONE
+                                    .fill(theme::sidebar())
+                                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                                    .corner_radius(CornerRadius::same(9))
+                                    .inner_margin(Margin::symmetric(10, 8))
+                                    .show(&mut cols[i], |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(RichText::new(*title).strong().size(12.5).color(theme::text_primary()));
+                                        });
+                                        ui.add_space(3.0);
+                                        Frame::NONE
+                                            .fill(col.gamma_multiply(0.15))
+                                            .corner_radius(CornerRadius::same(4))
+                                            .inner_margin(Margin::symmetric(5, 1))
+                                            .show(ui, |ui| {
+                                                ui.label(RichText::new(*badge).small().strong().color(*col));
+                                            });
+                                        ui.add_space(3.0);
+                                        ui.label(RichText::new(*desc).small().color(theme::muted()));
+                                    });
+                            }
+                        });
                     });
 
                 ui.add_space(8.0);
@@ -929,109 +1387,18 @@ impl VpnApp {
 
         ui.add_space(4.0);
 
-        // -------------------------------------------------------------------
-        // 第 1 栏：分流策略组切换胶囊条（搬迁并集成到可用节点）
-        // -------------------------------------------------------------------
-        // 默认只挂「全部」；其余组只有配置里真的有它才出现（内置四组看 smart_routing，
-        // 覆写 YAML 里定义的组看 proxy_config.override_yaml，跑着的内核上报的组看 kernel_groups）。
+        // 默认只挂「全部」；其余组只有配置里真的有它才出现
         let visible_names = visible_group_names(
             self.proxy_config.smart_routing,
             self.proxy_config.override_yaml.as_deref(),
             &self.kernel_groups,
         );
-        // 选中的组从配置里消失了就回到「全部」—— 不许留一个看不见却生效的选中态。
         if !visible_names.iter().any(|name| name == &self.proxy_selected_group) {
             self.proxy_selected_group = "全部".to_string();
         }
-        let group_pills: Vec<(String, &'static str, Icon)> = visible_names
-            .into_iter()
-            .map(|name| {
-                let (tag, icon) = match name.as_str() {
-                    "全部" => ("所有节点", Icon::Globe),
-                    "AI分组" => ("AI 专用", Icon::Lightning),
-                    "美国节点" => ("US 选优", Icon::Globe),
-                    "多线并发下载" => ("并发加速", Icon::ArrowDown),
-                    "普通代理" => ("出海兜底", Icon::Shield),
-                    _ => {
-                        let kind = self
-                            .kernel_groups
-                            .iter()
-                            .find(|group| group.name == name)
-                            .map(|group| group.kind.to_lowercase());
-                        match kind.as_deref() {
-                            Some("url-test") | Some("urltest") => ("自动选优", Icon::Lightning),
-                            Some("load-balance") | Some("loadbalance") => {
-                                ("负载均衡", Icon::ArrowDown)
-                            }
-                            Some("fallback") => ("故障转移", Icon::Shield),
-                            _ => ("手动选择", Icon::Radar),
-                        }
-                    }
-                };
-                (name, tag, icon)
-            })
-            .collect();
 
-        ui.horizontal_wrapped(|ui| {
-            icon_label(ui, Icon::Shield, 13.0, theme::accent());
-            ui.label(RichText::new("分流策略组:").small().strong().color(theme::text_primary()))
-                .on_hover_text("智能分流策略组：点击可快速筛选对应场景的节点列表；平时保持「全部」即可，内核全自动智能分流。");
-
-            for (name, _tag, _icon) in &group_pills {
-                let is_selected = self.proxy_selected_group == *name;
-                let count = self
-                    .proxy_nodes
-                    .iter()
-                    .filter(|n| node_matches_group(n, name, &self.kernel_groups))
-                    .count();
-
-                let (fill, stroke, text_color) = if is_selected {
-                    (
-                        theme::accent_bg(),
-                        Stroke::new(1.2_f32, theme::accent()),
-                        theme::accent_strong(),
-                    )
-                } else {
-                    (
-                        theme::panel(),
-                        Stroke::new(1.0_f32, theme::border_subtle()),
-                        theme::text_secondary(),
-                    )
-                };
-
-                let label_text = format!("{name} ({count})");
-                let btn = egui::Button::new(
-                    RichText::new(&label_text).small().strong().color(text_color),
-                )
-                .fill(fill)
-                .stroke(stroke)
-                .corner_radius(CornerRadius::same(theme::RADIUS_BTN));
-
-                let tooltip = match name.as_str() {
-                    "全部" => "展示全部可用节点，自由选择切换",
-                    "AI分组" => "专供 ChatGPT、Claude、Midjourney、Grok 等 AI，优先保证美国/原生 IP 解锁",
-                    "美国节点" => "url-test 周期测速，实时挑选最低延迟节点供给 Google 与 YouTube",
-                    "多线并发下载" => "load-balance 负载均衡，聚合节点并发加速 IDM / 迅雷 / 网盘下载",
-                    "普通代理" => "常规网页出海兜底；国内服务直连",
-                    _ => "点击切换至该策略组并筛选对应节点",
-                };
-
-                let resp = ui.add(btn).on_hover_text(tooltip);
-                if resp.clicked() && !is_selected {
-                    self.proxy_selected_group = name.clone();
-                }
-            }
-        });
-
-        ui.add_space(6.0);
-
-        // -------------------------------------------------------------------
-        // 第 2 栏：当前策略组运行状态、出口指示与策略/排序控制
-        // -------------------------------------------------------------------
         let is_auto = self.proxy_config.url_test;
-        let current_strategy = self.proxy_config.auto_strategy;
         let running = self.proxy_status.state == ProxyState::Running;
-
         let current_group_now = if self.proxy_selected_group == "全部" || self.proxy_selected_group == "PROXY" {
             if is_auto {
                 self.kernel_egress_name()
@@ -1047,238 +1414,132 @@ impl VpnApp {
                 .and_then(|g| g.now.clone())
         };
 
-        let group_kind = self
-            .kernel_groups
-            .iter()
-            .find(|g| g.name == self.proxy_selected_group)
-            .map(|g| g.kind.clone())
-            .unwrap_or_else(|| {
-                match self.proxy_selected_group.as_str() {
-                    "美国节点" => "url-test".to_string(),
-                    "多线并发下载" => "load-balance".to_string(),
-                    "AI分组" | "普通代理" => "select".to_string(),
-                    _ => if is_auto { "url-test".to_string() } else { "select".to_string() },
-                }
-            });
-
-        ui.horizontal(|ui| {
-            if self.proxy_selected_group == "全部" || self.proxy_selected_group == "PROXY" {
-                let is_url_test = is_auto && current_strategy == AutoRoutingStrategy::UrlTest;
-                if ui
-                    .add(icons::selectable_icon_btn(Icon::Lightning, "延迟选优", is_url_test))
-                    .on_hover_text(AutoRoutingStrategy::UrlTest.description())
-                    .clicked()
-                {
-                    self.proxy_config.url_test = true;
-                    self.proxy_config.auto_strategy = AutoRoutingStrategy::UrlTest;
-                    if running {
-                        self.save_proxy_config();
+        // ===================================================================
+        // macOS Sequoia 极简晶体工具栏 (单行紧凑布局：地区过滤 + 排序 + 搜索与节点计数)
+        // ===================================================================
+        Frame::NONE
+            .fill(theme::panel())
+            .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+            .corner_radius(CornerRadius::same(10))
+            .inner_margin(Margin::symmetric(14, 7))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    // 若当前在按特定策略组筛选，展示可点击重置的轻量胶囊
+                    if self.proxy_selected_group != "全部" {
+                        let reset_resp = ui.add(
+                            egui::Button::new(
+                                RichText::new(format!("📁 {} ✕", self.proxy_selected_group))
+                                    .small()
+                                    .strong()
+                                    .color(theme::accent_strong()),
+                            )
+                            .fill(theme::accent_bg())
+                            .stroke(Stroke::new(1.0_f32, theme::accent()))
+                            .corner_radius(CornerRadius::same(10)),
+                        );
+                        if reset_resp
+                            .on_hover_text("当前正在按此策略组过滤节点，点击重置并显示「全部」节点")
+                            .clicked()
+                        {
+                            self.proxy_selected_group = "全部".to_string();
+                        }
+                        ui.separator();
                     }
-                }
 
-                let is_fallback = is_auto && current_strategy == AutoRoutingStrategy::Fallback;
-                if ui
-                    .add(icons::selectable_icon_btn(Icon::Shield, "故障转移", is_fallback))
-                    .on_hover_text(AutoRoutingStrategy::Fallback.description())
-                    .clicked()
-                {
-                    self.proxy_config.url_test = true;
-                    self.proxy_config.auto_strategy = AutoRoutingStrategy::Fallback;
-                    if running {
-                        self.save_proxy_config();
+                    // 地区过滤胶囊
+                    icon_label(ui, Icon::Globe, 12.0, theme::text_secondary());
+                    let regions = [
+                        ("all", "全部"),
+                        ("HK", "🇭🇰 香港"),
+                        ("JP", "🇯🇵 日本"),
+                        ("US", "🇺🇸 美国"),
+                        ("SG", "🇸🇬 新加坡"),
+                        ("TW", "🇹🇼 台湾"),
+                        ("KR", "🇰🇷 韩国"),
+                        ("OTHER", "其它"),
+                    ];
+                    for (code, label) in regions {
+                        let is_sel = self.proxy_region_filter == code;
+                        let (fill, stroke, text_color) = if is_sel {
+                            (
+                                theme::accent_bg(),
+                                Stroke::new(1.0_f32, theme::accent()),
+                                theme::accent_strong(),
+                            )
+                        } else {
+                            (
+                                theme::sidebar(),
+                                Stroke::new(1.0_f32, theme::border_subtle()),
+                                theme::muted(),
+                            )
+                        };
+                        let btn = egui::Button::new(RichText::new(label).small().strong().color(text_color))
+                            .fill(fill)
+                            .stroke(stroke)
+                            .corner_radius(CornerRadius::same(10));
+                        if ui.add(btn).clicked() && !is_sel {
+                            self.proxy_region_filter = code.to_string();
+                        }
                     }
-                }
 
-                let is_load_balance = is_auto && current_strategy == AutoRoutingStrategy::LoadBalance;
-                if ui
-                    .add(icons::selectable_icon_btn(Icon::Rocket, "负载均衡", is_load_balance))
-                    .on_hover_text(AutoRoutingStrategy::LoadBalance.description())
-                    .clicked()
-                {
-                    self.proxy_config.url_test = true;
-                    self.proxy_config.auto_strategy = AutoRoutingStrategy::LoadBalance;
-                    if running {
-                        self.save_proxy_config();
-                    }
-                }
-
-                let is_manual = !is_auto;
-                if ui
-                    .add(icons::selectable_icon_btn(Icon::Pin, "手动指定", is_manual))
-                    .on_hover_text("锁定单节点通信，关闭策略组自动切换")
-                    .clicked()
-                {
-                    self.proxy_config.url_test = false;
-                    if running {
-                        self.save_proxy_config();
-                    }
-                }
-            } else {
-                let (kind_desc, kind_tip) = match group_kind.to_lowercase().as_str() {
-                    "url-test" | "urltest" => (
-                        "⚡ 自动优选 (url-test)",
-                        "内核按周期测速延迟自动选优分配出口节点",
-                    ),
-                    "load-balance" | "loadbalance" => (
-                        "⚖️ 负载均衡 (load-balance)",
-                        "流量分散并发至本组所有可用节点，加速并发传输",
-                    ),
-                    _ => (
-                        "👆 手动切换 (select)",
-                        "点击下方任意节点卡片即可将本组出口切换为该节点",
-                    ),
-                };
-                Frame::NONE
-                    .fill(theme::panel())
-                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
-                    .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
-                    .inner_margin(Margin::symmetric(8, 4))
-                    .show(ui, |ui| {
-                        ui.label(RichText::new(kind_desc).small().strong().color(theme::accent_strong()));
-                    })
-                    .response
-                    .on_hover_text(kind_tip);
-            }
-
-            if running {
-                if let Some(ref now) = current_group_now {
-                    ui.separator();
-                    let clean = crate::gui::widgets::clean_node_display_name(now);
-                    let display_now = if clean.chars().count() > 22 {
-                        let mut s: String = clean.chars().take(22).collect();
-                        s.push('…');
-                        s
-                    } else {
-                        clean.to_string()
-                    };
-                    Frame::NONE
-                        .fill(theme::success_bg())
-                        .stroke(Stroke::new(1.0_f32, theme::success().gamma_multiply(0.4)))
-                        .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
-                        .inner_margin(Margin::symmetric(8, 4))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let (beacon, _) = ui.allocate_exact_size(Vec2::splat(6.0), Sense::hover());
-                                ui.painter().circle_filled(beacon.center(), 3.0, theme::success());
+                    // 右侧动作组：节点排序 + 搜索框与节点计数
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        Frame::NONE
+                            .fill(theme::sidebar())
+                            .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                            .corner_radius(CornerRadius::same(8))
+                            .inner_margin(Margin::symmetric(8, 3))
+                            .show(ui, |ui| {
                                 ui.label(
-                                    RichText::new(format!("出口: {display_now}"))
+                                    RichText::new(format!("{} 节点", self.proxy_nodes.len()))
                                         .small()
                                         .strong()
-                                        .color(theme::text_primary()),
+                                        .color(theme::text_secondary()),
                                 );
                             });
-                        })
-                        .response
-                        .on_hover_text(format!("当前「{}」策略组实际选路出口：\n{now}", self.proxy_selected_group));
-                }
-            } else {
-                ui.separator();
-                let has_candidate = self.selected_proxy_node_id.is_some()
-                    || (self.proxy_config.url_test && (!self.proxy_nodes.is_empty() || !self.nodes.is_empty()));
-                if ui
-                    .add_enabled(has_candidate && !self.proxy_busy, primary_btn("🚀 启动代理"))
-                    .on_hover_text("以当前选中的策略组立即启动代理")
-                    .clicked()
-                {
-                    self.start_proxy();
-                }
-            }
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let is_name = self.proxy_sort_by == ProxySortBy::Name;
-                if ui
-                    .add(icons::selectable_icon_btn(Icon::Sort, "名称", is_name))
-                    .clicked()
-                {
-                    self.proxy_sort_by = ProxySortBy::Name;
-                }
-                let is_lat = self.proxy_sort_by == ProxySortBy::Latency;
-                if ui
-                    .add(icons::selectable_icon_btn(Icon::Lightning, "延迟", is_lat))
-                    .clicked()
-                {
-                    self.proxy_sort_by = ProxySortBy::Latency;
-                }
-                ui.label(RichText::new("排序:").small().color(theme::muted()));
-            });
-        });
+                        let cleared = ui
+                            .add_visible(
+                                !self.proxy_search.is_empty(),
+                                icons::icon_btn_square(Icon::Close, 11.0),
+                            )
+                            .clicked();
+                        if cleared {
+                            self.proxy_search.clear();
+                        }
 
-        ui.add_space(4.0);
+                        ui.push_id("proxy_node_search_island", |ui| {
+                            ui.horizontal(|ui| {
+                                icon_label(ui, Icon::Search, 12.0, theme::muted());
+                                let search_field = ui.add(
+                                    egui::TextEdit::singleline(&mut self.proxy_search)
+                                        .hint_text("搜索节点...")
+                                        .desired_width(100.0),
+                                );
+                                crate::gui::widgets::note_text_field(ui, &search_field);
+                            });
+                        });
 
-        // -------------------------------------------------------------------
-        // 第 3 栏：地区胶囊分段条 (左) + 搜索框 & 节点数 (右)
-        // -------------------------------------------------------------------
-        ui.horizontal(|ui| {
-            let regions = [
-                ("all", "全部"),
-                ("HK", "香港"),
-                ("JP", "日本"),
-                ("US", "美国"),
-                ("SG", "新加坡"),
-                ("TW", "台湾"),
-                ("KR", "韩国"),
-                ("OTHER", "其它"),
-            ];
-            for (code, label) in regions {
-                let is_sel = self.proxy_region_filter == code;
-                let (fill, stroke, text_color) = if is_sel {
-                    (
-                        theme::accent_bg(),
-                        Stroke::new(1.0_f32, theme::accent()),
-                        theme::accent_strong(),
-                    )
-                } else {
-                    (
-                        theme::panel(),
-                        Stroke::new(1.0_f32, theme::border_subtle()),
-                        theme::muted(),
-                    )
-                };
-                let btn = egui::Button::new(RichText::new(label).small().strong().color(text_color))
-                    .fill(fill)
-                    .stroke(stroke)
-                    .corner_radius(CornerRadius::same(theme::RADIUS_BTN));
-                if ui.add(btn).clicked() && !is_sel {
-                    self.proxy_region_filter = code.to_string();
-                }
-            }
+                        ui.separator();
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let cleared = ui
-                    .add_visible(
-                        !self.proxy_search.is_empty(),
-                        icons::icon_btn_square(Icon::Close, 11.0),
-                    )
-                    .clicked();
-                if cleared {
-                    self.proxy_search.clear();
-                }
-                ui.push_id("proxy_node_search", |ui| {
-                    ui.horizontal(|ui| {
-                        icon_label(ui, Icon::Search, 13.0, theme::muted());
-                        let search_field = ui.add(
-                            egui::TextEdit::singleline(&mut self.proxy_search)
-                                .hint_text("搜索节点...")
-                                .desired_width(130.0),
-                        );
-                        crate::gui::widgets::note_text_field(ui, &search_field);
+                        let is_name = self.proxy_sort_by == ProxySortBy::Name;
+                        if ui
+                            .add(icons::selectable_icon_btn(Icon::Sort, "名称", is_name))
+                            .clicked()
+                        {
+                            self.proxy_sort_by = ProxySortBy::Name;
+                        }
+                        let is_lat = self.proxy_sort_by == ProxySortBy::Latency;
+                        if ui
+                            .add(icons::selectable_icon_btn(Icon::Lightning, "延迟", is_lat))
+                            .clicked()
+                        {
+                            self.proxy_sort_by = ProxySortBy::Latency;
+                        }
+                        ui.label(RichText::new("排序:").small().color(theme::text_secondary()));
                     });
                 });
-
-                Frame::NONE
-                    .fill(theme::panel())
-                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
-                    .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
-                    .inner_margin(Margin::symmetric(8, 4))
-                    .show(ui, |ui| {
-                        ui.label(
-                            RichText::new(format!("{} 节点", self.proxy_nodes.len()))
-                                .small()
-                                .color(theme::muted()),
-                        );
-                    });
             });
-        });
 
         ui.add_space(6.0);
 
@@ -1314,8 +1575,9 @@ impl VpnApp {
         let mut selected = None;
         let mut group_switch_member = None;
         let mut locked: Option<(String, String)> = None;
+        let mut switch_to_manual = false;
         let mut menu_action: Option<NodeCardAction> = None;
-        let mut status_msg: Option<String> = None;
+        let status_msg: Option<String> = None;
         let selected_id = self.selected_proxy_node_id.clone();
         let switching_id = self.switching_node_id.clone();
         let is_busy = self.busy;
@@ -1396,10 +1658,8 @@ impl VpnApp {
 
                                 let card_tip = if self.proxy_selected_group != "全部" && self.proxy_selected_group != "PROXY" {
                                     "点击将该节点设为当前策略组出口，右键查看详情 / 测速 / IP 检测"
-                                } else if is_auto {
-                                    "自动选路中：出口由内核决定。右键可「锁定为出口」（会关掉自动选路）/ 查看详情 / 测速 / IP 检测"
                                 } else {
-                                    "点击连接，右键查看详情 / 测速 / IP 检测"
+                                    "点击连接该节点（若处于自动选优将自动切换为手动指定），右键查看详情 / 测速 / IP 检测"
                                 };
 
                                 let response = compact_node_card(
@@ -1411,12 +1671,12 @@ impl VpnApp {
                                 .on_hover_text(card_tip);
 
                                 if response.clicked() {
-                                    if !is_auto {
-                                        if !is_selected {
-                                            selected = Some((node.id.clone(), node.name.clone()));
-                                        }
-                                    } else if !is_selected {
-                                        status_msg = Some("自动选路中：出口由内核决定，要固定这个节点请右键「锁定为出口」".into());
+                                    // 点击节点时：如果当前策略不是手动指定，自动将策略切换为手动指定
+                                    if is_auto {
+                                        switch_to_manual = true;
+                                    }
+                                    if !is_selected {
+                                        selected = Some((node.id.clone(), node.name.clone()));
                                     }
 
                                     // 若当前过滤的策略组是可手动选择的 Selector 组且包含该节点，也同步让内核切换该策略组
@@ -1479,6 +1739,12 @@ impl VpnApp {
         }
         if let Some((grp, member)) = group_switch_member {
             self.select_kernel_member(grp, member);
+        }
+        if switch_to_manual {
+            self.proxy_config.url_test = false;
+            if running {
+                self.save_proxy_config();
+            }
         }
         if let Some((id, name)) = selected {
             self.switch_proxy_node(id, name, "手动切换");
@@ -1686,133 +1952,598 @@ impl VpnApp {
     pub(crate) fn ui_proxy_connections(&mut self, ui: &mut Ui) {
         section_title(
             ui,
-            "活跃连接监控",
-            "实时查看走代理与直连的进程、目标域名及传输流量，支持一键断开异常连接",
+            "网络连接与 DNS 审计",
+            "分流流向监控、活动连接跟踪、进程带宽矩阵及内核实时 DNS 解析记录",
         );
 
+        let is_running = self.proxy_status.state == ProxyState::Running;
         let mut close_id = None;
         let mut close_all = false;
+        let mut close_process_name: Option<String> = None;
+        let mut copy_text_payload: Option<String> = None;
 
-        ui.horizontal_wrapped(|ui| {
-            ui.label("筛选");
-            let conn_filter_field = ui.add(
-                egui::TextEdit::singleline(&mut self.connections_filter)
-                    .hint_text("按进程、域名或 IP 过滤")
-                    .desired_width(180.0),
-            );
-            crate::gui::widgets::note_text_field(ui, &conn_filter_field);
-            if !self.connections_filter.is_empty() && ui.button("清空").clicked() {
-                self.connections_filter.clear();
+        // 聚合活跃进程数据
+        let mut process_map: std::collections::HashMap<String, (u64, u64, usize, usize, usize)> = std::collections::HashMap::new();
+        let mut direct_conns = 0usize;
+        let mut proxy_conns = 0usize;
+        let mut direct_bytes = 0u64;
+        let mut proxy_bytes = 0u64;
+
+        for c in &self.active_connections {
+            let total_traffic = c.download + c.upload;
+            let is_direct = c.target.eq_ignore_ascii_case("direct") || c.rule.contains("DIRECT");
+            if is_direct {
+                direct_conns += 1;
+                direct_bytes += total_traffic;
+            } else {
+                proxy_conns += 1;
+                proxy_bytes += total_traffic;
             }
-            ui.separator();
-            ui.label(format!("当前连接总数: {}", self.active_connections.len()));
-            ui.separator();
-            let running = self.proxy_status.state == ProxyState::Running;
-            if ui
-                .add_enabled(
-                    running && !self.active_connections.is_empty(),
-                    danger_btn("断开全部连接"),
-                )
-                .on_hover_text("向内核发送指令关闭所有活动的网络连接")
-                .clicked()
-            {
-                close_all = true;
+
+            let proc_name = if c.process.is_empty() { "未知进程" } else { c.process.as_str() };
+            let entry = process_map.entry(proc_name.to_string()).or_insert((0, 0, 0, 0, 0));
+            entry.0 += c.upload;
+            entry.1 += c.download;
+            entry.2 += 1;
+            if is_direct {
+                entry.3 += 1;
+            } else {
+                entry.4 += 1;
             }
+        }
+
+        let mut process_list: Vec<(String, u64, u64, usize, usize, usize)> = process_map
+            .into_iter()
+            .map(|(k, v)| (k, v.0, v.1, v.2, v.3, v.4))
+            .collect();
+        process_list.sort_by_key(|p| std::cmp::Reverse(p.1 + p.2));
+
+        let total_traffic = direct_bytes + proxy_bytes;
+        let total_conns = (direct_conns + proxy_conns) as f32;
+
+        // 顶部 macOS 风格次级 Tab 切换栏：连接列表 / 连接进程 / DNS 记录
+        ui.horizontal(|ui| {
+            let conn_str = format!("连接列表 ({})", self.active_connections.len());
+            let proc_str = format!("连接进程 ({})", process_list.len());
+            let dns_str = format!("DNS 记录 ({})", self.dns_records.len());
+            let tabs = [
+                (ConnectionsTab::List, Icon::Radar, conn_str.as_str()),
+                (ConnectionsTab::Processes, Icon::Cpu, proc_str.as_str()),
+                (ConnectionsTab::Dns, Icon::Globe, dns_str.as_str()),
+            ];
+            macos_segmented_tabs(ui, &mut self.connections_tab, &tabs);
         });
+
         ui.add_space(8.0);
 
-        if self.proxy_status.state != ProxyState::Running {
+        if !is_running {
             card_frame().show(ui, |ui| {
-                ui.label(RichText::new("代理未在运行中，暂无活跃连接数据").color(theme::muted()));
+                ui.label(RichText::new("代理内核未运行，暂无活跃连接与实时 DNS 数据。启动代理后将在此自动监听展示。").color(theme::muted()));
             });
             return;
         }
 
-        let filter = self.connections_filter.trim().to_lowercase();
-        let filtered: Vec<&ActiveConnectionInfo> = self
-            .active_connections
-            .iter()
-            .filter(|c| {
-                if filter.is_empty() {
-                    true
-                } else {
-                    c.process.to_lowercase().contains(&filter)
-                        || c.host.to_lowercase().contains(&filter)
-                        || c.destination.to_lowercase().contains(&filter)
-                        || c.rule.to_lowercase().contains(&filter)
-                }
-            })
-            .collect();
-
-        if filtered.is_empty() {
-            card_frame().show(ui, |ui| {
-                ui.label(
-                    RichText::new(if self.active_connections.is_empty() {
-                        "当前暂无活动的网络连接"
-                    } else {
-                        "没有匹配筛选条件的网络连接"
-                    })
-                    .color(theme::muted()),
-                );
-            });
-            return;
-        }
-
-        panel_frame().show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    egui::Grid::new("active_connections_grid")
-                        .striped(true)
-                        .min_col_width(60.0)
-                        .spacing([12.0, 6.0])
-                        .show(ui, |ui| {
-                            header_cell(ui, "网络");
-                            header_cell(ui, "进程");
-                            header_cell(ui, "目标地址");
-                            header_cell(ui, "分流规则");
-                            header_cell(ui, "上传");
-                            header_cell(ui, "下载");
-                            header_cell(ui, "操作");
-                            ui.end_row();
-
-                            for c in filtered {
-                                ui.label(RichText::new(&c.network).small());
-                                ui.label(RichText::new(&c.process).strong().small());
-                                let target_text = if !c.host.is_empty() {
-                                    format!("{} ({})", c.host, c.destination)
-                                } else {
-                                    c.destination.clone()
-                                };
-                                ui.label(RichText::new(target_text).small());
-                                ui.label(RichText::new(&c.rule).small().color(theme::accent()));
-                                ui.label(
-                                    RichText::new(format_bytes(c.upload))
-                                        .small()
-                                        .color(theme::muted()),
-                                );
-                                ui.label(
-                                    RichText::new(format_bytes(c.download))
-                                        .small()
-                                        .color(theme::muted()),
-                                );
-                                if ui
-                                    .add(danger_btn("断开"))
-                                    .on_hover_text("断开此连接")
-                                    .clicked()
-                                {
-                                    close_id = Some(c.id.clone());
-                                }
-                                ui.end_row();
-                            }
-                        });
+        match self.connections_tab {
+            ConnectionsTab::List => {
+                // 1. 工具栏：筛选 + 统计 + 批量断开
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("筛选");
+                    let conn_filter_field = ui.add(
+                        egui::TextEdit::singleline(&mut self.connections_filter)
+                            .hint_text("按进程、域名或 IP 过滤")
+                            .desired_width(180.0),
+                    );
+                    crate::gui::widgets::note_text_field(ui, &conn_filter_field);
+                    if !self.connections_filter.is_empty() && ui.button("清空").clicked() {
+                        self.connections_filter.clear();
+                    }
+                    ui.separator();
+                    ui.label(format!("当前活跃连接: {} 条", self.active_connections.len()));
+                    ui.separator();
+                    if ui
+                        .add_enabled(!self.active_connections.is_empty(), danger_btn("断开全部连接"))
+                        .on_hover_text("向内核发送指令关闭所有活动的网络连接")
+                        .clicked()
+                    {
+                        close_all = true;
+                    }
                 });
-        });
+
+                ui.add_space(8.0);
+
+                // 2. 分流流向概览
+                if total_conns > 0.0 {
+                    Frame::NONE
+                        .fill(theme::panel())
+                        .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                        .corner_radius(CornerRadius::same(10))
+                        .inner_margin(Margin::symmetric(14, 10))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    icon_label(ui, Icon::Radar, 13.0, theme::accent());
+                                    ui.label(RichText::new("分流流向监控").small().strong().color(theme::text_primary()));
+                                });
+                                ui.add_space(4.0);
+
+                                let segments = [
+                                    ("代理分流 (Proxy)", proxy_conns as f32, theme::accent()),
+                                    ("国内直连 (Direct)", direct_conns as f32, theme::success()),
+                                ];
+                                crate::gui::widgets::render_distribution_bar(ui, &segments, total_conns, 8.0);
+                                ui.add_space(4.0);
+
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "代理: {} 连 ({})",
+                                            proxy_conns,
+                                            format_bytes(proxy_bytes)
+                                        ))
+                                        .small()
+                                        .color(theme::accent_strong()),
+                                    );
+                                    ui.separator();
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "直连: {} 连 ({})",
+                                            direct_conns,
+                                            format_bytes(direct_bytes)
+                                        ))
+                                        .small()
+                                        .color(theme::success()),
+                                    );
+                                });
+                            });
+                        });
+                    ui.add_space(8.0);
+                }
+
+                // 3. 连接列表表格
+                let filter = self.connections_filter.trim().to_lowercase();
+                let filtered: Vec<&ActiveConnectionInfo> = self
+                    .active_connections
+                    .iter()
+                    .filter(|c| {
+                        if filter.is_empty() {
+                            true
+                        } else {
+                            c.process.to_lowercase().contains(&filter)
+                                || c.host.to_lowercase().contains(&filter)
+                                || c.destination.to_lowercase().contains(&filter)
+                                || c.rule.to_lowercase().contains(&filter)
+                        }
+                    })
+                    .collect();
+
+                if filtered.is_empty() {
+                    card_frame().show(ui, |ui| {
+                        ui.label(
+                            RichText::new(if self.active_connections.is_empty() {
+                                "当前暂无活动的网络连接"
+                            } else {
+                                "没有匹配筛选条件的网络连接"
+                            })
+                            .color(theme::muted()),
+                        );
+                    });
+                } else {
+                    panel_frame().show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                egui::Grid::new("active_connections_grid")
+                                    .striped(true)
+                                    .min_col_width(60.0)
+                                    .spacing([12.0, 7.0])
+                                    .show(ui, |ui| {
+                                        header_cell(ui, "网络");
+                                        header_cell(ui, "进程");
+                                        header_cell(ui, "目标地址");
+                                        header_cell(ui, "分流规则");
+                                        header_cell(ui, "上传流量");
+                                        header_cell(ui, "下载流量");
+                                        header_cell(ui, "操作");
+                                        ui.end_row();
+
+                                        for c in filtered {
+                                            // 1. 网络协议微晶徽标
+                                            let net_upper = c.network.to_uppercase();
+                                            let (net_fill, net_color) = match net_upper.as_str() {
+                                                "TCP" => (theme::accent_bg(), theme::accent_strong()),
+                                                "UDP" => (Color32::from_rgba_unmultiplied(245, 158, 11, 35), Color32::from_rgb(245, 158, 11)),
+                                                _ => (theme::sidebar(), theme::muted()),
+                                            };
+                                            Frame::NONE
+                                                .fill(net_fill)
+                                                .corner_radius(CornerRadius::same(6))
+                                                .inner_margin(Margin::symmetric(6, 2))
+                                                .show(ui, |ui| {
+                                                    ui.label(RichText::new(&net_upper).small().strong().color(net_color));
+                                                });
+
+                                            // 2. 进程胶囊
+                                            Frame::NONE
+                                                .fill(theme::sidebar())
+                                                .corner_radius(CornerRadius::same(6))
+                                                .inner_margin(Margin::symmetric(6, 2))
+                                                .show(ui, |ui| {
+                                                    ui.horizontal(|ui| {
+                                                        icon_label(ui, Icon::Terminal, 10.0, theme::muted());
+                                                        ui.label(RichText::new(&c.process).strong().small().color(theme::text_primary()));
+                                                    });
+                                                });
+
+                                            // 3. 目标地址
+                                            let target_text = if !c.host.is_empty() {
+                                                format!("{} ({})", c.host, c.destination)
+                                            } else {
+                                                c.destination.clone()
+                                            };
+                                            ui.label(RichText::new(target_text).small().color(theme::text_primary()))
+                                                .on_hover_text(&c.destination);
+
+                                            // 4. 分流规则微标
+                                            let is_direct = c.target.eq_ignore_ascii_case("direct") || c.rule.contains("DIRECT");
+                                            let (rule_fill, rule_color) = if is_direct {
+                                                (theme::success_bg(), theme::success())
+                                            } else {
+                                                (theme::accent_bg(), theme::accent_strong())
+                                            };
+                                            Frame::NONE
+                                                .fill(rule_fill)
+                                                .corner_radius(CornerRadius::same(6))
+                                                .inner_margin(Margin::symmetric(6, 2))
+                                                .show(ui, |ui| {
+                                                    ui.label(RichText::new(&c.rule).small().strong().color(rule_color));
+                                                });
+
+                                            // 5. 上传
+                                            ui.label(
+                                                RichText::new(format!("↑ {}", format_bytes(c.upload)))
+                                                    .small()
+                                                    .color(theme::success()),
+                                            );
+
+                                            // 6. 下载
+                                            ui.label(
+                                                RichText::new(format!("↓ {}", format_bytes(c.download)))
+                                                    .small()
+                                                    .strong()
+                                                    .color(theme::accent_strong()),
+                                            );
+
+                                            // 7. 操作
+                                            if ui
+                                                .add(danger_btn("断开"))
+                                                .on_hover_text("断开此连接")
+                                                .clicked()
+                                            {
+                                                close_id = Some(c.id.clone());
+                                            }
+                                            ui.end_row();
+                                        }
+                                    });
+                            });
+                    });
+                }
+            }
+            ConnectionsTab::Processes => {
+                // 1. 工具栏
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("筛选进程");
+                    let proc_filter_field = ui.add(
+                        egui::TextEdit::singleline(&mut self.connections_process_filter)
+                            .hint_text("按进程名过滤")
+                            .desired_width(180.0),
+                    );
+                    crate::gui::widgets::note_text_field(ui, &proc_filter_field);
+                    if !self.connections_process_filter.is_empty() && ui.button("清空").clicked() {
+                        self.connections_process_filter.clear();
+                    }
+                    ui.separator();
+                    ui.label(format!("当前活跃进程: {} 个", process_list.len()));
+                    ui.separator();
+                    ui.label(RichText::new(format!("进程产生总流量: {}", format_bytes(total_traffic))).small().color(theme::muted()));
+                });
+
+                ui.add_space(8.0);
+
+                // 2. Top 进程矩阵卡片
+                let top_matrix: Vec<(&str, u64, usize)> = process_list
+                    .iter()
+                    .map(|p| (p.0.as_str(), p.1 + p.2, p.3))
+                    .collect();
+                if !top_matrix.is_empty() {
+                    Frame::NONE
+                        .fill(theme::panel())
+                        .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                        .corner_radius(CornerRadius::same(10))
+                        .inner_margin(Margin::symmetric(14, 10))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    icon_label(ui, Icon::Cpu, 13.0, theme::accent());
+                                    ui.label(RichText::new("Top 进程流量与带宽占比").small().strong().color(theme::text_primary()));
+                                });
+                                ui.add_space(4.0);
+                                crate::gui::widgets::render_top_processes_card(ui, &top_matrix, total_traffic);
+                            });
+                        });
+                    ui.add_space(8.0);
+                }
+
+                // 3. 进程详细聚合表
+                let p_filter = self.connections_process_filter.trim().to_lowercase();
+                let filtered_procs: Vec<&(String, u64, u64, usize, usize, usize)> = process_list
+                    .iter()
+                    .filter(|p| p_filter.is_empty() || p.0.to_lowercase().contains(&p_filter))
+                    .collect();
+
+                if filtered_procs.is_empty() {
+                    card_frame().show(ui, |ui| {
+                        ui.label(RichText::new("当前暂无进程产生网络连接").color(theme::muted()));
+                    });
+                } else {
+                    panel_frame().show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                egui::Grid::new("process_connections_grid")
+                                    .striped(true)
+                                    .min_col_width(70.0)
+                                    .spacing([14.0, 8.0])
+                                    .show(ui, |ui| {
+                                        header_cell(ui, "进程");
+                                        header_cell(ui, "活跃连接数");
+                                        header_cell(ui, "分流分布");
+                                        header_cell(ui, "上行流量");
+                                        header_cell(ui, "下行流量");
+                                        header_cell(ui, "总流量");
+                                        header_cell(ui, "操作");
+                                        ui.end_row();
+
+                                        for p in filtered_procs {
+                                            let proc_name = &p.0;
+                                            let upload = p.1;
+                                            let download = p.2;
+                                            let conn_count = p.3;
+                                            let dir_count = p.4;
+                                            let prx_count = p.5;
+                                            let proc_traffic = upload + download;
+
+                                            // 1. 进程名称
+                                            Frame::NONE
+                                                .fill(theme::sidebar())
+                                                .corner_radius(CornerRadius::same(6))
+                                                .inner_margin(Margin::symmetric(8, 4))
+                                                .show(ui, |ui| {
+                                                    ui.horizontal(|ui| {
+                                                        icon_label(ui, Icon::Terminal, 11.0, theme::accent());
+                                                        ui.label(RichText::new(proc_name).strong().color(theme::text_primary()));
+                                                    });
+                                                });
+
+                                            // 2. 活跃连接数
+                                            ui.label(RichText::new(format!("{conn_count} 条")).strong().color(theme::text_primary()));
+
+                                            // 3. 分流分布
+                                            ui.horizontal(|ui| {
+                                                if prx_count > 0 {
+                                                    ui.label(RichText::new(format!("代理:{prx_count}")).small().color(theme::accent_strong()));
+                                                }
+                                                if dir_count > 0 {
+                                                    ui.label(RichText::new(format!("直连:{dir_count}")).small().color(theme::success()));
+                                                }
+                                            });
+
+                                            // 4. 上行
+                                            ui.label(RichText::new(format!("↑ {}", format_bytes(upload))).small().color(theme::success()));
+
+                                            // 5. 下行
+                                            ui.label(RichText::new(format!("↓ {}", format_bytes(download))).small().strong().color(theme::accent_strong()));
+
+                                            // 6. 总流量
+                                            ui.label(RichText::new(format_bytes(proc_traffic)).strong().color(theme::text_primary()));
+
+                                            // 7. 操作：关闭该进程的所有连接
+                                            if ui
+                                                .add(danger_btn("断开全部"))
+                                                .on_hover_text(format!("关闭进程 {proc_name} 的全部活动连接"))
+                                                .clicked()
+                                            {
+                                                close_process_name = Some(proc_name.clone());
+                                            }
+                                            ui.end_row();
+                                        }
+                                    });
+                            });
+                    });
+                }
+            }
+            ConnectionsTab::Dns => {
+                // 1. 工具栏：筛选 + 统计 + 清空
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("筛选记录");
+                    let dns_filter_field = ui.add(
+                        egui::TextEdit::singleline(&mut self.connections_dns_filter)
+                            .hint_text("按域名、解析 IP 或发起进程过滤")
+                            .desired_width(200.0),
+                    );
+                    crate::gui::widgets::note_text_field(ui, &dns_filter_field);
+                    if !self.connections_dns_filter.is_empty() && ui.button("清空").clicked() {
+                        self.connections_dns_filter.clear();
+                    }
+                    ui.separator();
+                    ui.label(format!("已记录 DNS 轨迹: {} 条", self.dns_records.len()));
+                    ui.separator();
+                    if ui.button("清空全部记录").clicked() {
+                        self.dns_records.clear();
+                    }
+                });
+
+                ui.add_space(8.0);
+
+                // 2. DNS 运行配置摘要
+                Frame::NONE
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                    .corner_radius(CornerRadius::same(10))
+                    .inner_margin(Margin::symmetric(14, 10))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            icon_label(ui, Icon::Globe, 14.0, theme::accent());
+                            ui.label(RichText::new("DNS 架构状态:").strong().color(theme::text_primary()));
+                            let (mode_str, mode_color) = match self.proxy_config.dns.enhanced_mode {
+                                DnsEnhancedMode::FakeIp => ("Fake-IP (秒级并发映射)", theme::success()),
+                                DnsEnhancedMode::RedirHost => ("Redir-Host (真实解析直通)", theme::accent()),
+                            };
+                            ui.label(RichText::new(mode_str).strong().color(mode_color));
+                            ui.separator();
+                            let ns = self.proxy_config.dns.nameservers.first().map(|s| s.as_str()).unwrap_or("doh.pub");
+                            ui.label(RichText::new(format!("主上游: {ns}")).small().color(theme::muted()));
+                        });
+                    });
+
+                ui.add_space(8.0);
+
+                // 3. DNS 记录表格
+                let d_filter = self.connections_dns_filter.trim().to_lowercase();
+                let filtered_dns: Vec<&DnsRecord> = self
+                    .dns_records
+                    .iter()
+                    .filter(|r| {
+                        d_filter.is_empty()
+                            || r.host.to_lowercase().contains(&d_filter)
+                            || r.ip.to_lowercase().contains(&d_filter)
+                            || r.process.to_lowercase().contains(&d_filter)
+                            || r.rule.to_lowercase().contains(&d_filter)
+                    })
+                    .collect();
+
+                if filtered_dns.is_empty() {
+                    card_frame().show(ui, |ui| {
+                        ui.label(
+                            RichText::new(if self.dns_records.is_empty() {
+                                "暂无实时 DNS 记录（发起网页浏览或网络请求时将在此自动捕获）"
+                            } else {
+                                "没有匹配筛选条件的 DNS 记录"
+                            })
+                            .color(theme::muted()),
+                        );
+                    });
+                } else {
+                    panel_frame().show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                egui::Grid::new("dns_records_grid")
+                                    .striped(true)
+                                    .min_col_width(60.0)
+                                    .spacing([12.0, 7.0])
+                                    .show(ui, |ui| {
+                                        header_cell(ui, "时间");
+                                        header_cell(ui, "查询域名");
+                                        header_cell(ui, "解析目标 IP");
+                                        header_cell(ui, "发起进程");
+                                        header_cell(ui, "网络");
+                                        header_cell(ui, "分流动作");
+                                        header_cell(ui, "操作");
+                                        ui.end_row();
+
+                                        for r in filtered_dns {
+                                            // 1. 时间
+                                            ui.label(RichText::new(&r.time_str).small().monospace().color(theme::muted()));
+
+                                            // 2. 域名
+                                            ui.label(RichText::new(&r.host).strong().small().color(theme::text_primary()))
+                                                .on_hover_text(&r.host);
+
+                                            // 3. 解析目标
+                                            ui.label(RichText::new(&r.ip).small().monospace().color(theme::text_secondary()))
+                                                .on_hover_text(&r.ip);
+
+                                            // 4. 发起进程
+                                            Frame::NONE
+                                                .fill(theme::sidebar())
+                                                .corner_radius(CornerRadius::same(6))
+                                                .inner_margin(Margin::symmetric(6, 2))
+                                                .show(ui, |ui| {
+                                                    ui.horizontal(|ui| {
+                                                        icon_label(ui, Icon::Terminal, 9.0, theme::muted());
+                                                        ui.label(RichText::new(&r.process).small().color(theme::text_primary()));
+                                                    });
+                                                });
+
+                                            // 5. 协议
+                                            let (net_fill, net_color) = if r.network == "UDP" {
+                                                (Color32::from_rgba_unmultiplied(245, 158, 11, 35), Color32::from_rgb(245, 158, 11))
+                                            } else {
+                                                (theme::accent_bg(), theme::accent_strong())
+                                            };
+                                            Frame::NONE
+                                                .fill(net_fill)
+                                                .corner_radius(CornerRadius::same(6))
+                                                .inner_margin(Margin::symmetric(6, 2))
+                                                .show(ui, |ui| {
+                                                    ui.label(RichText::new(&r.network).small().strong().color(net_color));
+                                                });
+
+                                            // 6. 分流动作
+                                            let is_direct = r.target.eq_ignore_ascii_case("direct") || r.rule.contains("DIRECT");
+                                            let (rule_fill, rule_color) = if is_direct {
+                                                (theme::success_bg(), theme::success())
+                                            } else {
+                                                (theme::accent_bg(), theme::accent_strong())
+                                            };
+                                            Frame::NONE
+                                                .fill(rule_fill)
+                                                .corner_radius(CornerRadius::same(6))
+                                                .inner_margin(Margin::symmetric(6, 2))
+                                                .show(ui, |ui| {
+                                                    ui.label(RichText::new(&r.rule).small().strong().color(rule_color));
+                                                });
+
+                                            // 7. 复制
+                                            ui.horizontal(|ui| {
+                                                if ui.small_button("复制域名").clicked() {
+                                                    copy_text_payload = Some(r.host.clone());
+                                                }
+                                                if ui.small_button("复制IP").clicked() {
+                                                    copy_text_payload = Some(r.ip.clone());
+                                                }
+                                            });
+                                            ui.end_row();
+                                        }
+                                    });
+                            });
+                    });
+                }
+            }
+        }
 
         if let Some(id) = close_id {
             self.close_connection(id);
         } else if close_all {
             self.close_all_connections();
+        } else if let Some(proc_name) = close_process_name {
+            let ids_to_close: Vec<String> = self
+                .active_connections
+                .iter()
+                .filter(|c| c.process == proc_name)
+                .map(|c| c.id.clone())
+                .collect();
+            for id in ids_to_close {
+                self.close_connection(id);
+            }
+        }
+
+        if let Some(text) = copy_text_payload {
+            ui.ctx().copy_text(text);
+            self.status = "已复制到剪贴板".into();
         }
     }
 
@@ -1950,6 +2681,28 @@ impl VpnApp {
                 );
                 return;
             }
+
+            // 规则命中分段分布条
+            let mut direct_hits = 0f32;
+            let mut proxy_hits = 0f32;
+            let mut other_hits = 0f32;
+            for hit in &self.rule_hits_today {
+                if hit.target.eq_ignore_ascii_case("direct") || hit.rule.contains("DIRECT") {
+                    direct_hits += hit.hits as f32;
+                } else if hit.target.eq_ignore_ascii_case("proxy") || hit.target == "全部" {
+                    proxy_hits += hit.hits as f32;
+                } else {
+                    other_hits += hit.hits as f32;
+                }
+            }
+            let segments = [
+                ("国内直连 (DIRECT)", direct_hits, theme::success()),
+                ("出海代理 (PROXY)", proxy_hits, theme::accent()),
+                ("智能策略分流", other_hits, Color32::from_rgb(245, 158, 11)),
+            ];
+            crate::gui::widgets::render_distribution_bar(ui, &segments, total as f32, 7.0);
+            ui.add_space(6.0);
+
             ui.horizontal(|ui| {
                 header_cell(ui, "命中的规则");
                 header_cell(ui, "派给");
@@ -2699,149 +3452,229 @@ impl VpnApp {
         section_title(ui, "DNS / TUN", "配置接管模式、监听端口与 DNS");
         let editable = !self.proxy_busy && self.proxy_status.config_editable();
         let mut save_clicked = false;
-        card_frame().show(ui, |ui| {
-            ui.add_enabled_ui(editable, |ui| {
-                ui.strong("接管模式");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.proxy_config.mode, ProxyMode::System, "系统代理");
-                    ui.selectable_value(&mut self.proxy_config.mode, ProxyMode::Tun, "TUN");
-                });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label("运行内核");
-                    egui::ComboBox::from_id_salt("proxy_kernel_preference")
-                        .selected_text(match self.proxy_config.kernel_preference {
-                            KernelPreference::Auto => "自动选择",
-                            KernelPreference::Mihomo => "Mihomo",
-                            KernelPreference::SingBox => "Sing-box",
-                            KernelPreference::Xray => "Xray",
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.proxy_config.kernel_preference,
-                                KernelPreference::Auto,
-                                "自动选择",
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                card_frame().show(ui, |ui| {
+                    ui.add_enabled_ui(editable, |ui| {
+                        ui.horizontal(|ui| {
+                            icon_label(ui, Icon::Plug, 14.0, theme::accent());
+                            ui.label(RichText::new("接管模式架构").strong().size(14.0).color(theme::text_primary()));
+                        });
+                        ui.add_space(6.0);
+
+                        // 双卡架构选择器 (System Proxy vs TUN Virtual Device)
+                        ui.columns(2, |column_uis| {
+                            // 卡片 1: 系统代理
+                            let ui = &mut column_uis[0];
+                            let is_sys = self.proxy_config.mode == ProxyMode::System;
+                            let (stroke, bg) = if is_sys {
+                                (Stroke::new(1.5_f32, theme::accent()), theme::accent_bg())
+                            } else {
+                                (Stroke::new(1.0_f32, theme::border_subtle()), theme::sidebar())
+                            };
+                            let card1 = Frame::NONE
+                                .fill(bg)
+                                .stroke(stroke)
+                                .corner_radius(CornerRadius::same(10))
+                                .inner_margin(Margin::symmetric(14, 10))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        icon_label(ui, Icon::Globe, 16.0, if is_sys { theme::accent() } else { theme::muted() });
+                                        ui.label(RichText::new("系统代理 (System)").strong().color(theme::text_primary()));
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            if is_sys {
+                                                ui.label(RichText::new("● 激活中").small().strong().color(theme::accent_strong()));
+                                            } else {
+                                                ui.label(RichText::new("○ 点击选用").small().color(theme::muted()));
+                                            }
+                                        });
+                                    });
+                                    ui.add_space(4.0);
+                                    ui.label(RichText::new("自动配置系统 HTTP / SOCKS5 代理").small().color(theme::text_secondary()));
+                                    ui.label(RichText::new("适用于浏览器与支持系统代理的桌面应用，零系统侵入").small().color(theme::muted()));
+                                });
+                            if card1.response.interact(Sense::click()).clicked() {
+                                self.proxy_config.mode = ProxyMode::System;
+                            }
+
+                            // 卡片 2: TUN 虚拟网卡
+                            let ui = &mut column_uis[1];
+                            let is_tun = self.proxy_config.mode == ProxyMode::Tun;
+                            let (stroke, bg) = if is_tun {
+                                (Stroke::new(1.5_f32, theme::accent()), theme::accent_bg())
+                            } else {
+                                (Stroke::new(1.0_f32, theme::border_subtle()), theme::sidebar())
+                            };
+                            let card2 = Frame::NONE
+                                .fill(bg)
+                                .stroke(stroke)
+                                .corner_radius(CornerRadius::same(10))
+                                .inner_margin(Margin::symmetric(14, 10))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        icon_label(ui, Icon::Lightning, 16.0, if is_tun { theme::accent() } else { theme::muted() });
+                                        ui.label(RichText::new("TUN 虚拟网卡 (Global)").strong().color(theme::text_primary()));
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            if is_tun {
+                                                ui.label(RichText::new("● 激活中").small().strong().color(theme::accent_strong()));
+                                            } else {
+                                                ui.label(RichText::new("○ 点击选用").small().color(theme::muted()));
+                                            }
+                                        });
+                                    });
+                                    ui.add_space(4.0);
+                                    ui.label(RichText::new("创建底层虚拟网卡接管全系统 IP 层流量").small().color(theme::text_secondary()));
+                                    ui.label(RichText::new("拦截 UDP/ICMP、游戏加速、终端命令全自动透明分流").small().color(theme::muted()));
+                                });
+                            if card2.response.interact(Sense::click()).clicked() {
+                                self.proxy_config.mode = ProxyMode::Tun;
+                            }
+                        });
+
+                        ui.add_space(10.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+
+                        ui.horizontal(|ui| {
+                            ui.label("运行内核");
+                            egui::ComboBox::from_id_salt("proxy_kernel_preference")
+                                .selected_text(match self.proxy_config.kernel_preference {
+                                    KernelPreference::Auto => "自动选择",
+                                    KernelPreference::Mihomo => "Mihomo",
+                                    KernelPreference::SingBox => "Sing-box",
+                                    KernelPreference::Xray => "Xray",
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.proxy_config.kernel_preference,
+                                        KernelPreference::Auto,
+                                        "自动选择",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.proxy_config.kernel_preference,
+                                        KernelPreference::Mihomo,
+                                        "Mihomo",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.proxy_config.kernel_preference,
+                                        KernelPreference::SingBox,
+                                        "Sing-box",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.proxy_config.kernel_preference,
+                                        KernelPreference::Xray,
+                                        "Xray",
+                                    );
+                                });
+                        });
+                        ui.add_space(8.0);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Mixed 端口");
+                            ui.add(
+                                egui::DragValue::new(&mut self.proxy_config.mixed_port).range(1..=u16::MAX),
                             );
-                            ui.selectable_value(
-                                &mut self.proxy_config.kernel_preference,
-                                KernelPreference::Mihomo,
-                                "Mihomo",
+                            ui.label("控制端口");
+                            ui.add(
+                                egui::DragValue::new(&mut self.proxy_config.controller_port)
+                                    .range(1..=u16::MAX),
                             );
-                            ui.selectable_value(
-                                &mut self.proxy_config.kernel_preference,
-                                KernelPreference::SingBox,
-                                "Sing-box",
-                            );
-                            ui.selectable_value(
-                                &mut self.proxy_config.kernel_preference,
-                                KernelPreference::Xray,
-                                "Xray",
+                            ui.checkbox(&mut self.proxy_config.allow_lan, "允许局域网");
+                            ui.checkbox(
+                                &mut self.proxy_config.terminal_proxy,
+                                "终端代理（写入 HTTP_PROXY / HTTPS_PROXY，Git·curl·npm·pip 才认）",
+                            )
+                            .on_hover_text(
+                                "启动代理时把变量写进 HKCU\\Environment，停止时清除；只清我们自己写的值，\n\
+                                 你原有的代理变量不会被碰。新开的终端立即生效，已开着的终端要重开。",
                             );
                         });
-                });
-                ui.add_space(8.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Mixed 端口");
-                    ui.add(
-                        egui::DragValue::new(&mut self.proxy_config.mixed_port).range(1..=u16::MAX),
-                    );
-                    ui.label("控制端口");
-                    ui.add(
-                        egui::DragValue::new(&mut self.proxy_config.controller_port)
-                            .range(1..=u16::MAX),
-                    );
-                    ui.checkbox(&mut self.proxy_config.allow_lan, "允许局域网");
-                    ui.checkbox(
-                        &mut self.proxy_config.terminal_proxy,
-                        "终端代理（写入 HTTP_PROXY / HTTPS_PROXY，Git·curl·npm·pip 才认）",
-                    )
-                    .on_hover_text(
-                        "启动代理时把变量写进 HKCU\\Environment，停止时清除；只清我们自己写的值，\n\
-                         你原有的代理变量不会被碰。新开的终端立即生效，已开着的终端要重开。",
-                    );
-                });
 
-                if self.proxy_config.mode == ProxyMode::Tun {
-                    ui.add_space(14.0);
-                    ui.strong("TUN 参数");
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label("协议栈");
-                        egui::ComboBox::from_id_salt("tun_stack")
-                            .selected_text(tun_stack_label(self.proxy_config.tun.stack))
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut self.proxy_config.tun.stack,
-                                    TunStack::Mixed,
-                                    "Mixed",
-                                );
-                                ui.selectable_value(
-                                    &mut self.proxy_config.tun.stack,
-                                    TunStack::System,
-                                    "System",
-                                );
-                                ui.selectable_value(
-                                    &mut self.proxy_config.tun.stack,
-                                    TunStack::Gvisor,
-                                    "gVisor",
+                        if self.proxy_config.mode == ProxyMode::Tun {
+                            ui.add_space(14.0);
+                            ui.strong("TUN 参数");
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("协议栈");
+                                egui::ComboBox::from_id_salt("tun_stack")
+                                    .selected_text(tun_stack_label(self.proxy_config.tun.stack))
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut self.proxy_config.tun.stack,
+                                            TunStack::Mixed,
+                                            "Mixed",
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.proxy_config.tun.stack,
+                                            TunStack::System,
+                                            "System",
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.proxy_config.tun.stack,
+                                            TunStack::Gvisor,
+                                            "gVisor",
+                                        );
+                                    });
+                                ui.checkbox(&mut self.proxy_config.tun.auto_route, "自动路由");
+                                ui.checkbox(
+                                    &mut self.proxy_config.tun.auto_detect_interface,
+                                    "自动检测网卡",
                                 );
                             });
-                        ui.checkbox(&mut self.proxy_config.tun.auto_route, "自动路由");
-                        ui.checkbox(
-                            &mut self.proxy_config.tun.auto_detect_interface,
-                            "自动检测网卡",
-                        );
-                    });
-                }
+                        }
 
-                ui.add_space(14.0);
-                ui.strong("DNS");
-                ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(&mut self.proxy_config.dns.enabled, "启用");
-                    ui.checkbox(&mut self.proxy_config.dns.ipv6, "IPv6");
-                    egui::ComboBox::from_id_salt("dns_enhanced_mode")
-                        .selected_text(dns_mode_label(self.proxy_config.dns.enhanced_mode))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.proxy_config.dns.enhanced_mode,
-                                DnsEnhancedMode::FakeIp,
-                                "Fake-IP",
-                            );
-                            ui.selectable_value(
-                                &mut self.proxy_config.dns.enhanced_mode,
-                                DnsEnhancedMode::RedirHost,
-                                "Redir-Host",
-                            );
+                        ui.add_space(14.0);
+                        ui.strong("DNS");
+                        ui.horizontal_wrapped(|ui| {
+                            ui.checkbox(&mut self.proxy_config.dns.enabled, "启用");
+                            ui.checkbox(&mut self.proxy_config.dns.ipv6, "IPv6");
+                            egui::ComboBox::from_id_salt("dns_enhanced_mode")
+                                .selected_text(dns_mode_label(self.proxy_config.dns.enhanced_mode))
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.proxy_config.dns.enhanced_mode,
+                                        DnsEnhancedMode::FakeIp,
+                                        "Fake-IP",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.proxy_config.dns.enhanced_mode,
+                                        DnsEnhancedMode::RedirHost,
+                                        "Redir-Host",
+                                    );
+                                });
                         });
-                });
-                if self.proxy_config.dns.nameservers.is_empty() {
-                    self.proxy_config
-                        .dns
-                        .nameservers
-                        .push(crate::proxy::DEFAULT_DNS_PRIMARY.into());
-                }
-                for (index, nameserver) in self.proxy_config.dns.nameservers.iter_mut().enumerate()
-                {
-                    let hint = if index == 0 {
-                        crate::proxy::DEFAULT_DNS_PRIMARY
-                    } else {
-                        crate::proxy::DEFAULT_DNS_SECONDARY
-                    };
-                    ui.horizontal(|ui| {
-                        ui.label(format!("DNS {}", index + 1));
-                        let ns_field = ui.add_sized(
-                            [420.0, 24.0],
-                            egui::TextEdit::singleline(nameserver).hint_text(hint),
-                        );
-                        crate::gui::widgets::note_text_field(ui, &ns_field);
+                        if self.proxy_config.dns.nameservers.is_empty() {
+                            self.proxy_config
+                                .dns
+                                .nameservers
+                                .push(crate::proxy::DEFAULT_DNS_PRIMARY.into());
+                        }
+                        for (index, nameserver) in self.proxy_config.dns.nameservers.iter_mut().enumerate()
+                        {
+                            let hint = if index == 0 {
+                                crate::proxy::DEFAULT_DNS_PRIMARY
+                            } else {
+                                crate::proxy::DEFAULT_DNS_SECONDARY
+                            };
+                            ui.horizontal(|ui| {
+                                ui.label(format!("DNS {}", index + 1));
+                                let ns_field = ui.add_sized(
+                                    [420.0, 24.0],
+                                    egui::TextEdit::singleline(nameserver).hint_text(hint),
+                                );
+                                crate::gui::widgets::note_text_field(ui, &ns_field);
+                            });
+                        }
+                        ui.add_space(12.0);
+                        save_clicked = ui.add(primary_btn("保存网络配置")).clicked();
                     });
-                }
-                ui.add_space(12.0);
-                save_clicked = ui.add(primary_btn("保存网络配置")).clicked();
+                    if !editable {
+                        ui.label(RichText::new("停止代理后可修改运行配置").color(theme::muted()));
+                    }
+                });
+                ui.add_space(16.0);
             });
-            if !editable {
-                ui.label(RichText::new("停止代理后可修改运行配置").color(theme::muted()));
-            }
-        });
+
         if save_clicked {
             self.save_proxy_config();
         }
@@ -2853,180 +3686,257 @@ impl VpnApp {
             "代理内核",
             "应用独立下载、校验、备份和更新，不依赖 v2rayN",
         );
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("存储目录 data/kernels · 来源为官方 GitHub Release")
-                    .small()
-                    .color(theme::muted()),
-            );
-            if ui
-                .add_enabled(!self.kernel_busy, egui::Button::new("检查更新"))
-                .clicked()
-            {
-                self.reload_kernels();
-                self.status = "正在检查官方内核版本...".into();
-            }
-            if self.kernel_busy && ui.add(danger_btn("取消下载")).clicked() {
-                self.kernel_cancel.store(true, Ordering::Relaxed);
-                self.status = "正在取消内核下载...".into();
-            }
-        });
-        if let Some(progress) = &self.kernel_progress {
-            let detail = if progress.stage == crate::kernel::KernelUpdateStage::Downloading {
-                format!(
-                    "{} / {} · {}/s",
-                    format_bytes(progress.downloaded),
-                    format_bytes(progress.total),
-                    format_bytes(progress.bytes_per_second as u64)
-                )
-            } else {
-                progress.message.clone()
-            };
-            ui.add(
-                egui::ProgressBar::new(progress.fraction())
-                    .animate(true)
-                    .desired_width(ui.available_width())
-                    .text(format!(
-                        "{} · {} · {}",
-                        progress.kind.display_name(),
-                        progress.stage.label(),
-                        detail
-                    )),
-            );
-        }
-        ui.add_space(6.0);
-        let kernels = self.kernels.clone();
-        let releases = self.kernel_releases.clone();
-        let mut update_kind = None;
-        card_frame().show(ui, |ui| {
-            let available = ui.available_width();
-            let kind_width = 76.0;
-            let status_width = 58.0;
-            let version_width = (available * 0.25).max(150.0);
-            let latest_width = 88.0;
-            let action_width = 72.0;
-            let path_width = (available
-                - kind_width
-                - status_width
-                - version_width
-                - latest_width
-                - action_width
-                - 52.0)
-                .max(150.0);
-            ui.horizontal(|ui| {
-                ui.add_sized(
-                    [kind_width, 20.0],
-                    egui::Label::new(RichText::new("内核").strong().color(theme::muted()).small()),
-                );
-                ui.add_sized(
-                    [status_width, 20.0],
-                    egui::Label::new(RichText::new("状态").strong().color(theme::muted()).small()),
-                );
-                ui.add_sized(
-                    [version_width, 20.0],
-                    egui::Label::new(
-                        RichText::new("当前版本")
-                            .strong()
-                            .color(theme::muted())
-                            .small(),
-                    ),
-                );
-                ui.add_sized(
-                    [latest_width, 20.0],
-                    egui::Label::new(
-                        RichText::new("最新版本")
-                            .strong()
-                            .color(theme::muted())
-                            .small(),
-                    ),
-                );
-                ui.add_sized(
-                    [path_width, 20.0],
-                    egui::Label::new(RichText::new("路径").strong().color(theme::muted()).small()),
-                );
-                ui.add_sized(
-                    [action_width, 20.0],
-                    egui::Label::new(RichText::new("操作").strong().color(theme::muted()).small()),
-                );
-            });
-            ui.separator();
-            for kernel in &kernels {
-                let version = kernel.version.as_deref().unwrap_or("-");
-                let release = releases.iter().find(|release| release.kind == kernel.kind);
-                let latest = release
-                    .and_then(|release| release.latest_version.as_deref())
-                    .unwrap_or("检查中");
-                let path = kernel
-                    .path
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "-".into());
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [kind_width, 24.0],
-                        egui::Label::new(RichText::new(kernel.kind.display_name()).strong())
-                            .truncate(),
+                    ui.label(
+                        RichText::new("存储目录 data/kernels · 来源为官方 GitHub Release")
+                            .small()
+                            .color(theme::muted()),
                     );
-                    ui.add_sized(
-                        [status_width, 24.0],
-                        egui::Label::new(
-                            RichText::new(if kernel.available {
-                                "可用"
-                            } else {
-                                "未找到"
-                            })
-                            .color(if kernel.available {
-                                theme::success()
-                            } else {
-                                theme::danger()
-                            }),
-                        ),
-                    );
-                    ui.add_sized([version_width, 24.0], egui::Label::new(version).truncate())
-                        .on_hover_text(version);
-                    ui.add_sized(
-                        [latest_width, 24.0],
-                        egui::Label::new(RichText::new(latest).color(
-                            if release.is_some_and(|release| release.update_available) {
-                                theme::warning()
-                            } else {
-                                theme::muted()
-                            },
-                        ))
-                        .truncate(),
-                    );
-                    ui.add_sized([path_width, 24.0], egui::Label::new(&path).truncate())
-                        .on_hover_text(path);
-                    let can_update = release.is_some_and(|release| release.update_available)
-                        && !self.kernel_busy
-                        && !self.proxy_status.kernel_in_use(kernel.kind);
-                    let label = if kernel.available { "更新" } else { "下载" };
                     if ui
-                        .add_enabled(
-                            can_update,
-                            egui::Button::new(label)
-                                .min_size(Vec2::new(action_width, 24.0))
-                                .fill(if can_update {
-                                    theme::accent_bg()
-                                } else {
-                                    Color32::TRANSPARENT
-                                }),
-                        )
-                        .on_hover_text(if self.proxy_status.kernel_in_use(kernel.kind) {
-                            "停止当前代理后才能更新这个内核"
-                        } else {
-                            "下载官方资产，校验 SHA-256 后备份替换"
-                        })
+                        .add_enabled(!self.kernel_busy, egui::Button::new("检查更新"))
                         .clicked()
                     {
-                        update_kind = Some(kernel.kind);
+                        self.reload_kernels();
+                        self.status = "正在检查官方内核版本...".into();
+                    }
+                    if let Some(kp) = &self.kernel_progress {
+                        ui.label(
+                            RichText::new(format!(
+                                "正在更新 {} ({})",
+                                kp.kind.display_name(),
+                                kp.stage.label()
+                            ))
+                            .small()
+                            .color(theme::accent_strong()),
+                        );
+                    }
+                    if self.kernel_busy && ui.add(danger_btn("取消下载")).clicked() {
+                        self.kernel_cancel.store(true, Ordering::Relaxed);
+                        self.status = "正在取消内核下载...".into();
                     }
                 });
-            }
-        });
-        if let Some(kind) = update_kind {
-            self.open_kernel_download(kind);
-        }
+
+                ui.add_space(8.0);
+                let kernels = self.kernels.clone();
+                let releases = self.kernel_releases.clone();
+                let mut update_kind = None;
+
+                let col_count = kernels.len().max(1);
+                ui.columns(col_count, |column_uis| {
+                    for (i, kernel) in kernels.iter().enumerate() {
+                        let ui = &mut column_uis[i];
+                        let col_max_w = ui.available_width();
+                        ui.set_max_width(col_max_w);
+                        ui.set_clip_rect(ui.max_rect());
+
+                        let version = kernel.version.as_deref().unwrap_or("未检测到");
+                        let release = releases.iter().find(|release| release.kind == kernel.kind);
+                        let latest = release
+                            .and_then(|release| release.latest_version.as_deref())
+                            .unwrap_or("检查中");
+                        let path = kernel
+                            .path
+                            .as_ref()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| "-".into());
+
+                        let is_running = self.proxy_status.kernel == Some(kernel.kind);
+                        let is_preferred = self.proxy_config.kernel_preference == KernelPreference::Auto && kernel.kind == KernelKind::Mihomo
+                            || match self.proxy_config.kernel_preference {
+                                KernelPreference::Mihomo => kernel.kind == KernelKind::Mihomo,
+                                KernelPreference::SingBox => kernel.kind == KernelKind::SingBox,
+                                KernelPreference::Xray => kernel.kind == KernelKind::Xray,
+                                _ => false,
+                            };
+
+                        let card_stroke = if is_running {
+                            Stroke::new(1.5_f32, theme::accent())
+                        } else if is_preferred {
+                            Stroke::new(1.0_f32, theme::accent().gamma_multiply(0.5))
+                        } else {
+                            Stroke::new(1.0_f32, theme::border_subtle())
+                        };
+
+                        Frame::NONE
+                            .fill(theme::panel())
+                            .stroke(card_stroke)
+                            .corner_radius(CornerRadius::same(12))
+                            .inner_margin(Margin::symmetric(12, 10))
+                            .show(ui, |ui| {
+                                ui.set_max_width(ui.available_width());
+
+                                // 1. 卡片头部：图标 + 标题 + 运行徽标
+                                ui.horizontal(|ui| {
+                                    let (chip_icon, chip_color) = match kernel.kind {
+                                        KernelKind::Mihomo => (Icon::Cpu, theme::accent()),
+                                        KernelKind::SingBox => (Icon::Lightning, Color32::from_rgb(52, 211, 153)),
+                                        KernelKind::Xray => (Icon::Radar, Color32::from_rgb(245, 158, 11)),
+                                    };
+                                    icon_label(ui, chip_icon, 15.0, chip_color);
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(kernel.kind.display_name())
+                                                .strong()
+                                                .size(14.0)
+                                                .color(theme::text_primary()),
+                                        )
+                                        .truncate(),
+                                    );
+
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if is_running {
+                                            let (beacon, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+                                            ui.painter().circle_filled(beacon.center(), 4.0, theme::success());
+                                            ui.label(RichText::new("运行中").small().strong().color(theme::success()));
+                                        } else if kernel.available {
+                                            ui.label(RichText::new("● 就绪").small().color(theme::accent_strong()));
+                                        } else {
+                                            ui.label(RichText::new("○ 未安装").small().color(theme::muted()));
+                                        }
+                                    });
+                                });
+
+                                ui.add_space(6.0);
+
+                                // 2. 特性胶囊标签
+                                let features = match kernel.kind {
+                                    KernelKind::Mihomo => "智能分流 · TUN · Fake-IP · 规则集",
+                                    KernelKind::SingBox => "ShadowTLS · VLESS · Hysteria2",
+                                    KernelKind::Xray => "XTLS · VLESS · Trojan · Splithttp",
+                                };
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(features)
+                                            .small()
+                                            .color(theme::text_secondary()),
+                                    )
+                                    .truncate(),
+                                )
+                                .on_hover_text(features);
+
+                                ui.add_space(6.0);
+                                ui.separator();
+                                ui.add_space(6.0);
+
+                                // 3. 版本度量
+                                let clean_ver = clean_kernel_version(version);
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("当前:").small().color(theme::muted()));
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(clean_ver)
+                                                .strong()
+                                                .small()
+                                                .monospace()
+                                                .color(theme::text_primary()),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(format!("完整版本：\n{version}"));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("最新:").small().color(theme::muted()));
+                                    let (lat_text, lat_color) = if release.is_some_and(|r| r.update_available) {
+                                        (format!("{latest} (可更新)"), theme::warning())
+                                    } else {
+                                        (format!("{latest} (最新)"), theme::text_secondary())
+                                    };
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(lat_text)
+                                                .small()
+                                                .strong()
+                                                .color(lat_color),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(format!("官方远端版本：{latest}"));
+                                });
+
+                                ui.add_space(4.0);
+
+                                // 4. 路径信息
+                                ui.horizontal(|ui| {
+                                    icon_label(ui, Icon::Package, 11.0, theme::muted());
+                                    let display_path = if path == "-" || path.is_empty() {
+                                        "-".to_string()
+                                    } else {
+                                        std::path::Path::new(&path)
+                                            .file_name()
+                                            .map(|name| name.to_string_lossy().to_string())
+                                            .unwrap_or_else(|| path.clone())
+                                    };
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(display_path)
+                                                .small()
+                                                .monospace()
+                                                .color(theme::muted()),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(format!("文件路径：\n{path}"));
+                                });
+
+                                ui.add_space(8.0);
+
+                                // 5. 操作按钮：若本内核正处于下载/更新中，就地展示进度条，不挤压破坏卡片高度
+                                let is_this_kernel_busy = self.kernel_busy
+                                    && self.kernel_progress.as_ref().map(|p| p.kind) == Some(kernel.kind);
+
+                                if is_this_kernel_busy {
+                                    if let Some(p) = &self.kernel_progress {
+                                        let text = if p.stage == crate::kernel::KernelUpdateStage::Downloading {
+                                            if p.total > 0 {
+                                                let pct = (p.downloaded as f64 / p.total as f64 * 100.0).clamp(0.0, 100.0) as u32;
+                                                format!("{pct}% · {}/s", format_bytes(p.bytes_per_second as u64))
+                                            } else {
+                                                format!("{}/s", format_bytes(p.bytes_per_second as u64))
+                                            }
+                                        } else {
+                                            p.stage.label().to_string()
+                                        };
+                                        ui.add(
+                                            egui::ProgressBar::new(p.fraction())
+                                                .animate(true)
+                                                .desired_width(ui.available_width())
+                                                .text(RichText::new(text).small().strong()),
+                                        );
+                                    }
+                                } else {
+                                    let can_update = release.is_some_and(|release| release.update_available)
+                                        && !self.kernel_busy
+                                        && !self.proxy_status.kernel_in_use(kernel.kind);
+                                    let btn_label = if !kernel.available {
+                                        "📥 下载内核"
+                                    } else if can_update {
+                                        "⚡ 立即更新"
+                                    } else {
+                                        "✅ 已是最新"
+                                    };
+                                    let btn = egui::Button::new(RichText::new(btn_label).small().strong())
+                                        .min_size(Vec2::new(ui.available_width(), 26.0))
+                                        .fill(if can_update || !kernel.available { theme::accent_bg() } else { theme::sidebar() })
+                                        .stroke(Stroke::new(1.0_f32, if can_update || !kernel.available { theme::accent() } else { theme::border_subtle() }))
+                                        .corner_radius(CornerRadius::same(8));
+
+                                    if ui.add_enabled(can_update || !kernel.available, btn).clicked() {
+                                        update_kind = Some(kernel.kind);
+                                    }
+                                }
+                            });
+                    }
+                });
+
+                ui.add_space(16.0);
+                if let Some(kind) = update_kind {
+                    self.open_kernel_download(kind);
+                }
+            });
     }
 
     pub(crate) fn ui_proxy_logs(&mut self, ui: &mut Ui) {
@@ -3353,6 +4263,34 @@ impl VpnApp {
             self.status = "已复制落地 IP 归属信息".into();
         }
         self.show_ip_risk_dialog = open;
+    }
+}
+
+/// 提取干净精简的内核版本号用于卡片紧凑展示（例如从长横幅中提取 `v1.19.32` 或 `1.14.3`），
+/// 避免 80 字符的完整编译横幅导致列宽被强行撑爆并覆盖右侧卡片。
+pub fn clean_kernel_version(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "未检测到" || trimmed == "-" {
+        return trimmed;
+    }
+
+    // 优先从按空格分隔的词项中寻找形如 v1.19.32、1.14.3 或 26.3.27 的标准版本标记
+    for part in trimmed.split_whitespace() {
+        let clean = part.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '-');
+        let check = clean.strip_prefix('v').unwrap_or(clean);
+        if let Some(first_char) = check.chars().next() {
+            if first_char.is_ascii_digit() && check.contains('.') {
+                return clean;
+            }
+        }
+    }
+
+    // 如果未识别出标准数字版本（如包含短 commit hash 或特殊名称），安全截取最多 16 个字符
+    if trimmed.chars().count() > 16 {
+        let (idx, _) = trimmed.char_indices().nth(16).unwrap_or((trimmed.len(), ' '));
+        &trimmed[..idx]
+    } else {
+        trimmed
     }
 }
 
@@ -4378,5 +5316,33 @@ mod policy_group_filter_tests {
         assert!(visible_group_names(false, Some(document), &[])
             .iter()
             .any(|name| name == "我的分组"));
+    }
+}
+
+#[cfg(test)]
+mod clean_kernel_version_tests {
+    use super::clean_kernel_version;
+
+    #[test]
+    fn test_extracts_semver_from_complex_kernel_banners() {
+        assert_eq!(
+            clean_kernel_version(
+                "Mihomo Meta v1.19.32 windows amd64 with go1.26.8 Wed Sep 30 16:55:17 UTC 2026"
+            ),
+            "v1.19.32"
+        );
+        assert_eq!(
+            clean_kernel_version("sing-box version 1.14.3 (go1.22.0 windows/amd64)"),
+            "1.14.3"
+        );
+        assert_eq!(
+            clean_kernel_version("Xray 26.3.27 (Xray, Penetrates Everything.) OpenSource"),
+            "26.3.27"
+        );
+        assert_eq!(clean_kernel_version("v1.19.32"), "v1.19.32");
+        assert_eq!(clean_kernel_version("1.14.3"), "1.14.3");
+        assert_eq!(clean_kernel_version("未检测到"), "未检测到");
+        assert_eq!(clean_kernel_version("-"), "-");
+        assert_eq!(clean_kernel_version(""), "");
     }
 }

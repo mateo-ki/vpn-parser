@@ -19,27 +19,86 @@ impl VpnApp {
         let mut dedupe = false;
         let mut clear_all = false;
 
-        // 节点类型统计：协议双字母缩写图标 (All / VL / VM / TR / SS 等) + 旁边是数量
+        // 节点类型统计：协议分布环形图 (Donut Chart) + 协议缩写徽标
         if let Some(s) = &self.stats.clone() {
             if !s.protocol_stats.is_empty() {
-                ui.horizontal_wrapped(|ui| {
-                    let is_all = self.protocol_filter.is_empty() || self.protocol_filter == "all";
-                    if crate::gui::widgets::protocol_stat_chip(ui, "All", s.node_count, is_all).clicked() {
-                        self.protocol_filter = "".to_string();
-                        filter_changed = true;
-                    }
+                ui.horizontal(|ui| {
+                    crate::gui::widgets::render_protocol_donut_chart(ui, &s.protocol_stats, s.node_count);
+                    ui.add_space(8.0);
 
-                    for p in &s.protocol_stats {
-                        let is_active = self.protocol_filter.eq_ignore_ascii_case(&p.protocol);
-                        if crate::gui::widgets::protocol_stat_chip(ui, &p.protocol, p.count, is_active).clicked() {
-                            if is_active {
+                    ui.vertical(|ui| {
+                        crate::gui::widgets::render_node_health_bar(
+                            ui,
+                            s.alive_count,
+                            s.tested_count,
+                            s.node_count,
+                        );
+                        ui.add_space(3.0);
+
+                        let lat_stats = crate::gui::widgets::LatencySpectrumStats::from_latencies(
+                            self.nodes.iter().map(|n| n.latency_ms)
+                        );
+                        crate::gui::widgets::render_latency_spectrum(ui, &lat_stats);
+                        ui.add_space(4.0);
+
+                        ui.horizontal_wrapped(|ui| {
+                            let is_all = self.protocol_filter.is_empty() || self.protocol_filter == "all";
+                            if crate::gui::widgets::protocol_stat_chip(ui, "All", s.node_count, is_all).clicked() {
                                 self.protocol_filter = "".to_string();
-                            } else {
-                                self.protocol_filter = p.protocol.clone();
+                                filter_changed = true;
                             }
-                            filter_changed = true;
-                        }
-                    }
+
+                            for p in &s.protocol_stats {
+                                let is_active = self.protocol_filter.eq_ignore_ascii_case(&p.protocol);
+                                if crate::gui::widgets::protocol_stat_chip(ui, &p.protocol, p.count, is_active).clicked() {
+                                    if is_active {
+                                        self.protocol_filter = "".to_string();
+                                    } else {
+                                        self.protocol_filter = p.protocol.clone();
+                                    }
+                                    filter_changed = true;
+                                }
+                            }
+
+                            ui.separator();
+
+                            let is_all_lat = (self.latency_filter.is_empty() || self.latency_filter == "all") && !self.only_available_nodes;
+                            let (color_all, stroke_all) = if is_all_lat {
+                                (theme::accent_bg(), Stroke::new(1.0_f32, theme::accent()))
+                            } else {
+                                (theme::sidebar(), Stroke::new(1.0_f32, theme::border_subtle()))
+                            };
+                            if ui.add(egui::Button::new(RichText::new("全部状态").small().strong()).fill(color_all).stroke(stroke_all).corner_radius(CornerRadius::same(10))).clicked() {
+                                self.latency_filter = "all".to_string();
+                                self.only_available_nodes = false;
+                                filter_changed = true;
+                            }
+
+                            let is_alive = self.only_available_nodes || self.latency_filter == "alive";
+                            let (color_alive, stroke_alive) = if is_alive {
+                                (theme::success_bg(), Stroke::new(1.0_f32, theme::success()))
+                            } else {
+                                (theme::sidebar(), Stroke::new(1.0_f32, theme::border_subtle()))
+                            };
+                            if ui.add(egui::Button::new(RichText::new("🟢 仅看可用").small().strong()).fill(color_alive).stroke(stroke_alive).corner_radius(CornerRadius::same(10))).clicked() {
+                                self.only_available_nodes = !self.only_available_nodes;
+                                self.latency_filter = if self.only_available_nodes { "alive".to_string() } else { "all".to_string() };
+                                filter_changed = true;
+                            }
+
+                            let is_untested = self.latency_filter == "untested";
+                            let (color_untest, stroke_untest) = if is_untested {
+                                (theme::accent_bg(), Stroke::new(1.0_f32, theme::accent()))
+                            } else {
+                                (theme::sidebar(), Stroke::new(1.0_f32, theme::border_subtle()))
+                            };
+                            if ui.add(egui::Button::new(RichText::new("⚪ 未测速").small().strong()).fill(color_untest).stroke(stroke_untest).corner_radius(CornerRadius::same(10))).clicked() {
+                                self.only_available_nodes = false;
+                                self.latency_filter = if is_untested { "all".to_string() } else { "untested".to_string() };
+                                filter_changed = true;
+                            }
+                        });
+                    });
                 });
                 ui.add_space(8.0);
             }

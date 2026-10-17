@@ -98,6 +98,18 @@ pub fn section_title(ui: &mut Ui, title: &str, subtitle: &str) {
 }
 
 pub fn nav_item(ui: &mut Ui, current: &mut Tab, tab: Tab, icon: Icon, label: &str) {
+    nav_item_with_badge(ui, current, tab, icon, label, None, None);
+}
+
+pub fn nav_item_with_badge(
+    ui: &mut Ui,
+    current: &mut Tab,
+    tab: Tab,
+    icon: Icon,
+    label: &str,
+    badge: Option<&str>,
+    dot_color: Option<Color32>,
+) {
     let selected = *current == tab;
     let (fill, stroke, text_color, icon_color) = if selected {
         (
@@ -119,7 +131,7 @@ pub fn nav_item(ui: &mut Ui, current: &mut Tab, tab: Tab, icon: Icon, label: &st
         .fill(fill)
         .stroke(stroke)
         .corner_radius(CornerRadius::same(theme::RADIUS_NAV))
-        .inner_margin(Margin::symmetric(theme::PAD_NAV_X, 10))
+        .inner_margin(Margin::symmetric(theme::PAD_NAV_X, 8))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -135,6 +147,36 @@ pub fn nav_item(ui: &mut Ui, current: &mut Tab, tab: Tab, icon: Icon, label: &st
                 icon_label(ui, icon, 17.0, icon_color);
                 ui.add_space(8.0);
                 ui.label(RichText::new(label).strong().color(text_color).size(13.5));
+
+                // 右侧微标胶囊或发光点
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(color) = dot_color {
+                        let (rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+                        ui.painter().circle_filled(rect.center(), 4.0, color.gamma_multiply(0.3));
+                        ui.painter().circle_filled(rect.center(), 2.5, color);
+                    } else if let Some(b) = badge {
+                        Frame::NONE
+                            .fill(if selected {
+                                theme::accent().gamma_multiply(0.25)
+                            } else {
+                                theme::border_subtle()
+                            })
+                            .corner_radius(CornerRadius::same(10))
+                            .inner_margin(Margin::symmetric(6, 2))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new(b)
+                                        .small()
+                                        .strong()
+                                        .color(if selected {
+                                            theme::accent_strong()
+                                        } else {
+                                            theme::sidebar_muted()
+                                        }),
+                                );
+                            });
+                    }
+                });
             });
         })
         .response
@@ -145,6 +187,89 @@ pub fn nav_item(ui: &mut Ui, current: &mut Tab, tab: Tab, icon: Icon, label: &st
         *current = tab;
     }
     ui.add_space(3.0);
+}
+
+/// 纯图标导航项（macOS Dock 风格）：无文字、无角标数字，只保留语义矢量图标与状态圆点
+pub fn nav_item_icon_only(
+    ui: &mut Ui,
+    current: &mut Tab,
+    tab: Tab,
+    icon: Icon,
+    tooltip: &str,
+    dot_color: Option<Color32>,
+) {
+    let selected = *current == tab;
+    let (fill, stroke, icon_color) = if selected {
+        (
+            theme::accent_bg(),
+            Stroke::new(1.0_f32, theme::accent().gamma_multiply(0.4)),
+            theme::accent(),
+        )
+    } else {
+        (
+            Color32::TRANSPARENT,
+            Stroke::NONE,
+            theme::sidebar_muted(),
+        )
+    };
+
+    let item_size = egui::vec2(ui.available_width(), 40.0);
+    let (rect, resp) = ui.allocate_exact_size(item_size, Sense::click());
+    let painter = ui.painter_at(rect);
+
+    let is_hovered = resp.hovered();
+    let bg_fill = if selected {
+        fill
+    } else if is_hovered {
+        theme::panel().gamma_multiply(0.7)
+    } else {
+        fill
+    };
+
+    if bg_fill != Color32::TRANSPARENT {
+        painter.rect_filled(rect, CornerRadius::same(theme::RADIUS_NAV), bg_fill);
+    }
+    if stroke != Stroke::NONE {
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(theme::RADIUS_NAV),
+            stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
+
+    // 左侧选中小指示条 (macOS 风格)
+    if selected {
+        let bar = egui::Rect::from_min_size(
+            egui::pos2(rect.min.x + 2.0, rect.center().y - 8.0),
+            egui::vec2(3.0, 16.0),
+        );
+        painter.rect_filled(bar, CornerRadius::same(2), theme::accent());
+    }
+
+    // 居中绘制矢量图标
+    let icon_size = 20.0;
+    let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(icon_size));
+    let active_icon_color = if is_hovered && !selected {
+        theme::text_primary()
+    } else {
+        icon_color
+    };
+    crate::gui::icons::draw_icon(&painter, icon_rect, icon, active_icon_color);
+
+    // 右上角状态微标发光圆点 (如代理运行状态)
+    if let Some(color) = dot_color {
+        let dot_pos = egui::pos2(rect.right() - 8.0, rect.top() + 8.0);
+        painter.circle_filled(dot_pos, 4.0, color.gamma_multiply(0.3));
+        painter.circle_filled(dot_pos, 2.5, color);
+    }
+
+    if resp.clicked() {
+        *current = tab;
+    }
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(tooltip);
+    ui.add_space(4.0);
 }
 
 /// 一行两段的表头：左段按自然宽度排，右段（动作组）钉在内容区右缘。
@@ -245,6 +370,78 @@ pub fn panel_tab<T: PartialEq + Copy>(
     }
 }
 
+/// macOS 原生风格药丸分段选择条 (Segmented Control)
+/// 整体置于统一外壳托盘内，激活项带高亮浮动药丸底色与轻柔边框，未激活项悬停高亮
+pub fn macos_segmented_tabs<T: PartialEq + Copy>(
+    ui: &mut Ui,
+    current: &mut T,
+    tabs: &[(T, Icon, &str)],
+) {
+    let tray_frame = Frame::NONE
+        .fill(theme::sidebar())
+        .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(Margin::symmetric(3, 3));
+
+    tray_frame.show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for &(panel, icon, label) in tabs {
+                let selected = *current == panel;
+                let (fill, stroke, text_color, icon_color) = if selected {
+                    if theme::is_light() {
+                        (
+                            Color32::WHITE,
+                            Stroke::new(1.0_f32, Color32::from_black_alpha(20)),
+                            theme::text_primary(),
+                            theme::accent(),
+                        )
+                    } else {
+                        (
+                            Color32::from_rgb(44, 44, 50),
+                            Stroke::new(1.0_f32, Color32::from_white_alpha(24)),
+                            Color32::WHITE,
+                            theme::accent(),
+                        )
+                    }
+                } else {
+                    (
+                        Color32::TRANSPARENT,
+                        Stroke::NONE,
+                        theme::text_secondary(),
+                        theme::muted(),
+                    )
+                };
+
+                let resp = Frame::NONE
+                    .fill(fill)
+                    .stroke(stroke)
+                    .corner_radius(CornerRadius::same(6))
+                    .inner_margin(Margin::symmetric(11, 5))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            icon_label(ui, icon, 13.0, icon_color);
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(label)
+                                    .strong()
+                                    .size(12.0)
+                                    .color(text_color),
+                            );
+                        });
+                    })
+                    .response
+                    .interact(Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+
+                if resp.clicked() {
+                    *current = panel;
+                }
+            }
+        });
+    });
+}
+
 /// 状态徽章。返回整块的 `Response`，让调用方还能挂 hover —— 徽章自己要说清
 /// "为什么是这个状态"，不该让人去翻状态栏。
 pub fn status_badge(ui: &mut Ui, text: &str, color: Color32) -> egui::Response {
@@ -265,20 +462,20 @@ pub fn status_badge(ui: &mut Ui, text: &str, color: Color32) -> egui::Response {
         .response
 }
 
-/// 协议小胶囊。**不再按协议分色**（用户 2026-10-06：页面上不要红/黄，颜色太乱）——
-/// 协议小胶囊：磨砂微标设计，简洁科技感。
+/// 协议小胶囊：微晶磨砂色彩微标
 pub fn protocol_pill(ui: &mut Ui, protocol: &str) {
+    let color = protocol_color(protocol);
     Frame::NONE
-        .fill(theme::border_subtle())
-        .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
-        .corner_radius(CornerRadius::same(4))
+        .fill(color.gamma_multiply(0.14))
+        .stroke(Stroke::new(1.0_f32, color.gamma_multiply(0.35)))
+        .corner_radius(CornerRadius::same(5))
         .inner_margin(Margin::symmetric(6, 2))
         .show(ui, |ui| {
             ui.label(
                 RichText::new(protocol)
                     .strong()
                     .size(10.5)
-                    .color(theme::text_secondary()),
+                    .color(color),
             );
         });
 }
@@ -297,17 +494,32 @@ pub fn compact_node_card(
         (theme::panel(), Stroke::new(1.0_f32, theme::border_subtle()))
     };
 
-    let response = Frame::NONE
+    let mut frame = Frame::NONE
         .fill(fill)
         .stroke(stroke)
-        .corner_radius(CornerRadius::same(theme::RADIUS_BTN))
-        .inner_margin(Margin::symmetric(14, 10))
+        .corner_radius(CornerRadius::same(12))
+        .inner_margin(Margin::symmetric(14, 10));
+
+    if is_selected {
+        frame = frame.shadow(egui::epaint::Shadow {
+            offset: [0, 4],
+            blur: 16,
+            spread: 0,
+            color: theme::accent().gamma_multiply(0.22),
+        });
+    }
+
+    let response = frame
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.set_min_height(58.0);
 
-            // 第一行：标题 + 右侧状态标识
+            // 第一行：国旗 + 节点名称 + 右侧活跃药丸
             ui.horizontal(|ui| {
+                let (flag, _country_name) =
+                    country_flag_and_name(node.country.as_deref().unwrap_or(""));
+                ui.label(RichText::new(flag).size(15.0));
+
                 let name_color = if is_switching {
                     theme::warning()
                 } else if is_selected {
@@ -316,44 +528,82 @@ pub fn compact_node_card(
                     theme::text_primary()
                 };
 
-                let clean_name = clean_node_display_name(&node.name);
+                let clean_name = sanitize_node_name(&node.name);
+                let reserve_right = if is_selected || is_switching { 52.0 } else { 0.0 };
+                let available_text_w = (ui.available_width() - reserve_right).max(60.0);
+
                 let name_label = ui.add_sized(
-                    [ui.available_width() - if is_selected { 44.0 } else { 0.0 }, 18.0],
-                    egui::Label::new(RichText::new(clean_name).strong().size(13.0).color(name_color)).truncate(),
+                    [available_text_w, 18.0],
+                    egui::Label::new(
+                        RichText::new(&clean_name)
+                            .strong()
+                            .size(13.0)
+                            .color(name_color),
+                    )
+                    .truncate(),
                 );
                 name_label.on_hover_text(&node.name);
 
                 if is_selected {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new("● 活跃").small().strong().color(theme::accent()));
+                        Frame::NONE
+                            .fill(Color32::from_rgb(52, 199, 89).gamma_multiply(0.18))
+                            .stroke(Stroke::new(
+                                1.0_f32,
+                                Color32::from_rgb(52, 199, 89).gamma_multiply(0.4),
+                            ))
+                            .corner_radius(CornerRadius::same(10))
+                            .inner_margin(Margin::symmetric(6, 2))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let (beacon, _) =
+                                        ui.allocate_exact_size(Vec2::splat(6.0), Sense::hover());
+                                    ui.painter().circle_filled(
+                                        beacon.center(),
+                                        3.0,
+                                        Color32::from_rgb(52, 199, 89),
+                                    );
+                                    ui.label(
+                                        RichText::new("活跃")
+                                            .small()
+                                            .strong()
+                                            .color(Color32::from_rgb(52, 199, 89)),
+                                    );
+                                });
+                            });
+                    });
+                } else if is_switching {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        icon_label(ui, Icon::Lightning, 11.0, theme::warning());
+                        ui.label(
+                            RichText::new("切换中...")
+                                .small()
+                                .strong()
+                                .color(theme::warning()),
+                        );
                     });
                 }
             });
 
             ui.add_space(5.0);
 
-            // 第二行：协议标签 + 国旗与国家 + 右侧延迟
+            // 第二行：协议标签 + 国家名称 + 右侧信号与延迟
             ui.horizontal(|ui| {
                 protocol_pill(ui, &node.protocol.to_uppercase());
 
                 if let Some(country) = &node.country {
-                    let (flag, name) = country_flag_and_name(country);
+                    let (_flag, name) = country_flag_and_name(country);
                     ui.label(
-                        RichText::new(format!("{flag} {name}"))
+                        RichText::new(name)
                             .small()
                             .color(theme::text_secondary()),
                     );
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if is_switching {
-                        ui.horizontal(|ui| {
-                            icon_label(ui, Icon::Lightning, 11.0, theme::warning());
-                            ui.label(RichText::new("切换中...").small().strong().color(theme::warning()));
-                        });
-                    } else {
-                        ui.label(latency_text(node).small().strong());
-                    }
+                    ui.label(latency_text(node).small().strong());
+                    ui.add_space(2.0);
+                    render_signal_bars(ui, node.latency_ms);
                 });
             });
         })
@@ -364,7 +614,7 @@ pub fn compact_node_card(
     if response.hovered() && !is_selected && !is_switching {
         ui.painter().rect_stroke(
             response.rect,
-            CornerRadius::same(theme::RADIUS_BTN),
+            CornerRadius::same(12),
             Stroke::new(1.0_f32, theme::accent().gamma_multiply(0.4)),
             egui::StrokeKind::Inside,
         );
@@ -511,6 +761,7 @@ pub fn clock_of(at_rfc3339: &str) -> String {
 /// 表头里的迷你流量图：下载实线、上传虚线，两条共用一个量程 —— 各用各的量程会让
 /// 300 B/s 的上传画得和 30 KB/s 的下载一样高，那是假象。32px 高塞不下坐标和文字，
 /// 读数走 hover；累计值在窗口底部状态栏本来就有。
+#[allow(dead_code)]
 pub fn render_traffic_sparkline(
     ui: &mut Ui,
     history: &std::collections::VecDeque<(f32, f32)>,
@@ -597,6 +848,804 @@ pub fn render_traffic_sparkline(
             }
         }
     }
+}
+
+/// 4 格手机/WiFi 风格延迟信号柱图
+pub fn render_signal_bars(ui: &mut Ui, latency_ms: Option<i64>) {
+    let size = egui::vec2(16.0, 13.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter_at(rect);
+
+    let baseline = rect.max.y;
+    let bar_w = 2.5;
+    let bar_gap = 1.5;
+    let heights = [3.5_f32, 6.5_f32, 9.5_f32, 12.5_f32];
+
+    let (active_bars, bar_color) = match latency_ms {
+        Some(ms) if ms < 100 => (4, theme::success()),
+        Some(ms) if ms < 220 => (3, theme::success()),
+        Some(ms) if ms < 450 => (2, theme::warning()),
+        Some(_) => (1, Color32::from_rgb(239, 68, 68)),
+        None => (0, theme::muted()),
+    };
+
+    let dim_color = theme::border_subtle();
+
+    for i in 0..4 {
+        let x = rect.min.x + i as f32 * (bar_w + bar_gap);
+        let h = heights[i];
+        let bar_rect = egui::Rect::from_min_max(
+            egui::pos2(x, baseline - h),
+            egui::pos2(x + bar_w, baseline),
+        );
+        let fill = if i < active_bars {
+            bar_color
+        } else {
+            dim_color
+        };
+        painter.rect_filled(bar_rect, CornerRadius::same(1), fill);
+    }
+
+    let tooltip = match latency_ms {
+        Some(ms) => format!("延迟: {ms} ms (信号: {active_bars}/4 格)"),
+        None => "未测速 / 离线".to_string(),
+    };
+    response.on_hover_text(tooltip);
+}
+
+/// 协议专属色彩标识
+pub fn protocol_color(protocol: &str) -> Color32 {
+    let lower = protocol.to_lowercase();
+    match lower.as_str() {
+        "vless" | "vl" => theme::accent(),
+        "vmess" | "vm" => Color32::from_rgb(2, 132, 199),
+        "trojan" | "tr" => Color32::from_rgb(245, 158, 11),
+        "shadowsocks" | "ss" | "shadowsocksr" | "ssr" => Color32::from_rgb(16, 185, 129),
+        "hysteria" | "hysteria2" | "hy" | "hy2" => Color32::from_rgb(168, 85, 247),
+        "wireguard" | "wg" => Color32::from_rgb(99, 102, 241),
+        "tuic" | "tu" => Color32::from_rgb(236, 72, 153),
+        "masque" | "mq" => Color32::from_rgb(13, 148, 136),
+        _ => theme::text_secondary(),
+    }
+}
+
+/// 半圆速度计仪表盘 (Speedometer Gauge)
+/// 支持动态指示针、发光弧轨、实时速率与上传副读数
+pub fn render_speedometer(
+    ui: &mut Ui,
+    down_bytes_per_sec: u64,
+    up_bytes_per_sec: u64,
+    is_active: bool,
+) {
+    let width = 144.0;
+    let height = 96.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
+    let painter = ui.painter_at(rect);
+
+    // 几何中心与外半径
+    let center = egui::pos2(rect.center().x, rect.min.y + 54.0);
+    let radius = 42.0;
+    let stroke_width = 6.5_f32;
+
+    // 240 度开角：从 150 度 (左下) 顺时针扫至 390 度 (右下)
+    let start_angle = 150.0_f32.to_radians();
+    let sweep = 240.0_f32.to_radians();
+    let steps = 36;
+
+    // 底层暗灰背景轨
+    let track_points: Vec<egui::Pos2> = (0..=steps)
+        .map(|i| {
+            let t = i as f32 / steps as f32;
+            let angle = start_angle + t * sweep;
+            egui::pos2(center.x + radius * angle.cos(), center.y + radius * angle.sin())
+        })
+        .collect();
+    painter.add(egui::Shape::line(
+        track_points,
+        Stroke::new(stroke_width, theme::border_subtle()),
+    ));
+
+    // 计算当前速度比例 (半对数层级分布，使得 0~10M/100M/1000M 均有灵敏反应)
+    let ratio = if is_active {
+        let mbps = (down_bytes_per_sec as f32 * 8.0) / 1_000_000.0;
+        if mbps <= 0.05 {
+            0.0
+        } else if mbps <= 1.0 {
+            (mbps / 1.0) * 0.25
+        } else if mbps <= 10.0 {
+            0.25 + ((mbps - 1.0) / 9.0) * 0.25
+        } else if mbps <= 50.0 {
+            0.50 + ((mbps - 10.0) / 40.0) * 0.25
+        } else {
+            (0.75 + ((mbps - 50.0) / 150.0) * 0.25).min(1.0)
+        }
+    } else {
+        0.0
+    };
+
+    // 绘制激活的高亮发光进度弧
+    if ratio > 0.005 {
+        let active_steps = ((steps as f32 * ratio).ceil() as usize).max(2);
+        let active_points: Vec<egui::Pos2> = (0..=active_steps)
+            .map(|i| {
+                let t = (i as f32 / active_steps as f32) * ratio;
+                let angle = start_angle + t * sweep;
+                egui::pos2(center.x + radius * angle.cos(), center.y + radius * angle.sin())
+            })
+            .collect();
+        let glow_color = theme::accent();
+        // 外层柔光
+        painter.add(egui::Shape::line(
+            active_points.clone(),
+            Stroke::new(stroke_width + 4.0_f32, glow_color.gamma_multiply(0.25)),
+        ));
+        // 内层实线
+        painter.add(egui::Shape::line(
+            active_points,
+            Stroke::new(stroke_width, glow_color),
+        ));
+    }
+
+    // 绘制指针与中心轴心
+    let needle_angle = start_angle + ratio * sweep;
+    let needle_tip = egui::pos2(
+        center.x + (radius - 9.0) * needle_angle.cos(),
+        center.y + (radius - 9.0) * needle_angle.sin(),
+    );
+    let needle_color = if is_active { theme::accent() } else { theme::muted() };
+    painter.line_segment([center, needle_tip], Stroke::new(2.0_f32, needle_color));
+    painter.circle_filled(center, 4.0, needle_color);
+    painter.circle_filled(center, 2.0, theme::panel());
+
+    // 刻度标注 (0 / 100M+)
+    let left_tick = egui::pos2(center.x + (radius + 8.0) * start_angle.cos(), center.y + (radius + 8.0) * start_angle.sin());
+    let right_tick = egui::pos2(center.x + (radius + 8.0) * (start_angle + sweep).cos(), center.y + (radius + 8.0) * (start_angle + sweep).sin());
+    painter.text(left_tick, egui::Align2::RIGHT_CENTER, "0", egui::FontId::proportional(8.5), theme::muted());
+    painter.text(right_tick, egui::Align2::LEFT_CENTER, "100M+", egui::FontId::proportional(8.5), theme::muted());
+
+    // 仪表盘中心文字读数
+    let speed_color = if is_active && down_bytes_per_sec > 0 {
+        theme::text_primary()
+    } else {
+        theme::muted()
+    };
+    painter.text(
+        egui::pos2(center.x, center.y + 16.0),
+        egui::Align2::CENTER_CENTER,
+        format_speed(down_bytes_per_sec),
+        egui::FontId::proportional(13.0),
+        speed_color,
+    );
+
+    // 底部副读数
+    let up_str = format!("↑ {}", format_speed(up_bytes_per_sec));
+    painter.text(
+        egui::pos2(center.x, center.y + 30.0),
+        egui::Align2::CENTER_CENTER,
+        up_str,
+        egui::FontId::proportional(10.0),
+        theme::text_secondary(),
+    );
+
+    response.on_hover_text(format!(
+        "实时测速仪表盘\n↓ 下载速率: {}\n↑ 上传速率: {}",
+        format_speed(down_bytes_per_sec),
+        format_speed(up_bytes_per_sec)
+    ));
+}
+
+/// 实时吞吐大波形图：平滑 Catmull-Rom 贝塞尔曲线、下行半透明发光渐变填充、上行虚线、悬停交叉准星与标尺
+pub fn render_traffic_waveform_card(
+    ui: &mut Ui,
+    history: &std::collections::VecDeque<(f32, f32)>,
+    active: bool,
+    height: f32,
+) {
+    let width = ui.available_width().max(160.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let hovered = response.hovered();
+    let painter = ui.painter_at(rect);
+    let baseline = rect.max.y - 4.0;
+    let top_padding = 18.0;
+    let usable_h = (height - top_padding - 6.0).max(10.0);
+
+    // 底线
+    painter.line_segment(
+        [
+            egui::pos2(rect.min.x, baseline),
+            egui::pos2(rect.max.x, baseline),
+        ],
+        Stroke::new(1.0_f32, theme::border_subtle()),
+    );
+
+    if !active || history.len() < 2 {
+        // 未启动代理或暂无采样时，显示平直基准线与标尺（一条线），无大字遮挡
+        let ruler_y = baseline - usable_h;
+        painter.line_segment(
+            [
+                egui::pos2(rect.min.x + 4.0, ruler_y),
+                egui::pos2(rect.max.x - 4.0, ruler_y),
+            ],
+            Stroke::new(0.8_f32, theme::border_subtle().gamma_multiply(0.4)),
+        );
+        painter.text(
+            egui::pos2(rect.min.x + 6.0, rect.min.y + 2.0),
+            egui::Align2::LEFT_TOP,
+            "峰值量程 0.0 KB/s · 待机",
+            egui::FontId::proportional(9.0),
+            theme::muted(),
+        );
+
+        // 绘制贯穿视口的平直流量监控基准线（一条线）
+        let line_color = theme::accent().gamma_multiply(0.7);
+        painter.line_segment(
+            [
+                egui::pos2(rect.min.x + 4.0, baseline),
+                egui::pos2(rect.max.x - 4.0, baseline),
+            ],
+            Stroke::new(1.8_f32, line_color),
+        );
+        // 右端点指示发光光标
+        painter.circle_filled(egui::pos2(rect.max.x - 4.0, baseline), 3.5, line_color.gamma_multiply(0.3));
+        painter.circle_filled(egui::pos2(rect.max.x - 4.0, baseline), 2.0, line_color);
+
+        if hovered {
+            response.on_hover_text("实时流量监视器 · 待机 (0.0 KB/s)\n启动代理后将实时绘制平滑吞吐波形");
+        }
+        return;
+    }
+
+    let downs: Vec<f32> = history.iter().map(|&(down, _)| down).collect();
+    let ups: Vec<f32> = history.iter().map(|&(_, up)| up).collect();
+    let scale = chart_scale(
+        &history
+            .iter()
+            .flat_map(|&(d, u)| [d, u])
+            .collect::<Vec<f32>>(),
+    );
+    let last = history.len() - 1;
+    let dx = (rect.width() - 8.0) / last as f32;
+    let at = |index: usize, value: f32| {
+        let ratio = (value / scale).clamp(0.0, 1.0);
+        egui::pos2(
+            rect.min.x + 4.0 + index as f32 * dx,
+            baseline - ratio * usable_h,
+        )
+    };
+    let curve = |values: &[f32]| -> Vec<egui::Pos2> {
+        let raw: Vec<egui::Pos2> = values
+            .iter()
+            .enumerate()
+            .map(|(index, &value)| at(index, value))
+            .collect();
+        smooth_polyline(&raw, 4)
+    };
+
+    let down_curve = curve(&downs);
+    let up_curve = curve(&ups);
+
+    // 绘制量程上限淡色虚线指示，隔离文字区与波形区
+    let ruler_y = baseline - usable_h;
+    painter.line_segment(
+        [
+            egui::pos2(rect.min.x + 4.0, ruler_y),
+            egui::pos2(rect.max.x - 4.0, ruler_y),
+        ],
+        Stroke::new(0.8_f32, theme::border_subtle().gamma_multiply(0.4)),
+    );
+
+    // 绘制下行半透明发光渐变区域填充（逐梯形填充，避免凹多边形变形）
+    let down_color = theme::success();
+    let fill_color = down_color.gamma_multiply(0.12);
+    for window in down_curve.windows(2) {
+        let p1 = window[0];
+        let p2 = window[1];
+        let b1 = egui::pos2(p1.x, baseline);
+        let b2 = egui::pos2(p2.x, baseline);
+        painter.add(egui::Shape::convex_polygon(
+            vec![p1, p2, b2, b1],
+            fill_color,
+            Stroke::NONE,
+        ));
+    }
+
+    // 绘制上行曲线（虚线）
+    let up_color = theme::accent();
+    for dash in egui::Shape::dashed_line(&up_curve, Stroke::new(1.3_f32, up_color), 3.0, 2.5) {
+        painter.add(dash);
+    }
+
+    // 绘制下行主曲线（发光实线）
+    painter.add(egui::Shape::line(
+        down_curve.clone(),
+        Stroke::new(1.8_f32, down_color),
+    ));
+
+    // 最新点端点发光球
+    painter.circle_filled(at(last, ups[last]), 2.0, up_color);
+    painter.circle_filled(at(last, downs[last]), 3.5, down_color.gamma_multiply(0.3));
+    painter.circle_filled(at(last, downs[last]), 2.2, down_color);
+
+    // 标尺文字 (左上角当前量程上限，置于量程虚线上方的独立保护区，与最高波峰保持垂直安全间隙)
+    let max_speed_str = format_speed((scale * 1024.0) as u64);
+    painter.text(
+        egui::pos2(rect.min.x + 6.0, rect.min.y + 2.0),
+        egui::Align2::LEFT_TOP,
+        format!("峰值量程 {max_speed_str}"),
+        egui::FontId::proportional(9.0),
+        theme::muted(),
+    );
+
+    // 悬停交互十字准星与时间点数据
+    if hovered {
+        if let Some(point) = ui.input(|i| i.pointer.hover_pos()) {
+            if point.x >= rect.min.x && point.x <= rect.max.x {
+                let index = (((point.x - rect.min.x - 4.0) / dx).round() as usize).min(last);
+                let x = at(index, 0.0).x;
+                painter.line_segment(
+                    [egui::pos2(x, rect.min.y + 2.0), egui::pos2(x, baseline)],
+                    Stroke::new(1.0_f32, theme::border()),
+                );
+                let ago = (last - index) as u64;
+                response.on_hover_text(format!(
+                    "{ago} 秒前 · ↓ {} · ↑ {}",
+                    format_speed((downs[index] * 1024.0) as u64),
+                    format_speed((ups[index] * 1024.0) as u64),
+                ));
+            }
+        }
+    }
+}
+
+/// 协议分布环形图 (Donut Chart)
+/// 呈现节点协议的占比圆环、中心总数与交互提示
+pub fn render_protocol_donut_chart(
+    ui: &mut Ui,
+    stats: &[crate::models::ProtocolStat],
+    total_nodes: i64,
+) {
+    let size = egui::vec2(68.0, 68.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter_at(rect);
+
+    let center = rect.center();
+    let radius = 25.0;
+    let stroke_width = 7.0_f32;
+
+    if total_nodes <= 0 || stats.is_empty() {
+        painter.circle_stroke(
+            center,
+            radius,
+            Stroke::new(stroke_width, theme::border_subtle()),
+        );
+        painter.text(
+            center,
+            egui::Align2::CENTER_CENTER,
+            "0",
+            egui::FontId::proportional(12.0),
+            theme::muted(),
+        );
+        return;
+    }
+
+    let mut current_angle = -std::f32::consts::FRAC_PI_2; // 从 12 点钟方向开始
+    let gap = if stats.len() > 1 { 0.05_f32 } else { 0.0 };
+
+    let mut tooltip_lines = Vec::new();
+    tooltip_lines.push(format!("节点协议分布 (共 {total_nodes} 节点):"));
+
+    for s in stats {
+        let ratio = (s.count as f32 / total_nodes as f32).clamp(0.0, 1.0);
+        if ratio < 0.005 {
+            continue;
+        }
+        let sweep = ratio * (std::f32::consts::PI * 2.0) - gap;
+        if sweep <= 0.0 {
+            current_angle += ratio * (std::f32::consts::PI * 2.0);
+            continue;
+        }
+
+        let steps = ((sweep / (std::f32::consts::PI * 2.0) * 32.0).ceil() as usize).max(4);
+        let arc_points: Vec<egui::Pos2> = (0..=steps)
+            .map(|i| {
+                let t = i as f32 / steps as f32;
+                let angle = current_angle + t * sweep;
+                egui::pos2(center.x + radius * angle.cos(), center.y + radius * angle.sin())
+            })
+            .collect();
+
+        let color = protocol_color(&s.protocol);
+        painter.add(egui::Shape::line(
+            arc_points,
+            Stroke::new(stroke_width, color),
+        ));
+
+        current_angle += sweep + gap;
+
+        let pct = ratio * 100.0;
+        tooltip_lines.push(format!("• {}: {:.1}% ({} 节点)", s.protocol.to_uppercase(), pct, s.count));
+    }
+
+    // 中心数字读数 (例如 1248 节点)
+    let total_str = if total_nodes >= 10000 {
+        format!("{:.1}w", total_nodes as f64 / 10000.0)
+    } else if total_nodes >= 1000 {
+        format!("{:.1}k", total_nodes as f64 / 1000.0)
+    } else {
+        format!("{total_nodes}")
+    };
+
+    painter.text(
+        egui::pos2(center.x, center.y - 4.0),
+        egui::Align2::CENTER_CENTER,
+        total_str,
+        egui::FontId::proportional(11.0),
+        theme::text_primary(),
+    );
+    painter.text(
+        egui::pos2(center.x, center.y + 7.0),
+        egui::Align2::CENTER_CENTER,
+        "节点",
+        egui::FontId::proportional(8.5),
+        theme::muted(),
+    );
+
+    response.on_hover_text(tooltip_lines.join("\n"));
+}
+
+/// 节点池健康可用率水平分段色条
+pub fn render_node_health_bar(
+    ui: &mut Ui,
+    alive: i64,
+    tested: i64,
+    total: i64,
+) {
+    if total <= 0 {
+        return;
+    }
+    let height = 22.0;
+    let width = ui.available_width().clamp(180.0, 360.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
+    let painter = ui.painter_at(rect);
+
+    let bar_h = 5.5_f32;
+    let bar_y = rect.min.y + 14.0;
+    let bar_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.min.x, bar_y),
+        egui::pos2(rect.max.x, bar_y + bar_h),
+    );
+
+    // 背景槽
+    painter.rect_filled(bar_rect, CornerRadius::same(2), theme::border_subtle());
+
+    let alive_f = alive.max(0) as f32;
+    let dead_f = (tested - alive).max(0) as f32;
+    let untested_f = (total - tested).max(0) as f32;
+    let total_f = total as f32;
+
+    let alive_w = (alive_f / total_f) * rect.width();
+    let dead_w = (dead_f / total_f) * rect.width();
+
+    // 绘制可用分段 (绿色)
+    if alive_w > 1.0 {
+        let r = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x, bar_y),
+            egui::pos2(rect.min.x + alive_w, bar_y + bar_h),
+        );
+        painter.rect_filled(r, CornerRadius::same(2), theme::success());
+    }
+
+    // 绘制失效分段 (警示红/深色)
+    if dead_w > 1.0 {
+        let r = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x + alive_w, bar_y),
+            egui::pos2(rect.min.x + alive_w + dead_w, bar_y + bar_h),
+        );
+        painter.rect_filled(r, CornerRadius::same(0), Color32::from_rgb(239, 68, 68));
+    }
+
+    let pct = if tested > 0 {
+        alive as f64 / tested as f64 * 100.0
+    } else {
+        0.0
+    };
+
+    // 顶部状态文字
+    let text = format!("实测可用率 {:.1}% (可用 {} · 失效 {} · 待测 {})", pct, alive, (tested - alive).max(0), (total - tested).max(0));
+    painter.text(
+        egui::pos2(rect.min.x, rect.min.y + 4.0),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::FontId::proportional(10.0),
+        theme::text_secondary(),
+    );
+
+    response.on_hover_text(format!(
+        "节点可用性诊断:\n• 实测可用: {alive} 节点 ({:.1}%)\n• 实测失效: {} 节点\n• 尚未测速: {untested_f} 节点\n• 节点总数: {total} 节点",
+        (alive_f / total_f * 100.0),
+        (tested - alive).max(0),
+    ));
+}
+
+/// 订阅测通率微进度条
+pub fn render_mini_progress_bar(ui: &mut Ui, current: i64, total: i64) {
+    let width = 42.0;
+    let height = 5.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
+    let painter = ui.painter_at(rect);
+
+    painter.rect_filled(rect, CornerRadius::same(2), theme::border_subtle());
+
+    if total > 0 && current > 0 {
+        let ratio = (current as f32 / total as f32).clamp(0.0, 1.0);
+        let fill_w = rect.width() * ratio;
+        let fill_rect = egui::Rect::from_min_max(
+            rect.min,
+            egui::pos2(rect.min.x + fill_w, rect.max.y),
+        );
+        let color = if ratio >= 0.7 {
+            theme::success()
+        } else if ratio >= 0.3 {
+            theme::warning()
+        } else {
+            Color32::from_rgb(239, 68, 68)
+        };
+        painter.rect_filled(fill_rect, CornerRadius::same(2), color);
+    }
+
+    let pct = if total > 0 {
+        current as f32 / total as f32 * 100.0
+    } else {
+        0.0
+    };
+    response.on_hover_text(format!("成活率: {:.1}% ({current}/{total})", pct));
+}
+
+/// 环形百分比度量图 (Radial Progress Meter)
+pub fn render_radial_metric(ui: &mut Ui, label: &str, ratio: f32, color: Color32) {
+    let size = egui::vec2(48.0, 48.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter_at(rect);
+
+    let center = egui::pos2(rect.center().x, rect.min.y + 20.0);
+    let radius = 16.0;
+    let stroke_width = 4.0_f32;
+
+    // 底轨
+    painter.circle_stroke(center, radius, Stroke::new(stroke_width, theme::border_subtle()));
+
+    // 进度弧
+    let clamped = ratio.clamp(0.0, 1.0);
+    if clamped > 0.005 {
+        let start_angle = -std::f32::consts::FRAC_PI_2;
+        let sweep = clamped * std::f32::consts::PI * 2.0;
+        let steps = ((clamped * 28.0).ceil() as usize).max(3);
+        let arc_points: Vec<egui::Pos2> = (0..=steps)
+            .map(|i| {
+                let t = i as f32 / steps as f32;
+                let angle = start_angle + t * sweep;
+                egui::pos2(center.x + radius * angle.cos(), center.y + radius * angle.sin())
+            })
+            .collect();
+        painter.add(egui::Shape::line(arc_points, Stroke::new(stroke_width, color)));
+    }
+
+    // 环心百分比
+    let pct_str = format!("{:.0}%", clamped * 100.0);
+    painter.text(
+        center,
+        egui::Align2::CENTER_CENTER,
+        pct_str,
+        egui::FontId::proportional(9.5),
+        theme::text_primary(),
+    );
+
+    // 底部标题
+    painter.text(
+        egui::pos2(center.x, rect.max.y - 1.0),
+        egui::Align2::CENTER_BOTTOM,
+        label,
+        egui::FontId::proportional(8.5),
+        theme::text_secondary(),
+    );
+
+    response.on_hover_text(format!("{label}: {:.1}%", clamped * 100.0));
+}
+
+/// 多彩分段分布条 (Segmented Distribution Bar)
+pub fn render_distribution_bar(
+    ui: &mut Ui,
+    segments: &[(&str, f32, Color32)],
+    total_val: f32,
+    height: f32,
+) {
+    let width = ui.available_width().max(120.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
+    let painter = ui.painter_at(rect);
+
+    painter.rect_filled(rect, CornerRadius::same(3), theme::border_subtle());
+
+    if total_val <= 0.0 || segments.is_empty() {
+        return;
+    }
+
+    let mut current_x = rect.min.x;
+    let mut hover_lines = Vec::new();
+
+    for (name, val, color) in segments {
+        if *val <= 0.0 {
+            continue;
+        }
+        let seg_w = (val / total_val) * rect.width();
+        if seg_w < 1.0 {
+            continue;
+        }
+        let seg_rect = egui::Rect::from_min_max(
+            egui::pos2(current_x, rect.min.y),
+            egui::pos2(current_x + seg_w, rect.max.y),
+        );
+        painter.rect_filled(seg_rect, CornerRadius::same(0), *color);
+        current_x += seg_w;
+
+        let pct = (val / total_val) * 100.0;
+        hover_lines.push(format!("• {}: {:.1}%", name, pct));
+    }
+
+    response.on_hover_text(hover_lines.join("\n"));
+}
+
+/// 延迟频谱分布统计数据
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LatencySpectrumStats {
+    pub ultra_fast: usize, // < 100ms
+    pub fast: usize,       // 100~200ms
+    pub medium: usize,     // 200~400ms
+    pub slow: usize,       // > 400ms
+    pub untested: usize,   // 未测速
+    pub total: usize,
+}
+
+impl LatencySpectrumStats {
+    pub fn from_latencies<'a>(latencies: impl IntoIterator<Item = Option<i64>>) -> Self {
+        let mut stats = Self::default();
+        for lat in latencies {
+            stats.total += 1;
+            match lat {
+                Some(ms) if ms > 0 && ms <= 100 => stats.ultra_fast += 1,
+                Some(ms) if ms > 100 && ms <= 200 => stats.fast += 1,
+                Some(ms) if ms > 200 && ms <= 400 => stats.medium += 1,
+                Some(ms) if ms > 400 => stats.slow += 1,
+                _ => stats.untested += 1,
+            }
+        }
+        stats
+    }
+}
+
+/// 渲染节点全库延迟分布阶梯频谱指示条 (Latency Spectrum Bar)
+pub fn render_latency_spectrum(
+    ui: &mut Ui,
+    stats: &LatencySpectrumStats,
+) {
+    if stats.total == 0 {
+        return;
+    }
+
+    let total = stats.total as f32;
+    let width = ui.available_width().max(160.0);
+    let bar_height = 8.0_f32;
+
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, bar_height), Sense::hover());
+    let painter = ui.painter_at(rect);
+
+    painter.rect_filled(rect, CornerRadius::same(4), theme::sidebar());
+
+    let tiers: [(&str, usize, Color32); 5] = [
+        ("极速 <100ms", stats.ultra_fast, Color32::from_rgb(16, 185, 129)),
+        ("良好 100-200ms", stats.fast, Color32::from_rgb(52, 211, 153)),
+        ("中等 200-400ms", stats.medium, Color32::from_rgb(245, 158, 11)),
+        ("迟缓 >400ms", stats.slow, Color32::from_rgb(239, 68, 68)),
+        ("未测速", stats.untested, theme::border_subtle()),
+    ];
+
+    let mut current_x = rect.min.x;
+    let mut tooltips = Vec::new();
+
+    for (label, count, color) in tiers {
+        if count == 0 {
+            continue;
+        }
+        let seg_w = (count as f32 / total) * rect.width();
+        let seg_rect = egui::Rect::from_min_max(
+            egui::pos2(current_x, rect.min.y),
+            egui::pos2((current_x + seg_w).min(rect.max.x), rect.max.y),
+        );
+        let cr = if current_x <= rect.min.x + 0.5 && current_x + seg_w >= rect.max.x - 0.5 {
+            CornerRadius::same(4)
+        } else if current_x <= rect.min.x + 0.5 {
+            CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 }
+        } else if current_x + seg_w >= rect.max.x - 1.0 {
+            CornerRadius { nw: 0, sw: 0, ne: 4, se: 4 }
+        } else {
+            CornerRadius::same(0)
+        };
+        painter.rect_filled(seg_rect, cr, color);
+        current_x += seg_w;
+
+        let pct = (count as f32 / total) * 100.0;
+        tooltips.push(format!("• {}: {} 节点 ({:.1}%)", label, count, pct));
+    }
+
+    response.on_hover_text(format!("全网延迟阶梯频谱分布：\n{}", tooltips.join("\n")));
+}
+
+/// Top 活跃进程带宽消耗与连接数矩阵卡片 (Process Bandwidth Matrix)
+pub fn render_top_processes_card(
+    ui: &mut Ui,
+    processes: &[(&str, u64, usize)],
+    total_bytes: u64,
+) {
+    if processes.is_empty() {
+        return;
+    }
+
+    let colors = [
+        theme::accent(),
+        Color32::from_rgb(52, 211, 153),
+        Color32::from_rgb(245, 158, 11),
+        Color32::from_rgb(168, 85, 247),
+    ];
+
+    ui.vertical(|ui| {
+        for (i, (proc, bytes, conns)) in processes.iter().take(4).enumerate() {
+            let color = colors[i % colors.len()];
+            let ratio = if total_bytes > 0 {
+                (*bytes as f32 / total_bytes as f32).clamp(0.02, 1.0)
+            } else {
+                0.05
+            };
+
+            ui.horizontal(|ui| {
+                let (beacon, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+                ui.painter().circle_filled(beacon.center(), 3.5, color);
+
+                let clean_proc = if proc.chars().count() > 14 {
+                    let mut s: String = proc.chars().take(14).collect();
+                    s.push('…');
+                    s
+                } else {
+                    proc.to_string()
+                };
+
+                ui.label(RichText::new(clean_proc).small().strong().color(theme::text_primary()))
+                    .on_hover_text(*proc);
+
+                let bar_width = 80.0_f32;
+                let (bar_rect, bar_resp) = ui.allocate_exact_size(Vec2::new(bar_width, 6.0), Sense::hover());
+                ui.painter().rect_filled(bar_rect, CornerRadius::same(3), theme::sidebar());
+                let fill_rect = egui::Rect::from_min_max(
+                    bar_rect.min,
+                    egui::pos2(bar_rect.min.x + bar_width * ratio, bar_rect.max.y),
+                );
+                ui.painter().rect_filled(fill_rect, CornerRadius::same(3), color);
+                let pct = if total_bytes > 0 {
+                    (*bytes as f64 / total_bytes as f64) * 100.0
+                } else {
+                    0.0
+                };
+                bar_resp.on_hover_text(format!("流量占比: {:.1}%", pct));
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(format!("{} · {} 连接", format_bytes(*bytes), conns))
+                            .small()
+                            .color(theme::muted()),
+                    );
+                });
+            });
+            ui.add_space(2.0);
+        }
+    });
 }
 
 /// 24 小时出口健康条：一小时一格，最右是"现在"。
@@ -941,6 +1990,33 @@ pub fn clean_node_display_name(name: &str) -> &str {
         }
     }
     s
+}
+
+/// 深度净化节点名称：去除乱码方块字符、单字母前缀、多余空格及杂乱符号
+pub fn sanitize_node_name(name: &str) -> String {
+    let raw = clean_node_display_name(name);
+    // 过滤掉未解码的方块符号、乱码和控制字符
+    let cleaned: String = raw
+        .chars()
+        .filter(|&c| c != '□' && c != '\u{FFFD}' && !c.is_control())
+        .collect();
+
+    let mut s = cleaned.trim();
+
+    // 剔除常见的单字母前缀，如 "D 🇭🇰", "C 🇸🇬", "U · "
+    if s.len() > 3 {
+        let first_chars: Vec<char> = s.chars().take(4).collect();
+        if first_chars.len() >= 2 && first_chars[1] == ' ' && first_chars[0].is_ascii_alphabetic() {
+            s = &s[first_chars[0].len_utf8() + 1..];
+        }
+    }
+
+    let s = s.trim();
+    if s.is_empty() {
+        raw.to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 pub fn latency_text(n: &NodeSummary) -> RichText {

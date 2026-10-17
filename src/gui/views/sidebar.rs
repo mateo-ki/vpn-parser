@@ -1,17 +1,18 @@
 use crate::gui::icons::Icon;
 use crate::gui::theme;
 use crate::gui::types::Tab;
-use crate::gui::widgets::{format_duration_ms, header_cell, nav_item, stat_chip};
+use crate::gui::widgets::{format_duration_ms, header_cell, nav_item_icon_only, stat_chip};
 use crate::gui::VpnApp;
 use crate::proxy::ProxyState;
-use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, Vec2};
+use eframe::egui::{self, CornerRadius, RichText, Sense, Stroke, Ui, Vec2};
 
 impl VpnApp {
     pub(crate) fn ui_sidebar(&mut self, ui: &mut Ui, target_tab: &mut Tab) {
         ui.visuals_mut().override_text_color = Some(theme::sidebar_text());
-        ui.add_space(14.0);
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
+        ui.add_space(8.0);
+
+        // App Logo 居中呈现
+        ui.vertical_centered(|ui| {
             let texture = self.logo_texture.get_or_insert_with(|| {
                 let img = image::load_from_memory(include_bytes!("../../../assets/app-icon.png"))
                     .expect("load app-icon.png")
@@ -26,142 +27,49 @@ impl VpnApp {
             });
             ui.add(
                 egui::Image::new(&*texture)
-                    .fit_to_exact_size(Vec2::splat(32.0))
-                    .corner_radius(CornerRadius::same(6)),
+                    .fit_to_exact_size(Vec2::splat(36.0))
+                    .corner_radius(CornerRadius::same(8)),
             );
-            ui.add_space(6.0);
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("VPN Parser")
-                            .strong()
-                            .size(16.5)
-                            .color(theme::sidebar_text()),
-                    );
-                    Frame::NONE
-                        .fill(theme::accent_bg())
-                        .stroke(Stroke::new(1.0_f32, theme::accent_bg()))
-                        .corner_radius(CornerRadius::same(4))
-                        .inner_margin(Margin::symmetric(4, 1))
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new("CORE")
-                                    .size(9.0)
-                                    .strong()
-                                    .color(theme::accent()),
-                            );
-                        });
-                });
-                ui.label(
-                    RichText::new("网络代理控制台")
-                        .small()
-                        .color(theme::sidebar_muted()),
-                );
-                // 有新版本才出现：绿色↑ + 版本号，点了直接去「关于」页更新。
-                if let Some(tag) = self.pending_update_tag() {
-                    if sidebar_update_marker(ui, &tag) {
-                        *target_tab = Tab::About;
-                    }
+            if let Some(tag) = self.pending_update_tag() {
+                ui.add_space(2.0);
+                if ui
+                    .link(RichText::new("↑ 更新").small().strong().color(theme::success()))
+                    .on_hover_text(format!("发现新版本 {tag}，点击去「关于」页下载更新"))
+                    .clicked()
+                {
+                    *target_tab = Tab::About;
                 }
-            });
+            }
         });
-        ui.add_space(14.0);
+
+        ui.add_space(10.0);
         let line_y = ui.cursor().top();
         ui.painter().hline(
             ui.max_rect().x_range(),
             line_y,
-            Stroke::new(1.0_f32, theme::border()),
+            Stroke::new(1.0_f32, theme::border_subtle()),
         );
-        ui.add_space(10.0);
+        ui.add_space(8.0);
 
-        nav_item(ui, target_tab, Tab::Proxy, Icon::Dashboard, self.tr("控制台"));
-        nav_item(ui, target_tab, Tab::Nodes, Icon::Lightning, self.tr("节点池"));
-        nav_item(ui, target_tab, Tab::Sources, Icon::Subscription, self.tr("订阅源"));
-        nav_item(ui, target_tab, Tab::Settings, Icon::Gear, self.tr("系统设置"));
-        nav_item(ui, target_tab, Tab::About, Icon::Info, self.tr("关于"));
+        let is_running = matches!(self.proxy_status.state, ProxyState::Running);
+        let proxy_dot = if is_running { Some(theme::success()) } else { None };
+        let nodes_tip = self
+            .stats
+            .as_ref()
+            .map(|s| format!("节点池 ({} 节点)", s.node_count))
+            .unwrap_or_else(|| self.tr("节点池").to_string());
+        let sources_tip = self
+            .stats
+            .as_ref()
+            .map(|s| format!("订阅源 ({} 个)", s.source_count))
+            .unwrap_or_else(|| self.tr("订阅源").to_string());
 
-        ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-            ui.add_space(6.0);
-            Frame::NONE
-                .fill(theme::panel())
-                .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
-                .corner_radius(CornerRadius::same(theme::RADIUS_CARD))
-                .inner_margin(Margin::symmetric(12, 10))
-                .show(ui, |ui| {
-                    ui.set_min_width(ui.available_width());
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            // 内核都还没装上时"代理未启动"是废话：这叫预备。
-                            let prepared = crate::gui::prepare::is_prepared(
-                                self.kernel_installed_cached(),
-                                matches!(
-                                    self.proxy_status.state,
-                                    ProxyState::Running
-                                        | ProxyState::Degraded
-                                        | ProxyState::Starting
-                                ),
-                            );
-                            let (dot_color, status_text) = match self.proxy_status.state {
-                                ProxyState::Running => (theme::success(), "代理运行中".to_string()),
-                                ProxyState::Degraded => (theme::warning(), "代理降级运行".to_string()),
-                                ProxyState::Starting => (theme::accent_hover(), "代理启动中...".to_string()),
-                                ProxyState::Stopping => (theme::muted(), "代理停止中...".to_string()),
-                                ProxyState::Failed => (theme::danger(), "代理启动失败".to_string()),
-                                ProxyState::Stopped if prepared => {
-                                    if self.kernel_busy {
-                                        if let Some(kp) = &self.kernel_progress {
-                                            if kp.stage == crate::kernel::KernelUpdateStage::Downloading && kp.total > 0 {
-                                                let pct = ((kp.downloaded as f64 / kp.total as f64) * 100.0).clamp(0.0, 100.0) as u32;
-                                                (theme::accent(), format!("预备 · 下载内核 {pct}%"))
-                                            } else {
-                                                (theme::accent(), format!("预备 · 内核{}", kp.stage.label()))
-                                            }
-                                        } else {
-                                            (theme::accent(), "预备 · 正在下载内核".to_string())
-                                        }
-                                    } else {
-                                        (theme::accent(), "预备 · 等待内核".to_string())
-                                    }
-                                }
-                                ProxyState::Stopped => (theme::sidebar_muted(), "代理未启动".to_string()),
-                            };
-                            let (rect, _) =
-                                ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
-                            // Concentric glowing dot
-                            ui.painter().circle_filled(
-                                rect.center(),
-                                5.0,
-                                dot_color.gamma_multiply(0.25),
-                            );
-                            ui.painter().circle_filled(rect.center(), 3.0, dot_color);
-                            ui.label(
-                                RichText::new(&status_text)
-                                    .small()
-                                    .strong()
-                                    .color(theme::text_primary()),
-                            );
-                        });
-                        ui.add_space(4.0);
-                        if let Some(s) = &self.stats {
-                            ui.label(
-                                RichText::new(format!(
-                                    "源 {} · 节点 {} · 可用 {}",
-                                    s.source_count, s.node_count, s.alive_count
-                                ))
-                                .small()
-                                .color(theme::sidebar_muted()),
-                            );
-                        }
-                    });
-                });
-            ui.add_space(6.0);
-            let sep_y = ui.cursor().top();
-            ui.painter().hline(
-                ui.max_rect().x_range(),
-                sep_y,
-                Stroke::new(1.0_f32, theme::border()),
-            );
-        });
+        // 仅保留语义图标，无多余文字和数字角标；鼠标悬停展示完整提示
+        nav_item_icon_only(ui, target_tab, Tab::Proxy, Icon::Dashboard, self.tr("控制台"), proxy_dot);
+        nav_item_icon_only(ui, target_tab, Tab::Nodes, Icon::Lightning, &nodes_tip, None);
+        nav_item_icon_only(ui, target_tab, Tab::Sources, Icon::Subscription, &sources_tip, None);
+        nav_item_icon_only(ui, target_tab, Tab::Settings, Icon::Gear, self.tr("系统设置"), None);
+        nav_item_icon_only(ui, target_tab, Tab::About, Icon::Info, self.tr("关于"), None);
     }
 
     pub(crate) fn ui_task_panel(&self, ui: &mut Ui) {

@@ -131,6 +131,14 @@ pub struct VpnApp {
     pub(crate) rules_tab: RulesTab,
     /// 分流策略组面板的分区（视图 / 配置）。
     pub(crate) groups_tab: GroupsTab,
+    /// 活跃连接监控面板的分区（连接列表 / 连接进程 / DNS 记录）。
+    pub(crate) connections_tab: ConnectionsTab,
+    /// DNS 实时解析记录
+    pub(crate) dns_records: std::collections::VecDeque<DnsRecord>,
+    /// 连接进程过滤词
+    pub(crate) connections_process_filter: String,
+    /// DNS 记录过滤词
+    pub(crate) connections_dns_filter: String,
     /// 「导入规则」弹框：是否打开、贴进来的原文、最近一次解析结果。
     pub(crate) show_rule_import: bool,
     /// 导入框旁边那个「?」——各输入形状的示范，逐段由测试保证真能导入。
@@ -283,6 +291,7 @@ pub struct VpnApp {
     /// 系统设置页的"显示高级设置"：只影响这一屏看不看得到那些数值调参，不入库。
     #[allow(dead_code)]
     pub(crate) settings_advanced_open: bool,
+    #[allow(dead_code)]
     pub(crate) proxy_diagnostics_open: bool,
     pub(crate) palette_open: bool,
     pub(crate) palette_query: String,
@@ -375,7 +384,7 @@ impl VpnApp {
             sources_panel: SourcesPanel::List,
             source_name_filter: String::new(),
             source_status_filter: SourceStatusFilter::All,
-            proxy_panel: ProxyPanel::Nodes,
+            proxy_panel: ProxyPanel::Charts,
             status: "就绪".into(),
             status_actions_width: 0.0,
             busy: false,
@@ -435,6 +444,10 @@ impl VpnApp {
             show_gist_config_modal: false,
             rules_tab: RulesTab::default(),
             groups_tab: GroupsTab::default(),
+            connections_tab: ConnectionsTab::default(),
+            dns_records: std::collections::VecDeque::new(),
+            connections_process_filter: String::new(),
+            connections_dns_filter: String::new(),
             show_rule_import: false,
             show_rule_import_help: false,
             rule_import_text: String::new(),
@@ -541,7 +554,7 @@ impl VpnApp {
             failover_searching: false,
             failover_from: None,
             settings_advanced_open: false,
-            proxy_diagnostics_open: false,
+            proxy_diagnostics_open: true,
             palette_open: false,
             palette_query: String::new(),
             palette_selected: 0,
@@ -1506,6 +1519,41 @@ impl VpnApp {
                                     let key = (conn.rule.clone(), conn.target.clone());
                                     *self.rule_tally.entry(key.clone()).or_insert(0) += 1;
                                     self.rule_seen.insert(conn.id.clone(), key);
+
+                                    // 记录新增 DNS 解析 / 域名请求轨迹
+                                    if !conn.host.is_empty() || conn.destination.contains(":53") {
+                                        let now_str = chrono::Local::now().format("%H:%M:%S").to_string();
+                                        let is_duplicate = self
+                                            .dns_records
+                                            .iter()
+                                            .take(15)
+                                            .any(|r| r.host == conn.host && r.ip == conn.destination);
+                                        if !is_duplicate {
+                                            if self.dns_records.len() >= 300 {
+                                                self.dns_records.pop_back();
+                                            }
+                                            self.dns_records.push_front(DnsRecord {
+                                                id: conn.id.clone(),
+                                                host: if conn.host.is_empty() {
+                                                    conn.destination.clone()
+                                                } else {
+                                                    conn.host.clone()
+                                                },
+                                                ip: conn.destination.clone(),
+                                                port: conn
+                                                    .destination
+                                                    .split(':')
+                                                    .nth(1)
+                                                    .unwrap_or("53")
+                                                    .to_string(),
+                                                process: conn.process.clone(),
+                                                rule: conn.rule.clone(),
+                                                target: conn.target.clone(),
+                                                network: conn.network.to_uppercase(),
+                                                time_str: now_str,
+                                            });
+                                        }
+                                    }
                                 }
                             }
                             if self.rule_seen.len() > 20_000 {
@@ -4076,13 +4124,13 @@ impl eframe::App for VpnApp {
         self.ui_title_bar(ctx);
 
         egui::SidePanel::left("sidebar")
-            .exact_width(220.0)
+            .exact_width(64.0)
             .resizable(false)
             .frame(
                 Frame::NONE
                     .fill(theme::sidebar())
                     .stroke(Stroke::NONE)
-                    .inner_margin(Margin::symmetric(12, 10)),
+                    .inner_margin(Margin::symmetric(8, 10)),
             )
             .show(ctx, |ui| self.ui_sidebar(ui, &mut next_tab));
 

@@ -1,41 +1,31 @@
-# 🚀 VPN Parser v1.7.2 发布说明 / Release Notes
+# 🚀 VPN Parser v1.7.3 发布说明 / Release Notes
 
-🎉 欢迎使用 **VPN Parser v1.7.2**！此版本是一次里程碑式的跨平台体验与稳定性升级，全面攻克了 Linux 多桌面环境（Fedora / GNOME / niri / DMS）的 9 项兼容性体验瓶颈，为虚拟机（VirtualBox）与老旧 CPU 架构引入了智能回退兼容内核，并带来了全新的状态栏内核下载实时进度与测速稳定性调优。
+🎉 欢迎使用 **VPN Parser v1.7.3**！此版本对控制台进行了全新图形化与交互重构，重塑了仪表盘视觉中枢，下沉调度决策中心并引入全自动路由起振，彻底消除界面抖动，带来极致丝滑的桌面网络管理体验；同时全面支持 macOS 原生字体渲染与 DMG/App 打包分发。
 
 ---
 
 ## 🌟 新特性与核心更新
 
-### 🐧 1. Linux 多桌面环境深度兼容 (Fedora / GNOME / niri / DMS)
-- **内核路径自适应识别**：修正内核更新器候选查找路径，将 `$XDG_DATA_HOME` 及 `~/.local/share/vpn-parser/kernels` 作为第一优先级候选，彻底解决 Linux 下 Mihomo 内核安装后无法被发现导致循环重新下载的问题；
-- **桌面窗口管理优雅回退**：在未接入 Win32 托盘机制的 Linux 环境下，点击标题栏关闭按钮安全退出程序，点击最小化按钮正常最小化窗口，彻底解除被失效的停放逻辑卡死的现象；
-- **Wayland / DMS Dock 图标原生绑定**：配置 `egui::ViewportBuilder::with_app_id("vpn-parser")`，精确关联 `.desktop` 规范，解决 niri + DMS Dock 及 GNOME Wayland 环境下应用图标丢失为通用占位符的问题；
-- **代理内核启动生命周期守护**：补齐 Linux 启动代理时的系统代理能力检查守卫，避免因平台不支持注册表修改而引发致命错误，进而误杀 `kill_on_drop` 刚拉起的本地内核进程；
-- **内核日志实时轮询与交互**：切换至“运行日志”页面时自动以 1.5 秒频率实时拉取代理内核标准输出，并提供手动「刷新日志」「复制全部」与「清空显示」工具；
-- **订阅拉取结果断点恢复**：启动及重新加载时自动从本地 SQLite 数据库恢复最近拉取明细，当拉取失败时完整展示报错详情及排查指引；
-- **AppImage 智能环境更新**：通过 `APPIMAGE`/`APPDIR` 识别运行态环境，检查更新时优先推荐 AppImage 资产，并在启动时自动授予 `+x` 执行权限。
+### 📊 1. 控制台视觉中枢全新重构 (Console Dashboard Overhaul)
+- **图表默认直达 (Default Charts View)**：进入「控制台」默认聚焦「图表」仪表盘，实时呈现网络测速仪表盘、平滑吞吐波形图与出海健康带；
+- **分流策略与调度决策中心下沉**：将策略组与「延迟选优」「故障转移」「负载均衡」「手动指定」按钮平滑迁入图表底部，最大化释放「可用节点」视图的垂直纵深；
+- **一键调度智能起振代理 (Auto-Start Proxy on Strategy)**：未运行代理时，点击「延迟选优」「故障转移」或「负载均衡」立即自动启动代理并应用调度，一步到位；
+- **智能点选无感切手动 (Auto-Switch to Manual on Node Click)**：在自动选优/故障转移/负载均衡模式下，直接点击任意可用节点卡片，自动将策略切换为「手动指定」并瞬间联通出口；
+- **示波器平直待机基线 (Oscilloscope Standby Flatline)**：代理待机或无流量时，监视器绘制平直示波基线 (0.0 KB/s) 配合辉光游标与峰值量程标尺，替代大字提示，告别视觉割裂感；
+- **主控卡片固定高度杜绝抖动 (Zero-CLS Hero Island)**：移除顶部冗余按钮，第二行始终保持 34px 固定高度微晶胶囊，未选节点时展示占位监控指标，彻底杜绝选点后的界面跳动；
+- **全网延迟频谱与协议环图严格等高**：左右卡片高度严格锁定为 104px 对齐；右翼协议药丸智能紧凑排版（最多两行，多协议聚合成「其它 N (占比%)」并支持悬停明细查看），彻底解决小众协议换行撑爆高度的问题。
 
 ---
 
-### ⚡ 2. 内核下载断流熔断与虚拟机 (VirtualBox) 指令集自适应
-- **镜像断流 12 秒智能熔断**：在流式分块读取中引入 `CHUNK_IDLE_TIMEOUT = 12s` 超时机制，解决 `gh-proxy` 偶发性连接保持但零数据停滞导致的下载卡死问题；
-- **多镜像故障转移链 (`candidate_urls_for`)**：为各下载方式建立主备镜像链，`gh-proxy` 停滞或报错自动无缝降级至 `ghfast` 备用镜像，`ghfast` 异常自动切换至 `gh-proxy`，全流程自动重试；
-- **VirtualBox `0xC0000005` 崩溃自动降级**：捕获虚拟机特权指令冲突（`STATUS_ACCESS_VIOLATION`），当标准版内核在虚拟机中崩溃时，自动切换下载 MetaCubeX 官方专为虚拟机和老 CPU 编译的 **`compatible` 兼容版资产**；
-- **Defender / 虚拟机首次执行查毒放宽**：将内核版本探测超时由 5 秒放宽至 15 秒，给 VirtualBox 虚拟机和 Windows Defender 留出充足的首次沙盒查毒时间，杜绝首次运行误报超时。
+### 🌐 2. 活跃连接多维视图拆分 (Connections View Multi-Tabs)
+- **连接列表 / 连接进程 / DNS 记录三重视图**：支持实时连接会话监控、按应用进程聚合统计上行与下行流量，以及核心 DNS 缓存解析记录。
 
 ---
 
-### 📊 3. 预备阶段状态栏下载进度实时反馈
-- **状态栏百分比与速率显示**：内核下载过程中，底部状态栏动态显示当前百分比与速率，如：  
-  `[动效] 下载内核 45%` 以及 `状态：正在下载 mihomo-windows-amd64-v1.19.32.zip 45% (10.1MB / 22.5MB, 2.15 MB/s) · ghfast 镜像`；
-- **迷你进度条无缝嵌入**：状态栏左侧指示器旁直接嵌入平滑填充的迷你 ProgressBar 控件；
-- **侧边栏状态徽章联动**：左侧工作区状态徽章同步联动更新为 `预备 · 下载内核 45%`。
-
----
-
-### 🛠️ 4. 节点池与测速网络抗抖动优化
-- **全部订阅源列表修复**：修复切换节点池分组至“全部订阅源”时由于条件守卫拦截导致节点列表被意外清空的问题；
-- **测速超时与并发调优**：将 TCP 预过滤和 DNS 并行解析超时时间从 800ms 放宽至 2500ms，将默认最大并发由 128 调整为 64，防止家用路由器 NAT 状态表被打满丢包，避免可用慢节点被误判超时。
+### 🍎 3. macOS 深度适配与跨平台优化
+- **macOS 中文字体完美渲染**：新增 PingFang SC、Hiragino Sans GB、STHeiti 等系统字库探测与多级字体回退链，彻底根治 macOS 下中文字体缺失显示为方块（豆腐块）的问题；
+- **macOS 原生红黄绿交通灯与调色板**：适配 macOS 原生风格的主题调色板与窗口控制细节；
+- **长页面自适应滚动**：DNS/TUN 设置页与内核管理页全卡片引入自适应上下滚动，避免下载进度条或复杂规则挤压隐藏底部内容。
 
 ---
 
@@ -43,12 +33,13 @@
 
 | 平台 | 文件名 | 说明 |
 | :--- | :--- | :--- |
-| **Windows 64位** | `vpn-parser-1.7.2-windows-x64-setup.exe` | 推荐，双击运行向导自动安装升级（含 VirtualBox 兼容自适应） |
-| **Linux (通用)** | `vpn-parser-1.7.2-x86_64.AppImage` | 推荐，开箱即用，赋予可执行权限后双击运行 |
-| **Linux (Fedora/RHEL)** | `vpn-parser-1.7.2-1.x86_64.rpm` | `sudo dnf install ./vpn-parser-1.7.2-1.x86_64.rpm` |
-| **Linux (Debian/Ubuntu)** | `vpn-parser_1.7.2-1_amd64.deb` | `sudo dpkg -i vpn-parser_1.7.2-1_amd64.deb` |
+| **Windows 64位** | `vpn-parser-1.7.3-windows-x64-setup.exe` | 推荐，双击运行向导自动安装升级（含 VirtualBox 兼容自适应） |
+| **macOS (DMG)** | `vpn-parser-1.7.3-macos-x64.dmg` | 推荐，拖拽至 Applications 即可运行 |
+| **Linux (通用)** | `vpn-parser-1.7.3-x86_64.AppImage` | 推荐，开箱即用，赋予可执行权限后双击运行 |
+| **Linux (Fedora/RHEL)** | `vpn-parser-1.7.3-1.x86_64.rpm` | `sudo dnf install ./vpn-parser-1.7.3-1.x86_64.rpm` |
+| **Linux (Debian/Ubuntu)** | `vpn-parser_1.7.3-1_amd64.deb` | `sudo dpkg -i vpn-parser_1.7.3-1_amd64.deb` |
 | **完整校验文件** | `sha256.txt` | 包含所有发布资产的官方 SHA-256 哈希值 |
 
 ---
 
-**Full Changelog**: https://github.com/mateo-ki/vpn-parser/compare/v1.7.1...v1.7.2
+**Full Changelog**: https://github.com/mateo-ki/vpn-parser/compare/v1.7.2...v1.7.3

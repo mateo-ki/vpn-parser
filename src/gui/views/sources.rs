@@ -2,8 +2,8 @@ use crate::gui::icons::{self, icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::types::{SourceStatusFilter, SourcesPanel};
 use crate::gui::widgets::{
-    card_frame, header_cell, primary_btn, render_fetch_ticks, source_status_failed,
-    status_badge,
+    card_frame, header_cell, primary_btn, render_fetch_ticks, render_mini_progress_bar,
+    render_radial_metric, source_status_failed, status_badge,
 };
 use crate::gui::VpnApp;
 use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
@@ -48,6 +48,63 @@ impl VpnApp {
         if self.sources_panel == SourcesPanel::Results {
             self.ui_fetch_results(ui);
             return;
+        }
+
+        // 订阅源健康与产出度量看板
+        if let Some(s) = &self.stats.clone() {
+            Frame::NONE
+                .fill(theme::panel())
+                .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                .corner_radius(CornerRadius::same(10))
+                .inner_margin(Margin::symmetric(14, 8))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let enabled_ratio = if s.source_count > 0 {
+                            s.enabled_source_count as f32 / s.source_count as f32
+                        } else {
+                            0.0
+                        };
+                        render_radial_metric(ui, "源启用率", enabled_ratio, theme::accent());
+                        ui.add_space(10.0);
+
+                        let yield_ratio = if s.node_count > 0 {
+                            s.alive_count as f32 / s.node_count as f32
+                        } else {
+                            0.0
+                        };
+                        render_radial_metric(ui, "节点可用率", yield_ratio, theme::success());
+                        ui.add_space(14.0);
+
+                        ui.vertical(|ui| {
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                icon_label(ui, Icon::Globe, 13.0, theme::accent());
+                                ui.label(
+                                    RichText::new(format!(
+                                        "订阅源池: {} 个 (已启用 {})",
+                                        s.source_count, s.enabled_source_count
+                                    ))
+                                    .strong()
+                                    .small()
+                                    .color(theme::text_primary()),
+                                );
+                            });
+                            ui.add_space(2.0);
+                            ui.horizontal(|ui| {
+                                icon_label(ui, Icon::Radar, 13.0, theme::success());
+                                ui.label(
+                                    RichText::new(format!(
+                                        "累计解析节点: {} 个 · 实测可用: {} 个",
+                                        s.node_count, s.alive_count
+                                    ))
+                                    .small()
+                                    .color(theme::text_secondary()),
+                                );
+                            });
+                        });
+                    });
+                });
+            ui.add_space(6.0);
         }
 
         // 第 1 行：新建 拉取全部 代理拉取全部 导入订阅 导出订阅 清空全部
@@ -306,11 +363,14 @@ impl VpnApp {
                                                 .color(theme::warning()),
                                         );
                                     } else {
-                                        ui.label(
-                                            RichText::new(format!("测通 {alive}/{total}"))
-                                                .small()
-                                                .color(theme::text_secondary()),
-                                        );
+                                        ui.horizontal(|ui| {
+                                            render_mini_progress_bar(ui, alive, total);
+                                            ui.label(
+                                                RichText::new(format!("{alive}/{total}"))
+                                                    .small()
+                                                    .color(theme::text_secondary()),
+                                            );
+                                        });
                                     }
                                 });
                                 ui.horizontal(|ui| {

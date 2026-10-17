@@ -548,10 +548,21 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// 文件名像不像一个中日韩字体。Linux 上要靠它从字体目录里挑；Windows 用固定文件名。
+/// 文件名像不像一个中日韩字体。macOS/Linux 上要靠它从字体目录里挑；Windows 用固定文件名。
 #[cfg(feature = "gui")]
+#[allow(dead_code)]
 fn looks_like_cjk_font(file_name_lower: &str) -> bool {
     [
+        "pingfang",
+        "hiragino",
+        "stheiti",
+        "songti",
+        "kaiti",
+        "yuanti",
+        "arial unicode",
+        "heiti",
+        "applegothic",
+        "applesdgothicneo",
         "msyh",
         "simhei",
         "simsun",
@@ -572,9 +583,10 @@ fn looks_like_cjk_font(file_name_lower: &str) -> bool {
     .any(|needle| file_name_lower.contains(needle))
 }
 
-/// 在字体目录里递归找中日韩字体。Linux 的字体装在随发行版变化的子目录下，固定路径
+/// 在字体目录里递归找中日韩字体。macOS/Linux 的字体装在随发行版变化的子目录下，固定路径
 /// 猜不中就走这里；深度封顶，不跟着符号链接往下转。
 #[cfg(feature = "gui")]
+#[allow(dead_code)]
 fn scan_cjk_fonts(dirs: &[std::path::PathBuf], depth: u8) -> Vec<std::path::PathBuf> {
     let mut found = Vec::new();
     let mut stack: Vec<(std::path::PathBuf, u8)> = dirs.iter().cloned().map(|d| (d, 0)).collect();
@@ -620,7 +632,33 @@ fn cjk_font_candidates() -> Vec<std::path::PathBuf> {
         ]
         .to_vec()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let fixed = [
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            "/System/Library/Fonts/Supplemental/Songti.ttc",
+            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+            "/System/Library/Fonts/Supplemental/Kaiti.ttc",
+            "/System/Library/Fonts/Supplemental/Yuanti.ttc",
+            "/Library/Fonts/Arial Unicode.ttf",
+            "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+        ];
+        let mut roots = vec![
+            std::path::PathBuf::from("/System/Library/Fonts"),
+            std::path::PathBuf::from("/System/Library/Fonts/Supplemental"),
+            std::path::PathBuf::from("/Library/Fonts"),
+        ];
+        if let Some(home) = std::env::var_os("HOME") {
+            roots.push(std::path::Path::new(&home).join("Library/Fonts"));
+        }
+        let mut out: Vec<_> = fixed.iter().map(std::path::PathBuf::from).collect();
+        out.extend(scan_cjk_fonts(&roots, 2));
+        out
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         let fixed = [
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
@@ -645,38 +683,44 @@ fn cjk_font_candidates() -> Vec<std::path::PathBuf> {
 #[cfg(feature = "gui")]
 /// 加载中文字体。没有它整屏中文都是方框 —— egui 自带字体不含 CJK 字形。
 fn setup_chinese_fonts(ctx: &egui::Context) {
-    let mut font_bytes: Option<Vec<u8>> = None;
-    let mut font_name = "cjk".to_string();
+    let mut fonts = egui::FontDefinitions::default();
+    let mut loaded_names = Vec::new();
+
     for path in cjk_font_candidates() {
         if let Ok(bytes) = std::fs::read(&path) {
-            info!(path = %path.display(), "loaded CJK font for GUI");
-            font_bytes = Some(bytes);
-            // 原来是 `path.rsplit('\\')`：Linux 的路径会把整条路径当成字体名。
-            font_name = path
+            let font_name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "cjk".to_string());
-            break;
+                .unwrap_or_else(|| format!("cjk_{}", loaded_names.len()));
+
+            info!(path = %path.display(), font = %font_name, "loaded CJK font for GUI");
+
+            fonts.font_data.insert(
+                font_name.clone(),
+                std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+            );
+            loaded_names.push(font_name);
+
+            // 加载前 2 个可用中文字体作为主力与多级回退，既保证字形完备又避免内存过大
+            if loaded_names.len() >= 2 {
+                break;
+            }
         }
     }
 
-    let Some(bytes) = font_bytes else {
+    if loaded_names.is_empty() {
         tracing::warn!("no CJK font found; Chinese text may not render");
         return;
-    };
-
-    let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        font_name.clone(),
-        std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-    );
-
-    // Prefer CJK font first for both proportional and monospace families.
-    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-        family.insert(0, font_name.clone());
     }
-    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-        family.insert(0, font_name);
+
+    // 将加载到的 CJK 字体按顺序插入 proportional 与 monospace 字体族首部
+    for (i, name) in loaded_names.iter().enumerate() {
+        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            family.insert(i, name.clone());
+        }
+        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+            family.insert(i, name.clone());
+        }
     }
 
     ctx.set_fonts(fonts);
@@ -751,6 +795,10 @@ mod cjk_font_tests {
     #[test]
     fn the_cjk_name_test_accepts_real_packages_and_rejects_latin_fonts() {
         for name in [
+            "pingfang.ttc",
+            "hiraginosansgb.ttc",
+            "stheiti-light.ttc",
+            "songti.ttc",
             "notosanscjk-regular.ttc",
             "notosanscjksc-regular.otf",
             "wqy-microhei.ttc",

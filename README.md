@@ -7,7 +7,7 @@
 Rust + egui 编写的高性能现代化跨平台桌面代理工具：采集订阅、解析节点、驱动代理内核（Mihomo / sing-box / Xray），并实测代理可用性与延迟。
 
 <p align="center">
-  <img src="docs/images/dashboard-v17.png" alt="VPN Parser 控制台主界面" width="100%">
+  <img src="docs/images/dashboard-v173.png" alt="VPN Parser 控制台主界面" width="100%">
 </p>
 
 - **Windows**：安装包（Inno Setup）+ 系统代理一键控制 + TUN 虚拟网卡模式（带管理员提权）
