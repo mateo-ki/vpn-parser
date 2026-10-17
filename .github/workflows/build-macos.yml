@@ -64,28 +64,17 @@ jobs:
       - name: 编译 release 版 (Universal / Native)
         run: |
           set -euo pipefail
-          rustup target add aarch64-apple-darwin x86_64-apple-darwin || true
-
-          build_universal=true
-          if ! cargo build --release --target aarch64-apple-darwin --bin vpn-parser; then
-            build_universal=false
+          rustup target add x86_64-apple-darwin || true
+          cargo build --release --bin vpn-parser
+          mac_arch=$(uname -m)
+          if cargo build --release --target x86_64-apple-darwin --bin vpn-parser; then
+            if lipo -create -output target/release/vpn-parser-universal target/release/vpn-parser target/x86_64-apple-darwin/release/vpn-parser; then
+              mv target/release/vpn-parser-universal target/release/vpn-parser
+              mac_arch="universal"
+              echo "成功打包 Universal 二进制 (arm64 + x86_64)"
+            fi
           fi
-          if ! cargo build --release --target x86_64-apple-darwin --bin vpn-parser; then
-            build_universal=false
-          fi
-
-          mkdir -p target/release
-          if [ "$build_universal" = "true" ] && command -v lipo >/dev/null 2>&1; then
-            echo "打包 Universal 二进制 (arm64 + x86_64)..."
-            lipo -create -output target/release/vpn-parser \
-              target/aarch64-apple-darwin/release/vpn-parser \
-              target/x86_64-apple-darwin/release/vpn-parser
-            echo "mac_arch=universal" >> "$GITHUB_ENV"
-          else
-            echo "打包 Native 二进制..."
-            cargo build --release --bin vpn-parser
-            echo "mac_arch=$(uname -m)" >> "$GITHUB_ENV"
-          fi
+          echo "mac_arch=${mac_arch}" >> "$GITHUB_ENV"
 
       - name: 创建 macOS 应用包 (.app)、DMG 安装包 (.dmg) 与归档 (.tar.gz)
         run: |
@@ -106,34 +95,7 @@ jobs:
           chmod +x "${APP_DIR}/Contents/MacOS/vpn-parser"
 
           # 3. 写入 Info.plist
-          cat > "${APP_DIR}/Contents/Info.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleName</key>
-    <string>VPN Parser</string>
-    <key>CFBundleDisplayName</key>
-    <string>VPN Parser</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.mateoki.vpn-parser</string>
-    <key>CFBundleVersion</key>
-    <string>${version}</string>
-    <key>CFBundleShortVersionString</key>
-    <string>${version}</string>
-    <key>CFBundleExecutable</key>
-    <string>vpn-parser</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>11.0</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-</dict>
-</plist>
-EOF
+          sed "s/__VERSION__/${version}/g" installer/Info.plist > "${APP_DIR}/Contents/Info.plist"
 
           # 4. 生成 AppIcon.icns
           if [ -f assets/app-icon.png ]; then
