@@ -388,7 +388,10 @@ impl VpnApp {
         ui.add_space(8.0);
         card_frame().show(ui, |ui| {
             if self.fetch_results.is_empty() {
-                ui.label(RichText::new("暂无拉取结果").color(theme::muted()));
+                ui.label(
+                    RichText::new("暂无拉取结果（添加订阅并点击「拉取全部」后将在此显示拉取与解析明细）")
+                        .color(theme::muted()),
+                );
                 return;
             }
             egui::ScrollArea::both()

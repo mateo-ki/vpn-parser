@@ -3029,20 +3029,61 @@ impl VpnApp {
         }
     }
 
-    pub(crate) fn ui_proxy_logs(&self, ui: &mut Ui) {
+    pub(crate) fn ui_proxy_logs(&mut self, ui: &mut Ui) {
         let kernel_name = self
             .proxy_status
             .kernel
             .map(KernelKind::display_name)
             .unwrap_or("代理内核");
-        section_title(ui, "运行日志", &format!("{kernel_name} 最近输出"));
+        ui.horizontal(|ui| {
+            section_title(ui, "运行日志", &format!("{kernel_name} 最近输出"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("刷新日志").clicked() {
+                    self.reload_proxy_logs();
+                }
+                if !self.proxy_log.is_empty() {
+                    if ui.button("清空显示").clicked() {
+                        self.proxy_log.clear();
+                    }
+                    if ui.button("复制全部").clicked() {
+                        ui.ctx().copy_text(self.proxy_log.clone());
+                        self.status = "日志内容已复制到剪贴板".into();
+                    }
+                }
+            });
+        });
         card_frame().show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .max_height(320.0)
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
                     if self.proxy_log.is_empty() {
-                        ui.label(RichText::new("暂无日志").color(theme::muted()));
+                        let is_running = self.proxy_status.state == ProxyState::Running;
+                        if is_running {
+                            ui.label(
+                                RichText::new("暂无输出（内核运行中，正在等待新日志...）")
+                                    .color(theme::muted()),
+                            );
+                        } else if let Some(err) = &self.proxy_status.last_error {
+                            ui.label(
+                                RichText::new(format!("代理内核未运行（最近异常：{err}）"))
+                                    .color(theme::danger()),
+                            );
+                            ui.label(
+                                RichText::new(
+                                    "请检查节点连通性或内核配置，启动代理后将在此显示内核输出日志。",
+                                )
+                                .color(theme::muted())
+                                .small(),
+                            );
+                        } else {
+                            ui.label(
+                                RichText::new(
+                                    "代理内核未运行。点击上方「启动代理」后，此处将实时展示内核输出日志。",
+                                )
+                                .color(theme::muted()),
+                            );
+                        }
                     } else {
                         ui.monospace(&self.proxy_log);
                     }

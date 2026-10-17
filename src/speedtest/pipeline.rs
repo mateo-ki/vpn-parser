@@ -53,14 +53,14 @@ pub async fn run_speedtest_pipeline(
         .collect();
     let concurrency = opts.concurrency.clamp(1, 512) as usize;
     let (prefilter_timeout_ms, proxy_timeout_duration) = match opts.intensity {
-        SpeedtestIntensity::Fast => (opts.timeout_ms.min(500), Duration::from_millis(1800)),
+        SpeedtestIntensity::Fast => (opts.timeout_ms.clamp(600, 1500), Duration::from_millis(2000)),
         SpeedtestIntensity::Standard => (
-            opts.timeout_ms.min(TCP_PREFILTER_TIMEOUT_MS),
-            Duration::from_millis(opts.timeout_ms.clamp(2_500, 15_000) as u64),
+            opts.timeout_ms.clamp(1200, TCP_PREFILTER_TIMEOUT_MS),
+            Duration::from_millis(opts.timeout_ms.clamp(3_000, 15_000) as u64),
         ),
         SpeedtestIntensity::Deep => (
-            opts.timeout_ms.max(1200),
-            Duration::from_millis(opts.timeout_ms.clamp(4_000, 20_000) as u64),
+            opts.timeout_ms.clamp(2000, 5000),
+            Duration::from_millis(opts.timeout_ms.clamp(5_000, 25_000) as u64),
         ),
     };
 
@@ -82,7 +82,7 @@ pub async fn run_speedtest_pipeline(
     let resolved = resolve_targets_parallel(
         dns_targets,
         network_limit.clone(),
-        Duration::from_millis(800),
+        Duration::from_millis(2500),
     )
     .await;
 

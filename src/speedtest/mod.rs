@@ -36,9 +36,9 @@ impl SpeedtestIntensity {
 
     pub fn description(self) -> &'static str {
         match self {
-            Self::Fast => "并发 256，短超时 500ms，极速筛除大量离线僵尸节点",
-            Self::Standard => "并发 128，标准超时 1500ms，TCP 预筛 + 真实内核代理握手",
-            Self::Deep => "并发 64，高容忍长超时 3500ms，严苛校验真实可用性",
+            Self::Fast => "并发 128，快速超时 1000ms，极速筛除大量离线僵尸节点",
+            Self::Standard => "并发 64，标准超时 2000ms，稳定预筛 + 真实内核代理握手",
+            Self::Deep => "并发 32，高容忍长超时 3500ms，低并发防丢包，严苛校验真实可用性",
         }
     }
 }
@@ -68,7 +68,7 @@ pub struct SpeedTestOptions {
     pub tcp_ping_only: bool,
 }
 
-pub const TCP_PREFILTER_TIMEOUT_MS: u32 = 800;
+pub const TCP_PREFILTER_TIMEOUT_MS: u32 = 2500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeedTestPhase {
@@ -92,8 +92,8 @@ pub struct SpeedTestProgress {
 impl Default for SpeedTestOptions {
     fn default() -> Self {
         Self {
-            concurrency: 128,
-            timeout_ms: 1500,
+            concurrency: 64,
+            timeout_ms: 2000,
             measure_download: false,
             download_test_ms: 800,
             intensity: SpeedtestIntensity::Standard,

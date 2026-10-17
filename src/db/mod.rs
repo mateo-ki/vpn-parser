@@ -556,6 +556,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_nodes_without_source_id_returns_all_nodes() {
+        let path =
+            std::env::temp_dir().join(format!("vpn-parser-all-nodes-{}.db", Uuid::new_v4()));
+        let db = Database::connect(path.to_str().unwrap()).await.unwrap();
+        let s1 = db
+            .create_source(CreateSource {
+                name: "Source 1".into(),
+                url_template: "https://example.com/1".into(),
+                enabled: true,
+                remark: None,
+            })
+            .await
+            .unwrap();
+        let s2 = db
+            .create_source(CreateSource {
+                name: "Source 2".into(),
+                url_template: "https://example.com/2".into(),
+                enabled: true,
+                remark: None,
+            })
+            .await
+            .unwrap();
+
+        let now = Utc::now();
+        let node1 = Node {
+            id: "node-1".into(),
+            source_id: Some(s1.id.clone()),
+            protocol: "ss".into(),
+            name: "Node 1".into(),
+            server: "1.1.1.1".into(),
+            port: 443,
+            raw: "ss://node-1".into(),
+            config: serde_json::json!({}),
+            country: None,
+            latency_ms: None,
+            latency_ok: None,
+            download_kbps: None,
+            latency_kernel: None,
+            latency_test_kind: None,
+            latency_tested_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let node2 = Node {
+            id: "node-2".into(),
+            source_id: Some(s2.id.clone()),
+            protocol: "ss".into(),
+            name: "Node 2".into(),
+            server: "2.2.2.2".into(),
+            port: 443,
+            raw: "ss://node-2".into(),
+            config: serde_json::json!({}),
+            country: None,
+            latency_ms: None,
+            latency_ok: None,
+            download_kbps: None,
+            latency_kernel: None,
+            latency_test_kind: None,
+            latency_tested_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        db.replace_source_nodes(&s1.id, &[node1]).await.unwrap();
+        db.replace_source_nodes(&s2.id, &[node2]).await.unwrap();
+
+        // 挑选指定源
+        let page1 = db
+            .list_nodes(None, Some(&s1.id), None, None, None, 1, 50, None)
+            .await
+            .unwrap();
+        assert_eq!(page1.total, 1);
+        assert_eq!(page1.items[0].id, "node-1");
+
+        // "全部订阅源" (source_id: None) 应查到所有源的节点
+        let page_all = db
+            .list_nodes(None, None, None, None, None, 1, 50, None)
+            .await
+            .unwrap();
+        assert_eq!(page_all.total, 2);
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[tokio::test]
     async fn push_disabled_sources_are_excluded_from_push_export() {
         let path = std::env::temp_dir().join(format!("vpn-parser-push-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();

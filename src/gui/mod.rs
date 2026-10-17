@@ -213,6 +213,7 @@ pub struct VpnApp {
     pub(crate) traffic_prev_sample: Option<(std::time::Instant, u64, u64)>,
     pub(crate) last_traffic_poll: std::time::Instant,
     pub(crate) last_groups_poll: std::time::Instant,
+    pub(crate) last_log_poll: std::time::Instant,
     pub(crate) traffic_polling: bool,
     /// 内核各 proxy-group 的实时状态（名字/类型/当前成员）。
     pub(crate) kernel_groups: Vec<KernelGroup>,
@@ -466,8 +467,8 @@ impl VpnApp {
             pending_added_source: None,
             edit_fetch_concurrency: 4,
             edit_fetch_timeout_secs: 30,
-            edit_speedtest_concurrency: 128,
-            edit_timeout_ms: 1500,
+            edit_speedtest_concurrency: 64,
+            edit_timeout_ms: 2000,
             edit_speedtest_download: false,
             edit_download_test_ms: 800,
             edit_http_server_enabled: false,
@@ -492,6 +493,7 @@ impl VpnApp {
             traffic_prev_sample: None,
             last_traffic_poll: std::time::Instant::now(),
             last_groups_poll: std::time::Instant::now() - std::time::Duration::from_secs(60),
+            last_log_poll: std::time::Instant::now() - std::time::Duration::from_secs(60),
             traffic_polling: false,
             kernel_groups: Vec::new(),
             proxy_selected_group: "全部".to_string(),
@@ -609,15 +611,15 @@ impl VpnApp {
     pub(crate) fn speed_opts(&self) -> SpeedTestOptions {
         let (concurrency, timeout_ms) = match self.speedtest_intensity {
             SpeedtestIntensity::Fast => (
-                self.settings.speedtest_concurrency.max(256),
-                self.settings.speedtest_timeout_ms.min(800),
+                self.settings.speedtest_concurrency.clamp(64, 128),
+                self.settings.speedtest_timeout_ms.min(1200),
             ),
             SpeedtestIntensity::Standard => (
-                self.settings.speedtest_concurrency,
-                self.settings.speedtest_timeout_ms,
+                self.settings.speedtest_concurrency.clamp(32, 96),
+                self.settings.speedtest_timeout_ms.max(1500),
             ),
             SpeedtestIntensity::Deep => (
-                (self.settings.speedtest_concurrency / 2).max(32).min(64),
+                (self.settings.speedtest_concurrency / 2).clamp(16, 48),
                 self.settings.speedtest_timeout_ms.max(3500),
             ),
         };
@@ -714,6 +716,18 @@ impl VpnApp {
         });
     }
 
+    pub(crate) fn reload_proxy_logs(&mut self) {
+        let manager = self.proxy_manager.clone();
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            let log = manager
+                .recent_log(12_000)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(BgMsg::ProxyLog(log));
+        });
+    }
+
     pub(crate) fn reload_sources(&mut self) {
         let db = self.db.clone();
         let tx = self.tx.clone();
@@ -743,16 +757,12 @@ impl VpnApp {
         };
         let page = self.page;
         let page_size = self.page_size;
-        let Some(source_id) = self.selected_node_source_id.clone() else {
-            self.nodes.clear();
-            self.node_total = 0;
-            return;
-        };
+        let source_id = self.selected_node_source_id.clone();
         self.rt.spawn(async move {
             let res = db
                 .list_nodes(
                     protocol.as_deref(),
-                    Some(&source_id),
+                    source_id.as_deref(),
                     keyword.as_deref(),
                     latency.as_deref(),
                     country.as_deref(),
@@ -846,7 +856,28 @@ impl VpnApp {
                 Ok(msg) => {
                     need_repaint = true;
                     match msg {
-                        BgMsg::Sources(Ok(list)) => self.sources = list,
+                        BgMsg::Sources(Ok(list)) => {
+                            if self.fetch_results.is_empty() {
+                                for source in &list {
+                                    if let Some(status) = &source.last_status {
+                                        let success = status.starts_with("ok")
+                                            || status.contains("unchanged");
+                                        self.fetch_results.push(FetchResult {
+                                            source_id: source.id.clone(),
+                                            source_name: source.name.clone(),
+                                            resolved_url: source
+                                                .last_resolved_url
+                                                .clone()
+                                                .unwrap_or_else(|| source.url_template.clone()),
+                                            success,
+                                            message: status.clone(),
+                                            node_count: source.last_node_count.max(0) as usize,
+                                        });
+                                    }
+                                }
+                            }
+                            self.sources = list;
+                        }
                         BgMsg::Sources(Err(e)) => self.status = format!("加载订阅源失败: {e}"),
                         BgMsg::Nodes(Ok((items, total))) => {
                             self.nodes = items;
@@ -855,22 +886,19 @@ impl VpnApp {
                         BgMsg::Nodes(Err(e)) => self.status = format!("加载节点失败: {e}"),
                         BgMsg::NodeGroups(Ok(groups)) => {
                             let previous = self.selected_node_source_id.clone();
-                            let selection_is_valid = previous.as_ref().is_some_and(|selected| {
-                                groups
-                                    .iter()
-                                    .any(|group| node_group_key(group) == *selected)
-                            });
+                            let selection_is_valid = previous.is_none()
+                                || previous.as_ref().is_some_and(|selected| {
+                                    groups
+                                        .iter()
+                                        .any(|group| node_group_key(group) == *selected)
+                                });
                             if !selection_is_valid {
-                                self.selected_node_source_id = groups.first().map(node_group_key);
+                                self.selected_node_source_id = None;
                                 self.page = 1;
                             }
                             self.node_groups = groups;
                             if self.selected_node_source_id != previous {
                                 self.reload_nodes();
-                            }
-                            if self.selected_node_source_id.is_none() {
-                                self.nodes.clear();
-                                self.node_total = 0;
                             }
                         }
                         BgMsg::NodeGroups(Err(e)) => self.status = format!("加载节点分组失败: {e}"),
@@ -1087,10 +1115,36 @@ impl VpnApp {
                         }
                         BgMsg::FetchOneDone { source_id, result } => {
                             self.active_source_fetches.remove(&source_id);
-                            if let Ok(result) = &result {
-                                self.fetch_results
-                                    .retain(|item| item.source_id != result.source_id);
-                                self.fetch_results.push(result.clone());
+                            match &result {
+                                Ok(res) => {
+                                    self.fetch_results
+                                        .retain(|item| item.source_id != res.source_id);
+                                    self.fetch_results.push(res.clone());
+                                }
+                                Err(error) => {
+                                    let name = self
+                                        .sources
+                                        .iter()
+                                        .find(|s| s.id == source_id)
+                                        .map(|s| s.name.clone())
+                                        .unwrap_or_else(|| source_id.clone());
+                                    let url = self
+                                        .sources
+                                        .iter()
+                                        .find(|s| s.id == source_id)
+                                        .map(|s| s.url_template.clone())
+                                        .unwrap_or_else(|| "-".into());
+                                    self.fetch_results
+                                        .retain(|item| item.source_id != source_id);
+                                    self.fetch_results.push(FetchResult {
+                                        source_id: source_id.clone(),
+                                        source_name: name,
+                                        resolved_url: url,
+                                        success: false,
+                                        message: error.clone(),
+                                        node_count: 0,
+                                    });
+                                }
                             }
                             if self
                                 .pending_added_source
@@ -3914,18 +3968,19 @@ impl eframe::App for VpnApp {
         // Intercept window close event according to user setting (close_to_tray vs exit)
         // Guard with frame_count > 5 so false close events during window creation are ignored
         if self.frame_count > 5 && ctx.input(|i| i.viewport().close_requested()) {
-            if self.settings.close_to_tray && !self.force_quit {
-                crate::startup_log("Window close requested -> 收进托盘（停放到屏幕外）");
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.park_to_tray();
-                return;
-            } else {
-                crate::startup_log("Window close requested -> quitting application");
-                self.force_quit = true;
-                self.tray.shutdown();
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                return;
+            if self.settings.close_to_tray && self.tray.supported() && !self.force_quit {
+                crate::startup_log("Window close requested -> 尝试收进托盘（停放到屏幕外）");
+                if self.park_to_tray() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    return;
+                }
+                crate::startup_log("[托盘] 停放失败，降级为正常退出程序");
             }
+            crate::startup_log("Window close requested -> quitting application");
+            self.force_quit = true;
+            self.tray.shutdown();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
         }
 
         self.poll_bg(ctx);
@@ -3960,6 +4015,13 @@ impl eframe::App for VpnApp {
             if self.last_groups_poll.elapsed() >= std::time::Duration::from_secs(5) {
                 self.last_groups_poll = std::time::Instant::now();
                 self.poll_kernel_groups();
+            }
+            if self.tab == Tab::Proxy
+                && self.proxy_panel == ProxyPanel::Logs
+                && self.last_log_poll.elapsed() >= std::time::Duration::from_millis(1500)
+            {
+                self.last_log_poll = std::time::Instant::now();
+                self.reload_proxy_logs();
             }
         }
         // 预备状态（一个内核都没装）自己把内核下下来；一次运行最多自己动一次。
@@ -4035,14 +4097,33 @@ impl eframe::App for VpnApp {
                 // 纵向内边距 7 → 3，文字仍是 normal 字号，读得清但不再撑高度。
                 ui.spacing_mut().button_padding = egui::vec2(11.0, 3.0);
                 ui.horizontal(|ui| {
-                    if self.busy {
+                    if self.busy || self.kernel_busy {
                         ui.spinner();
+                        let busy_text = if let Some(kp) = &self.kernel_progress {
+                            if kp.stage == crate::kernel::KernelUpdateStage::Downloading && kp.total > 0 {
+                                let pct = ((kp.downloaded as f64 / kp.total as f64) * 100.0).clamp(0.0, 100.0) as u32;
+                                format!("下载内核 {pct}%")
+                            } else {
+                                format!("内核{}", kp.stage.label())
+                            }
+                        } else {
+                            "处理中".to_string()
+                        };
                         ui.label(
-                            RichText::new("处理中")
+                            RichText::new(busy_text)
                                 .color(theme::accent())
                                 .strong()
                                 .small(),
                         );
+                        if let Some(kp) = &self.kernel_progress {
+                            if kp.stage == crate::kernel::KernelUpdateStage::Downloading && kp.total > 0 {
+                                ui.add(
+                                    egui::ProgressBar::new(kp.fraction())
+                                        .animate(true)
+                                        .desired_width(70.0),
+                                );
+                            }
+                        }
                         ui.separator();
                     }
                     // 系统代理被外部改掉时**不再往这条上写提示**（2026-10-15 他一句"不用显示这个"）。

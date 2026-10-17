@@ -169,29 +169,46 @@ impl KernelKind {
         self.asset_name_for(KernelPlatform::current(), tag)
     }
 
-    /// 三个内核在各平台上发的容器格式：
+    /// 三个内核在各平台上发的容器格式与候选资产列表（首选标准版，备选兼容版 compatible）：
     /// mihomo: Windows (.zip), Linux (.gz), macOS (.gz)
     /// xray: Windows (.zip), Linux (.zip), macOS (.zip)
     /// sing-box: Windows (.zip), Linux (.tar.gz), macOS (.tar.gz)
-    pub fn asset_name_for(self, platform: KernelPlatform, tag: &str) -> String {
+    pub fn asset_candidates_for(self, platform: KernelPlatform, tag: &str) -> Vec<String> {
         let version = tag.trim_start_matches('v');
         match (self, platform) {
-            (Self::Mihomo, KernelPlatform::Windows) => format!("mihomo-windows-amd64-{tag}.zip"),
-            (Self::Xray, KernelPlatform::Windows) => "Xray-windows-64.zip".into(),
+            (Self::Mihomo, KernelPlatform::Windows) => vec![
+                format!("mihomo-windows-amd64-{tag}.zip"),
+                format!("mihomo-windows-amd64-compatible-{tag}.zip"),
+            ],
+            (Self::Mihomo, KernelPlatform::Linux) => vec![
+                format!("mihomo-linux-amd64-{tag}.gz"),
+                format!("mihomo-linux-amd64-compatible-{tag}.gz"),
+            ],
+            (Self::Mihomo, KernelPlatform::MacOS) => vec![
+                format!("mihomo-darwin-amd64-{tag}.gz"),
+                format!("mihomo-darwin-amd64-compatible-{tag}.gz"),
+            ],
+            (Self::Xray, KernelPlatform::Windows) => vec!["Xray-windows-64.zip".into()],
+            (Self::Xray, KernelPlatform::Linux) => vec!["Xray-linux-64.zip".into()],
+            (Self::Xray, KernelPlatform::MacOS) => vec!["Xray-macos-64.zip".into()],
             (Self::SingBox, KernelPlatform::Windows) => {
-                format!("sing-box-{version}-windows-amd64.zip")
+                vec![format!("sing-box-{version}-windows-amd64.zip")]
             }
-            (Self::Mihomo, KernelPlatform::Linux) => format!("mihomo-linux-amd64-{tag}.gz"),
-            (Self::Xray, KernelPlatform::Linux) => "Xray-linux-64.zip".into(),
             (Self::SingBox, KernelPlatform::Linux) => {
-                format!("sing-box-{version}-linux-amd64.tar.gz")
+                vec![format!("sing-box-{version}-linux-amd64.tar.gz")]
             }
-            (Self::Mihomo, KernelPlatform::MacOS) => format!("mihomo-darwin-amd64-{tag}.gz"),
-            (Self::Xray, KernelPlatform::MacOS) => "Xray-macos-64.zip".into(),
             (Self::SingBox, KernelPlatform::MacOS) => {
-                format!("sing-box-{version}-darwin-amd64.tar.gz")
+                vec![format!("sing-box-{version}-darwin-amd64.tar.gz")]
             }
         }
+    }
+
+    pub fn asset_name_for(self, platform: KernelPlatform, tag: &str) -> String {
+        self.asset_candidates_for(platform, tag)[0].clone()
+    }
+
+    pub fn asset_candidates(self, tag: &str) -> Vec<String> {
+        self.asset_candidates_for(KernelPlatform::current(), tag)
     }
 
     pub fn matches_archive_executable(self, file_name: &str) -> bool {
@@ -497,11 +514,22 @@ pub fn find_mihomo_executable() -> Option<PathBuf> {
     find_kernel_executable(KernelKind::Mihomo)
 }
 
+pub fn managed_kernel_path(kind: KernelKind) -> PathBuf {
+    managed_kernel_root()
+        .join(kind.directory_name())
+        .join(kind.executable_name())
+}
+
 pub fn find_kernel_executable(kind: KernelKind) -> Option<PathBuf> {
     if let Some(path) = std::env::var_os(kind.environment_variable()).map(PathBuf::from) {
         if path.is_file() {
             return Some(path);
         }
+    }
+
+    let managed = managed_kernel_path(kind);
+    if managed.is_file() {
+        return Some(managed);
     }
 
     let current_exe = std::env::current_exe().ok();
@@ -609,9 +637,11 @@ async fn read_kernel_version_with_env(
     }
     // 必须带超时：`output()` 会一直等子进程退出，某个内核挂住就会让整条
     // 探测链（以及依赖它的更新检查）永远不返回。
-    let output = tokio::time::timeout(std::time::Duration::from_secs(5), command.output())
+    // 在虚拟机 (VirtualBox) 或 Windows Defender 开启时，首次拉起全新 exe 会被 Defender
+    // 实时查毒扫描 5~10 秒，因此探测超时放宽到 15 秒，避免误杀首次启动。
+    let output = tokio::time::timeout(std::time::Duration::from_secs(15), command.output())
         .await
-        .map_err(|_| anyhow::anyhow!("读取版本超时: {}", path.display()))?
+        .map_err(|_| anyhow::anyhow!("读取版本超时 (15s): {}", path.display()))?
         .with_context(|| format!("执行 {} 失败", path.display()))?;
     let text = format!(
         "{}{}",
@@ -785,6 +815,13 @@ Use tags: with_gvisor
             1
         );
         assert!(kernel_candidates(KernelKind::Xray, None, None).is_empty());
+    }
+
+    #[test]
+    fn managed_kernel_path_points_inside_managed_kernel_root() {
+        let path = managed_kernel_path(KernelKind::Mihomo);
+        assert!(path.starts_with(managed_kernel_root()));
+        assert!(path.ends_with(KernelKind::Mihomo.executable_name()));
     }
 
     #[test]

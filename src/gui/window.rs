@@ -168,10 +168,10 @@ impl VpnApp {
             });
 
         if action_minimize {
-            if self.settings.close_to_tray {
+            if self.settings.close_to_tray && self.tray.supported() && self.park_to_tray() {
                 crate::startup_log("Title-bar minimize -> 最小化收进托盘（从任务栏隐藏）");
-                self.park_to_tray();
             } else {
+                crate::startup_log("Title-bar minimize -> 最小化窗口");
                 self.was_minimized = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             }
@@ -225,9 +225,9 @@ impl VpnApp {
     /// 收进托盘 = 把窗口**停放到屏幕外**（不再 `Visible(false)`，理由见 `platform::window_park`：
     /// 隐藏的窗口收不到 WM_PAINT，一帧都不跑，eframe 会把泵永久留在 Poll，实测烧满一个核）。
     /// 只能在 UI 线程调用。
-    pub(crate) fn park_to_tray(&mut self) {
+    pub(crate) fn park_to_tray(&mut self) -> bool {
         if self.parked {
-            return;
+            return true;
         }
         match crate::platform::park_main_window() {
             Some(spot) => {
@@ -238,7 +238,7 @@ impl VpnApp {
             None => {
                 // 停不出去就不能装作"收进托盘了"：窗口还在用户眼前，状态必须说实话。
                 crate::startup_log("[托盘] 停放失败（找不到主窗口），窗口保持原位");
-                return;
+                return false;
             }
         }
         // 释放节点库缓存与工作集：这条是原来"隐藏到托盘"就有的行为，保留。
@@ -247,6 +247,7 @@ impl VpnApp {
             db.trim_cached_pools().await;
         });
         crate::platform::trim_working_set();
+        true
     }
 
     /// 从托盘叫回来：把窗口放回停放前记下位置和大小，并夺回焦点。
@@ -265,15 +266,17 @@ impl VpnApp {
     }
 
     pub(crate) fn request_window_close(&mut self, ctx: &egui::Context) {
-        if self.settings.close_to_tray && !self.force_quit {
+        if self.settings.close_to_tray && self.tray.supported() && !self.force_quit {
             crate::startup_log("Title-bar close -> 收进托盘（停放到屏幕外）");
-            self.park_to_tray();
-        } else {
-            crate::startup_log("Title-bar close -> quitting application");
-            self.force_quit = true;
-            self.tray.shutdown();
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            if self.park_to_tray() {
+                return;
+            }
+            crate::startup_log("[托盘] 停放失败，降级为退出程序");
         }
+        crate::startup_log("Title-bar close -> quitting application");
+        self.force_quit = true;
+        self.tray.shutdown();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
     /// 无边框窗口的缩放手：把 `resize_handle_rects` 算出的那几块铺成一层覆盖区。

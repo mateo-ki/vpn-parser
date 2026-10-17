@@ -105,6 +105,14 @@ impl TrayHandle {
     pub fn shutdown(&self) {
         let _ = self.update_tx.send(TrayUpdate::Shutdown);
     }
+
+    pub fn is_supported() -> bool {
+        cfg!(windows)
+    }
+
+    pub fn supported(&self) -> bool {
+        Self::is_supported()
+    }
 }
 
 impl Default for TrayHandle {

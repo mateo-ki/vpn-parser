@@ -102,15 +102,28 @@ impl VpnApp {
                                 ),
                             );
                             let (dot_color, status_text) = match self.proxy_status.state {
-                                ProxyState::Running => (theme::success(), "代理运行中"),
-                                ProxyState::Degraded => (theme::warning(), "代理降级运行"),
-                                ProxyState::Starting => (theme::accent_hover(), "代理启动中..."),
-                                ProxyState::Stopping => (theme::muted(), "代理停止中..."),
-                                ProxyState::Failed => (theme::danger(), "代理启动失败"),
+                                ProxyState::Running => (theme::success(), "代理运行中".to_string()),
+                                ProxyState::Degraded => (theme::warning(), "代理降级运行".to_string()),
+                                ProxyState::Starting => (theme::accent_hover(), "代理启动中...".to_string()),
+                                ProxyState::Stopping => (theme::muted(), "代理停止中...".to_string()),
+                                ProxyState::Failed => (theme::danger(), "代理启动失败".to_string()),
                                 ProxyState::Stopped if prepared => {
-                                    (theme::accent(), "预备 · 等待内核")
+                                    if self.kernel_busy {
+                                        if let Some(kp) = &self.kernel_progress {
+                                            if kp.stage == crate::kernel::KernelUpdateStage::Downloading && kp.total > 0 {
+                                                let pct = ((kp.downloaded as f64 / kp.total as f64) * 100.0).clamp(0.0, 100.0) as u32;
+                                                (theme::accent(), format!("预备 · 下载内核 {pct}%"))
+                                            } else {
+                                                (theme::accent(), format!("预备 · 内核{}", kp.stage.label()))
+                                            }
+                                        } else {
+                                            (theme::accent(), "预备 · 正在下载内核".to_string())
+                                        }
+                                    } else {
+                                        (theme::accent(), "预备 · 等待内核".to_string())
+                                    }
                                 }
-                                ProxyState::Stopped => (theme::sidebar_muted(), "代理未启动"),
+                                ProxyState::Stopped => (theme::sidebar_muted(), "代理未启动".to_string()),
                             };
                             let (rect, _) =
                                 ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
@@ -122,7 +135,7 @@ impl VpnApp {
                             );
                             ui.painter().circle_filled(rect.center(), 3.0, dot_color);
                             ui.label(
-                                RichText::new(status_text)
+                                RichText::new(&status_text)
                                     .small()
                                     .strong()
                                     .color(theme::text_primary()),

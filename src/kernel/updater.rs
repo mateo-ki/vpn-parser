@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 const MAX_ARCHIVE_SIZE: u64 = 150 * 1024 * 1024;
 
@@ -135,6 +136,28 @@ pub const ASSET_MIRROR_PREFIXES: [(&str, &str); 2] = [
     ("gh-proxy", "https://gh-proxy.com/"),
     ("ghfast", "https://ghfast.top/"),
 ];
+
+/// 选定的下载方式对应的一组 URL（含自动备用镜像）。
+pub fn candidate_urls_for(source: KernelSource, direct_url: &str) -> Vec<(String, String)> {
+    match source {
+        KernelSource::GhProxy => vec![
+            (asset_url_for(KernelSource::GhProxy, direct_url), "gh-proxy 镜像".to_string()),
+            (asset_url_for(KernelSource::GhFast, direct_url), "ghfast 镜像 (备用)".to_string()),
+        ],
+        KernelSource::GhFast => vec![
+            (asset_url_for(KernelSource::GhFast, direct_url), "ghfast 镜像".to_string()),
+            (asset_url_for(KernelSource::GhProxy, direct_url), "gh-proxy 镜像 (备用)".to_string()),
+        ],
+        KernelSource::Official => vec![
+            (asset_url_for(KernelSource::Official, direct_url), "官方直连".to_string()),
+            (asset_url_for(KernelSource::GhFast, direct_url), "ghfast 镜像 (备用)".to_string()),
+        ],
+        KernelSource::Proxy => vec![
+            (asset_url_for(KernelSource::Proxy, direct_url), "走代理".to_string()),
+        ],
+        KernelSource::Local => vec![],
+    }
+}
 
 /// 选定的下载方式对应的那一个 URL —— 一次只有一条连接，不再并发抢跑。
 pub fn asset_url_for(source: KernelSource, direct_url: &str) -> String {
@@ -472,67 +495,120 @@ impl KernelUpdater {
             },
             release.tag_name
         ));
-        let asset_name = kind.asset_name(&release.tag_name);
-        let asset = release
-            .assets
-            .iter()
-            .find(|asset| asset.name == asset_name)
-            .cloned()
-            .with_context(|| format!("官方 Release 未找到资产 {asset_name}"))?;
-        let expected_hash = require_sha256(&asset)?.to_string();
-        crate::startup_log(&format!(
-            "[内核] {} 目标资产 {} / {} 字节，SHA-256 期望 {}…（下载方式 {}）",
-            kind.display_name(),
-            asset.name,
-            asset.size,
-            &expected_hash[..expected_hash.len().min(12)],
-            source.label()
-        ));
-        if asset.size == 0 || asset.size > MAX_ARCHIVE_SIZE {
-            bail!("内核压缩包大小异常: {} bytes", asset.size);
-        }
+        let candidates = kind.asset_candidates(&release.tag_name);
+        let mut install_failures = Vec::new();
 
-        let bytes = self
-            .download_asset(kind, &asset, source, transport_index, cancelled, progress)
-            .await?;
-        if bytes.len() as u64 != asset.size {
+        for candidate_name in &candidates {
+            ensure_not_cancelled(cancelled)?;
+            let Some(asset) = release
+                .assets
+                .iter()
+                .find(|asset| &asset.name == candidate_name)
+                .cloned()
+            else {
+                continue;
+            };
+
+            let expected_hash = match require_sha256(&asset) {
+                Ok(h) => h.to_string(),
+                Err(e) => {
+                    install_failures.push(format!("{candidate_name}: {e}"));
+                    continue;
+                }
+            };
+
             crate::startup_log(&format!(
-                "[内核] {} 下载大小不一致: 期望 {}，实际 {}",
+                "[内核] {} 目标资产 {} / {} 字节，SHA-256 期望 {}…（下载方式 {}）",
                 kind.display_name(),
+                asset.name,
                 asset.size,
+                &expected_hash[..expected_hash.len().min(12)],
+                source.label()
+            ));
+            if asset.size == 0 || asset.size > MAX_ARCHIVE_SIZE {
+                install_failures.push(format!("{candidate_name}: 压缩包大小异常"));
+                continue;
+            }
+
+            let bytes = match self
+                .download_asset(kind, &asset, source, transport_index, cancelled, progress)
+                .await
+            {
+                Ok(b) => b,
+                Err(e) => {
+                    install_failures.push(format!("{candidate_name} 下载失败: {e}"));
+                    continue;
+                }
+            };
+
+            if bytes.len() as u64 != asset.size {
+                let msg = format!("下载大小不一致: 期望 {}，实际 {}", asset.size, bytes.len());
+                crate::startup_log(&format!("[内核] {} {candidate_name} {msg}", kind.display_name()));
+                install_failures.push(format!("{candidate_name}: {msg}"));
+                continue;
+            }
+
+            crate::startup_log(&format!(
+                "[内核] {} 下载完成 {} 字节，开始校验 SHA-256",
+                kind.display_name(),
                 bytes.len()
             ));
-            bail!("下载大小不一致: 期望 {}，实际 {}", asset.size, bytes.len());
+            progress(KernelUpdateProgress {
+                kind,
+                stage: KernelUpdateStage::Verifying,
+                downloaded: asset.size,
+                total: asset.size,
+                bytes_per_second: 0.0,
+                message: "正在校验 SHA-256".into(),
+            });
+            ensure_not_cancelled(cancelled)?;
+            if let Err(error) = verify_sha256(&bytes, &expected_hash) {
+                crate::startup_log(&format!("[内核] {} {candidate_name} {error}", kind.display_name()));
+                install_failures.push(format!("{candidate_name}: {error}"));
+                continue;
+            }
+            crate::startup_log(&format!("[内核] {} {candidate_name} SHA-256 校验通过", kind.display_name()));
+
+            let archive_format = match KernelArchive::from_asset_name(&asset.name) {
+                Some(f) => f,
+                None => {
+                    install_failures.push(format!("{candidate_name}: 容器格式认不出来"));
+                    continue;
+                }
+            };
+
+            match self
+                .install_bytes(
+                    kind,
+                    bytes,
+                    Some(release.tag_name.as_str()),
+                    archive_format,
+                    cancelled,
+                    progress,
+                )
+                .await
+            {
+                Ok(result) => return Ok(result),
+                Err(error) => {
+                    crate::startup_log(&format!(
+                        "[内核] {} 资产 {} 落地验证失败: {error}，若有备选变体则尝试下一个...",
+                        kind.display_name(),
+                        asset.name
+                    ));
+                    progress(KernelUpdateProgress {
+                        kind,
+                        stage: KernelUpdateStage::Downloading,
+                        downloaded: 0,
+                        total: 0,
+                        bytes_per_second: 0.0,
+                        message: format!("{} 运行失败，正在尝试兼容版内核...", asset.name),
+                    });
+                    install_failures.push(format!("{candidate_name}: {error}"));
+                }
+            }
         }
-        crate::startup_log(&format!(
-            "[内核] {} 下载完成 {} 字节，开始校验 SHA-256",
-            kind.display_name(),
-            bytes.len()
-        ));
-        progress(KernelUpdateProgress {
-            kind,
-            stage: KernelUpdateStage::Verifying,
-            downloaded: asset.size,
-            total: asset.size,
-            bytes_per_second: 0.0,
-            message: "正在校验 SHA-256".into(),
-        });
-        ensure_not_cancelled(cancelled)?;
-        verify_sha256(&bytes, &expected_hash).map_err(|error| {
-            crate::startup_log(&format!("[内核] {} {error}", kind.display_name()));
-            error
-        })?;
-        crate::startup_log(&format!("[内核] {} SHA-256 校验通过", kind.display_name()));
-        self.install_bytes(
-            kind,
-            bytes,
-            Some(release.tag_name.as_str()),
-            KernelArchive::from_asset_name(&asset.name)
-                .ok_or_else(|| anyhow::anyhow!("官方资产 {} 的容器格式认不出来", asset.name))?,
-            cancelled,
-            progress,
-        )
-        .await
+
+        bail!("安装 {} 失败：{}", kind.display_name(), install_failures.join("；"))
     }
 
     /// 校验过字节之后的统一落地：解压到暂存 → 跑一次拿版本 → 备份旧内核 → 替换 → 失败回滚。
@@ -593,23 +669,37 @@ impl KernelUpdater {
         if !matches!(staged, Ok(Some(_))) {
             let second =
                 read_kernel_version_with_env(kind, &staging, &crate::kernel::GODEBUG_COMPAT).await;
-            if matches!(second, Ok(Some(_))) {
-                compat_only = true;
-                crate::startup_log(&format!(
-                    "[内核] {} 只有带 GODEBUG=cpu.all=off 才跑得起来 —— 这台机器的 CPUID 不可信，                     启动内核时也得带上（第一次的错见上一行）",
-                    kind.display_name()
-                ));
-                staged = second;
-            } else {
-                // 文本里不放反斜杠路径：日志中真正有用的是下面那行完整路径本身。
-                crate::startup_log(
-                    "[内核] 带 GODEBUG=cpu.all=off 仍然跑不起来 —— 更像杀软挂钩或访客环境问题。手动验证：把下面这个文件另存为 x.exe 后运行 x.exe -v",
-                );
-                crate::startup_log(&format!("[内核] 暂存文件: {}", staging.display()));
+            match &second {
+                Ok(Some(line)) => {
+                    compat_only = true;
+                    crate::startup_log(&format!(
+                        "[内核] {} 只有带 GODEBUG=cpu.all=off 才跑得起来: {line} —— 这台机器的 CPUID 不可信，启动内核时也得带上（第一次报错见上一行）",
+                        kind.display_name()
+                    ));
+                    staged = second;
+                }
+                Ok(None) => {
+                    crate::startup_log("[内核] 带 GODEBUG=cpu.all=off 运行了但没有打印任何版本行");
+                }
+                Err(err) => {
+                    crate::startup_log(&format!(
+                        "[内核] 带 GODEBUG=cpu.all=off 仍然跑不起来: {err} —— 更像杀软挂钩或访客环境问题。手动验证：把下面这个文件另存为 x.exe 后运行 x.exe -v"
+                    ));
+                    crate::startup_log(&format!("[内核] 暂存文件: {}", staging.display()));
+                }
             }
         }
-        let staged_version =
-            staged?.with_context(|| format!("{} 暂存内核未返回版本", kind.display_name()))?;
+        let staged_version = match staged {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                let _ = tokio::fs::remove_file(&staging).await;
+                bail!("{} 暂存内核未返回版本", kind.display_name());
+            }
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&staging).await;
+                return Err(e);
+            }
+        };
         if let Some(tag) = expected_tag {
             if !version_matches(&staged_version, tag) {
                 crate::startup_log(&format!(
@@ -687,7 +777,7 @@ impl KernelUpdater {
         })
     }
 
-    /// 并发竞速下载：镜像与官方原链同时开跑，谁先下完用谁，其余立刻丢弃（丢弃即断流）。
+    /// 并发竞速下载：镜像与官方原链按序尝试，主通道失败/停滞自动尝试备用通道。
     /// 一条通道全失败才换下一条；`preferred` 是查版本时先赢的那条通道。
     async fn download_asset<F>(
         &self,
@@ -704,43 +794,46 @@ impl KernelUpdater {
         ensure_not_cancelled(cancelled)?;
         let mut order = self.transport_order(source)?;
         order.sort_by_key(|index| if *index == preferred { 0 } else { 1 });
-        let url = asset_url_for(source, &asset.browser_download_url);
+        let candidates = candidate_urls_for(source, &asset.browser_download_url);
         let mut failures = Vec::new();
-        // 一次只有一条连接在跑：这条通道失败才换下一条，所以进度天然单调递增。
+        // 一次只有一条连接在跑：主通道或镜像停滞/失败才试下一个，进度天然单调递增。
         for index in order {
             let transport = &self.transports[index];
-            let label = format!("{}·{}", transport.label, source.label());
-            match Self::stream_asset(
-                &transport.stream_client,
-                url.clone(),
-                label.clone(),
-                kind,
-                asset.name.clone(),
-                asset.size,
-                cancelled,
-                progress,
-            )
-            .await
-            {
-                Ok(bytes) => return Ok(bytes),
-                Err(error) => {
-                    failures.push(format!("{label}: {error}"));
-                    progress(KernelUpdateProgress {
-                        kind,
-                        stage: KernelUpdateStage::Downloading,
-                        downloaded: 0,
-                        total: asset.size,
-                        bytes_per_second: 0.0,
-                        message: format!("{label} 失败，换下一条通道：{error}"),
-                    });
+            for (url, source_label) in &candidates {
+                ensure_not_cancelled(cancelled)?;
+                let label = format!("{}·{}", transport.label, source_label);
+                match Self::stream_asset(
+                    &transport.stream_client,
+                    url.clone(),
+                    label.clone(),
+                    kind,
+                    asset.name.clone(),
+                    asset.size,
+                    cancelled,
+                    progress,
+                )
+                .await
+                {
+                    Ok(bytes) => return Ok(bytes),
+                    Err(error) => {
+                        failures.push(format!("{label}: {error}"));
+                        crate::startup_log(&format!("[内核下载] {label} 失败: {error}，尝试备用通道..."));
+                        progress(KernelUpdateProgress {
+                            kind,
+                            stage: KernelUpdateStage::Downloading,
+                            downloaded: 0,
+                            total: asset.size,
+                            bytes_per_second: 0.0,
+                            message: format!("{label} 失败：{error}，正在切换通道..."),
+                        });
+                    }
                 }
             }
         }
         bail!("下载 {} 失败：{}", asset.name, failures.join("；"))
     }
 
-    /// 单条连接的流式下载。长度不够就判失败——镜像偶尔回半截或回 HTML，
-    /// 不能让它把坏数据交给上层校验。
+    /// 单条连接的流式下载。长度不够或传输停滞超过 12 秒就判失败自动换线。
     #[allow(clippy::too_many_arguments)]
     async fn stream_asset(
         client: &Client,
@@ -752,18 +845,23 @@ impl KernelUpdater {
         cancelled: &AtomicBool,
         progress: &(dyn Fn(KernelUpdateProgress) + Send + Sync),
     ) -> Result<Vec<u8>> {
-        let response = match client
-            .get(url)
-            .timeout(std::time::Duration::from_secs(300))
-            .send()
-            .await
+        const CONNECT_AND_HEADER_TIMEOUT: Duration = Duration::from_secs(12);
+        const CHUNK_IDLE_TIMEOUT: Duration = Duration::from_secs(12);
+
+        let response = match tokio::time::timeout(
+            CONNECT_AND_HEADER_TIMEOUT,
+            client.get(&url).send()
+        )
+        .await
         {
-            Ok(response) => match response.error_for_status() {
+            Ok(Ok(response)) => match response.error_for_status() {
                 Ok(response) => response,
                 Err(error) => bail!("HTTP 失败: {error}"),
             },
-            Err(error) => bail!("{error:#}"),
+            Ok(Err(error)) => bail!("{error:#}"),
+            Err(_) => bail!("连接或响应头超时 (12s)"),
         };
+
         let mut response = response;
         let started = std::time::Instant::now();
         let capacity = (expected as usize).min(MAX_ARCHIVE_SIZE as usize);
@@ -772,30 +870,46 @@ impl KernelUpdater {
             if cancelled.load(Ordering::Relaxed) {
                 bail!("已取消");
             }
-            match response.chunk().await {
-                Ok(Some(chunk)) => {
+            match tokio::time::timeout(CHUNK_IDLE_TIMEOUT, response.chunk()).await {
+                Ok(Ok(Some(chunk))) => {
                     bytes.extend_from_slice(&chunk);
                     if bytes.len() as u64 > MAX_ARCHIVE_SIZE {
                         bail!("下载内容超过安全大小限制");
                     }
                     let elapsed = started.elapsed().as_secs_f64().max(0.001);
                     let own = bytes.len() as u64;
+                    let percent = if expected > 0 {
+                        ((own as f64 / expected as f64) * 100.0).clamp(0.0, 100.0) as u32
+                    } else {
+                        0
+                    };
+                    let mb_down = own as f64 / 1024.0 / 1024.0;
+                    let mb_total = expected as f64 / 1024.0 / 1024.0;
+                    let speed_kbs = (own as f64 / elapsed) / 1024.0;
+                    let speed_str = if speed_kbs >= 1024.0 {
+                        format!("{:.2} MB/s", speed_kbs / 1024.0)
+                    } else {
+                        format!("{:.1} KB/s", speed_kbs)
+                    };
                     progress(KernelUpdateProgress {
                         kind,
                         stage: KernelUpdateStage::Downloading,
                         downloaded: own,
                         total: expected,
                         bytes_per_second: own as f64 / elapsed,
-                        message: format!("正在下载 {name}（{label}）"),
+                        message: format!(
+                            "正在下载 {name} {percent}% ({mb_down:.1}MB / {mb_total:.1}MB, {speed_str}) · {label}"
+                        ),
                     });
                 }
-                Ok(None) => {
+                Ok(Ok(None)) => {
                     if (bytes.len() as u64) < expected {
-                        bail!("只下到 {} / {} 字节", bytes.len(), expected);
+                        bail!("只下到 {} / {} 字节（连接过早中断）", bytes.len(), expected);
                     }
                     return Ok(bytes);
                 }
-                Err(error) => bail!("下载中断: {error}"),
+                Ok(Err(error)) => bail!("下载中断: {error}"),
+                Err(_) => bail!("下载停滞（超过 12 秒未收到任何新数据）"),
             }
         }
     }
@@ -892,28 +1006,46 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
         return None;
     }
     const MIHOMO_TAG: &str = "v1.19.32";
-    let (digest, size) = if KernelPlatform::current() == KernelPlatform::Windows {
-        (
-            "sha256:1ac84e795b5b915446e20139677fb6cc013a0778e876e8d4c96f994750b4c4a3",
-            22_492_402_u64,
-        )
-    } else {
-        (
-            "sha256:8451100836c9eda194331c2babfad490b2faf30cebc1a04b0e76fd8ac2d35d10",
-            22_846_526_u64,
-        )
-    };
-    let name = kind.asset_name(MIHOMO_TAG);
+    let (primary_name, primary_digest, primary_size, compat_name, compat_digest, compat_size) =
+        if KernelPlatform::current() == KernelPlatform::Windows {
+            (
+                format!("mihomo-windows-amd64-{MIHOMO_TAG}.zip"),
+                "sha256:1ac84e795b5b915446e20139677fb6cc013a0778e876e8d4c96f994750b4c4a3",
+                22_492_402_u64,
+                format!("mihomo-windows-amd64-compatible-{MIHOMO_TAG}.zip"),
+                "sha256:974a4d7ad69aed27aa2e8f91d61113573c14dadb14562c63e58effabf59816f0",
+                22_525_067_u64,
+            )
+        } else {
+            (
+                format!("mihomo-linux-amd64-{MIHOMO_TAG}.gz"),
+                "sha256:8451100836c9eda194331c2babfad490b2faf30cebc1a04b0e76fd8ac2d35d10",
+                22_846_526_u64,
+                format!("mihomo-linux-amd64-compatible-{MIHOMO_TAG}.gz"),
+                "sha256:ba3ce607747a07f948fc35780e108a4a7c7f552a38b9bd4d115f313ebcb89c20",
+                22_877_876_u64,
+            )
+        };
     Some(GithubRelease {
         tag_name: MIHOMO_TAG.to_string(),
-        assets: vec![GithubAsset {
-            name: name.clone(),
-            browser_download_url: format!(
-                "https://github.com/MetaCubeX/mihomo/releases/download/{MIHOMO_TAG}/{name}"
-            ),
-            size,
-            digest: Some(digest.to_string()),
-        }],
+        assets: vec![
+            GithubAsset {
+                name: primary_name.clone(),
+                browser_download_url: format!(
+                    "https://github.com/MetaCubeX/mihomo/releases/download/{MIHOMO_TAG}/{primary_name}"
+                ),
+                size: primary_size,
+                digest: Some(primary_digest.to_string()),
+            },
+            GithubAsset {
+                name: compat_name.clone(),
+                browser_download_url: format!(
+                    "https://github.com/MetaCubeX/mihomo/releases/download/{MIHOMO_TAG}/{compat_name}"
+                ),
+                size: compat_size,
+                digest: Some(compat_digest.to_string()),
+            },
+        ],
         fallback: true,
     })
 }
@@ -1095,9 +1227,11 @@ mod tests {
     fn fallback_release_is_self_consistent() {
         let release = fallback_release(KernelKind::Mihomo).expect("mihomo 有兜底版本");
         assert!(release.fallback);
-        assert_eq!(release.assets.len(), 1);
+        assert_eq!(release.assets.len(), 2);
         let asset = &release.assets[0];
         assert_eq!(asset.name, KernelKind::Mihomo.asset_name(&release.tag_name));
+        let compat = &release.assets[1];
+        assert!(compat.name.contains("compatible"));
         // 大小/容器要跟着平台走：这两个号分别是 Windows 的 .zip 和 Linux 的 .gz，
         // 写死任何一个都会在另一个平台上变成"下得来但校验必挂"。
         let (want_size, want_suffix) = match KernelPlatform::current() {
@@ -1407,6 +1541,20 @@ mod source_tests {
                 "{source:?} 必须只连官方原链"
             );
         }
+    }
+
+    #[test]
+    fn candidate_urls_contain_primary_and_fallback_mirrors() {
+        let direct = "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.29/mihomo.zip";
+        let proxy_candidates = candidate_urls_for(KernelSource::GhProxy, direct);
+        assert_eq!(proxy_candidates.len(), 2);
+        assert!(proxy_candidates[0].0.contains("gh-proxy.com"));
+        assert!(proxy_candidates[1].0.contains("ghfast.top"));
+
+        let fast_candidates = candidate_urls_for(KernelSource::GhFast, direct);
+        assert_eq!(fast_candidates.len(), 2);
+        assert!(fast_candidates[0].0.contains("ghfast.top"));
+        assert!(fast_candidates[1].0.contains("gh-proxy.com"));
     }
 
     #[test]

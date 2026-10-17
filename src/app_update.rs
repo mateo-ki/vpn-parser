@@ -21,6 +21,7 @@ pub enum PackageKind {
     WindowsSetup,
     Deb,
     Rpm,
+    AppImage,
 }
 
 impl PackageKind {
@@ -29,6 +30,7 @@ impl PackageKind {
             Self::WindowsSetup => "Windows 安装包",
             Self::Deb => "deb 包",
             Self::Rpm => "rpm 包",
+            Self::AppImage => "AppImage 单文件",
         }
     }
 
@@ -45,6 +47,7 @@ impl PackageKind {
             Self::WindowsSetup => "-windows-x64-setup.exe",
             Self::Deb => ".deb",
             Self::Rpm => ".rpm",
+            Self::AppImage => ".AppImage",
         }
     }
 
@@ -56,6 +59,13 @@ impl PackageKind {
             Self::WindowsSetup => format!("双击运行 {file}（安装向导会先关掉当前程序）"),
             Self::Deb => format!("sudo dpkg -i {file}"),
             Self::Rpm => format!("sudo rpm -Uvh {file}"),
+            Self::AppImage => {
+                if let Some(orig) = std::env::var_os("APPIMAGE").map(PathBuf::from) {
+                    format!("chmod +x {file} && 直接运行新版或替换原文件：{}", orig.display())
+                } else {
+                    format!("chmod +x {file} && {file}")
+                }
+            }
         }
     }
 }
@@ -251,7 +261,18 @@ fn package_preference_from_os_release(os_release: &str) -> Vec<PackageKind> {
     }
 }
 
-/// 这台机器该优先认哪种包。Windows 直接给死；Linux 读 `/etc/os-release`，读不到就两个都试。
+#[allow(dead_code)]
+pub fn is_running_as_appimage() -> bool {
+    std::env::var_os("APPIMAGE").is_some()
+        || std::env::var_os("APPDIR").is_some()
+        || std::env::current_exe()
+            .ok()
+            .and_then(|p| p.to_str().map(|s| s.contains("/.mount_")))
+            .unwrap_or(false)
+}
+
+/// 这台机器该优先认哪种包。Windows 直接给死；Linux 在 AppImage 环境下优先 AppImage，
+/// 否则读 `/etc/os-release`，读不到就 deb/rpm 都试，同时追加 AppImage 作兜底。
 fn package_preference() -> Vec<PackageKind> {
     #[cfg(windows)]
     {
@@ -259,8 +280,12 @@ fn package_preference() -> Vec<PackageKind> {
     }
     #[cfg(not(windows))]
     {
+        if is_running_as_appimage() {
+            return vec![PackageKind::AppImage];
+        }
         let text = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
         let mut kinds = package_preference_from_os_release(&text);
+        kinds.push(PackageKind::AppImage); // 兜底：通用单文件
         kinds.push(PackageKind::WindowsSetup); // 兜底：万一 Release 只发了 Windows 包
         kinds
     }
@@ -281,15 +306,17 @@ fn pick_installer_asset(assets: &[AssetJson], tag: &str) -> Option<AppAsset> {
 fn pick_one_kind(assets: &[AssetJson], kind: PackageKind, version: &str) -> Option<AppAsset> {
     let expected = format!("vpn-parser-{version}{}", kind.suffix());
     // 松匹配按包型分两档，理由见 `needs_version_in_name`：Windows 那串是 release.yml
-    // 按同一个模板写的，后缀命中就等于版本命中；deb/rpm 的名字里还夹着工具自己填的
+    // 按同一个模板写的，后缀命中就等于版本命中；deb/rpm/AppImage 的名字里还夹着工具自己填的
     // 修订号（`-1`）和架构（`amd64`/`x86_64`），只看后缀就可能挑到别的版本那一份。
     let needs_version = kind.needs_version_in_name();
+    let suffix_lower = kind.suffix().to_ascii_lowercase();
     let loose = |asset: &AssetJson| {
-        asset.name.ends_with(kind.suffix()) && (!needs_version || asset.name.contains(version))
+        let name_lower = asset.name.to_ascii_lowercase();
+        name_lower.ends_with(&suffix_lower) && (!needs_version || asset.name.contains(version))
     };
     let found = assets
         .iter()
-        .position(|asset| asset.name == expected)
+        .position(|asset| asset.name.eq_ignore_ascii_case(&expected))
         .or_else(|| assets.iter().rposition(loose))?;
     let asset = &assets[found];
     Some(AppAsset {
@@ -784,9 +811,25 @@ pub fn launch_installer(path: &Path) -> Result<Handoff> {
     }
     #[cfg(not(windows))]
     {
-        let kind = match path.extension().and_then(|ext| ext.to_str()) {
+        let ext_lower = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|s| s.to_ascii_lowercase());
+        let kind = match ext_lower.as_deref() {
             Some("deb") => PackageKind::Deb,
             Some("rpm") => PackageKind::Rpm,
+            Some("appimage") => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(meta) = path.metadata() {
+                        let mut perms = meta.permissions();
+                        perms.set_mode(0o755);
+                        let _ = std::fs::set_permissions(path, perms);
+                    }
+                }
+                PackageKind::AppImage
+            }
             _ => PackageKind::Deb,
         };
         let command = kind.install_command(path);
@@ -896,13 +939,18 @@ ID-LIKE=\"debian\"
             asset("vpn-parser_1.5.0-1_amd64.deb", None),
             asset("vpn-parser_1.6.2-1_amd64.deb", None),
             asset("vpn-parser-1.6.2-1.x86_64.rpm", None),
+            asset("vpn-parser-1.6.2-x86_64.AppImage", None),
         ];
         let deb = pick_one_kind(&assets, PackageKind::Deb, "1.6.2").expect("该找到 deb");
         assert_eq!(deb.name, "vpn-parser_1.6.2-1_amd64.deb");
         let rpm = pick_one_kind(&assets, PackageKind::Rpm, "1.6.2").expect("该找到 rpm");
         assert_eq!(rpm.name, "vpn-parser-1.6.2-1.x86_64.rpm");
+        let appimage =
+            pick_one_kind(&assets, PackageKind::AppImage, "1.6.2").expect("该找到 appimage");
+        assert_eq!(appimage.name, "vpn-parser-1.6.2-x86_64.AppImage");
         // 反向对照：只到 1.6.1 的 Release 不该把 1.6.2 那份 deb 当成自己的。
         assert!(pick_one_kind(&assets, PackageKind::Deb, "1.6.1").is_none());
+        assert!(pick_one_kind(&assets, PackageKind::AppImage, "1.6.1").is_none());
     }
 
     /// 交给用户的那条命令必须带真实路径 —— 说"请用包管理器安装"等于没说。
@@ -919,6 +967,9 @@ ID-LIKE=\"debian\"
         assert!(PackageKind::WindowsSetup
             .install_command(path)
             .contains("安装向导"));
+        assert!(PackageKind::AppImage
+            .install_command(path)
+            .contains("chmod +x "));
     }
 
     #[test]

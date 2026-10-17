@@ -1328,7 +1328,7 @@ impl ProxyManager {
                     || diagnostic.contains("自动建立连接")
                     || diagnostic.contains("start initial configuration")
                 {
-                    if runtime.options.mode == ProxyMode::System {
+                    if runtime.options.mode == ProxyMode::System && self.system_proxy.supported() {
                         if let Some(snapshot) = preserved_system_proxy_snapshot.take() {
                             runtime.system_proxy_snapshot = Some(snapshot);
                         } else if runtime.system_proxy_snapshot.is_none() {

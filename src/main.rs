@@ -438,6 +438,8 @@ fn main() -> Result<()> {
         ) = gui_handles.clone();
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
+                // Linux / Wayland 下合成器按 app_id 关联 .desktop 与图标
+                .with_app_id("vpn-parser")
                 // 系统标题栏去掉，换成 gui::VpnApp::ui_title_bar 自绘的一条
                 // （最小化 / 最大化 / 关闭 + 拖动 + 8 向缩放手）。
                 .with_decorations(false)

@@ -23,6 +23,7 @@ logs/
 .idea/
 .vscode/
 .workbuddy/
+.zcode/
 *.swp
 *.swo
 .superpowers/
