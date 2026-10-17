@@ -147,6 +147,7 @@ impl VpnApp {
                     egui::ComboBox::from_id_salt("node_source_filter")
                         .selected_text(source_label)
                         .width(130.0)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                         .show_ui(ui, |ui| {
                             // 下拉框内嵌模糊搜索输入框
                             ui.horizontal(|ui| {
@@ -173,6 +174,7 @@ impl VpnApp {
                                             self.source_filter.clear();
                                             filter_changed = true;
                                         }
+                                        ui.memory_mut(|m| m.close_popup());
                                     }
 
                                     let q = self.source_search_query.trim().to_lowercase();
@@ -194,6 +196,7 @@ impl VpnApp {
                                                 self.source_filter = s.id.clone();
                                                 filter_changed = true;
                                             }
+                                            ui.memory_mut(|m| m.close_popup());
                                         }
                                     }
 
