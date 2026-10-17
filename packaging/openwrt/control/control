@@ -1,0 +1,9 @@
+Package: vpn-parser
+Version: __VERSION__
+Depends: libc, ca-certificates
+Architecture: __ARCH__
+Maintainer: mateo-ki <https://github.com/mateo-ki/vpn-parser>
+Section: net
+Priority: optional
+Title: VPN Parser subscription collector and proxy node manager
+Description: VPN Parser is a lightweight, headless subscription collector, speedtester, and node quality management microservice for OpenWrt.

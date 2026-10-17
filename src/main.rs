@@ -148,9 +148,18 @@ fn main() -> Result<()> {
         startup_log(&format!("exe_path: {}", exe_path.display()));
         // 诊断模式已经切到自己的临时目录了，别再跟去安装目录（那会重新用上 D 盘的 data）。
         if !diag {
+            #[cfg(windows)]
             if let Some(exe_dir) = exe_path.parent() {
                 let _ = std::env::set_current_dir(exe_dir);
                 startup_log(&format!("set_current_dir: {}", exe_dir.display()));
+            }
+            #[cfg(not(windows))]
+            if let Some(exe_dir) = exe_path.parent() {
+                let dir_str = exe_dir.to_string_lossy();
+                if !dir_str.starts_with("/usr") && !dir_str.starts_with("/bin") && !dir_str.starts_with("/sbin") {
+                    let _ = std::env::set_current_dir(exe_dir);
+                    startup_log(&format!("set_current_dir: {}", exe_dir.display()));
+                }
             }
         }
     }
@@ -398,7 +407,29 @@ fn main() -> Result<()> {
             println!("HTTP API 访问令牌（本次启动随机生成）: {api_token}");
         }
         rt.block_on(async {
-            tokio::signal::ctrl_c().await.ok();
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                let mut sigterm = signal(SignalKind::terminate()).ok();
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        info!("received SIGINT (Ctrl+C), shutting down");
+                    }
+                    _ = async {
+                        if let Some(sig) = &mut sigterm {
+                            sig.recv().await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    } => {
+                        info!("received SIGTERM, shutting down");
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                tokio::signal::ctrl_c().await.ok();
+            }
             if let Err(error) = proxy_manager.stop().await {
                 tracing::error!(%error, "restore system proxy on headless exit failed");
             }

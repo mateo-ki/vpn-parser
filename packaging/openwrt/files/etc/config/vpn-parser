@@ -1,0 +1,5 @@
+config vpn-parser 'main'
+	option enabled '1'
+	option listen '0.0.0.0:8080'
+	option db '/etc/vpn-parser/vpn-parser.db'
+	option api_token ''

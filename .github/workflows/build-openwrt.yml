@@ -1,0 +1,127 @@
+name: OpenWrt
+
+# OpenWrt .ipk 自动化编译与打包流水线
+# 覆盖架构：
+#   - x86_64: 通用 X86 软路由、PVE/ESXi 虚拟机、工控机等
+#   - aarch64_generic: ARM64 软硬路由（NanoPi R2S/R4S/R5S、友善、GL.iNet、香橙派等）
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-ipk:
+    name: 构建 OpenWrt .ipk (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            arch: x86_64
+          - target: aarch64-unknown-linux-musl
+            arch: aarch64_generic
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 获取版本号
+        id: get_version
+        run: |
+          set -euo pipefail
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Detected version: $version"
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: 安装 cross 工具
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/cross-rs/cross/releases/download/v0.2.5/cross-x86_64-unknown-linux-musl.tar.gz | sudo tar -xz -C /usr/local/bin
+          cross --version
+
+      - name: 缓存 Cargo 依赖
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: 交叉编译无头静态 Release 二进制
+        run: |
+          cross build --release --no-default-features --target ${{ matrix.target }}
+
+      - name: 打包 OpenWrt .ipk 与独立压缩包
+        run: |
+          set -euo pipefail
+          version="${{ steps.get_version.outputs.version }}"
+          arch="${{ matrix.arch }}"
+          target="${{ matrix.target }}"
+          binary="target/${target}/release/vpn-parser"
+
+          mkdir -p dist
+
+          # 1. 生成 OpenWrt .ipk 包
+          chmod +x packaging/openwrt/make_ipk.sh
+          ./packaging/openwrt/make_ipk.sh "$binary" "$arch" dist "$version"
+
+          # 2. 生成纯静态 Linux 二进制归档 (.tar.gz)
+          tar_name="vpn-parser_${version}_linux_${arch}_musl.tar.gz"
+          mkdir -p "target/tar-staging"
+          cp "$binary" "target/tar-staging/vpn-parser"
+          chmod 755 "target/tar-staging/vpn-parser"
+          strip --strip-unneeded "target/tar-staging/vpn-parser" 2>/dev/null || true
+          cp packaging/openwrt/files/etc/init.d/vpn-parser "target/tar-staging/vpn-parser.init"
+          cp packaging/openwrt/files/etc/config/vpn-parser "target/tar-staging/vpn-parser.config"
+          tar -czf "dist/${tar_name}" -C "target/tar-staging" .
+          rm -rf "target/tar-staging"
+
+          # 3. 计算 SHA-256 校验和
+          cd dist
+          for f in *; do
+            if [ -f "$f" ] && [[ "$f" != *.sha256 ]]; then
+              sha256sum "$f" > "${f}.sha256"
+            fi
+          done
+          cat *.sha256
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-packages-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+      # 只有 tag 发版时挂入 GitHub Release
+      - name: 追加 OpenWrt 资产到 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          for i in $(seq 1 40); do
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "release $tag 已存在（第 $i 次查到），上传 OpenWrt 资产"
+              for f in dist/*.ipk dist/*.tar.gz dist/*.sha256; do
+                [ -f "$f" ] || continue
+                echo "Uploading $f to release $tag..."
+                gh release upload "$tag" "$f" --clobber
+              done
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "等 Release $tag 出现超时（10 分钟）" >&2
+          exit 1

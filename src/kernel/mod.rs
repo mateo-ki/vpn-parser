@@ -503,6 +503,17 @@ pub fn kernel_candidates(
             );
         }
     }
+    #[cfg(unix)]
+    {
+        for prefix in ["/usr/bin", "/usr/local/bin", "/usr/sbin", "/bin"] {
+            candidates.push(PathBuf::from(prefix).join(kind.executable_name()));
+        }
+        if let Some(path_var) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path_var) {
+                candidates.push(dir.join(kind.executable_name()));
+            }
+        }
+    }
     candidates
 }
 

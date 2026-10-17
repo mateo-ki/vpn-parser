@@ -49,6 +49,14 @@ image = { version = "0.25", default-features = false, features = ["png"], option
 default = ["gui"]
 gui = ["dep:eframe", "dep:egui", "dep:arboard", "dep:image", "dep:wgpu"]
 
+[[example]]
+name = "park_probe"
+required-features = ["gui"]
+
+[[example]]
+name = "tray_wake_probe"
+required-features = ["gui"]
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Networking_WinInet", "Win32_Security", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_StationsAndDesktops", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_Com"] }
 
