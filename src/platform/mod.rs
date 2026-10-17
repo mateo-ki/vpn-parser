@@ -252,12 +252,20 @@ fn euid_is_root_from_status(status: &str) -> bool {
 }
 
 /// Linux 上"要不要再提权一次"问的就是 effective uid —— 直接 `sudo` 起本程序时它是 0，
-/// 这时 TUN 已经能做，不该再要求一次提权（以前这里恒 false，root 跑的实例也会被
-/// 判成"没提权"，于是 TUN 永远启动不了，界面还让你去提权）。
-#[cfg(not(windows))]
+/// 这时 TUN 已经能做，不该再要求一次提权。
+#[cfg(target_os = "linux")]
 pub fn is_elevated() -> bool {
     std::fs::read_to_string("/proc/self/status")
         .map(|text| euid_is_root_from_status(&text))
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+pub fn is_elevated() -> bool {
+    std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
         .unwrap_or(false)
 }
 
@@ -808,7 +816,7 @@ mod tests {
 
     /// Linux 的 TUN 提权请求不能只说"不支持"——那等于把两条能走通的路藏起来。
     /// 断言的是"这句错误有没有可执行性"：给命令、给能力名、给实测的失败原因。
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_linux_tun_error_tells_you_how_to_get_cap_net_admin() {
         let text = request_elevation(&[])
@@ -827,7 +835,7 @@ mod tests {
     /// 端到端对账：`is_elevated()` 必须等于外部真值（`id -u`）。
     /// 这条要在两种身份下各跑一次才有意义（普通用户 / `wsl -u root`），
     /// 因为老实现是恒 false —— 恒 false 在普通用户下"看着是对的"，只有 root 跑才暴露。
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_root_detection_agrees_with_id_dash_u() {
         let out = std::process::Command::new("id")

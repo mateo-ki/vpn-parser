@@ -1204,13 +1204,13 @@ pub fn render_protocol_donut_chart(
     stats: &[crate::models::ProtocolStat],
     total_nodes: i64,
 ) {
-    let size = egui::vec2(68.0, 68.0);
+    let size = egui::vec2(96.0, 96.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter_at(rect);
 
     let center = rect.center();
-    let radius = 25.0;
-    let stroke_width = 7.0_f32;
+    let radius = 37.0;
+    let stroke_width = 9.5_f32;
 
     if total_nodes <= 0 || stats.is_empty() {
         painter.circle_stroke(
@@ -1222,7 +1222,7 @@ pub fn render_protocol_donut_chart(
             center,
             egui::Align2::CENTER_CENTER,
             "0",
-            egui::FontId::proportional(12.0),
+            egui::FontId::proportional(14.0),
             theme::muted(),
         );
         return;
@@ -1276,17 +1276,17 @@ pub fn render_protocol_donut_chart(
     };
 
     painter.text(
-        egui::pos2(center.x, center.y - 4.0),
+        egui::pos2(center.x, center.y - 7.0),
         egui::Align2::CENTER_CENTER,
         total_str,
-        egui::FontId::proportional(11.0),
+        egui::FontId::proportional(13.5),
         theme::text_primary(),
     );
     painter.text(
-        egui::pos2(center.x, center.y + 7.0),
+        egui::pos2(center.x, center.y + 9.0),
         egui::Align2::CENTER_CENTER,
         "节点",
-        egui::FontId::proportional(8.5),
+        egui::FontId::proportional(10.0),
         theme::muted(),
     );
 
@@ -1533,12 +1533,12 @@ pub fn render_latency_spectrum(
 
     let total = stats.total as f32;
     let width = ui.available_width().max(160.0);
-    let bar_height = 8.0_f32;
+    let bar_height = 13.0_f32;
 
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, bar_height), Sense::hover());
     let painter = ui.painter_at(rect);
 
-    painter.rect_filled(rect, CornerRadius::same(4), theme::sidebar());
+    painter.rect_filled(rect, CornerRadius::same(6), theme::sidebar());
 
     let tiers: [(&str, usize, Color32); 5] = [
         ("极速 <100ms", stats.ultra_fast, Color32::from_rgb(16, 185, 129)),

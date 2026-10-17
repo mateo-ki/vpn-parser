@@ -562,8 +562,8 @@ impl VpnApp {
                     let total_w = ui.available_width();
                     let gap = 10.0;
                     let left_w = ((total_w - gap) * 0.48).max(280.0);
-                    let row_h = 104.0_f32;
-                    let inner_h = row_h - 20.0; // 84.0_f32
+                    let row_h = 164.0_f32; // 原 104.0 增加 60px
+                    let inner_h = row_h - 20.0; // 144.0_f32
 
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                         // 左翼卡片：全网延迟阶梯频谱分布
@@ -577,20 +577,20 @@ impl VpnApp {
                                 ui.set_min_height(inner_h);
                                 ui.vertical(|ui| {
                                     ui.horizontal(|ui| {
-                                        icon_label(ui, Icon::Lightning, 13.0, theme::accent());
+                                        icon_label(ui, Icon::Lightning, 14.0, theme::accent());
                                         ui.label(
                                             RichText::new("全网延迟阶梯频谱分布")
                                                 .strong()
-                                                .small()
+                                                .size(13.0)
                                                 .color(theme::text_primary()),
                                         );
                                     });
-                                    ui.add_space(8.0);
+                                    ui.add_space(14.0);
                                     let spectrum = crate::gui::widgets::LatencySpectrumStats::from_latencies(
                                         self.nodes.iter().map(|n| n.latency_ms),
                                     );
                                     crate::gui::widgets::render_latency_spectrum(ui, &spectrum);
-                                    ui.add_space(8.0);
+                                    ui.add_space(16.0);
                                     ui.horizontal(|ui| {
                                         ui.label(RichText::new(format!("⚡ <100ms: {}", spectrum.ultra_fast)).small().strong().color(Color32::from_rgb(16, 185, 129)));
                                         ui.separator();
@@ -621,14 +621,14 @@ impl VpnApp {
                                 ui.set_min_height(inner_h);
                                 ui.horizontal(|ui| {
                                     crate::gui::widgets::render_protocol_donut_chart(ui, &s.protocol_stats, s.node_count);
-                                    ui.add_space(10.0);
+                                    ui.add_space(12.0);
                                     ui.vertical(|ui| {
                                         ui.horizontal(|ui| {
-                                            icon_label(ui, Icon::Radar, 13.0, theme::accent());
+                                            icon_label(ui, Icon::Radar, 14.0, theme::accent());
                                             ui.label(
                                                 RichText::new("节点协议组成分布")
                                                     .strong()
-                                                    .small()
+                                                    .size(13.0)
                                                     .color(theme::text_primary()),
                                             );
                                             ui.separator();
@@ -645,7 +645,7 @@ impl VpnApp {
                                                     .color(theme::success()),
                                             );
                                         });
-                                        ui.add_space(6.0);
+                                        ui.add_space(10.0);
 
                                         let mut all_stats: Vec<(String, i64, f64)> = s
                                             .protocol_stats
@@ -1080,12 +1080,14 @@ impl VpnApp {
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             for group in self.kernel_groups.clone() {
+                                let is_expanded = self.expanded_kernel_groups.contains(&group.name);
                                 Frame::NONE
                                     .fill(theme::panel())
                                     .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
                                     .corner_radius(CornerRadius::same(10))
                                     .inner_margin(Margin::symmetric(14, 10))
                                     .show(ui, |ui| {
+                                        let mut toggle_clicked = false;
                                         ui.horizontal(|ui| {
                                             let group_icon = match group.name.as_str() {
                                                 "AI分组" => Icon::Lightning,
@@ -1114,63 +1116,111 @@ impl VpnApp {
                                             ui.with_layout(
                                                 egui::Layout::right_to_left(egui::Align::Center),
                                                 |ui| {
-                                                    if let Some(now) = &group.now {
-                                                        ui.horizontal(|ui| {
-                                                            ui.label(
-                                                                RichText::new(format!("当前出口: {now}"))
-                                                                    .small()
-                                                                    .strong()
-                                                                    .color(theme::success()),
-                                                            );
-                                                        });
-                                                    }
-                                                },
-                                            );
-                                        });
-
-                                        ui.add_space(6.0);
-                                        ui.horizontal_wrapped(|ui| {
-                                            let is_selector = matches!(
-                                                group.kind.to_lowercase().as_str(),
-                                                "select" | "selector"
-                                            );
-                                            for member in &group.members {
-                                                let is_active = group.now.as_deref() == Some(member.as_str());
-                                                let text_color = if is_active {
-                                                    theme::accent_strong()
-                                                } else {
-                                                    theme::text_secondary()
-                                                };
-                                                let btn = ui.add(
-                                                    egui::Button::new(
-                                                        RichText::new(member)
+                                                    // 展开/收起 胶囊按钮（默认折叠，点击展开）
+                                                    let toggle_label = if is_expanded {
+                                                        format!("▼ 收起接口 ({} 个)", group.members.len())
+                                                    } else {
+                                                        format!("▶ 展开接口 ({} 个)", group.members.len())
+                                                    };
+                                                    let toggle_btn = egui::Button::new(
+                                                        RichText::new(toggle_label)
                                                             .small()
                                                             .strong()
-                                                            .color(text_color),
+                                                            .color(if is_expanded {
+                                                                theme::accent_strong()
+                                                            } else {
+                                                                theme::text_secondary()
+                                                            }),
                                                     )
-                                                    .fill(if is_active {
+                                                    .fill(if is_expanded {
                                                         theme::accent_bg()
                                                     } else {
-                                                        theme::page_bg()
+                                                        theme::sidebar()
                                                     })
                                                     .stroke(Stroke::new(
                                                         1.0_f32,
-                                                        if is_active {
+                                                        if is_expanded {
                                                             theme::accent()
                                                         } else {
                                                             theme::border_subtle()
                                                         },
                                                     ))
-                                                    .corner_radius(CornerRadius::same(6)),
-                                                );
-                                                if is_selector && btn.clicked() && !is_active {
-                                                    self.select_kernel_member(
-                                                        group.name.clone(),
-                                                        member.clone(),
-                                                    );
-                                                }
-                                            }
+                                                    .corner_radius(CornerRadius::same(8));
+
+                                                    if ui.add(toggle_btn)
+                                                        .on_hover_text(if is_expanded { "点击收起折叠该分组下的所有节点接口" } else { "点击展开查看该分组下的所有节点接口并可点选切换" })
+                                                        .clicked()
+                                                    {
+                                                        toggle_clicked = true;
+                                                    }
+
+                                                    if let Some(now) = &group.now {
+                                                        ui.separator();
+                                                        ui.label(
+                                                            RichText::new(format!("当前出口: {now}"))
+                                                                .small()
+                                                                .strong()
+                                                                .color(theme::success()),
+                                                        );
+                                                    }
+                                                },
+                                            );
                                         });
+
+                                        if toggle_clicked {
+                                            if is_expanded {
+                                                self.expanded_kernel_groups.remove(&group.name);
+                                            } else {
+                                                self.expanded_kernel_groups.insert(group.name.clone());
+                                            }
+                                        }
+
+                                        // 仅当展开时才展示该策略组下的所有接口/节点胶囊
+                                        if is_expanded {
+                                            ui.add_space(8.0);
+                                            ui.horizontal_wrapped(|ui| {
+                                                let is_selector = matches!(
+                                                    group.kind.to_lowercase().as_str(),
+                                                    "select" | "selector"
+                                                );
+                                                for member in &group.members {
+                                                    let is_active = group.now.as_deref() == Some(member.as_str());
+                                                    let text_color = if is_active {
+                                                        theme::accent_strong()
+                                                    } else {
+                                                        theme::text_secondary()
+                                                    };
+                                                    let btn = ui.add(
+                                                        egui::Button::new(
+                                                            RichText::new(member)
+                                                                .small()
+                                                                .strong()
+                                                                .color(text_color),
+                                                        )
+                                                        .fill(if is_active {
+                                                            theme::accent_bg()
+                                                        } else {
+                                                            theme::page_bg()
+                                                        })
+                                                        .stroke(Stroke::new(
+                                                            1.0_f32,
+                                                            if is_active {
+                                                                theme::accent()
+                                                            } else {
+                                                                theme::border_subtle()
+                                                            },
+                                                        ))
+                                                        .corner_radius(CornerRadius::same(6)),
+                                                    );
+                                                    if is_selector && btn.clicked() && !is_active {
+                                                        self.select_kernel_member(
+                                                            group.name.clone(),
+                                                            member.clone(),
+                                                        );
+                                                    }
+                                                }
+                                            });
+                                        }
                                     });
                                 ui.add_space(6.0);
                             }
@@ -1384,8 +1434,6 @@ impl VpnApp {
         if self.proxy_selected_group.is_empty() {
             self.proxy_selected_group = "全部".to_string();
         }
-
-        ui.add_space(4.0);
 
         // 默认只挂「全部」；其余组只有配置里真的有它才出现
         let visible_names = visible_group_names(

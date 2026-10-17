@@ -72,6 +72,7 @@ pub struct VpnApp {
     pub(crate) gist_pages: usize,
     pub(crate) gist_query_flags: Vec<bool>,
     pub(crate) active_source_fetches: HashSet<String>,
+    pub(crate) expanded_kernel_groups: HashSet<String>,
 
     pub(crate) sources: Vec<Source>,
     pub(crate) fetch_results: Vec<FetchResult>,
@@ -578,6 +579,7 @@ impl VpnApp {
             connections_filter: String::new(),
             homogeneity_reports: None,
             homogeneity_selected: HashSet::new(),
+            expanded_kernel_groups: HashSet::new(),
             show_homogeneity_dialog: false,
             homogeneity_busy: false,
             homogeneity_status: None,
