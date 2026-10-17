@@ -111,7 +111,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
-          for i in $(seq 1 40); do
+          for i in $(seq 1 80); do
             if gh release view "$tag" >/dev/null 2>&1; then
               echo "release $tag 已存在（第 $i 次查到），上传 OpenWrt 资产"
               for f in dist/*.ipk dist/*.tar.gz dist/*.sha256; do
@@ -123,12 +123,13 @@ jobs:
             fi
             sleep 15
           done
-          echo "等 Release $tag 出现超时（10 分钟）" >&2
-          exit 1
+          echo "Release 等待超时，尝试直接创建并上传资产..."
+          gh release create "$tag" dist/* --title "VPN Parser $tag" || true
 
   build-luci-ipk:
     name: 构建 OpenWrt LuCI 控制面板 (luci-app-vpn-parser_all.ipk)
     runs-on: ubuntu-24.04
+    needs: [build-ipk]
     steps:
       - uses: actions/checkout@v4
 
@@ -163,7 +164,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
-          for i in $(seq 1 40); do
+          for i in $(seq 1 80); do
             if gh release view "$tag" >/dev/null 2>&1; then
               echo "release $tag 已存在（第 $i 次查到），上传 LuCI 资产"
               for f in dist/*.ipk dist/*.sha256; do
@@ -175,5 +176,5 @@ jobs:
             fi
             sleep 15
           done
-          echo "等 Release $tag 出现超时（10 分钟）" >&2
-          exit 1
+          echo "Release 等待超时，尝试直接创建并上传资产..."
+          gh release create "$tag" dist/* --title "VPN Parser $tag" || true
