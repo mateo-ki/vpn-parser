@@ -348,6 +348,7 @@ impl VpnApp {
         api_controller: crate::api::ApiServerController,
         initial_proxy_node: Option<(String, String)>,
     ) -> Self {
+        let _rt_guard = rt.enter();
         let (tx, rx) = mpsc::channel();
         let api_addr = api_controller.listen_addr().to_string();
         let mut app = Self {
@@ -3867,6 +3868,7 @@ impl VpnApp {
 
 impl eframe::App for VpnApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let _rt_guard = self.rt.enter();
         if self.reload_due
             && self.last_full_reload.elapsed() >= std::time::Duration::from_millis(800)
         {
@@ -4292,6 +4294,7 @@ impl eframe::App for VpnApp {
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        let _rt_guard = self.rt.enter();
         if self.settings_dirty() {
             // eframe 会周期性调用 save()（约每 30 秒一次，UI 线程上）；
             // 绝不能在这里 block_on 等数据库写锁，否则后台任务一重 UI 就冻住。
@@ -4308,6 +4311,7 @@ impl eframe::App for VpnApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        let _rt_guard = self.rt.enter();
         // 退出路径必须同步完成（runtime 马上要关），但要加超时上限：
         // SQLite 写锁被后台任务占用或内核停止卡住时，退出不能无限期挂死。
         if self.settings_dirty() {

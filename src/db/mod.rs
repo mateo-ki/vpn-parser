@@ -51,7 +51,6 @@ impl Database {
             .pragma("mmap_size", "268435456");
         let pool = SqlitePoolOptions::new()
             .max_connections(4)
-            .idle_timeout(Some(Duration::from_secs(60)))
             .connect_with(options)
             .await
             .with_context(|| format!("connect sqlite {url}"))?;
@@ -136,7 +135,6 @@ impl Database {
             .pragma("mmap_size", "268435456");
         let pool = SqlitePoolOptions::new()
             .max_connections(2)
-            .idle_timeout(Some(Duration::from_secs(30)))
             .connect_with(options)
             .await
             .with_context(|| format!("connect subscription sqlite {}", path.display()))?;

@@ -250,6 +250,7 @@ fn main() -> Result<()> {
         }
     }
     let rt = Arc::new(Runtime::new()?);
+    let _rt_guard = rt.enter();
     let handoff_proxy_options = match cli.elevated_proxy_config.as_deref() {
         Some(encoded) => {
             let bytes = URL_SAFE_NO_PAD
