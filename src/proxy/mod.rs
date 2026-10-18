@@ -278,6 +278,18 @@ impl Default for MihomoConfigOptions {
 }
 
 impl MihomoConfigOptions {
+    /// 判断当前配置是否会激活 GeoSite / GeoIP 分流数据库。
+    /// 包含：隐私防追踪广告过滤、自定义规则、国内直连/GFW预设、或覆写片段中的 GEOSITE/GEOIP 规则。
+    pub fn uses_geo(&self) -> bool {
+        self.block_trackers
+            || self.rules.iter().any(TrafficRule::uses_geo)
+            || matches!(self.routing_mode, RoutingMode::ChinaDirect | RoutingMode::GfwList)
+            || self
+                .override_yaml
+                .as_deref()
+                .is_some_and(|y| y.contains("GEOSITE") || y.contains("GEOIP"))
+    }
+
     pub fn validate(&self) -> Result<()> {
         if self.mixed_port == self.controller_port {
             return Err(anyhow!("代理端口和控制端口不能相同"));
@@ -875,7 +887,10 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
         config["rule-providers"] = serde_json::Value::Object(providers);
     }
 
-    if selected_rules.iter().any(TrafficRule::uses_geo) {
+    let config_uses_geo = options.uses_geo()
+        || selected_rules.iter().any(TrafficRule::uses_geo)
+        || final_rules.iter().any(|r| r.contains("GEOSITE") || r.contains("GEOIP"));
+    if config_uses_geo {
         config["geodata-mode"] = json!(true);
         // 关死内核侧自动更新：它只会直连 GitHub（实测 0.116 MB/s），在启动窗口内下不完就
         // 留下半截库 → `list cn not found` → 内核起不来。库改由 `crate::geo` 负责：
@@ -1361,12 +1376,12 @@ impl ProxyManager {
         }
         // 分流数据库没备好就别急着起内核：半截库会让内核直接拒绝启动，而且报出来的
         // 是一句要人复制才能看懂的长错误。这里缺就补（镜像优先，其次系统代理）。
-        if kernel == KernelKind::Mihomo && runtime.options.rules.iter().any(TrafficRule::uses_geo) {
+        if kernel == KernelKind::Mihomo && runtime.options.uses_geo() {
             let dir = crate::geo::mihomo_dir();
             if !crate::geo::geo_ready(&dir) {
                 let system = crate::system_proxy::current_system_proxy_url();
                 if let Err(error) = crate::geo::provision(&dir, system.as_deref(), false).await {
-                    return Err(error);
+                    tracing::warn!(%error, "分流数据库准备未完全完成，尝试继续启动");
                 }
             }
         }
@@ -1494,7 +1509,14 @@ impl ProxyManager {
                     .lines()
                     .rev()
                     .find(|l| l.contains("level=fatal") || l.contains("level=error"));
-                let message = if let Some(err) = fatal_line {
+                let message = if detail.contains("failed to decode geodata file")
+                    || detail.contains("Geosite.dat invalid")
+                    || detail.contains("GeoIP.dat invalid")
+                    || detail.contains("cannot parse")
+                {
+                    crate::geo::purge_corrupt_geo_files(&crate::geo::mihomo_dir());
+                    "Mihomo 分流规则文件 (GeoSite/GeoIP) 损坏，已自动清理损坏文件。请在「规则设置」点击「更新规则文件」重新同步完整库后再启动代理。".to_string()
+                } else if let Some(err) = fatal_line {
                     format!("{} 启动失败: {}", kernel.display_name(), err.trim())
                 } else if !detail.trim().is_empty() && child.try_wait().ok().flatten().is_some() {
                     format!(

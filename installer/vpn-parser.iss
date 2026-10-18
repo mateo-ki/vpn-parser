@@ -42,6 +42,9 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 
 [Files]
 Source: "..\target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\data\kernels\mihomo\geosite.dat"; DestDir: "{app}\data\kernels\mihomo"; Flags: ignoreversion
+Source: "..\data\kernels\mihomo\geoip.dat"; DestDir: "{app}\data\kernels\mihomo"; Flags: ignoreversion
+Source: "..\data\kernels\mihomo\mihomo.exe"; DestDir: "{app}\data\kernels\mihomo"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
