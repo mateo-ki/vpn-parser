@@ -4753,15 +4753,10 @@ impl eframe::App for VpnApp {
 
 impl VpnApp {
     pub(crate) fn ensure_logo_texture(&mut self, ctx: &egui::Context) -> egui::TextureHandle {
-        let is_gold = self.settings.app_icon_style == "champagne" || self.settings.app_icon_style == "gold";
         if let Some(texture) = &self.logo_texture {
             return texture.clone();
         }
-        let bytes: &[u8] = if is_gold {
-            include_bytes!("../../assets/app-icon-gold.png")
-        } else {
-            include_bytes!("../../assets/app-icon-classic.png")
-        };
+        let bytes: &[u8] = include_bytes!("../../assets/app-icon-classic.png");
         let img = image::load_from_memory(bytes)
             .expect("load app-icon")
             .to_rgba8();
