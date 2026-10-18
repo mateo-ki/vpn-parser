@@ -1694,25 +1694,36 @@ impl VpnApp {
                                 };
                                 let node = &self.proxy_nodes[entry.index];
 
-                                // 选中高亮判定：优先匹配当前策略组活跃出口，或者全局选中节点
-                                let is_selected = if let Some(ref now) = current_group_now {
+                                // 活跃状态判定：优先匹配当前策略组活跃出口，或者全局选中节点
+                                let is_active = if let Some(ref now) = current_group_now {
                                     now == &node.name
                                 } else if is_auto {
                                     self.kernel_egress_name().as_deref() == Some(node.name.as_str())
                                 } else {
                                     selected_id.as_deref() == Some(&node.id)
                                 };
+                                let is_focused = self.focused_node_id.as_deref() == Some(&node.id);
                                 let is_switching = switching_id.as_deref() == Some(&node.id);
 
-                                let card_tip = format!(
-                                    "{}:{}\n左键点击选中，右键设为活动节点",
-                                    node.server, node.port
-                                );
+                                let card_tip = if is_active {
+                                    format!("{}:{}\n当前活动出口（右键管理）", node.server, node.port)
+                                } else if self.proxy_selected_group != "全部" && self.proxy_selected_group != "PROXY" {
+                                    format!(
+                                        "{}:{}\n左键点击选中，右键设为「{}」活动出口（双击亦可）",
+                                        node.server, node.port, self.proxy_selected_group
+                                    )
+                                } else {
+                                    format!(
+                                        "{}:{}\n左键点击选中，右键设为活动节点（双击亦可）",
+                                        node.server, node.port
+                                    )
+                                };
 
                                 let response = compact_node_card(
                                     column_ui,
                                     node,
-                                    is_selected,
+                                    is_active,
+                                    is_focused,
                                     is_switching,
                                 )
                                 .on_hover_text(card_tip);
@@ -1723,7 +1734,7 @@ impl VpnApp {
                                 let node_id = node.id.clone();
                                 let node_name = node.name.clone();
                                 response.context_menu(|ui| {
-                                    if !is_selected {
+                                    if !is_active {
                                         let label = if self.proxy_selected_group != "全部" && self.proxy_selected_group != "PROXY" {
                                             format!("🚀 设为「{}」活动出口", self.proxy_selected_group)
                                         } else {
@@ -1758,7 +1769,7 @@ impl VpnApp {
                                         menu_action = Some(NodeCardAction::CheckIpRisk(node_id.clone()));
                                         ui.close_menu();
                                     }
-                                    if (is_auto || self.proxy_selected_group != "全部") && !is_selected {
+                                    if (is_auto || self.proxy_selected_group != "全部") && !is_active {
                                         ui.separator();
                                         if ui.button("锁定为出口（关闭自动选路）").clicked() {
                                             locked = Some((node_id.clone(), node_name.clone()));
@@ -1767,7 +1778,7 @@ impl VpnApp {
                                     }
                                 });
 
-                                if double_clicked && !is_selected {
+                                if double_clicked && !is_active {
                                     if is_auto {
                                         switch_to_manual = true;
                                     }
@@ -1775,7 +1786,7 @@ impl VpnApp {
                                     if running && self.proxy_selected_group != "全部" && self.proxy_selected_group != "PROXY" {
                                         group_switch_member = Some((self.proxy_selected_group.clone(), node_name.clone()));
                                     }
-                                } else if clicked && !is_selected {
+                                } else if clicked {
                                     menu_action = Some(NodeCardAction::Select {
                                         id: node_id.clone(),
                                         name: node_name.clone(),
@@ -1794,8 +1805,8 @@ impl VpnApp {
         if let Some(action) = menu_action {
             match action {
                 NodeCardAction::Select { id, name } => {
-                    self.selected_proxy_node_id = Some(id);
-                    self.selected_proxy_node_name = Some(name);
+                    self.focused_node_id = Some(id);
+                    self.status = format!("已选中节点: {name}（右键设为活动节点）");
                 }
                 NodeCardAction::ShowDetail(id) => self.show_node(id),
                 NodeCardAction::Speedtest(id) => self.speedtest_one(id),

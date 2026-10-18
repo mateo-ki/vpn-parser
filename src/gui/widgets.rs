@@ -483,13 +483,19 @@ pub fn protocol_pill(ui: &mut Ui, protocol: &str) {
 pub fn compact_node_card(
     ui: &mut Ui,
     node: &NodeSummary,
-    is_selected: bool,
+    is_active: bool,
+    is_focused: bool,
     is_switching: bool,
 ) -> egui::Response {
     let (fill, stroke) = if is_switching {
         (theme::warning_bg(), Stroke::new(1.5_f32, theme::warning()))
-    } else if is_selected {
+    } else if is_active {
         (theme::accent_bg(), Stroke::new(1.5_f32, theme::accent()))
+    } else if is_focused {
+        (
+            theme::panel_hover(),
+            Stroke::new(1.5_f32, theme::accent().gamma_multiply(0.75)),
+        )
     } else {
         (theme::panel(), Stroke::new(1.0_f32, theme::border_subtle()))
     };
@@ -500,12 +506,19 @@ pub fn compact_node_card(
         .corner_radius(CornerRadius::same(12))
         .inner_margin(Margin::symmetric(14, 10));
 
-    if is_selected {
+    if is_active {
         frame = frame.shadow(egui::epaint::Shadow {
             offset: [0, 4],
             blur: 16,
             spread: 0,
             color: theme::accent().gamma_multiply(0.22),
+        });
+    } else if is_focused {
+        frame = frame.shadow(egui::epaint::Shadow {
+            offset: [0, 2],
+            blur: 8,
+            spread: 0,
+            color: theme::accent().gamma_multiply(0.12),
         });
     }
 
@@ -522,14 +535,16 @@ pub fn compact_node_card(
 
                 let name_color = if is_switching {
                     theme::warning()
-                } else if is_selected {
+                } else if is_active {
                     theme::accent_strong()
+                } else if is_focused {
+                    theme::accent()
                 } else {
                     theme::text_primary()
                 };
 
                 let clean_name = sanitize_node_name(&node.name);
-                let reserve_right = if is_selected || is_switching { 52.0 } else { 0.0 };
+                let reserve_right = if is_active || is_switching { 52.0 } else { 0.0 };
                 let available_text_w = (ui.available_width() - reserve_right).max(60.0);
 
                 let name_label = ui.add_sized(
@@ -544,7 +559,7 @@ pub fn compact_node_card(
                 );
                 name_label.on_hover_text(&node.name);
 
-                if is_selected {
+                if is_active {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         Frame::NONE
                             .fill(Color32::from_rgb(52, 199, 89).gamma_multiply(0.18))
@@ -611,7 +626,7 @@ pub fn compact_node_card(
         .interact(Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand);
 
-    if response.hovered() && !is_selected && !is_switching {
+    if response.hovered() && !is_active && !is_focused && !is_switching {
         ui.painter().rect_stroke(
             response.rect,
             CornerRadius::same(12),

@@ -126,6 +126,7 @@ pub struct VpnApp {
     pub(crate) proxy_log: String,
     pub(crate) selected_proxy_node_id: Option<String>,
     pub(crate) selected_proxy_node_name: Option<String>,
+    pub(crate) focused_node_id: Option<String>,
     pub(crate) switching_node_id: Option<String>,
     pub(crate) proxy_switch_seq: u64,
     pub(crate) proxy_node_groups: Vec<NodeGroupSummary>,
@@ -454,6 +455,7 @@ impl VpnApp {
             proxy_log: String::new(),
             selected_proxy_node_id: initial_proxy_node.as_ref().map(|node| node.0.clone()),
             selected_proxy_node_name: initial_proxy_node.map(|node| node.1),
+            focused_node_id: None,
             switching_node_id: None,
             proxy_switch_seq: 0,
             proxy_node_groups: vec![],
@@ -2721,6 +2723,14 @@ impl VpnApp {
         self.selected_proxy_node_id = Some(id.clone());
         self.selected_proxy_node_name = Some(name.clone());
         self.router.set_active(&id);
+
+        // 如果代理未运行：仅设为活动节点，不要启动代理！
+        if !running {
+            self.switching_node_id = None;
+            self.status = format!("已设为活动节点: {name}（代理未启动）");
+            return;
+        }
+
         self.switching_node_id = Some(id.clone());
         self.proxy_switch_seq = self.proxy_switch_seq.wrapping_add(1);
         let seq = self.proxy_switch_seq;
@@ -2732,8 +2742,7 @@ impl VpnApp {
 
         // url-test 打开时，目标节点通常已经是 PROXY 组的成员：这时只要让内核换个
         // 成员（PUT /proxies/PROXY），不需要重写配置 + 热重载掐断所有连接。
-        if running
-            && self.proxy_config.url_test
+        if self.proxy_config.url_test
             && self
                 .kernel_groups
                 .iter()
@@ -2752,11 +2761,7 @@ impl VpnApp {
         let url_test_size = self.proxy_config.url_test_size;
         let candidate_blacklist = self.router.blacklisted(std::time::Instant::now());
         let node_id = id.clone();
-        self.status = if !running {
-            format!("⚡ 正在极速异步启动代理并连接「{name}」...")
-        } else {
-            format!("⚡ 正在极速异步切换至「{name}」...")
-        };
+        self.status = format!("⚡ 正在极速异步切换至「{name}」...");
         self.rt.spawn(async move {
             let result = match db.get_node(&node_id).await {
                 Ok(Some(node)) => {
@@ -2769,19 +2774,9 @@ impl VpnApp {
                         &candidate_blacklist,
                     )
                     .await;
-                    let res = if !running {
-                        manager.connect(&node, None).await
-                    } else {
-                        manager.switch_node(&node).await
-                    };
-                    res.map(|_| {
-                        if !running {
-                            format!("代理已启动，已连接节点: {}", node.name)
-                        } else {
-                            format!("已平滑切换至节点: {}", node.name)
-                        }
-                    })
-                    .map_err(|e| e.to_string())
+                    let res = manager.switch_node(&node).await;
+                    res.map(|_| format!("已平滑切换至节点: {}", node.name))
+                        .map_err(|e| e.to_string())
                 }
                 Ok(None) => Err("节点不存在".to_string()),
                 Err(e) => Err(e.to_string()),
@@ -3087,6 +3082,11 @@ impl VpnApp {
     }
 
     pub(crate) fn start_proxy(&mut self) {
+        if self.selected_proxy_node_id.is_none() {
+            if let Some(ref focused) = self.focused_node_id {
+                self.selected_proxy_node_id = Some(focused.clone());
+            }
+        }
         if self.selected_proxy_node_id.is_none() && self.proxy_config.url_test {
             // 自动选路开着时左键点卡片不改锚点（出口归内核），所以"必须先选节点"会把
             // 启动按钮永久锁死。锚点只是生成配置的中心，取测速最优的那个就行。
@@ -3673,8 +3673,7 @@ impl VpnApp {
     pub(crate) fn handle_node_card_action(&mut self, action: NodeCardAction) {
         match action {
             NodeCardAction::Select { id, name } => {
-                self.selected_proxy_node_id = Some(id);
-                self.selected_proxy_node_name = Some(name.clone());
+                self.focused_node_id = Some(id);
                 self.status = format!("已选中节点: {name}（右键设为活动节点）");
             }
             NodeCardAction::Connect { id, name } => {

@@ -432,6 +432,7 @@ impl VpnApp {
             ui,
             &self.nodes,
             self.selected_proxy_node_id.as_deref(),
+            self.focused_node_id.as_deref(),
             self.switching_node_id.as_deref(),
             self.busy,
         );
@@ -445,6 +446,7 @@ pub fn render_node_cards_grid(
     ui: &mut Ui,
     nodes: &[crate::models::NodeSummary],
     selected_proxy_node_id: Option<&str>,
+    focused_node_id: Option<&str>,
     switching_node_id: Option<&str>,
     is_busy: bool,
 ) -> Option<NodeCardAction> {
@@ -464,20 +466,27 @@ pub fn render_node_cards_grid(
                             let Some(node) = row.get(column_index) else {
                                 continue;
                             };
-                            let is_selected =
+                            let is_active =
                                 selected_proxy_node_id == Some(&node.id);
+                            let is_focused =
+                                focused_node_id == Some(&node.id);
                             let is_switching =
                                 switching_node_id == Some(&node.id);
+                            let card_tip = if is_active {
+                                format!("{}:{}\n当前活动出口（右键管理）", node.server, node.port)
+                            } else {
+                                format!(
+                                    "{}:{}\n左键点击选中，右键设为活动节点（双击亦可）",
+                                    node.server, node.port
+                                )
+                            };
                             let response =
-                                compact_node_card(column_ui, node, is_selected, is_switching)
-                                    .on_hover_text(format!(
-                                        "{}:{}\n左键点击选中，右键设为活动节点",
-                                        node.server, node.port
-                                    ));
+                                compact_node_card(column_ui, node, is_active, is_focused, is_switching)
+                                    .on_hover_text(card_tip);
                             let clicked = response.clicked();
                             let double_clicked = response.double_clicked();
                             response.context_menu(|ui| {
-                                if !is_selected {
+                                if !is_active {
                                     if ui.button("🚀 设为活动节点").clicked() {
                                         card_action = Some(NodeCardAction::Connect {
                                             id: node.id.clone(),
@@ -513,12 +522,12 @@ pub fn render_node_cards_grid(
                                     ui.close_menu();
                                 }
                             });
-                            if double_clicked && !is_selected {
+                            if double_clicked && !is_active {
                                 card_action = Some(NodeCardAction::Connect {
                                     id: node.id.clone(),
                                     name: node.name.clone(),
                                 });
-                            } else if clicked && !is_selected {
+                            } else if clicked {
                                 card_action = Some(NodeCardAction::Select {
                                     id: node.id.clone(),
                                     name: node.name.clone(),

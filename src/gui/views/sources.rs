@@ -1070,6 +1070,7 @@ impl VpnApp {
                         ui,
                         &self.source_modal_nodes,
                         self.selected_proxy_node_id.as_deref(),
+                        self.focused_node_id.as_deref(),
                         self.switching_node_id.as_deref(),
                         self.busy,
                     );
