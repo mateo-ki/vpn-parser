@@ -271,6 +271,7 @@ pub struct VpnApp {
     pub(crate) startup_trim_done: bool,
     pub(crate) last_auto_trim: std::time::Instant,
     pub(crate) geo_updating: bool,
+    pub(crate) geo_auto_attempted: bool,
     pub(crate) auto_failover: bool,
     pub(crate) edit_exclude_keywords: String,
     pub(crate) edit_failover_latency_ms: u32,
@@ -577,6 +578,7 @@ impl VpnApp {
             startup_trim_done: false,
             last_auto_trim: std::time::Instant::now(),
             geo_updating: false,
+            geo_auto_attempted: false,
             auto_failover: false,
             edit_exclude_keywords: String::new(),
             edit_failover_latency_ms: 1500,
@@ -3143,6 +3145,28 @@ impl VpnApp {
         self.update_kernel_from(KernelKind::Mihomo, source, None, false);
     }
 
+    /// 新安装或缺少分流数据库时，在程序启动后自动于后台极速拉取完整的 GeoIP / GeoSite 规则文件。
+    pub(crate) fn maybe_auto_download_geo(&mut self) {
+        if self.geo_auto_attempted || self.geo_updating {
+            return;
+        }
+        let dir = crate::geo::mihomo_dir();
+        if crate::geo::geo_ready(&dir) {
+            self.geo_auto_attempted = true;
+            return;
+        }
+        self.geo_auto_attempted = true;
+        self.geo_updating = true;
+        self.status = "新安装首次运行：正在极速自动拉取 GeoIP / GeoSite 分流规则文件...".into();
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            let result = crate::geo::provision(&dir, None, false)
+                .await
+                .map(|detail| format!("Geo 分流规则库自动就绪：{detail}"));
+            let _ = tx.send(BgMsg::GeoUpdated(result.map_err(|e| e.to_string())));
+        });
+    }
+
     /// 新增源拉取成功之后：取这个源的节点 id，回来再发起测速。
     fn queue_added_source_speedtest(&mut self, source_id: String, source_name: String) {
         let db = self.db.clone();
@@ -4404,6 +4428,8 @@ impl eframe::App for VpnApp {
         }
         // 预备状态（一个内核都没装）自己把内核下下来；一次运行最多自己动一次。
         self.maybe_auto_prepare();
+        // 新安装检测到缺少 Geo 分流规则库时，自动在后台极速拉取（Fastly CDN 2秒秒下）。
+        self.maybe_auto_download_geo();
         // 侧栏的"有新版"标记要自己会亮，不能等用户去关于页点。
         self.maybe_check_app_update();
         // Degraded 更要测：那正是"出口已经不通了"的状态，探测和 auto_failover 无关。

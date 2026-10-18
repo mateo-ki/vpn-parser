@@ -310,6 +310,16 @@ fn main() -> Result<()> {
                 }
             });
         }
+        // 新安装如果缺少 Geo 分流规则库，在后台异步预先拉取（Fastly CDN 2秒就绪）
+        {
+            let geo_dir = crate::geo::mihomo_dir();
+            if !crate::geo::geo_ready(&geo_dir) {
+                rt.spawn(async move {
+                    tracing::info!("新安装首次运行，自动下载 GeoIP / GeoSite 规则库...");
+                    let _ = crate::geo::provision(&geo_dir, None, false).await;
+                });
+            }
+        }
         let tasks = TaskTracker::default();
         let collector = Collector::new(db.clone(), tasks.clone())?;
         let speedtester = SpeedTester::new(db.clone(), tasks.clone());
