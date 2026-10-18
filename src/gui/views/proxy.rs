@@ -195,7 +195,8 @@ impl VpnApp {
             (ProxyPanel::Charts, Icon::Dashboard, tr_charts),
             (ProxyPanel::Nodes, Icon::Pin, tr_nodes),
             (ProxyPanel::PortMappings, Icon::Plug, "一节点一端口"),
-            (ProxyPanel::Groups, Icon::Shield, tr_groups),
+            (ProxyPanel::Security, Icon::Shield, "安全隐私"),
+            (ProxyPanel::Groups, Icon::Rocket, tr_groups),
             (ProxyPanel::Connections, Icon::Radar, &conn_label),
             (ProxyPanel::Rules, Icon::Rules, tr_rules),
             (ProxyPanel::Network, Icon::Globe, tr_network),
@@ -210,6 +211,7 @@ impl VpnApp {
             ProxyPanel::Charts => self.ui_proxy_charts(ui),
             ProxyPanel::Nodes => self.ui_proxy_nodes(ui),
             ProxyPanel::PortMappings => self.ui_proxy_port_mappings(ui),
+            ProxyPanel::Security => self.ui_proxy_security(ui),
             ProxyPanel::Groups => self.ui_proxy_groups(ui),
             ProxyPanel::Connections => self.ui_proxy_connections(ui),
             ProxyPanel::Rules => self.ui_proxy_rules(ui),
@@ -2079,6 +2081,252 @@ impl VpnApp {
                 self.save_proxy_config();
             }
         });
+    }
+
+    pub(crate) fn ui_proxy_security(&mut self, ui: &mut Ui) {
+        let mut changed = false;
+
+        // 顶部总览卡片
+        panel_frame().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                icon_label(ui, Icon::Shield, 18.0, theme::success());
+                ui.label(RichText::new("安全隐私与抗追踪防护中心").strong().size(15.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("🛡️ 一键开启最佳防护").strong().color(Color32::WHITE),
+                            )
+                            .fill(theme::primary_btn()),
+                        )
+                        .on_hover_text("一键启用 Chrome 指纹伪装、WebRTC 防泄漏与隐私追踪广告过滤")
+                        .clicked()
+                    {
+                        self.proxy_config.client_fingerprint = Some("chrome".to_string());
+                        self.proxy_config.block_webrtc = true;
+                        self.proxy_config.block_trackers = true;
+                        changed = true;
+                        self.status = "已一键开启最佳安全隐私防护".to_string();
+                    }
+                });
+            });
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("集成协议指纹混淆、防 WebRTC 真实公网 IP 嗅探、第三方分析追踪器屏蔽与 UDP 端口跳跃优化，全方位保护网络身份。")
+                    .small()
+                    .color(theme::text_secondary()),
+            );
+        });
+
+        ui.add_space(8.0);
+
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            // -------------------------------------------------------------
+            // 卡片 1：全局 uTLS 浏览器指纹自动伪装 (Client Fingerprint)
+            // -------------------------------------------------------------
+            panel_frame().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    icon_label(ui, Icon::Globe, 16.0, theme::accent());
+                    ui.label(
+                        RichText::new("全局 uTLS 浏览器指纹自动伪装 (Client Fingerprint)")
+                            .strong()
+                            .size(14.0),
+                    );
+                });
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("模拟主流商业浏览器的 TLS ClientHello 密码套件与扩展顺序，消灭 Go / Rust 等代理客户端原生 TLS 特征指纹（JA3/JA4），彻底防御运营商 DPI 深度包检测与阻断。即使导入的订阅节点未携带 fp 参数，也会自动全局注入。")
+                        .small()
+                        .color(theme::text_secondary()),
+                );
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("模拟浏览器预设:").strong());
+
+                    let current_fp_label = match self.proxy_config.client_fingerprint.as_deref() {
+                        Some("chrome") => "Chrome 浏览器 (推荐)",
+                        Some("safari") => "Safari 浏览器 (Apple)",
+                        Some("firefox") => "Firefox 浏览器",
+                        Some("edge") => "Microsoft Edge",
+                        Some("ios") => "iOS WebKit (iPhone/iPad)",
+                        Some("randomized") => "Randomized (每次连接动态随机)",
+                        Some(other) => other,
+                        None => "⚪ 关闭指纹伪装",
+                    };
+
+                    egui::ComboBox::from_id_salt("security_utls_fingerprint")
+                        .selected_text(current_fp_label)
+                        .width(220.0)
+                        .show_ui(ui, |ui| {
+                            let options = [
+                                (Some("chrome".to_string()), "Chrome 浏览器 (推荐)"),
+                                (Some("safari".to_string()), "Safari 浏览器 (Apple)"),
+                                (Some("firefox".to_string()), "Firefox 浏览器"),
+                                (Some("edge".to_string()), "Microsoft Edge"),
+                                (Some("ios".to_string()), "iOS WebKit (iPhone/iPad)"),
+                                (Some("randomized".to_string()), "Randomized (每次连接动态随机)"),
+                                (None, "⚪ 关闭指纹伪装"),
+                            ];
+                            for (val, label) in options {
+                                let is_selected = self.proxy_config.client_fingerprint == val;
+                                if ui.selectable_label(is_selected, label).clicked() {
+                                    self.proxy_config.client_fingerprint = val;
+                                    changed = true;
+                                }
+                            }
+                        });
+                });
+            });
+
+            ui.add_space(8.0);
+
+            // -------------------------------------------------------------
+            // 卡片 2：WebRTC 真实 IP 泄漏防御 (Anti-WebRTC Leak)
+            // -------------------------------------------------------------
+            panel_frame().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    icon_label(ui, Icon::Shield, 16.0, theme::warning());
+                    ui.label(
+                        RichText::new("WebRTC 真实 IP 泄漏防御 (Anti-WebRTC Leak)")
+                            .strong()
+                            .size(14.0),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (btn_text, btn_fill, btn_color) = if self.proxy_config.block_webrtc {
+                            ("🟢 已启用防御", theme::success_bg(), theme::success())
+                        } else {
+                            ("⚪ 未启用", theme::panel_hover(), theme::muted())
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(btn_text).size(12.0).color(btn_color),
+                                )
+                                .fill(btn_fill),
+                            )
+                            .on_hover_text("点击切换 WebRTC 真实 IP 防泄漏开关")
+                            .clicked()
+                        {
+                            self.proxy_config.block_webrtc = !self.proxy_config.block_webrtc;
+                            changed = true;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("在内核层拦截 WebRTC 专用的 STUN / TURN 穿透端口（UDP/TCP 3478, 5349）以及常见 STUN 探测域名，彻底杜绝网站通过网页 JavaScript 探针探测并获取访客本地真实公网 IP。")
+                        .small()
+                        .color(theme::text_secondary()),
+                );
+            });
+
+            ui.add_space(8.0);
+
+            // -------------------------------------------------------------
+            // 卡片 3：隐私与行为追踪广告过滤 (Tracker & Telemetry Blocking)
+            // -------------------------------------------------------------
+            panel_frame().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    icon_label(ui, Icon::Alert, 16.0, theme::danger());
+                    ui.label(
+                        RichText::new("隐私与行为追踪广告过滤 (Tracker & Telemetry Blocking)")
+                            .strong()
+                            .size(14.0),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (btn_text, btn_fill, btn_color) = if self.proxy_config.block_trackers {
+                            ("🟢 已启用拦截", theme::success_bg(), theme::success())
+                        } else {
+                            ("⚪ 未启用", theme::panel_hover(), theme::muted())
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(btn_text).size(12.0).color(btn_color),
+                                )
+                                .fill(btn_fill),
+                            )
+                            .on_hover_text("点击切换行为追踪与广告拦截开关")
+                            .clicked()
+                        {
+                            self.proxy_config.block_trackers = !self.proxy_config.block_trackers;
+                            changed = true;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("在代理内核中自动加载专业过滤规则库（category-ads-all、privacy、reject），拦截第三方用户行为数据采集、埋点统计 SDK（Google Analytics、友盟等）及网页弹窗横幅广告，大幅提升隐私安全并加速页面加载。")
+                        .small()
+                        .color(theme::text_secondary()),
+                );
+            });
+
+            ui.add_space(8.0);
+
+            // -------------------------------------------------------------
+            // 卡片 4：UDP 端口跳跃与防 QoS 丢包混淆 (UDP Port Hopping & Anti-QoS)
+            // -------------------------------------------------------------
+            panel_frame().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    icon_label(ui, Icon::Lightning, 16.0, theme::accent());
+                    ui.label(
+                        RichText::new("UDP 端口跳跃与防 QoS 丢包混淆 (Port Hopping & Anti-QoS)")
+                            .strong()
+                            .size(14.0),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (btn_text, btn_fill, btn_color) = if self.proxy_config.udp_port_hopping {
+                            ("🟢 已启用", theme::success_bg(), theme::success())
+                        } else {
+                            ("⚪ 未启用", theme::panel_hover(), theme::muted())
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(btn_text).size(12.0).color(btn_color),
+                                )
+                                .fill(btn_fill),
+                            )
+                            .on_hover_text("点击切换 UDP 端口跳跃开关")
+                            .clicked()
+                        {
+                            self.proxy_config.udp_port_hopping = !self.proxy_config.udp_port_hopping;
+                            changed = true;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("针对 Hysteria2 / TUIC 等高性能 UDP 协议，启用端口跳跃伪装（如多端口随机跳跃）与 FullCone NAT 穿透，打破运营商单端口大流量特征识别与激进 QoS 限速，改善晚高峰丢包与连接卡顿。")
+                        .small()
+                        .color(theme::text_secondary()),
+                );
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("端口跳跃范围:").strong());
+                    let edit = ui.add(
+                        egui::TextEdit::singleline(&mut self.proxy_config.hop_ports)
+                            .desired_width(140.0)
+                            .hint_text("如 20000-40000"),
+                    );
+                    if edit.lost_focus() {
+                        changed = true;
+                    }
+                    ui.label(
+                        RichText::new("（服务端支持的端口范围，格式如 20000-40000）")
+                            .small()
+                            .color(theme::muted()),
+                    );
+                });
+            });
+        });
+
+        if changed {
+            self.save_proxy_config();
+        }
     }
 
     pub(crate) fn ui_node_picker_modal(&mut self, ctx: &egui::Context) {

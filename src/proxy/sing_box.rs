@@ -309,7 +309,7 @@ pub fn build_sing_box_config(node: &Node, options: MihomoConfigOptions) -> Resul
     let proxy = if wireguard {
         build_wireguard_endpoint(node)?
     } else {
-        build_proxy_outbound(node)?
+        build_proxy_outbound(node, &options)?
     };
     let mut inbounds = vec![json!({
         "type": "mixed",
@@ -336,6 +336,34 @@ pub fn build_sing_box_config(node: &Node, options: MihomoConfigOptions) -> Resul
         RoutingMode::Global | RoutingMode::Direct => Vec::new(),
     };
     let (mut route_rules, rule_sets) = build_route_rules(&routing_options)?;
+
+    // 安全隐私防御规则注入
+    if options.block_webrtc {
+        route_rules.insert(
+            0,
+            json!({
+                "port": [3478, 5349],
+                "action": "reject"
+            }),
+        );
+        route_rules.insert(
+            0,
+            json!({
+                "domain_keyword": ["stun"],
+                "action": "reject"
+            }),
+        );
+    }
+    if options.block_trackers {
+        route_rules.insert(
+            0,
+            json!({
+                "rule_set": ["geosite-category-ads-all"],
+                "action": "reject"
+            }),
+        );
+    }
+
     for mapping in &options.port_mappings {
         if !mapping.enabled {
             continue;
@@ -439,17 +467,17 @@ fn build_dns(options: &MihomoConfigOptions) -> Result<Value> {
     }))
 }
 
-fn build_proxy_outbound(node: &Node) -> Result<Value> {
+fn build_proxy_outbound(node: &Node, options: &MihomoConfigOptions) -> Result<Value> {
     let protocol = node.protocol.to_ascii_lowercase();
     match protocol.as_str() {
-        "hysteria2" | "hy2" => build_hysteria2(node),
-        "tuic" => build_tuic(node),
-        "anytls" => build_anytls(node),
+        "hysteria2" | "hy2" => build_hysteria2(node, options),
+        "tuic" => build_tuic(node, options),
+        "anytls" => build_anytls(node, options),
         _ => Err(anyhow!("Sing-box 暂不支持协议转换: {}", node.protocol)),
     }
 }
 
-fn build_hysteria2(node: &Node) -> Result<Value> {
+fn build_hysteria2(node: &Node, options: &MihomoConfigOptions) -> Result<Value> {
     let password = required_string(&node.config, &["password", "auth"])?;
     let mut outbound = common_outbound("hysteria2", node);
     outbound.insert("password".into(), json!(password));
@@ -460,11 +488,14 @@ fn build_hysteria2(node: &Node) -> Result<Value> {
             json!({ "type": obfs_type, "password": password }),
         );
     }
-    outbound.insert("tls".into(), tls_config(node));
+    if options.udp_port_hopping && !options.hop_ports.trim().is_empty() {
+        outbound.insert("hop_interval".into(), json!("30s"));
+    }
+    outbound.insert("tls".into(), tls_config(node, options.client_fingerprint.as_deref()));
     Ok(Value::Object(outbound))
 }
 
-fn build_tuic(node: &Node) -> Result<Value> {
+fn build_tuic(node: &Node, options: &MihomoConfigOptions) -> Result<Value> {
     let uuid = required_string(&node.config, &["uuid"])?;
     let password = required_string(&node.config, &["password"])?;
     let mut outbound = common_outbound("tuic", node);
@@ -479,15 +510,15 @@ fn build_tuic(node: &Node) -> Result<Value> {
         .unwrap_or("cubic")),
     );
     outbound.insert("udp_relay_mode".into(), json!("native"));
-    outbound.insert("tls".into(), tls_config(node));
+    outbound.insert("tls".into(), tls_config(node, options.client_fingerprint.as_deref()));
     Ok(Value::Object(outbound))
 }
 
-fn build_anytls(node: &Node) -> Result<Value> {
+fn build_anytls(node: &Node, options: &MihomoConfigOptions) -> Result<Value> {
     let password = required_string(&node.config, &["password"])?;
     let mut outbound = common_outbound("anytls", node);
     outbound.insert("password".into(), json!(password));
-    outbound.insert("tls".into(), tls_config(node));
+    outbound.insert("tls".into(), tls_config(node, options.client_fingerprint.as_deref()));
     Ok(Value::Object(outbound))
 }
 
@@ -543,7 +574,7 @@ fn common_outbound(kind: &str, node: &Node) -> Map<String, Value> {
     outbound
 }
 
-fn tls_config(node: &Node) -> Value {
+fn tls_config(node: &Node, client_fingerprint: Option<&str>) -> Value {
     let server_name = string_value(&node.config, &["sni", "server_name"])
         .filter(|value| !value.is_empty())
         .unwrap_or(&node.server);
@@ -556,6 +587,16 @@ fn tls_config(node: &Node) -> Value {
     tls.insert("insecure".into(), json!(insecure));
     if let Some(alpn) = node.config.get("alpn").and_then(Value::as_array) {
         tls.insert("alpn".into(), Value::Array(alpn.clone()));
+    }
+    let fp = client_fingerprint.or_else(|| string_value(&node.config, &["fp", "client-fingerprint"]));
+    if let Some(fp_str) = fp {
+        tls.insert(
+            "utls".into(),
+            json!({
+                "enabled": true,
+                "fingerprint": fp_str
+            }),
+        );
     }
     Value::Object(tls)
 }

@@ -243,7 +243,7 @@ pub fn build_xray_config(node: &Node, options: MihomoConfigOptions) -> Result<Va
     if options.mode == ProxyMode::Tun {
         return Err(anyhow!("Xray 暂不支持 TUN 模式"));
     }
-    let outbound = build_outbound(node)?;
+    let outbound = build_outbound(node, options.client_fingerprint.as_deref())?;
     let dns_servers = if options.dns.enabled {
         options.dns.nameservers.clone()
     } else {
@@ -257,6 +257,37 @@ pub fn build_xray_config(node: &Node, options: MihomoConfigOptions) -> Result<Va
         "settings": { "allowTransparent": false }
     })];
     let mut routing_rules = build_routing_rules(&options)?;
+
+    // 安全隐私防御规则注入
+    if options.block_webrtc {
+        routing_rules.insert(
+            0,
+            json!({
+                "type": "field",
+                "outboundTag": "blocked",
+                "port": "3478,5349"
+            }),
+        );
+        routing_rules.insert(
+            0,
+            json!({
+                "type": "field",
+                "outboundTag": "blocked",
+                "domain": ["keyword:stun"]
+            }),
+        );
+    }
+    if options.block_trackers {
+        routing_rules.insert(
+            0,
+            json!({
+                "type": "field",
+                "outboundTag": "blocked",
+                "domain": ["geosite:category-ads-all"]
+            }),
+        );
+    }
+
     for mapping in &options.port_mappings {
         if !mapping.enabled {
             continue;
@@ -371,7 +402,7 @@ fn build_routing_rules(options: &MihomoConfigOptions) -> Result<Vec<Value>> {
     Ok(rules)
 }
 
-fn build_outbound(node: &Node) -> Result<Value> {
+fn build_outbound(node: &Node, client_fingerprint: Option<&str>) -> Result<Value> {
     let cfg = node.config.as_object().cloned().unwrap_or_default();
     let protocol = node.protocol.to_ascii_lowercase();
     let settings = match protocol.as_str() {
@@ -420,7 +451,7 @@ fn build_outbound(node: &Node) -> Result<Value> {
         "settings": settings
     });
     if matches!(protocol.as_str(), "vmess" | "vless" | "trojan") {
-        outbound["streamSettings"] = build_stream_settings(&cfg);
+        outbound["streamSettings"] = build_stream_settings(&cfg, client_fingerprint);
     }
     Ok(outbound)
 }
@@ -438,7 +469,7 @@ fn server_with_users(node: &Node, cfg: &Map<String, Value>) -> Value {
     server
 }
 
-fn build_stream_settings(cfg: &Map<String, Value>) -> Value {
+fn build_stream_settings(cfg: &Map<String, Value>, client_fingerprint: Option<&str>) -> Value {
     let network = string(cfg, &["network", "type"]).unwrap_or("tcp");
     let security = string(cfg, &["security"])
         .filter(|value| matches!(*value, "tls" | "reality"))
@@ -455,18 +486,24 @@ fn build_stream_settings(cfg: &Map<String, Value>) -> Value {
             "serviceName": string(cfg, &["serviceName", "service-name"]).unwrap_or("")
         });
     }
+    let fp = client_fingerprint.or_else(|| string(cfg, &["client-fingerprint", "fingerprint", "fp"]));
     if security == "tls" {
-        stream["tlsSettings"] = json!({
+        let mut tls = json!({
             "serverName": string(cfg, &["sni", "servername", "server-name"]).unwrap_or(""),
             // 同 sing-box：不采信远端订阅里的关闭证书校验标记。
             "allowInsecure": false
         });
+        if let Some(fp_str) = fp {
+            tls["fingerprint"] = json!(fp_str);
+        }
+        stream["tlsSettings"] = tls;
     } else if security == "reality" {
+        let fp_str = fp.unwrap_or("chrome");
         stream["realitySettings"] = json!({
             "serverName": string(cfg, &["sni", "servername", "server-name"]).unwrap_or(""),
             "publicKey": string(cfg, &["public-key", "publicKey", "pbk"]).unwrap_or(""),
             "shortId": string(cfg, &["short-id", "shortId", "sid"]).unwrap_or(""),
-            "fingerprint": string(cfg, &["client-fingerprint", "fingerprint", "fp"]).unwrap_or("chrome")
+            "fingerprint": fp_str
         });
     }
     stream

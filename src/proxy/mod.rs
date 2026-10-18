@@ -210,6 +210,25 @@ pub struct MihomoConfigOptions {
     /// 端口映射的目标节点对象（已转为 clash proxy 对象）：启动前注入，不落盘。
     #[serde(default, skip)]
     pub port_mapping_nodes: Vec<(u16, String, Value)>,
+    /// 全局 uTLS 客户端浏览器指纹自动伪装（如 Some("chrome")、Some("safari")、None）
+    #[serde(default)]
+    pub client_fingerprint: Option<String>,
+    /// WebRTC 真实 IP 泄漏防御（拦截 STUN / TURN 协议探测）
+    #[serde(default)]
+    pub block_webrtc: bool,
+    /// 隐私与行为追踪广告规则集过滤
+    #[serde(default)]
+    pub block_trackers: bool,
+    /// UDP 端口跳跃与防 QoS 丢包混淆
+    #[serde(default)]
+    pub udp_port_hopping: bool,
+    /// UDP 端口跳跃范围（默认 20000-40000）
+    #[serde(default = "default_hop_ports")]
+    pub hop_ports: String,
+}
+
+fn default_hop_ports() -> String {
+    "20000-40000".to_string()
 }
 
 fn default_url_test_size() -> u16 {
@@ -238,6 +257,11 @@ impl Default for MihomoConfigOptions {
             override_yaml: None,
             port_mappings: Vec::new(),
             port_mapping_nodes: Vec::new(),
+            client_fingerprint: None,
+            block_webrtc: false,
+            block_trackers: false,
+            udp_port_hopping: false,
+            hop_ports: default_hop_ports(),
         }
     }
 }
@@ -430,6 +454,38 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
             "proxy": target_name
         }));
         port_rules.push(format!("IN-PORT,{},{}", port, target_name));
+    }
+
+    // 如果启用了全局客户端指纹伪装，为所有支持 TLS 的候选代理注入 client-fingerprint
+    if let Some(ref fp) = options.client_fingerprint {
+        let fp_val = Value::String(fp.clone());
+        for p in &mut candidate_proxies {
+            if let Some(obj) = p.as_object_mut() {
+                let p_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
+                let is_tls = obj.get("tls").and_then(Value::as_bool) == Some(true)
+                    || obj.contains_key("reality-opts")
+                    || obj.contains_key("public-key")
+                    || matches!(p_type, "vless" | "vmess" | "trojan" | "hysteria2" | "tuic" | "ssr");
+                if is_tls && (!obj.contains_key("client-fingerprint") || obj.get("client-fingerprint").and_then(Value::as_str) == Some("")) {
+                    obj.insert("client-fingerprint".into(), fp_val.clone());
+                }
+            }
+        }
+    }
+
+    // 如果启用了 UDP 端口跳跃，针对 Hysteria/Hysteria2/TUIC 注入端口范围
+    if options.udp_port_hopping && !options.hop_ports.trim().is_empty() {
+        let ports_str = options.hop_ports.trim().to_string();
+        for p in &mut candidate_proxies {
+            if let Some(obj) = p.as_object_mut() {
+                let p_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
+                if matches!(p_type, "hysteria" | "hysteria2" | "tuic") {
+                    if !obj.contains_key("ports") {
+                        obj.insert("ports".into(), Value::String(ports_str.clone()));
+                    }
+                }
+            }
+        }
     }
 
     let candidate_names: Vec<String> = candidate_proxies
@@ -674,6 +730,23 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
                 }
             }
         }
+    }
+
+    // 安全隐私防御规则注入
+    let mut privacy_rules: Vec<String> = Vec::new();
+    if options.block_webrtc {
+        privacy_rules.push("DST-PORT,3478,REJECT".into());
+        privacy_rules.push("DST-PORT,5349,REJECT".into());
+        privacy_rules.push("GEOSITE,stun,REJECT".into());
+        privacy_rules.push("DOMAIN-KEYWORD,stun,REJECT".into());
+    }
+    if options.block_trackers {
+        privacy_rules.push("GEOSITE,category-ads-all,REJECT".into());
+        privacy_rules.push("GEOSITE,privacy,REJECT".into());
+        privacy_rules.push("RULE-SET,reject,REJECT".into());
+    }
+    if !privacy_rules.is_empty() {
+        final_rules.splice(0..0, privacy_rules);
     }
 
     // 独占端口转发规则插入在所有规则最顶端，优先匹配
@@ -3103,5 +3176,49 @@ mod tests {
         options.port_mappings[0].enabled = false;
         let ports_disabled = adapter.required_ports(&options);
         assert!(!ports_disabled.contains(&10810));
+    }
+
+    #[test]
+    fn security_privacy_protections_generate_expected_configs() {
+        let current = node(
+            "vless",
+            json!({"server": "1.2.3.4", "port": 443, "uuid": "u1", "network": "ws", "security": "tls"}),
+        );
+        let hy2_node = node(
+            "hysteria2",
+            json!({"server": "5.6.7.8", "port": 443, "password": "pass", "sni": "example.com"}),
+        );
+        let options = MihomoConfigOptions {
+            client_fingerprint: Some("chrome".to_string()),
+            block_webrtc: true,
+            block_trackers: true,
+            udp_port_hopping: true,
+            hop_ports: "30000-50000".to_string(),
+            ..MihomoConfigOptions::default()
+        };
+
+        // 1. Mihomo 验证
+        let config = build_mihomo_config(&current, options.clone()).unwrap();
+        let proxies = config["proxies"].as_array().expect("proxies");
+        assert_eq!(proxies[0]["client-fingerprint"], "chrome");
+
+        let rules = config["rules"].as_array().expect("rules");
+        assert!(rules.iter().any(|r| r == "DST-PORT,3478,REJECT"));
+        assert!(rules.iter().any(|r| r == "DST-PORT,5349,REJECT"));
+        assert!(rules.iter().any(|r| r == "GEOSITE,category-ads-all,REJECT"));
+
+        // 2. Sing-box 验证
+        let sing_box_cfg = crate::proxy::sing_box::build_sing_box_config(&hy2_node, options.clone()).unwrap();
+        let sing_box_outbounds = sing_box_cfg["outbounds"].as_array().expect("outbounds");
+        assert_eq!(sing_box_outbounds[0]["tls"]["utls"]["fingerprint"], "chrome");
+        assert_eq!(sing_box_outbounds[0]["hop_interval"], "30s");
+
+        let sing_box_rules = sing_box_cfg["route"]["rules"].as_array().expect("route rules");
+        assert!(sing_box_rules.iter().any(|r| r.get("domain_keyword").is_some()));
+
+        // 3. Xray 验证
+        let xray_cfg = crate::proxy::xray::build_xray_config(&current, options).unwrap();
+        let xray_outbounds = xray_cfg["outbounds"].as_array().expect("outbounds");
+        assert_eq!(xray_outbounds[0]["streamSettings"]["tlsSettings"]["fingerprint"], "chrome");
     }
 }
