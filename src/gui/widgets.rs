@@ -3,7 +3,7 @@ use super::theme;
 use super::types::Tab;
 use crate::models::{NodeGroupSummary, NodeSummary, GOOGLE_PROXY_TEST_KIND};
 use crate::proxy::{
-    DnsEnhancedMode, NetworkProtocol, ProxyMode, ProxyState, RoutingMode, RuleAction, RuleMatcher,
+    DnsEnhancedMode, NetworkProtocol, ProxyMode, RoutingMode, RuleAction, RuleMatcher,
     TunStack,
 };
 use crate::speedtest::{SpeedTestPhase, SpeedTestProgress};
@@ -95,98 +95,6 @@ pub fn section_title(ui: &mut Ui, title: &str, subtitle: &str) {
         );
     });
     ui.add_space(6.0);
-}
-
-pub fn nav_item(ui: &mut Ui, current: &mut Tab, tab: Tab, icon: Icon, label: &str) {
-    nav_item_with_badge(ui, current, tab, icon, label, None, None);
-}
-
-pub fn nav_item_with_badge(
-    ui: &mut Ui,
-    current: &mut Tab,
-    tab: Tab,
-    icon: Icon,
-    label: &str,
-    badge: Option<&str>,
-    dot_color: Option<Color32>,
-) {
-    let selected = *current == tab;
-    let (fill, stroke, text_color, icon_color) = if selected {
-        (
-            theme::accent_bg(),
-            Stroke::NONE,
-            theme::text_primary(),
-            theme::accent(),
-        )
-    } else {
-        (
-            Color32::TRANSPARENT,
-            Stroke::NONE,
-            theme::text_secondary(),
-            theme::sidebar_muted(),
-        )
-    };
-
-    let resp = Frame::NONE
-        .fill(fill)
-        .stroke(stroke)
-        .corner_radius(CornerRadius::same(theme::RADIUS_NAV))
-        .inner_margin(Margin::symmetric(theme::PAD_NAV_X, 8))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.horizontal(|ui| {
-                if selected {
-                    let (indicator, _) =
-                        ui.allocate_exact_size(Vec2::new(3.0, 16.0), Sense::hover());
-                    ui.painter()
-                        .rect_filled(indicator, CornerRadius::same(2), theme::accent());
-                    ui.add_space(4.0);
-                } else {
-                    ui.add_space(7.0);
-                }
-                icon_label(ui, icon, 17.0, icon_color);
-                ui.add_space(8.0);
-                ui.label(RichText::new(label).strong().color(text_color).size(13.5));
-
-                // 右侧微标胶囊或发光点
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some(color) = dot_color {
-                        let (rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-                        ui.painter().circle_filled(rect.center(), 4.0, color.gamma_multiply(0.3));
-                        ui.painter().circle_filled(rect.center(), 2.5, color);
-                    } else if let Some(b) = badge {
-                        Frame::NONE
-                            .fill(if selected {
-                                theme::accent().gamma_multiply(0.25)
-                            } else {
-                                theme::border_subtle()
-                            })
-                            .corner_radius(CornerRadius::same(10))
-                            .inner_margin(Margin::symmetric(6, 2))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new(b)
-                                        .small()
-                                        .strong()
-                                        .color(if selected {
-                                            theme::accent_strong()
-                                        } else {
-                                            theme::sidebar_muted()
-                                        }),
-                                );
-                            });
-                    }
-                });
-            });
-        })
-        .response
-        .interact(Sense::click())
-        .on_hover_cursor(egui::CursorIcon::PointingHand);
-
-    if resp.clicked() {
-        *current = tab;
-    }
-    ui.add_space(3.0);
 }
 
 /// 纯图标导航项（macOS Dock 风格）：无文字、无角标数字，只保留语义矢量图标与状态圆点
@@ -494,7 +402,7 @@ pub fn compact_node_card(
     } else if is_focused {
         (
             theme::panel_hover(),
-            Stroke::new(1.5_f32, theme::accent().gamma_multiply(0.75)),
+            Stroke::new(1.0_f32, theme::border()),
         )
     } else {
         (theme::panel(), Stroke::new(1.0_f32, theme::border_subtle()))
@@ -503,8 +411,8 @@ pub fn compact_node_card(
     let mut frame = Frame::NONE
         .fill(fill)
         .stroke(stroke)
-        .corner_radius(CornerRadius::same(12))
-        .inner_margin(Margin::symmetric(14, 10));
+        .corner_radius(CornerRadius::same(10))
+        .inner_margin(Margin::symmetric(10, 8));
 
     if is_active {
         frame = frame.shadow(egui::epaint::Shadow {
@@ -513,46 +421,37 @@ pub fn compact_node_card(
             spread: 0,
             color: theme::accent().gamma_multiply(0.22),
         });
-    } else if is_focused {
-        frame = frame.shadow(egui::epaint::Shadow {
-            offset: [0, 2],
-            blur: 8,
-            spread: 0,
-            color: theme::accent().gamma_multiply(0.12),
-        });
     }
 
     let response = frame
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.set_min_height(58.0);
+            ui.set_min_height(52.0);
 
             // 第一行：国旗 + 节点名称 + 右侧活跃药丸
             ui.horizontal(|ui| {
                 let (flag, _country_name) =
                     country_flag_and_name(node.country.as_deref().unwrap_or(""));
-                ui.label(RichText::new(flag).size(15.0));
+                ui.label(RichText::new(flag).size(14.0));
 
                 let name_color = if is_switching {
                     theme::warning()
                 } else if is_active {
                     theme::accent_strong()
-                } else if is_focused {
-                    theme::accent()
                 } else {
                     theme::text_primary()
                 };
 
                 let clean_name = sanitize_node_name(&node.name);
-                let reserve_right = if is_active || is_switching { 52.0 } else { 0.0 };
-                let available_text_w = (ui.available_width() - reserve_right).max(60.0);
+                let reserve_right = if is_active || is_switching { 46.0 } else { 0.0 };
+                let available_text_w = (ui.available_width() - reserve_right).max(50.0);
 
                 let name_label = ui.add_sized(
                     [available_text_w, 18.0],
                     egui::Label::new(
                         RichText::new(&clean_name)
                             .strong()
-                            .size(13.0)
+                            .size(12.5)
                             .color(name_color),
                     )
                     .truncate(),
@@ -567,15 +466,15 @@ pub fn compact_node_card(
                                 1.0_f32,
                                 Color32::from_rgb(52, 199, 89).gamma_multiply(0.4),
                             ))
-                            .corner_radius(CornerRadius::same(10))
-                            .inner_margin(Margin::symmetric(6, 2))
+                            .corner_radius(CornerRadius::same(8))
+                            .inner_margin(Margin::symmetric(5, 1))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     let (beacon, _) =
                                         ui.allocate_exact_size(Vec2::splat(6.0), Sense::hover());
                                     ui.painter().circle_filled(
                                         beacon.center(),
-                                        3.0,
+                                        2.5,
                                         Color32::from_rgb(52, 199, 89),
                                     );
                                     ui.label(
@@ -589,9 +488,9 @@ pub fn compact_node_card(
                     });
                 } else if is_switching {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        icon_label(ui, Icon::Lightning, 11.0, theme::warning());
+                        icon_label(ui, Icon::Lightning, 10.0, theme::warning());
                         ui.label(
-                            RichText::new("切换中...")
+                            RichText::new("切换中")
                                 .small()
                                 .strong()
                                 .color(theme::warning()),
@@ -600,7 +499,7 @@ pub fn compact_node_card(
                 }
             });
 
-            ui.add_space(5.0);
+            ui.add_space(4.0);
 
             // 第二行：协议标签 + 国家名称 + 右侧信号与延迟
             ui.horizontal(|ui| {
@@ -2089,29 +1988,6 @@ pub fn source_status_failed(status: &str) -> bool {
         && status != "content unchanged"
 }
 
-pub fn latency_label(v: &str) -> &'static str {
-    match v {
-        "alive" => "可用",
-        "dead" => "不可用",
-        "untested" => "未测速",
-        _ => "全部",
-    }
-}
-
-pub fn region_label(code: &str) -> &'static str {
-    match code {
-        "all" => "全部地区",
-        "HK" => "香港",
-        "JP" => "日本",
-        "US" => "美国",
-        "SG" => "新加坡",
-        "TW" => "台湾",
-        "KR" => "韩国",
-        "OTHER" => "其它",
-        _ => "全部地区",
-    }
-}
-
 pub fn country_flag_and_name(code: &str) -> (&'static str, &'static str) {
     match code.to_ascii_uppercase().as_str() {
         "HK" => ("🇭🇰", "香港"),
@@ -2137,16 +2013,6 @@ pub fn country_flag_and_name(code: &str) -> (&'static str, &'static str) {
     }
 }
 
-pub fn proxy_state_label(state: ProxyState) -> (&'static str, Color32) {
-    match state {
-        ProxyState::Stopped => ("已停止", theme::muted()),
-        ProxyState::Starting => ("启动中", theme::warning()),
-        ProxyState::Running => ("运行中", theme::success()),
-        ProxyState::Degraded => ("降级", theme::warning()),
-        ProxyState::Stopping => ("停止中", theme::warning()),
-        ProxyState::Failed => ("失败", theme::danger()),
-    }
-}
 
 pub fn tun_stack_label(stack: TunStack) -> &'static str {
     match stack {

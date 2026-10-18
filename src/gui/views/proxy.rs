@@ -3,13 +3,13 @@ use crate::gui::theme;
 use crate::gui::types::{
     ActiveConnectionInfo, ConnectionsTab, DnsRecord, GroupsTab, KernelGroup, ProxyPanel, ProxySortBy, ProxyView, ProxyViewRow, RuleDraftKind, RulesTab,
 };
-use crate::gui::view_models::nodes_vm::NodeCardAction;
+use crate::gui::view_models::nodes_vm::{NodeCardAction, NodesViewModel};
 use crate::gui::widgets::{
     card_frame, compact_node_card, country_flag_and_name, danger_btn, dns_mode_label,
     format_bytes, format_speed, header_cell, macos_segmented_tabs, panel_frame, panel_tab, primary_btn,
     protocol_pill, render_health_strip, render_signal_bars, render_speedometer,
     render_traffic_waveform_card, routing_mode_description, routing_mode_detail,
-    rule_action_label, rule_matcher_label, section_title, status_badge, tun_stack_label,
+    rule_action_label, rule_matcher_label, sanitize_node_name, section_title, status_badge, tun_stack_label,
 };
 use crate::gui::VpnApp;
 use crate::kernel::{KernelKind, KernelPreference};
@@ -194,12 +194,12 @@ impl VpnApp {
         let tabs = [
             (ProxyPanel::Charts, Icon::Dashboard, tr_charts),
             (ProxyPanel::Nodes, Icon::Pin, tr_nodes),
-            (ProxyPanel::PortMappings, Icon::Plug, "一节点一端口"),
-            (ProxyPanel::Security, Icon::Shield, "安全隐私"),
             (ProxyPanel::Groups, Icon::Rocket, tr_groups),
             (ProxyPanel::Connections, Icon::Radar, &conn_label),
             (ProxyPanel::Rules, Icon::Rules, tr_rules),
             (ProxyPanel::Network, Icon::Globe, tr_network),
+            (ProxyPanel::PortMappings, Icon::Plug, "活动节点列表"),
+            (ProxyPanel::Security, Icon::Shield, "安全隐私"),
             (ProxyPanel::Kernels, Icon::Cpu, "内核管理"),
             (ProxyPanel::Logs, Icon::Terminal, "运行日志"),
         ];
@@ -210,12 +210,12 @@ impl VpnApp {
         match self.proxy_panel {
             ProxyPanel::Charts => self.ui_proxy_charts(ui),
             ProxyPanel::Nodes => self.ui_proxy_nodes(ui),
-            ProxyPanel::PortMappings => self.ui_proxy_port_mappings(ui),
-            ProxyPanel::Security => self.ui_proxy_security(ui),
             ProxyPanel::Groups => self.ui_proxy_groups(ui),
             ProxyPanel::Connections => self.ui_proxy_connections(ui),
             ProxyPanel::Rules => self.ui_proxy_rules(ui),
             ProxyPanel::Network => self.ui_proxy_network(ui),
+            ProxyPanel::PortMappings => self.ui_proxy_port_mappings(ui),
+            ProxyPanel::Security => self.ui_proxy_security(ui),
             ProxyPanel::Kernels => self.ui_proxy_kernels(ui),
             ProxyPanel::Logs => self.ui_proxy_logs(ui),
         }
@@ -562,7 +562,7 @@ impl VpnApp {
                 ui.add_space(10.0);
 
                 // 3. 全网节点延迟频谱带 + 节点协议组成分布（一行并排，上下边缘与高度严格对齐）
-                if let Some(s) = &self.stats.clone() {
+                if let Some(s) = self.stats.as_ref() {
                     let total_w = ui.available_width();
                     let gap = 10.0;
                     let left_w = ((total_w - gap) * 0.48).max(280.0);
@@ -1080,10 +1080,13 @@ impl VpnApp {
                         });
                     });
                 } else {
+                    let mut toggle_group: Option<(String, bool)> = None;
+                    let mut switch_action: Option<(String, String)> = None;
+
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            for group in self.kernel_groups.clone() {
+                            for group in &self.kernel_groups {
                                 let is_expanded = self.expanded_kernel_groups.contains(&group.name);
                                 Frame::NONE
                                     .fill(theme::panel())
@@ -1172,11 +1175,7 @@ impl VpnApp {
                                         });
 
                                         if toggle_clicked {
-                                            if is_expanded {
-                                                self.expanded_kernel_groups.remove(&group.name);
-                                            } else {
-                                                self.expanded_kernel_groups.insert(group.name.clone());
-                                            }
+                                            toggle_group = Some((group.name.clone(), !is_expanded));
                                         }
 
                                         // 仅当展开时才展示该策略组下的所有接口/节点胶囊
@@ -1217,10 +1216,10 @@ impl VpnApp {
                                                         .corner_radius(CornerRadius::same(6)),
                                                     );
                                                     if is_selector && btn.clicked() && !is_active {
-                                                        self.select_kernel_member(
+                                                        switch_action = Some((
                                                             group.name.clone(),
                                                             member.clone(),
-                                                        );
+                                                        ));
                                                     }
                                                 }
                                             });
@@ -1229,6 +1228,17 @@ impl VpnApp {
                                 ui.add_space(6.0);
                             }
                         });
+
+                    if let Some((name, expand)) = toggle_group {
+                        if expand {
+                            self.expanded_kernel_groups.insert(name);
+                        } else {
+                            self.expanded_kernel_groups.remove(&name);
+                        }
+                    }
+                    if let Some((grp, mbr)) = switch_action {
+                        self.select_kernel_member(grp, mbr);
+                    }
                 }
             }
             GroupsTab::Config => {
@@ -1362,12 +1372,14 @@ impl VpnApp {
             }
         } else {
             let has_executable_node = self.selected_proxy_node_id.is_some()
-                || (self.proxy_config.url_test && (!self.proxy_nodes.is_empty() || !self.nodes.is_empty()));
+                || self.focused_node_id.is_some()
+                || !self.nodes.is_empty()
+                || !self.proxy_nodes.is_empty();
             let can_start = !self.proxy_busy && !transitioning && has_executable_node;
             let start = ui.add_enabled(can_start, primary_btn("启动代理"));
             let start = if !has_executable_node {
                 start.on_hover_text("节点列表为空，请先在订阅源拉取节点")
-            } else if self.selected_proxy_node_id.is_none() && self.proxy_config.url_test {
+            } else if self.selected_proxy_node_id.is_none() && self.focused_node_id.is_none() && self.proxy_config.url_test {
                 start.on_hover_text("点击以当前策略组自动选优启动")
             } else {
                 start
@@ -1494,6 +1506,7 @@ impl VpnApp {
                             .clicked()
                         {
                             self.proxy_selected_group = "全部".to_string();
+                            self.proxy_page = 1;
                         }
                         ui.separator();
                     }
@@ -1531,6 +1544,7 @@ impl VpnApp {
                             .corner_radius(CornerRadius::same(10));
                         if ui.add(btn).clicked() && !is_sel {
                             self.proxy_region_filter = code.to_string();
+                            self.proxy_page = 1;
                         }
                     }
 
@@ -1558,6 +1572,7 @@ impl VpnApp {
                             .clicked();
                         if cleared {
                             self.proxy_search.clear();
+                            self.proxy_page = 1;
                         }
 
                         ui.push_id("proxy_node_search_island", |ui| {
@@ -1568,6 +1583,9 @@ impl VpnApp {
                                         .hint_text("搜索节点...")
                                         .desired_width(100.0),
                                 );
+                                if search_field.changed() {
+                                    self.proxy_page = 1;
+                                }
                                 crate::gui::widgets::note_text_field(ui, &search_field);
                             });
                         });
@@ -1580,6 +1598,7 @@ impl VpnApp {
                             .clicked()
                         {
                             self.proxy_sort_by = ProxySortBy::Name;
+                            self.proxy_page = 1;
                         }
                         let is_lat = self.proxy_sort_by == ProxySortBy::Latency;
                         if ui
@@ -1587,6 +1606,7 @@ impl VpnApp {
                             .clicked()
                         {
                             self.proxy_sort_by = ProxySortBy::Latency;
+                            self.proxy_page = 1;
                         }
                         ui.label(RichText::new("排序:").small().color(theme::text_secondary()));
                     });
@@ -1633,13 +1653,27 @@ impl VpnApp {
         let selected_id = self.selected_proxy_node_id.clone();
         let switching_id = self.switching_node_id.clone();
         let is_busy = self.busy;
-        let columns = if ui.available_width() >= 920.0 {
-            4
-        } else if ui.available_width() >= 660.0 {
-            3
+
+        let total_items = view.rows.len();
+        let page_size = (self.proxy_page_size as usize).clamp(10, 200);
+        let total_pages = NodesViewModel::total_pages(total_items as i64, page_size as u32);
+        if self.proxy_page > total_pages {
+            self.proxy_page = total_pages;
+        }
+        if self.proxy_page < 1 {
+            self.proxy_page = 1;
+        }
+
+        let start_idx = ((self.proxy_page - 1) as usize * page_size).min(total_items);
+        let end_idx = (start_idx + page_size).min(total_items);
+        let paged_rows = if start_idx < total_items {
+            &view.rows[start_idx..end_idx]
         } else {
-            2
+            &[]
         };
+
+        let (columns, total_card_rows) =
+            NodesViewModel::grid_layout(ui.available_width(), paged_rows.len());
 
         if view.rows.is_empty() {
             egui::ScrollArea::vertical()
@@ -1670,11 +1704,13 @@ impl VpnApp {
                                     if ui.button("清除筛选与搜索").clicked() {
                                         self.proxy_search.clear();
                                         self.proxy_region_filter = "all".into();
+                                        self.proxy_page = 1;
                                     }
                                 }
                                 if self.proxy_selected_group != "全部" {
                                     if ui.button("查看全部节点").clicked() {
                                         self.proxy_selected_group = "全部".into();
+                                        self.proxy_page = 1;
                                     }
                                 }
                             });
@@ -1683,14 +1719,52 @@ impl VpnApp {
                     });
                 });
         } else {
-            let total_card_rows = (view.rows.len() + columns - 1) / columns;
+            // 分页控制栏 (第 X / Y 页 · 共 Z 节点 · 上一页 / 下一页 · 容量选择器)
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "第 {} / {} 页 · 共 {} 节点",
+                        self.proxy_page, total_pages, total_items
+                    ))
+                    .small()
+                    .color(theme::text_secondary()),
+                );
+
+                if ui
+                    .add_enabled(self.proxy_page > 1, egui::Button::new("上一页").small())
+                    .clicked()
+                {
+                    self.proxy_page = self.proxy_page.saturating_sub(1).max(1);
+                }
+                if ui
+                    .add_enabled(self.proxy_page < total_pages, egui::Button::new("下一页").small())
+                    .clicked()
+                {
+                    self.proxy_page = (self.proxy_page + 1).min(total_pages);
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    egui::ComboBox::from_id_salt("proxy_page_size_selector")
+                        .selected_text(format!("每页 {} 条", self.proxy_page_size))
+                        .width(95.0)
+                        .show_ui(ui, |ui| {
+                            for size in [20, 25, 30, 50, 100] {
+                                if ui.selectable_value(&mut self.proxy_page_size, size, format!("{size} 条/页")).clicked() {
+                                    self.proxy_page = 1;
+                                }
+                            }
+                        });
+                });
+            });
+            ui.add_space(4.0);
+
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
-                .show_rows(ui, 68.0, total_card_rows, |ui, row_range| {
+                .show_rows(ui, 64.0, total_card_rows, |ui, row_range| {
                     for row_idx in row_range {
                         let start = row_idx * columns;
-                        let end = (start + columns).min(view.rows.len());
-                        let row = &view.rows[start..end];
+                        let end = (start + columns).min(paged_rows.len());
+                        let row = &paged_rows[start..end];
                         ui.columns(columns, |column_uis| {
                             for (column_index, column_ui) in column_uis.iter_mut().enumerate() {
                                 let Some(entry) = row.get(column_index) else {
@@ -1798,26 +1872,39 @@ impl VpnApp {
                                 }
                             }
                         });
-                        ui.add_space(8.0);
+                        ui.add_space(6.0);
                     }
                 });
+
+            if total_pages > 1 {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("第 {} / {} 页", self.proxy_page, total_pages))
+                            .small()
+                            .color(theme::text_secondary()),
+                    );
+                    if ui
+                        .add_enabled(self.proxy_page > 1, egui::Button::new("上一页").small())
+                        .clicked()
+                    {
+                        self.proxy_page = self.proxy_page.saturating_sub(1).max(1);
+                    }
+                    if ui
+                        .add_enabled(self.proxy_page < total_pages, egui::Button::new("下一页").small())
+                        .clicked()
+                    {
+                        self.proxy_page = (self.proxy_page + 1).min(total_pages);
+                    }
+                });
+            }
         }
 
         if let Some(msg) = status_msg {
             self.status = msg;
         }
         if let Some(action) = menu_action {
-            match action {
-                NodeCardAction::Select { id, name } => {
-                    self.focused_node_id = Some(id);
-                    self.status = format!("已选中节点: {name}（右键设为活动节点）");
-                }
-                NodeCardAction::ShowDetail(id) => self.show_node(id),
-                NodeCardAction::Speedtest(id) => self.speedtest_one(id),
-                NodeCardAction::CheckIpRisk(id) => self.check_ip_risk_for(&id),
-                NodeCardAction::Delete(id) => self.delete_node(id),
-                NodeCardAction::Connect { id, name } => self.switch_proxy_node(id, name, "手动切换"),
-            }
+            self.handle_node_card_action(action);
         }
         if let Some((grp, member)) = group_switch_member {
             self.select_kernel_member(grp, member);
@@ -1862,7 +1949,7 @@ impl VpnApp {
         panel_frame().show(ui, |ui| {
             ui.horizontal(|ui| {
                 icon_label(ui, Icon::Plug, 16.0, theme::accent());
-                ui.label(RichText::new("一节点一端口（多端口独立转发）").strong().size(15.0));
+                ui.label(RichText::new("活动节点列表（一节点一端口独立转发）").strong().size(15.0));
             });
             ui.add_space(4.0);
             ui.label(
@@ -1960,7 +2047,7 @@ impl VpnApp {
                     ui.add_space(30.0);
                     icon_label(ui, Icon::Plug, 28.0, theme::muted());
                     ui.add_space(8.0);
-                    ui.label(RichText::new("暂无一节点一端口映射规则").color(theme::text_secondary()));
+                    ui.label(RichText::new("暂无活动节点映射规则").color(theme::text_secondary()));
                     ui.label(
                         RichText::new("在上方输入本地端口并选择节点，即可为特定应用分配独占出口")
                             .small()
@@ -2336,20 +2423,22 @@ impl VpnApp {
         let mut open = self.node_picker_open;
         let mut picked_node = None;
 
-        egui::Window::new("选择转发目标节点")
+        egui::Window::new(RichText::new("选择转发目标节点").strong())
             .open(&mut open)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .resizable(true)
-            .default_size([500.0, 520.0])
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size([560.0, 520.0])
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     icon_label(ui, Icon::Search, 14.0, theme::muted());
-                    ui.add(
+                    let search_field = ui.add(
                         egui::TextEdit::singleline(&mut self.node_picker_search)
-                            .desired_width(ui.available_width() - 30.0)
+                            .desired_width(450.0)
                             .hint_text("搜索节点名称、国家、协议、服务器..."),
                     );
-                    if !self.node_picker_search.is_empty() && ui.button("✕").clicked() {
+                    crate::gui::widgets::note_text_field(ui, &search_field);
+                    if !self.node_picker_search.is_empty() && ui.small_button("✕").clicked() {
                         self.node_picker_search.clear();
                     }
                 });
@@ -2360,6 +2449,7 @@ impl VpnApp {
 
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
+                    .max_height(430.0)
                     .show(ui, |ui| {
                         let mut count = 0;
                         let mut seen_ids = std::collections::HashSet::new();
@@ -2390,18 +2480,21 @@ impl VpnApp {
                                 ui.label(RichText::new(flag).size(14.0));
                                 protocol_pill(ui, &node.protocol.to_uppercase());
 
+                                let clean_name = sanitize_node_name(&node.name);
                                 let name_label = ui.add_sized(
-                                    [ui.available_width() - 80.0, 18.0],
-                                    egui::Label::new(RichText::new(&node.name).strong()).truncate(),
+                                    [350.0, 18.0],
+                                    egui::Label::new(RichText::new(&clean_name).strong()).truncate(),
                                 );
                                 name_label.on_hover_text(format!(
                                     "{}\n{}:{}",
                                     node.name, node.server, node.port
                                 ));
 
-                                if ui.button("选择").clicked() {
-                                    picked_node = Some((node.id.clone(), node.name.clone()));
-                                }
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.button("选择").clicked() {
+                                        picked_node = Some((node.id.clone(), node.name.clone()));
+                                    }
+                                });
                             });
                             ui.separator();
                         }
@@ -3836,9 +3929,9 @@ impl VpnApp {
     /// 没有原生"另存为"对话框（不为此引依赖），所以走"文件 + 剪贴板"两条路，
     /// 哪条成了/没成都写在状态栏里，不假装成功。
     pub(crate) fn export_rules_as_json(&mut self) {
-        let rules = self.proxy_config.rules.clone();
+        let rules = &self.proxy_config.rules;
         let count = rules.len();
-        let json = match crate::proxy::rule_io::export_json(&rules) {
+        let json = match crate::proxy::rule_io::export_json(rules) {
             Ok(json) => json,
             Err(error) => {
                 self.status = format!("导出失败：{error}");
@@ -4381,20 +4474,18 @@ impl VpnApp {
                 });
 
                 ui.add_space(8.0);
-                let kernels = self.kernels.clone();
-                let releases = self.kernel_releases.clone();
                 let mut update_kind = None;
 
-                let col_count = kernels.len().max(1);
+                let col_count = self.kernels.len().max(1);
                 ui.columns(col_count, |column_uis| {
-                    for (i, kernel) in kernels.iter().enumerate() {
+                    for (i, kernel) in self.kernels.iter().enumerate() {
                         let ui = &mut column_uis[i];
                         let col_max_w = ui.available_width();
                         ui.set_max_width(col_max_w);
                         ui.set_clip_rect(ui.max_rect());
 
                         let version = kernel.version.as_deref().unwrap_or("未检测到");
-                        let release = releases.iter().find(|release| release.kind == kernel.kind);
+                        let release = self.kernel_releases.iter().find(|release| release.kind == kernel.kind);
                         let latest = release
                             .and_then(|release| release.latest_version.as_deref())
                             .unwrap_or("检查中");
@@ -4689,7 +4780,7 @@ impl VpnApp {
                     return;
                 }
 
-                if let Some(error) = self.ip_risk_error.clone() {
+                if let Some(error) = &self.ip_risk_error {
                     Frame::NONE
                         .fill(theme::danger_bg())
                         .stroke(Stroke::new(1.0_f32, theme::danger()))
@@ -4713,7 +4804,7 @@ impl VpnApp {
                     return;
                 }
 
-                let Some(risk) = self.ip_risk.clone() else {
+                let Some(risk) = self.ip_risk.as_ref() else {
                     ui.label(RichText::new("还没有查询结果。").color(theme::muted()));
                     return;
                 };
@@ -4776,18 +4867,18 @@ impl VpnApp {
 
                         ui.label(RichText::new("地区").small().color(theme::muted()));
                         ui.label(RichText::new(if risk.country.is_empty() {
-                            "未知".to_owned()
+                            "未知"
                         } else {
-                            risk.country.clone()
+                            &risk.country
                         })
                         .color(theme::text_primary()));
                         ui.end_row();
 
                         ui.label(RichText::new("ASN / 运营商").small().color(theme::muted()));
                         ui.label(RichText::new(if risk.org.is_empty() {
-                            "无 ASN 信息".to_owned()
+                            "无 ASN 信息"
                         } else {
-                            risk.org.clone()
+                            &risk.org
                         })
                         .color(theme::text_primary()));
                         ui.end_row();
@@ -4796,19 +4887,19 @@ impl VpnApp {
                 ui.add_space(8.0);
                 // 出口侧：本机只有一个 mixed 端口，所以"经代理查出口"只对**当前在跑的
                 // 那个节点**成立；别的节点必须用临时内核实测，否则显示的是别人的出口。
-                let target = self.ip_risk_target.clone();
-                let current = self.proxy_status.node_id.clone();
+                let target = self.ip_risk_target.as_deref();
+                let current = self.proxy_status.node_id.as_deref();
                 let target_is_running = self.proxy_status.local_proxy_active()
-                    && matches!((target.as_deref(), current.as_deref()), (Some(a), Some(b)) if a == b);
+                    && matches!((target, current), (Some(a), Some(b)) if a == b);
                 let egress_belongs_to_target = self.ip_risk_egress_for.is_some()
                     && self.ip_risk_egress_for == self.ip_risk_target;
                 let egress = if egress_belongs_to_target {
-                    self.ip_risk_egress.clone()
+                    self.ip_risk_egress.as_ref()
                 } else {
                     None
                 };
                 let egress_error = if egress_belongs_to_target {
-                    self.ip_risk_egress_error.clone()
+                    self.ip_risk_egress_error.as_deref()
                 } else {
                     None
                 };

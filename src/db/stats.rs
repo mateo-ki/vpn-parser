@@ -139,7 +139,67 @@ impl Database {
             .into_iter()
             .map(|source| (source.id, source.name))
             .collect::<std::collections::HashMap<_, _>>();
-        // 过滤条件全部下推 SQL，每组只回一条聚合行，不再整表加载。
+
+        // 若节点元数据缓存已命中，直接在内存中执行极速聚合（耗时 < 1ms）
+        if let Some(all_nodes) = self.get_cached_node_summaries().await {
+            let keyword_trimmed = keyword.map(str::trim).filter(|s| !s.is_empty());
+            let latency_lower = latency.map(|v| v.to_ascii_lowercase());
+            let mut counts: std::collections::HashMap<Option<String>, (i64, i64)> = std::collections::HashMap::new();
+
+            for node in all_nodes.iter() {
+                if let Some(proto) = protocol {
+                    if !proto.is_empty() && !proto.eq_ignore_ascii_case("all") {
+                        if !node.protocol.eq_ignore_ascii_case(proto) {
+                            continue;
+                        }
+                    }
+                }
+                if let Some(kw) = keyword_trimmed {
+                    if !kw.is_empty() {
+                        if !crate::db::nodes::contains_ignore_ascii_case(&node.name, kw)
+                            && !crate::db::nodes::contains_ignore_ascii_case(&node.server, kw)
+                        {
+                            continue;
+                        }
+                    }
+                }
+                if let Some(ref lat) = latency_lower {
+                    match lat.as_str() {
+                        "alive" if node.latency_ok != Some(true) => continue,
+                        "dead" if node.latency_ok != Some(false) => continue,
+                        "untested" if node.latency_ok.is_some() => continue,
+                        _ => {}
+                    }
+                }
+                let entry = counts.entry(node.source_id.clone()).or_insert((0, 0));
+                entry.0 += 1;
+                if node.latency_ok == Some(true) {
+                    entry.1 += 1;
+                }
+            }
+
+            let mut groups = Vec::new();
+            for (scope, (total, alive)) in counts {
+                if total == 0 {
+                    continue;
+                }
+                let source_name = scope
+                    .as_ref()
+                    .and_then(|id| names.get(id))
+                    .cloned()
+                    .unwrap_or_else(|| "未分组".to_owned());
+                groups.push(NodeGroupSummary {
+                    source_id: scope,
+                    source_name,
+                    total,
+                    alive,
+                });
+            }
+            groups.sort_by(|a, b| a.source_name.cmp(&b.source_name));
+            return Ok(groups);
+        }
+
+        // 缓存未热时，下推 SQL 查询
         let mut where_sql = String::from("WHERE 1=1");
         let mut binds: Vec<String> = Vec::new();
         if let Some(value) = protocol {
@@ -194,6 +254,46 @@ impl Database {
             sqlx::query_scalar("SELECT COUNT(*) FROM sources WHERE enabled = 1")
                 .fetch_one(&self.pool)
                 .await?;
+
+        // 若节点元数据缓存已命中，直接在内存中执行统计计算（耗时 < 1ms）
+        if let Some(all_nodes) = self.get_cached_node_summaries().await {
+            let mut node_count = 0i64;
+            let mut tested_count = 0i64;
+            let mut alive_count = 0i64;
+            let mut proto_counts: std::collections::HashMap<String, i64> =
+                std::collections::HashMap::new();
+
+            for node in all_nodes.iter() {
+                node_count += 1;
+                if node.latency_ok.is_some() {
+                    tested_count += 1;
+                }
+                if node.latency_ok == Some(true) {
+                    alive_count += 1;
+                }
+                if !node.protocol.is_empty() {
+                    *proto_counts
+                        .entry(node.protocol.to_ascii_lowercase())
+                        .or_default() += 1;
+                }
+            }
+
+            let mut protocol_stats = proto_counts
+                .into_iter()
+                .map(|(protocol, count)| ProtocolStat { protocol, count })
+                .collect::<Vec<_>>();
+            protocol_stats.sort_by(|a, b| b.count.cmp(&a.count));
+
+            return Ok(Stats {
+                source_count,
+                enabled_source_count,
+                node_count,
+                tested_count,
+                alive_count,
+                protocol_stats,
+            });
+        }
+
         // 聚合下推到 SQL 端完成：整表加载 2.6 万节点到内存只为数数太浪费。
         let mut tasks = tokio::task::JoinSet::new();
         for scope in self.node_scopes(None).await? {

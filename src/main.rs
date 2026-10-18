@@ -324,6 +324,7 @@ fn main() -> Result<()> {
     let (startup_url_test, startup_url_test_size) =
         (proxy_options.url_test, proxy_options.url_test_size);
     let proxy_manager = ProxyManager::new(proxy_options);
+    #[allow(unused_variables)]
     let initial_proxy_node = if let Some(node_id) = cli.start_proxy_node.as_deref() {
         rt.block_on(async {
             match db.get_node(node_id).await? {

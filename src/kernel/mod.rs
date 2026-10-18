@@ -47,6 +47,7 @@ impl KernelPreference {
 /// ① 在 Windows 上也能把 Linux 那套命名与解包格式断言跑一遍；
 /// ② 兜底版本的 SHA-256 是**按资产**算的，`.zip` 和 `.gz` 两个号不能混用一份常量。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum KernelPlatform {
     Windows,
     Linux,

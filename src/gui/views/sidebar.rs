@@ -175,8 +175,10 @@ impl VpnApp {
 
     #[allow(dead_code)]
     pub(crate) fn ui_stats_row(&mut self, ui: &mut Ui) {
-        if let Some(s) = &self.stats.clone() {
+        let mut switch_proto = None;
+        if let Some(s) = self.stats.as_ref() {
             let is_nodes_tab = self.tab == Tab::Nodes;
+            let current_proto = self.protocol_filter.clone();
             ui.horizontal_wrapped(|ui| {
                 stat_chip(ui, "订阅源", &s.source_count.to_string(), theme::accent());
                 stat_chip(
@@ -191,9 +193,8 @@ impl VpnApp {
 
                 // 仅在「节点池」上方展示协议首字母缩写图标 + 数量
                 if is_nodes_tab {
-                    let mut switch_proto = None;
                     for p in &s.protocol_stats {
-                        let is_active = self.protocol_filter.eq_ignore_ascii_case(&p.protocol);
+                        let is_active = current_proto.eq_ignore_ascii_case(&p.protocol);
                         if crate::gui::widgets::protocol_stat_chip(ui, &p.protocol, p.count, is_active).clicked() {
                             if is_active {
                                 switch_proto = Some("".to_string());
@@ -202,12 +203,13 @@ impl VpnApp {
                             }
                         }
                     }
-                    if let Some(proto) = switch_proto {
-                        self.protocol_filter = proto;
-                        self.reload_node_view();
-                    }
                 }
             });
+        }
+        if let Some(proto) = switch_proto {
+            self.protocol_filter = proto;
+            self.page = 1;
+            self.reload_nodes();
         }
     }
 }
@@ -215,6 +217,7 @@ impl VpnApp {
 /// 侧栏里"发现新版本"那一行。抽成自由函数是因为 parked 的诊断窗口 PrintWindow 只能
 /// 抓到全黑帧 —— 想证明它真的画出来、真的是绿色，只能把这段单独喂给离屏 Context 读形状。
 /// 返回是否被点击（点了跳「关于」页）。
+#[cfg(test)]
 pub(crate) fn sidebar_update_marker(ui: &mut Ui, tag: &str) -> bool {
     let row = ui.horizontal(|ui| {
         ui.add_space(1.0);

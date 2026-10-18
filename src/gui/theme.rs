@@ -327,6 +327,7 @@ macro_rules! token_accessors {
     ($($field:ident => $name:ident),* $(,)?) => {
         $(
             #[inline]
+            #[allow(dead_code)]
             pub fn $name() -> Color32 {
                 CURRENT.read().map(|p| p.$field).unwrap_or(Color32::GRAY)
             }
@@ -378,8 +379,6 @@ pub const RADIUS_NAV: u8 = 8;
 pub const RADIUS_BTN: u8 = 8;
 /// 卡片内边距（`Margin` 在 egui 0.31 是 i8）。
 pub const PAD_CARD: i8 = 22;
-/// 导航项内边距（横向）。
-pub const PAD_NAV_X: i8 = 13;
 
 /// 卡片描边：浅色与深色均保留 1px 精细边框，层次分明通透。
 #[inline]

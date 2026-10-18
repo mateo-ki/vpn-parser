@@ -238,6 +238,7 @@ pub fn is_elevated() -> bool {
 
 /// 从 `/proc/self/status` 的 `Uid:` 行判"进程是不是 root"（纯函数，测试能喂假文本）。
 /// 用这个而不是 `geteuid()`：仓库里没有 libc 依赖，而这行文本在 Linux 上一定读得到。
+#[allow(dead_code)]
 fn euid_is_root_from_status(status: &str) -> bool {
     status
         .lines()

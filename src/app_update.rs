@@ -17,6 +17,7 @@ pub const REPOSITORY: &str = "mateo-ki/vpn-parser";
 
 /// 一种平台的安装包形态。资产名规则各不同，所以"挑哪个包"和"怎么装"都得跟着它走。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum PackageKind {
     WindowsSetup,
     Deb,
@@ -53,6 +54,7 @@ impl PackageKind {
 
     /// 该用什么命令装。Linux 侧没有任何免密路径：dpkg/rpm 都要 root，
     /// 而"以用户身份悄悄换掉系统里的程序"不是我想给这个软件开的能力。
+    #[allow(dead_code)]
     pub fn install_command(self, path: &Path) -> String {
         let file = path.display();
         match self {
@@ -228,6 +230,7 @@ fn normalized_digest(value: &str) -> Option<String> {
 /// 顺序按"这台机器能装什么"给：Debian 系只要 deb，红帽系只要 rpm，认不出来时 deb 在前
 /// （Debian/Ubuntu 的装机量更大）。`ID_LIKE` 也要看 —— 衍生版常只改 `ID`，
 /// 血统写在 `ID_LIKE` 里，只看 ID 会把 Linux Mint / Pop!_OS 认成"不知道"。
+#[allow(dead_code)]
 fn package_preference_from_os_release(os_release: &str) -> Vec<PackageKind> {
     let mut family: Vec<String> = Vec::new();
     for line in os_release.lines() {
@@ -798,6 +801,7 @@ async fn fetch_text(url: &str, app_proxy: Option<&str>) -> Result<String> {
 /// 把下好的包"交出去"。两种结局，界面必须分开说，不然 Linux 上会出现
 /// "安装向导已启动"这句假话 —— 根本没有向导会接管。
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum Handoff {
     /// Windows：Inno 向导起来了，它会先 taskkill 本进程再装。
     WizardLaunched,

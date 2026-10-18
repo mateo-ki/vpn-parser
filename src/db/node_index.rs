@@ -73,6 +73,7 @@ impl Database {
     /// 拉取完成、测速完成、删源/清空这些"结果马上要用"的地方都走它。
     pub async fn invalidate_node_index(&self) {
         self.set_node_index_built_at(0).await;
+        self.invalidate_node_cache().await;
     }
 
     /// 全量重建：并发扫各分片的元数据 -> 先写临时表 -> 换名。

@@ -20,7 +20,7 @@ impl VpnApp {
         let mut clear_all = false;
 
         // 节点类型统计：协议分布环形图 (Donut Chart) + 协议缩写徽标
-        if let Some(s) = &self.stats.clone() {
+        if let Some(s) = self.stats.as_ref() {
             if !s.protocol_stats.is_empty() {
                 ui.horizontal(|ui| {
                     crate::gui::widgets::render_protocol_donut_chart(ui, &s.protocol_stats, s.node_count);
@@ -111,20 +111,33 @@ impl VpnApp {
             .corner_radius(CornerRadius::same(10))
             .inner_margin(Margin::symmetric(14, 10))
             .show(ui, |ui| {
-                // 第一行：搜索框 + 排序 + 只看可用 + 右侧操作组
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
+                // 第一行：搜索框 + 排序 + 只看可用 + 右侧操作组（水平垂直居中对齐，限定高度 28px 防止膨胀）
+                ui.allocate_ui_with_layout(
+                    egui::Vec2::new(ui.available_width(), 28.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
 
                     // 搜索框
                     icon_label(ui, Icon::Search, 13.0, theme::text_secondary());
                     let search_field = ui.add(
                         egui::TextEdit::singleline(&mut self.keyword)
-                            .desired_width(140.0)
+                            .desired_width(150.0)
                             .hint_text("搜索名称、服务器 IP..."),
                     );
                     crate::gui::widgets::note_text_field(ui, &search_field);
-                    if search_field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    let enter_pressed = search_field.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let lost_focus = search_field.lost_focus();
+                    if enter_pressed || (lost_focus && self.keyword != self.keyword_applied) {
+                        self.keyword_applied = self.keyword.clone();
                         filter_changed = true;
+                    }
+                    if !self.keyword.is_empty() {
+                        if ui.small_button("✕").on_hover_text("清除搜索关键词").clicked() {
+                            self.keyword.clear();
+                            self.keyword_applied.clear();
+                            filter_changed = true;
+                        }
                     }
 
                     ui.separator();
@@ -456,7 +469,7 @@ pub fn render_node_cards_grid(
             NodesViewModel::grid_layout(ui.available_width(), nodes.len());
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show_rows(ui, 84.0, total_card_rows, |ui, row_range| {
+            .show_rows(ui, 64.0, total_card_rows, |ui, row_range| {
                 for row_idx in row_range {
                     let start = row_idx * columns;
                     let end = (start + columns).min(nodes.len());
@@ -535,7 +548,7 @@ pub fn render_node_cards_grid(
                             }
                         }
                     });
-                    ui.add_space(8.0);
+                    ui.add_space(6.0);
                 }
             });
     });

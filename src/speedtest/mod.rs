@@ -34,6 +34,7 @@ impl SpeedtestIntensity {
         }
     }
 
+    #[allow(dead_code)]
     pub fn description(self) -> &'static str {
         match self {
             Self::Fast => "并发 128，快速超时 1000ms，极速筛除大量离线僵尸节点",

@@ -22,16 +22,13 @@ impl NodesViewModel {
         ((total as f32) / (page_size as f32)).ceil().max(1.0) as u32
     }
 
-    /// 根据容器宽度自适应计算网格列数与总卡片行数
+    /// 根据容器宽度自适应计算网格列数与总卡片行数。
+    /// 目标单个卡片宽度保持在 260px ~ 305px 之间（标准桌面屏下一行约 5 个卡片），
+    /// 既保证节点名有充裕展示空间，又避免在超宽屏下被无限拉大变空。
     #[inline]
     pub fn grid_layout(available_width: f32, count: usize) -> (usize, usize) {
-        let columns = if available_width >= 920.0 {
-            4
-        } else if available_width >= 660.0 {
-            3
-        } else {
-            2
-        };
+        let target_card_width = 270.0;
+        let columns = ((available_width / target_card_width).floor() as usize).clamp(2, 10);
         let rows = if count == 0 {
             0
         } else {
@@ -57,8 +54,9 @@ mod tests {
 
     #[test]
     fn test_grid_layout_columns() {
-        assert_eq!(NodesViewModel::grid_layout(1000.0, 10).0, 4);
-        assert_eq!(NodesViewModel::grid_layout(700.0, 10).0, 3);
-        assert_eq!(NodesViewModel::grid_layout(500.0, 10).0, 2);
+        assert_eq!(NodesViewModel::grid_layout(1500.0, 10).0, 5);
+        assert_eq!(NodesViewModel::grid_layout(1200.0, 10).0, 4);
+        assert_eq!(NodesViewModel::grid_layout(900.0, 10).0, 3);
+        assert_eq!(NodesViewModel::grid_layout(600.0, 10).0, 2);
     }
 }

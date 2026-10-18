@@ -93,7 +93,7 @@ impl KernelAdapter for MihomoAdapter {
     fn required_ports(&self, options: &MihomoConfigOptions) -> Vec<u16> {
         let mut ports = vec![options.mixed_port, options.controller_port];
         for mapping in &options.port_mappings {
-            if mapping.enabled {
+            if mapping.enabled && !ports.contains(&mapping.port) {
                 ports.push(mapping.port);
             }
         }

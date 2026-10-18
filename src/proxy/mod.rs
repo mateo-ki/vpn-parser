@@ -28,7 +28,7 @@ mod xray;
 pub use adapter::{kernel_adapter, KernelAdapter};
 pub use config::*;
 
-const STARTUP_PROXY_TOTAL_TIMEOUT: Duration = Duration::from_secs(5);
+const STARTUP_PROXY_TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_PROXY_VERIFY_TIMEOUT: Duration = Duration::from_millis(1_500);
 const STARTUP_SYSTEM_PROXY_RESERVE: Duration = Duration::from_millis(250);
 const STARTUP_PORT_CONNECT_TIMEOUT: Duration = Duration::from_millis(60);
@@ -128,8 +128,10 @@ pub enum AutoRoutingStrategy {
 }
 
 impl AutoRoutingStrategy {
+    #[allow(dead_code)]
     pub const ALL: [Self; 3] = [Self::UrlTest, Self::Fallback, Self::LoadBalance];
 
+    #[allow(dead_code)]
     pub fn label(self) -> &'static str {
         match self {
             Self::UrlTest => "⚡ 最低延迟 (Auto)",
@@ -456,6 +458,24 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
         port_rules.push(format!("IN-PORT,{},{}", port, target_name));
     }
 
+    // 兜底处理：若用户启用了端口映射，但在极少数情况下节点尚未预热成功，
+    // 依然为其生成监听并兜底转发至当前活动代理，确保本地监听端口 100% 就绪，不阻断内核启动
+    for mapping in &options.port_mappings {
+        if !mapping.enabled {
+            continue;
+        }
+        if !port_listeners.iter().any(|l| l.get("port") == Some(&json!(mapping.port))) {
+            port_listeners.push(json!({
+                "name": format!("inbound-{}", mapping.port),
+                "type": "mixed",
+                "port": mapping.port,
+                "listen": if options.allow_lan { "0.0.0.0" } else { "127.0.0.1" },
+                "proxy": proxy_name
+            }));
+            port_rules.push(format!("IN-PORT,{},{}", mapping.port, proxy_name));
+        }
+    }
+
     // 如果启用了全局客户端指纹伪装，为所有支持 TLS 的候选代理注入 client-fingerprint
     if let Some(ref fp) = options.client_fingerprint {
         let fp_val = Value::String(fp.clone());
@@ -572,7 +592,7 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
             "name": "多线并发下载",
             "type": "load-balance",
             "strategy": "round-robin",
-            "url": "https://cp.cloudflare.com/generate_204",
+            "url": "http://www.gstatic.com/generate_204",
             "interval": 300,
             "timeout": 2000,
             "lazy": true,
@@ -581,7 +601,7 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
         smart_groups.push(json!({
             "name": "美国节点",
             "type": "url-test",
-            "url": "https://cp.cloudflare.com/generate_204",
+            "url": "http://www.gstatic.com/generate_204",
             "interval": 300,
             "timeout": 2000,
             "lazy": true,
@@ -644,8 +664,14 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
     };
 
     if options.smart_routing {
-        smart_groups.extend(proxy_groups);
-        proxy_groups = smart_groups;
+        // PROXY 组始终作为首位主出站策略组，保持标准 Clash 规范
+        let mut final_groups = Vec::new();
+        if let Some(proxy_idx) = proxy_groups.iter().position(|g| g.get("name") == Some(&json!("PROXY"))) {
+            final_groups.push(proxy_groups.remove(proxy_idx));
+        }
+        final_groups.extend(smart_groups);
+        final_groups.extend(proxy_groups);
+        proxy_groups = final_groups;
     }
 
     let mut final_rules: Vec<String> = Vec::new();
@@ -737,13 +763,11 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
     if options.block_webrtc {
         privacy_rules.push("DST-PORT,3478,REJECT".into());
         privacy_rules.push("DST-PORT,5349,REJECT".into());
-        privacy_rules.push("GEOSITE,stun,REJECT".into());
         privacy_rules.push("DOMAIN-KEYWORD,stun,REJECT".into());
+        privacy_rules.push("DOMAIN-KEYWORD,turn,REJECT".into());
     }
     if options.block_trackers {
         privacy_rules.push("GEOSITE,category-ads-all,REJECT".into());
-        privacy_rules.push("GEOSITE,privacy,REJECT".into());
-        privacy_rules.push("RULE-SET,reject,REJECT".into());
     }
     if !privacy_rules.is_empty() {
         final_rules.splice(0..0, privacy_rules);
@@ -931,6 +955,9 @@ impl ProxyRuntime {
         }
         if options.url_test_nodes.is_empty() {
             options.url_test_nodes = self.options.url_test_nodes.clone();
+        }
+        if options.port_mapping_nodes.is_empty() {
+            options.port_mapping_nodes = self.options.port_mapping_nodes.clone();
         }
         self.options = options;
     }
@@ -1449,14 +1476,20 @@ impl ProxyManager {
                     .await
                     .unwrap_or_default();
                 let _ = work_dir.cleanup().await;
-                let message = if detail.trim().is_empty() {
-                    format!("{} 启动后端口 {port} 未就绪", kernel.display_name())
-                } else {
+                let fatal_line = detail
+                    .lines()
+                    .rev()
+                    .find(|l| l.contains("level=fatal") || l.contains("level=error"));
+                let message = if let Some(err) = fatal_line {
+                    format!("{} 启动失败: {}", kernel.display_name(), err.trim())
+                } else if !detail.trim().is_empty() && child.try_wait().ok().flatten().is_some() {
                     format!(
                         "{} 启动失败: {}",
                         kernel.display_name(),
                         last_nonempty_line(&detail)
                     )
+                } else {
+                    format!("{} 启动后端口 {port} 未就绪（启动超时）", kernel.display_name())
                 };
                 runtime.status.state = ProxyState::Failed;
                 runtime.status.message = message.clone();
@@ -2415,7 +2448,7 @@ mod tests {
 
     #[test]
     fn startup_proxy_verification_uses_five_second_total_budget() {
-        assert_eq!(STARTUP_PROXY_TOTAL_TIMEOUT, Duration::from_secs(5));
+        assert_eq!(STARTUP_PROXY_TOTAL_TIMEOUT, Duration::from_secs(10));
         assert_eq!(STARTUP_PROXY_VERIFY_TIMEOUT, Duration::from_millis(1_500));
         assert_eq!(STARTUP_SYSTEM_PROXY_RESERVE, Duration::from_millis(250));
         assert_eq!(STARTUP_PROXY_VERIFY_URLS, [PROXY_CONNECTIVITY_TEST_URL]);

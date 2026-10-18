@@ -128,10 +128,53 @@ impl Database {
         Ok(rows.into_iter().map(super::row_to_node).collect())
     }
 
+    /// 加载全部分片节点的元数据摘要并缓存到内存中（若已有有效缓存直接复用）
+    pub async fn load_all_node_summaries(&self) -> Result<std::sync::Arc<Vec<NodeSummary>>> {
+        if let Some(cached) = self.get_cached_node_summaries().await {
+            return Ok(cached);
+        }
+
+        let scopes = self.node_scopes(None).await?;
+        let mut tasks = tokio::task::JoinSet::new();
+        for scope in scopes {
+            if !self.node_db_path(scope.as_deref()).exists() {
+                continue;
+            }
+            let this = self.clone();
+            tasks.spawn(async move { this.load_scope_node_summaries(scope.as_deref()).await });
+        }
+        let mut summaries = Vec::new();
+        while let Some(joined) = tasks.join_next().await {
+            summaries.extend(joined.map_err(|error| anyhow!(error.to_string()))??);
+        }
+        let arc = std::sync::Arc::new(summaries);
+        self.set_cached_node_summaries(arc.clone()).await;
+        Ok(arc)
+    }
+
     pub(crate) async fn load_node_summaries(
         &self,
         source_id: Option<&str>,
     ) -> Result<Vec<NodeSummary>> {
+        if source_id.is_none() {
+            let all = self.load_all_node_summaries().await?;
+            return Ok((*all).clone());
+        }
+        // 若已命中热缓存，直接从内存中克隆该源的节点元数据
+        if let Some(all) = self.get_cached_node_summaries().await {
+            let filtered: Vec<NodeSummary> = all
+                .iter()
+                .filter(|n| {
+                    if source_id == Some(UNGROUPED_SOURCE_ID) {
+                        n.source_id.is_none()
+                    } else {
+                        n.source_id.as_deref() == source_id
+                    }
+                })
+                .cloned()
+                .collect();
+            return Ok(filtered);
+        }
         let scopes = self.node_scopes(source_id).await?;
         if scopes.len() <= 1 {
             let scope = scopes.into_iter().next().flatten();
@@ -139,6 +182,9 @@ impl Database {
         }
         let mut tasks = tokio::task::JoinSet::new();
         for scope in scopes {
+            if !self.node_db_path(scope.as_deref()).exists() {
+                continue;
+            }
             let this = self.clone();
             tasks.spawn(async move { this.load_scope_node_summaries(scope.as_deref()).await });
         }
@@ -343,6 +389,83 @@ impl Database {
         nodes
     }
 
+    /// 判断单个节点是否符合当前组合过滤条件
+    #[inline]
+    pub(crate) fn node_matches_filter(
+        node: &NodeSummary,
+        source_id: Option<&str>,
+        protocol: Option<&str>,
+        keyword: Option<&str>,
+        latency: Option<&str>,
+        country: Option<&str>,
+    ) -> bool {
+        if let Some(scope) = source_id {
+            if scope == UNGROUPED_SOURCE_ID {
+                if node.source_id.is_some() {
+                    return false;
+                }
+            } else if node.source_id.as_deref() != Some(scope) {
+                return false;
+            }
+        }
+        if let Some(proto) = protocol {
+            if !proto.is_empty() && !proto.eq_ignore_ascii_case("all") {
+                if !node.protocol.eq_ignore_ascii_case(proto) {
+                    return false;
+                }
+            }
+        }
+        if let Some(kw) = keyword {
+            if !kw.is_empty() {
+                if !contains_ignore_ascii_case(&node.name, kw)
+                    && !contains_ignore_ascii_case(&node.server, kw)
+                {
+                    return false;
+                }
+            }
+        }
+        if let Some(lat) = latency {
+            match lat {
+                "alive" => {
+                    if node.latency_ok != Some(true) {
+                        return false;
+                    }
+                }
+                "dead" => {
+                    if node.latency_ok != Some(false) {
+                        return false;
+                    }
+                }
+                "untested" => {
+                    if node.latency_ok.is_some() {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(c) = country {
+            if !c.eq_ignore_ascii_case("all") {
+                if c.eq_ignore_ascii_case("OTHER") {
+                    let is_major = node.country.as_deref().map_or(false, |code| {
+                        ["HK", "JP", "US", "SG", "TW", "KR", "GB", "DE"].contains(&code)
+                    });
+                    if is_major {
+                        return false;
+                    }
+                } else if !node
+                    .country
+                    .as_deref()
+                    .is_some_and(|code| code.eq_ignore_ascii_case(c))
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    #[allow(dead_code)]
     pub(crate) fn filter_node_summaries(
         mut nodes: Vec<NodeSummary>,
         protocol: Option<&str>,
@@ -353,30 +476,14 @@ impl Database {
         let keyword = keyword.map(str::trim).filter(|s| !s.is_empty());
         let latency = latency.map(|value| value.to_ascii_lowercase());
         nodes.retain(|node| {
-            protocol.is_none_or(|value| node.protocol == value)
-                && keyword.is_none_or(|value| {
-                    contains_ignore_ascii_case(&node.name, value)
-                        || contains_ignore_ascii_case(&node.server, value)
-                })
-                && match latency.as_deref() {
-                    Some("alive") => node.latency_ok == Some(true),
-                    Some("dead") => node.latency_ok == Some(false),
-                    Some("untested") => node.latency_ok.is_none(),
-                    _ => true,
-                }
-                && country.is_none_or(|value| {
-                    if value.eq_ignore_ascii_case("all") {
-                        true
-                    } else if value.eq_ignore_ascii_case("OTHER") {
-                        node.country.as_deref().map_or(true, |c| {
-                            !["HK", "JP", "US", "SG", "TW", "KR", "GB", "DE"].contains(&c)
-                        })
-                    } else {
-                        node.country
-                            .as_deref()
-                            .is_some_and(|c| c.eq_ignore_ascii_case(value))
-                    }
-                })
+            Self::node_matches_filter(
+                node,
+                None,
+                protocol,
+                keyword,
+                latency.as_deref(),
+                country,
+            )
         });
         nodes
     }
@@ -394,42 +501,62 @@ impl Database {
     ) -> Result<Page<NodeSummary>> {
         let page = page.max(1);
         let page_size = page_size.clamp(1, 500);
-        if let Some(scope) = source_id {
-            return self
-                .list_nodes_page(
-                    scope, protocol, keyword, latency, country, page, page_size, sort,
-                )
-                .await;
+
+        // 如果全局摘要缓存未热且明确指定了单个 source_id，优先走单分库快速 SQL 分页
+        if source_id.is_some() && self.get_cached_node_summaries().await.is_none() {
+            if let Some(scope) = source_id {
+                return self
+                    .list_nodes_page(
+                        scope, protocol, keyword, latency, country, page, page_size, sort,
+                    )
+                    .await;
+            }
         }
-        let mut nodes = Self::filter_node_summaries(
-            self.load_node_summaries(source_id).await?,
-            protocol,
-            keyword,
-            latency,
-            country,
-        );
+
+        let all_nodes = self.load_all_node_summaries().await?;
+        let keyword_trimmed = keyword.map(str::trim).filter(|s| !s.is_empty());
+        let latency_lower = latency.map(|v| v.to_ascii_lowercase());
+
+        let mut matched: Vec<&NodeSummary> = all_nodes
+            .iter()
+            .filter(|node| {
+                Self::node_matches_filter(
+                    node,
+                    source_id,
+                    protocol,
+                    keyword_trimmed,
+                    latency_lower.as_deref(),
+                    country,
+                )
+            })
+            .collect();
+
         match sort.unwrap_or("updated").to_ascii_lowercase().as_str() {
-            "latency" => nodes.sort_by_key(|node| {
+            "latency" => matched.sort_by_key(|node| {
                 (
                     node.latency_ok != Some(true),
                     node.latency_ms.unwrap_or(i64::MAX),
-                    node.name.clone(),
+                    &node.name,
                 )
             }),
-            "download" => nodes.sort_by(|a, b| {
+            "download" => matched.sort_by(|a, b| {
                 b.download_kbps
                     .partial_cmp(&a.download_kbps)
                     .unwrap_or(std::cmp::Ordering::Equal)
             }),
-            "name" => nodes.sort_by(|a, b| a.name.cmp(&b.name)),
-            _ => nodes.sort_by_key(|node| std::cmp::Reverse(node.updated_at)),
+            "name" => matched.sort_by(|a, b| a.name.cmp(&b.name)),
+            _ => matched.sort_by_key(|node| std::cmp::Reverse(node.updated_at)),
         }
-        let total = nodes.len() as i64;
-        let items = nodes
+
+        let total = matched.len() as i64;
+        let start = ((page - 1) * page_size) as usize;
+        let items = matched
             .into_iter()
-            .skip(((page - 1) * page_size) as usize)
+            .skip(start)
             .take(page_size as usize)
+            .cloned()
             .collect();
+
         Ok(Page {
             total,
             page,
@@ -447,9 +574,26 @@ impl Database {
         latency: Option<&str>,
         country: Option<&str>,
     ) -> Result<Vec<String>> {
-        let summaries = self.load_node_summaries(source_id).await?;
-        let filtered = Self::filter_node_summaries(summaries, protocol, keyword, latency, country);
-        Ok(filtered.into_iter().map(|node| node.id).collect())
+        let all_nodes = self.load_all_node_summaries().await?;
+        let keyword_trimmed = keyword.map(str::trim).filter(|s| !s.is_empty());
+        let latency_lower = latency.map(|v| v.to_ascii_lowercase());
+
+        let ids = all_nodes
+            .iter()
+            .filter(|node| {
+                Self::node_matches_filter(
+                    node,
+                    source_id,
+                    protocol,
+                    keyword_trimmed,
+                    latency_lower.as_deref(),
+                    country,
+                )
+            })
+            .map(|node| node.id.clone())
+            .collect();
+
+        Ok(ids)
     }
 
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
@@ -980,6 +1124,9 @@ impl Database {
             }
             tx.commit().await?;
         }
+        if updated > 0 {
+            self.invalidate_node_index().await;
+        }
         Ok(updated)
     }
 
@@ -1061,6 +1208,9 @@ impl Database {
                 let _ = payloads.execute(&mut *tx).await;
                 tx.commit().await?;
             }
+        }
+        if deleted > 0 {
+            self.invalidate_node_index().await;
         }
         Ok(deleted)
     }
@@ -1404,6 +1554,134 @@ mod tests {
         for id in &filtered_ids {
             assert!(id.starts_with("bench-"));
         }
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_cached_list_nodes_performance_and_invalidation() {
+        let dir = std::env::temp_dir().join(format!("vpn-cache-bench-{}", Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&dir);
+        let db_path = dir.join("test_cache.db");
+        let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
+
+        let s1 = db
+            .create_source(crate::models::CreateSource {
+                name: "Source HK".into(),
+                url_template: "https://example.com/hk".into(),
+                enabled: true,
+                remark: None,
+            })
+            .await
+            .unwrap()
+            .id;
+
+        let s2 = db
+            .create_source(crate::models::CreateSource {
+                name: "Source US".into(),
+                url_template: "https://example.com/us".into(),
+                enabled: true,
+                remark: None,
+            })
+            .await
+            .unwrap()
+            .id;
+
+        let nodes1: Vec<Node> = (0..500)
+            .map(|i| Node {
+                id: format!("hk-{i}"),
+                source_id: Some(s1.clone()),
+                protocol: if i % 2 == 0 { "ss".into() } else { "vless".into() },
+                name: format!("香港-Node-{i:03}"),
+                server: format!("hk{i}.example.com"),
+                port: 443,
+                raw: "ss://...".into(),
+                config: serde_json::json!({}),
+                country: Some("HK".into()),
+                latency_ms: Some((i % 200) as i64 + 10),
+                latency_ok: Some(i % 5 != 0),
+                download_kbps: Some(1024.0),
+                latency_kernel: Some("mihomo".into()),
+                latency_test_kind: Some("tcp".into()),
+                latency_tested_at: Some(Utc::now()),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .collect();
+        db.replace_source_nodes(&s1, &nodes1).await.unwrap();
+
+        let nodes2: Vec<Node> = (0..500)
+            .map(|i| Node {
+                id: format!("us-{i}"),
+                source_id: Some(s2.clone()),
+                protocol: "trojan".into(),
+                name: format!("美国-Node-{i:03}"),
+                server: format!("us{i}.example.com"),
+                port: 8443,
+                raw: "trojan://...".into(),
+                config: serde_json::json!({}),
+                country: Some("US".into()),
+                latency_ms: Some((i % 300) as i64 + 50),
+                latency_ok: Some(true),
+                download_kbps: Some(2048.0),
+                latency_kernel: Some("mihomo".into()),
+                latency_test_kind: Some("tcp".into()),
+                latency_tested_at: Some(Utc::now()),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .collect();
+        db.replace_source_nodes(&s2, &nodes2).await.unwrap();
+
+        // 此时写完节点，缓存已被标记失效
+        assert!(db.get_cached_node_summaries().await.is_none());
+
+        // 第一次读：冷读，应自动预热缓存
+        let t0 = std::time::Instant::now();
+        let page_cold = db
+            .list_nodes(None, None, None, None, None, 1, 24, None)
+            .await
+            .unwrap();
+        let elapsed_cold = t0.elapsed();
+        assert_eq!(page_cold.total, 1000);
+        assert_eq!(page_cold.items.len(), 24);
+        assert!(db.get_cached_node_summaries().await.is_some(), "冷读后应已缓存全量节点摘要");
+
+        // 第二次读：热读（多维组合筛选 + 排序 + 分页），应达到亚毫秒/极速响应
+        let t1 = std::time::Instant::now();
+        let page_warm = db
+            .list_nodes(
+                Some("vless"),
+                None,
+                Some("Node-0"),
+                Some("alive"),
+                Some("HK"),
+                1,
+                24,
+                Some("latency"),
+            )
+            .await
+            .unwrap();
+        let elapsed_warm = t1.elapsed();
+        println!("冷读耗时: {:.2?}，热读过滤耗时: {:.2?}", elapsed_cold, elapsed_warm);
+        assert!(!page_warm.items.is_empty());
+        assert!(
+            elapsed_warm.as_millis() < 20,
+            "热缓存多维组合筛选应在 20ms 内完成，实际: {:.2?}",
+            elapsed_warm
+        );
+
+        // 测试单订阅源过滤在热缓存下同样极速
+        let page_source = db
+            .list_nodes(None, Some(&s2), None, None, None, 1, 50, None)
+            .await
+            .unwrap();
+        assert_eq!(page_source.total, 500);
+
+        // 测试缓存失效机制：写操作应瞬间失效缓存
+        db.invalidate_node_index().await;
+        assert!(db.get_cached_node_summaries().await.is_none());
 
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);

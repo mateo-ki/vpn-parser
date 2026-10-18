@@ -52,7 +52,7 @@ impl VpnApp {
         }
 
         // 订阅源健康与产出度量看板
-        if let Some(s) = &self.stats.clone() {
+        if let Some(s) = self.stats.as_ref() {
             Frame::NONE
                 .fill(theme::panel())
                 .stroke(Stroke::new(1.0_f32, theme::border_subtle()))

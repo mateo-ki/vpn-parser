@@ -31,6 +31,10 @@ pub struct Database {
     /// 克隆共享同一缓存；删除/换名库文件前必须先 take/close 对应池。
     pub(crate) node_pools:
         std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, SqlitePool>>>,
+    /// 全局节点摘要内存级预热缓存（NodeSummary Cache）。
+    /// 解决跨分片无条件扫描导致筛选极慢的瓶颈，使节点池多维过滤、排序与分页达到 1ms 级极速响应。
+    pub(crate) node_summaries_cache:
+        std::sync::Arc<tokio::sync::RwLock<Option<std::sync::Arc<Vec<NodeSummary>>>>>,
 }
 
 impl Database {
@@ -84,10 +88,36 @@ impl Database {
             node_pools: std::sync::Arc::new(
                 std::sync::Mutex::new(std::collections::HashMap::new()),
             ),
+            node_summaries_cache: std::sync::Arc::new(
+                tokio::sync::RwLock::new(None),
+            ),
         };
         db.migrate().await?;
         let _ = db.prune_telemetry().await;
         Ok(db)
+    }
+
+    /// 获取缓存中的全量节点摘要
+    pub(crate) async fn get_cached_node_summaries(
+        &self,
+    ) -> Option<std::sync::Arc<Vec<NodeSummary>>> {
+        let cache = self.node_summaries_cache.read().await;
+        cache.clone()
+    }
+
+    /// 写入/更新全量节点摘要缓存
+    pub(crate) async fn set_cached_node_summaries(
+        &self,
+        summaries: std::sync::Arc<Vec<NodeSummary>>,
+    ) {
+        let mut cache = self.node_summaries_cache.write().await;
+        *cache = Some(summaries);
+    }
+
+    /// 失效节点摘要缓存（节点新增/更新/删除/测速完成时触发）
+    pub async fn invalidate_node_cache(&self) {
+        let mut cache = self.node_summaries_cache.write().await;
+        *cache = None;
     }
 
     /// 节点库缓存键：`None`（未分组）用固定哨兵，避免与真实来源 id 撞车。

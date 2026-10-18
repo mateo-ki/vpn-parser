@@ -882,24 +882,55 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
             }
         }
         Icon::Moon => {
-            // Crescent moon using an outer circle arc and an inner cutout arc
-            let r = s * 0.36;
-            let inner_r = s * 0.30;
-            let offset = s * 0.15;
-            let mut pts = Vec::with_capacity(26);
-            for step in 0..=12 {
-                let angle = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * (step as f32 / 12.0);
-                pts.push(Pos2::new(center.x + angle.cos() * r, center.y + angle.sin() * r));
+            // 现代极简几何新月形（外圆弧与内切弧完美相交，无尖刺毛刺）
+            let r = s * 0.38;
+            let alpha_top = -0.38 * std::f32::consts::PI;
+            let alpha_bot = 0.38 * std::f32::consts::PI;
+            let p_top = Pos2::new(center.x + r * alpha_top.cos(), center.y + r * alpha_top.sin());
+            let p_bot = Pos2::new(center.x + r * alpha_bot.cos(), center.y + r * alpha_bot.sin());
+
+            let c2 = Pos2::new(center.x + s * 0.16, center.y);
+            let beta_top = (p_top.y - c2.y).atan2(p_top.x - c2.x);
+            let beta_bot = (p_bot.y - c2.y).atan2(p_bot.x - c2.x);
+            let r_inner = ((p_top.x - c2.x).powi(2) + (p_top.y - c2.y).powi(2)).sqrt();
+
+            let steps = 16;
+            let mut outer_pts = Vec::with_capacity(steps + 1);
+            let mut inner_pts = Vec::with_capacity(steps + 1);
+
+            // 外弧：从上尖端 p_top 逆时针向左环绕到下尖端 p_bot
+            for i in 0..=steps {
+                let t = i as f32 / steps as f32;
+                let a = alpha_top - t * (2.0 * std::f32::consts::PI - (alpha_bot - alpha_top));
+                outer_pts.push(Pos2::new(center.x + r * a.cos(), center.y + r * a.sin()));
             }
-            for step in (0..=12).rev() {
-                let angle = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * (step as f32 / 12.0);
-                pts.push(Pos2::new(center.x + offset + angle.cos() * inner_r, center.y + angle.sin() * inner_r));
+
+            // 内弧：从上尖端 p_top 沿内圆弧平滑过渡到下尖端 p_bot
+            for i in 0..=steps {
+                let t = i as f32 / steps as f32;
+                let b = beta_top - t * (2.0 * std::f32::consts::PI - (beta_bot - beta_top));
+                inner_pts.push(Pos2::new(c2.x + r_inner * b.cos(), c2.y + r_inner * b.sin()));
             }
-            painter.add(egui::epaint::PathShape::convex_polygon(
-                pts,
-                color,
-                Stroke::NONE,
-            ));
+
+            // 用相邻顶点分割出的凸四边形填充内部，彻底杜绝凹多边形三角化出现的畸变和尖刺
+            for i in 0..steps {
+                let quad = vec![
+                    outer_pts[i],
+                    outer_pts[i + 1],
+                    inner_pts[i + 1],
+                    inner_pts[i],
+                ];
+                painter.add(egui::epaint::PathShape::convex_polygon(
+                    quad,
+                    color,
+                    Stroke::NONE,
+                ));
+            }
+
+            // 闭合外边框轮廓线，与 Sun 图标保持一致的高清质感
+            let mut closed_pts = outer_pts;
+            closed_pts.extend(inner_pts.into_iter().rev());
+            painter.add(egui::epaint::PathShape::closed_line(closed_pts, fine_stroke));
         }
     }
 }

@@ -98,6 +98,8 @@ pub struct VpnApp {
     pub(crate) source_filter: String,
     pub(crate) source_search_query: String,
     pub(crate) keyword: String,
+    pub(crate) keyword_applied: String,
+    pub(crate) nodes_req_id: u64,
     pub(crate) latency_filter: String,
     pub(crate) region_filter: String,
     pub(crate) only_available_nodes: bool,
@@ -251,6 +253,8 @@ pub struct VpnApp {
     /// 控制台可用节点网格的缓存视图 + 数据版本号（proxy_nodes 每次换数据都 +1）。
     pub(crate) proxy_view: Option<ProxyView>,
     pub(crate) proxy_nodes_rev: u64,
+    pub(crate) proxy_page: u32,
+    pub(crate) proxy_page_size: u32,
     pub(crate) ip_risk: Option<crate::ip_risk::IpRisk>,
     pub(crate) ip_risk_busy: bool,
     pub(crate) ip_risk_error: Option<String>,
@@ -441,6 +445,8 @@ impl VpnApp {
             source_filter: String::new(),
             source_search_query: String::new(),
             keyword: String::new(),
+            keyword_applied: String::new(),
+            nodes_req_id: 0,
             latency_filter: "all".into(),
             region_filter: "all".into(),
             only_available_nodes: false,
@@ -554,6 +560,8 @@ impl VpnApp {
             proxy_selected_group: "全部".to_string(),
             proxy_view: None,
             proxy_nodes_rev: 0,
+            proxy_page: 1,
+            proxy_page_size: 50,
             ip_risk: None,
             ip_risk_busy: false,
             ip_risk_error: None,
@@ -799,6 +807,8 @@ impl VpnApp {
     }
 
     pub(crate) fn reload_nodes(&mut self) {
+        self.nodes_req_id = self.nodes_req_id.wrapping_add(1);
+        let req_id = self.nodes_req_id;
         let db = self.db.clone();
         let tx = self.tx.clone();
         let protocol = nonempty_opt(&self.protocol_filter);
@@ -834,11 +844,15 @@ impl VpnApp {
                 .await
                 .map(|p| (p.items, p.total))
                 .map_err(|e| e.to_string());
-            let _ = tx.send(BgMsg::Nodes(res));
+            let _ = tx.send(BgMsg::Nodes { req_id, result: res });
         });
     }
 
     pub(crate) fn reload_node_view(&mut self) {
+        let db = self.db.clone();
+        self.rt.spawn(async move {
+            db.invalidate_node_cache().await;
+        });
         self.reload_nodes();
         self.reload_node_groups();
     }
@@ -940,11 +954,17 @@ impl VpnApp {
                             self.sources = list;
                         }
                         BgMsg::Sources(Err(e)) => self.status = format!("加载订阅源失败: {e}"),
-                        BgMsg::Nodes(Ok((items, total))) => {
-                            self.nodes = items;
-                            self.node_total = total;
+                        BgMsg::Nodes { req_id, result } => {
+                            if req_id == self.nodes_req_id {
+                                match result {
+                                    Ok((items, total)) => {
+                                        self.nodes = items;
+                                        self.node_total = total;
+                                    }
+                                    Err(e) => self.status = format!("加载节点失败: {e}"),
+                                }
+                            }
                         }
-                        BgMsg::Nodes(Err(e)) => self.status = format!("加载节点失败: {e}"),
                         BgMsg::SourceModalNodes { source_id, result } => {
                             if self.source_modal_source_id.as_deref() == Some(&source_id) {
                                 self.source_modal_loading = false;
@@ -3128,6 +3148,12 @@ impl VpnApp {
         if self.selected_proxy_node_id.is_none() {
             if let Some(ref focused) = self.focused_node_id {
                 self.selected_proxy_node_id = Some(focused.clone());
+            } else if let Some(n) = self.nodes.first() {
+                self.selected_proxy_node_id = Some(n.id.clone());
+                self.selected_proxy_node_name = Some(n.name.clone());
+            } else if let Some(n) = self.proxy_nodes.first() {
+                self.selected_proxy_node_id = Some(n.id.clone());
+                self.selected_proxy_node_name = Some(n.name.clone());
             }
         }
         if self.selected_proxy_node_id.is_none() && self.proxy_config.url_test {
@@ -3722,8 +3748,19 @@ impl VpnApp {
     pub(crate) fn handle_node_card_action(&mut self, action: NodeCardAction) {
         match action {
             NodeCardAction::Select { id, name } => {
-                self.focused_node_id = Some(id);
-                self.status = format!("已选中节点: {name}（右键设为活动节点）");
+                self.focused_node_id = Some(id.clone());
+                let running = matches!(
+                    self.proxy_status.state,
+                    ProxyState::Running | ProxyState::Degraded
+                );
+                if !running {
+                    // 代理未运行时，点击选中节点直接定为待启动的目标活动节点，但不自动启动代理
+                    self.selected_proxy_node_id = Some(id);
+                    self.selected_proxy_node_name = Some(name.clone());
+                    self.status = format!("已选中节点: {name}（点击「启动代理」即可开启）");
+                } else {
+                    self.status = format!("已聚焦节点: {name}（右键设为活动节点）");
+                }
             }
             NodeCardAction::Connect { id, name } => {
                 self.switch_proxy_node(id, name, "设为活动节点");
