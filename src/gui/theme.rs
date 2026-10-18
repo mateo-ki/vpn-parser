@@ -40,6 +40,10 @@ pub struct Palette {
     pub danger_stroke: Color32,
     pub sidebar_text: Color32,
     pub sidebar_muted: Color32,
+    /// 方案 A：温润木炭黑图标层级色彩
+    pub icon_primary: Color32,
+    pub icon_secondary: Color32,
+    pub icon_muted: Color32,
     /// 浅色主题（决定 egui Visuals 走 light 还是 dark，以及滚动条/阴影强度）。
     pub light: bool,
 }
@@ -113,11 +117,6 @@ fn readable_on(base: Color32, bg: Color32, target: f32) -> Color32 {
     value
 }
 
-#[inline]
-fn readable_on_white(accent: Color32) -> Color32 {
-    readable_on(accent, Color32::from_rgb(255, 255, 255), 4.6)
-}
-
 /// 深色底上的"压深"必须反着走：往**白**里提，直到在 `bg` 上到 `target`:1。
 /// [`readable_on`] 只会往黑里压 —— 那是为"亮强调色压在白底上"写的；拿它算夜间
 /// 的强调文字，越算越看不见（实测钴蓝压在夜间淡底上只有 3.15:1）。
@@ -139,7 +138,13 @@ impl Palette {
         } else {
             lighten(ink.accent, 0.12)
         };
-        let button = readable_on_white(ink.accent);
+        let (button, on_primary) = if contrast(ink.accent, Color32::WHITE) >= 4.5 {
+            (ink.accent, Color32::WHITE)
+        } else if contrast(ink.accent, ink.text) >= 4.5 {
+            (ink.accent, ink.text)
+        } else {
+            (readable_on(ink.accent, Color32::WHITE, 4.6), Color32::WHITE)
+        };
         let (primary_btn, primary_btn_hover, primary_btn_press) = if ink.light {
             (
                 button,
@@ -153,7 +158,6 @@ impl Palette {
                 darken(button, 0.12),
             )
         };
-        let on_primary = Color32::WHITE;
 
         // 淡强调底（选中项、胶囊、高亮提示块）
         let accent_bg = mix(ink.page, ink.accent, if ink.light { 0.12 } else { 0.20 });
@@ -188,7 +192,22 @@ impl Palette {
             danger_bg: mix(ink.page, ink.danger, if ink.light { 0.12 } else { 0.20 }),
             danger_stroke: mix(ink.page, ink.danger, if ink.light { 0.55 } else { 0.42 }),
             sidebar_text: ink.text,
-            sidebar_muted: ink.text_secondary,
+            sidebar_muted: if ink.light {
+                Color32::from_rgb(112, 112, 118) // 方案 A 柔和次级中性灰 #707076，彻底消除硬黑刺眼感
+            } else {
+                ink.text_secondary
+            },
+            icon_primary: if ink.light {
+                Color32::from_rgb(76, 76, 82) // 方案 A 聚焦/悬停态温润木炭黑 #4C4C52
+            } else {
+                Color32::from_rgb(229, 229, 234) // 方案 A 夜间暖白 #E5E5EA
+            },
+            icon_secondary: if ink.light {
+                Color32::from_rgb(112, 112, 118) // 方案 A 常态轻柔中性灰墨 #707076
+            } else {
+                Color32::from_rgb(174, 174, 178) // 方案 A 夜间次级银灰 #AEAEB2
+            },
+            icon_muted: Color32::from_rgb(142, 142, 147), // 方案 A 弱化中性灰 #8E8E93
             light: ink.light,
         }
     }
@@ -203,36 +222,31 @@ pub struct Theme {
     pub accent: u32,
 }
 
-/// 顺序就是设置页里的顺序。采用 macOS 官方原生风格雅致色系。
-pub const THEMES: [Theme; 5] = [
+/// 顺序就是设置页里的顺序。保留默认香槟金，并加入方案二莫兰迪低饱和、Surge 拓扑绿与方案三 Apple Store 晶紫。
+pub const THEMES: [Theme; 4] = [
     Theme {
-        id: "mac-sequoia",
-        name: "Sequoia 冰晶蓝（默认）",
-        accent: 0x00_71_E3,
+        id: "theme-champagne",
+        name: "香槟金（默认）",
+        accent: 0xD4_AF_37,
     },
     Theme {
-        id: "mac-space-gray",
-        name: "Space Gray 深空蓝",
-        accent: 0x29_97_FF,
+        id: "theme-morandi",
+        name: "莫兰迪低饱和 (柔和护眼)",
+        accent: 0x52_79_6F,
     },
     Theme {
-        id: "mac-aurora",
-        name: "Cyber Aurora 极光紫",
-        accent: 0x79_28_CA,
+        id: "theme-surge",
+        name: "Surge 拓扑绿 (方案二)",
+        accent: 0x34_C7_59,
     },
     Theme {
-        id: "mac-aqua",
-        name: "Classic Aqua 果冻青",
-        accent: 0x00_9E_B3,
-    },
-    Theme {
-        id: "mac-sonoma",
-        name: "Sonoma 暖阳橙",
-        accent: 0xF5_63_00,
+        id: "theme-apple-store",
+        name: "Apple Store 晶紫 (方案三)",
+        accent: 0xA8_55_F7,
     },
 ];
 
-pub const DEFAULT_THEME: &str = "mac-sequoia";
+pub const DEFAULT_THEME: &str = "theme-champagne";
 
 pub fn rgb(hex: u32) -> Color32 {
     Color32::from_rgb(
@@ -244,10 +258,10 @@ pub fn rgb(hex: u32) -> Color32 {
 
 pub fn theme_by_id(id: &str) -> &'static Theme {
     match id {
-        "soft-cobalt" => &THEMES[0],
-        "soft-indigo" | "soft-violet" => &THEMES[2],
-        "soft-teal" => &THEMES[3],
-        "soft-terracotta" => &THEMES[4],
+        "theme-morandi" | "morandi" => &THEMES[1],
+        "theme-surge" | "surge" | "theme-emerald" | "emerald" => &THEMES[2],
+        "theme-apple-store" | "apple-store" | "theme-violet" | "violet" => &THEMES[3],
+        "theme-champagne" | "champagne" | "mac-sequoia" | "soft-cobalt" => &THEMES[0],
         _ => THEMES
             .iter()
             .find(|theme| theme.id == id)
@@ -362,6 +376,9 @@ token_accessors! {
     danger_stroke => danger_stroke,
     sidebar_text => sidebar_text,
     sidebar_muted => sidebar_muted,
+    icon_primary => icon_primary,
+    icon_secondary => icon_secondary,
+    icon_muted => icon_muted,
 }
 
 // ---------------------------------------------------------------------------

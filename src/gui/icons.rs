@@ -44,9 +44,19 @@ pub enum Icon {
 pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
     let center = rect.center();
     let s = rect.width().min(rect.height());
-    let stroke = Stroke::new((s * 0.09).clamp(1.3, 2.2), color);
-    let fine_stroke = Stroke::new((s * 0.075).clamp(1.1, 1.8), color);
-    let bold_stroke = Stroke::new((s * 0.11).clamp(1.5, 2.5), color);
+    // 方案 A 进阶：温润软黑平滑重映射（若传入的是深冷死黑/高反差黑，自动平滑软化为温润暖木炭灰，消除刺眼生冷感）
+    let color = if theme::is_light() {
+        if color == Color32::BLACK || (color.r() <= 0x55 && color.g() <= 0x55 && color.b() <= 0x58) {
+            theme::icon_primary()
+        } else {
+            color
+        }
+    } else {
+        color
+    };
+    let stroke = Stroke::new((s * 0.065).clamp(1.15, 1.40), color);
+    let fine_stroke = Stroke::new((s * 0.052).clamp(1.0, 1.20), color);
+    let bold_stroke = Stroke::new((s * 0.078).clamp(1.25, 1.55), color);
 
     match icon {
         Icon::Dashboard => {
@@ -54,14 +64,15 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
             let pad = s * 0.06;
             let half = s * 0.36;
             let cr = CornerRadius::same(2);
-            // Top-left
-            painter.rect_filled(
+            // Top-left (精细轮廓线框)
+            painter.rect_stroke(
                 Rect::from_min_max(
                     Pos2::new(center.x - half - pad, center.y - half - pad),
                     Pos2::new(center.x - pad, center.y - pad),
                 ),
                 cr,
-                color,
+                stroke,
+                StrokeKind::Middle,
             );
             // Top-right
             painter.rect_stroke(
@@ -83,18 +94,27 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
                 fine_stroke,
                 StrokeKind::Middle,
             );
-            // Bottom-right
+            // Bottom-right (微晶柔和半透底色，剔除生硬死黑)
             painter.rect_filled(
                 Rect::from_min_max(
                     Pos2::new(center.x + pad, center.y + pad),
                     Pos2::new(center.x + half + pad, center.y + half + pad),
                 ),
                 cr,
-                color.gamma_multiply(0.4),
+                color.gamma_multiply(0.25),
+            );
+            painter.rect_stroke(
+                Rect::from_min_max(
+                    Pos2::new(center.x + pad, center.y + pad),
+                    Pos2::new(center.x + half + pad, center.y + half + pad),
+                ),
+                cr,
+                fine_stroke,
+                StrokeKind::Middle,
             );
         }
         Icon::Lightning => {
-            // Dynamic lightning bolt
+            // Dynamic lightning bolt (通透半透微晶填充 + 细致轮廓描边，彻底解决实心傻大黑粗硬块)
             let pts = vec![
                 Pos2::new(center.x + s * 0.06, center.y - s * 0.44),
                 Pos2::new(center.x - s * 0.30, center.y + s * 0.04),
@@ -104,9 +124,13 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
                 Pos2::new(center.x + s * 0.04, center.y - s * 0.04),
             ];
             painter.add(egui::epaint::PathShape::convex_polygon(
-                pts,
-                color,
+                pts.clone(),
+                color.gamma_multiply(0.25),
                 Stroke::NONE,
+            ));
+            painter.add(egui::epaint::PathShape::closed_line(
+                pts,
+                stroke,
             ));
         }
         Icon::Subscription => {
@@ -162,7 +186,8 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
                 Pos2::new(center.x, center.y - s * 0.05),
                 Vec2::new(body_w, body_h),
             );
-            painter.rect_filled(body_rect, CornerRadius::same(3), color);
+            painter.rect_filled(body_rect, CornerRadius::same(3), color.gamma_multiply(0.2));
+            painter.rect_stroke(body_rect, CornerRadius::same(3), stroke, StrokeKind::Inside);
 
             // Top dual prongs
             let prong_h = s * 0.22;
@@ -982,7 +1007,7 @@ pub fn button_with_icon<'a>(icon: Icon, text: &'a str, color: Color32) -> impl e
                 Vec2::splat(icon_size),
             );
             let cur_color = if resp.hovered() {
-                theme::text_primary()
+                theme::icon_primary()
             } else {
                 color
             };
@@ -1057,23 +1082,21 @@ pub fn danger_icon_btn<'a>(icon: Icon, text: &'a str) -> impl egui::Widget + 'a 
         let icon_size = 14.0;
         let icon_gap = 6.0;
 
-        let galley = ui.painter().layout_no_wrap(
-            text.to_string(),
-            egui::FontId::proportional(13.0),
-            theme::danger(),
-        );
+        let font_id = egui::FontId::proportional(13.0);
+        let text_str = text.to_string();
+        let text_size = ui.fonts(|f| f.layout_no_wrap(text_str.clone(), font_id.clone(), Color32::WHITE)).size();
 
         let desired_size = Vec2::new(
-            padding.x * 2.0 + icon_size + icon_gap + galley.size().x,
-            padding.y * 2.0 + galley.size().y.max(icon_size),
+            padding.x * 2.0 + icon_size + icon_gap + text_size.x,
+            padding.y * 2.0 + text_size.y.max(icon_size),
         );
 
         let (rect, resp) = ui.allocate_exact_size(desired_size, egui::Sense::click());
         if ui.is_rect_visible(rect) {
-            let (bg_fill, stroke_color) = if resp.hovered() {
-                (theme::danger_bg(), theme::danger())
+            let (bg_fill, stroke_color, fg_color) = if resp.hovered() {
+                (theme::danger_bg(), theme::danger_stroke(), theme::danger())
             } else {
-                (theme::danger_bg(), theme::danger_stroke())
+                (theme::panel_hover(), theme::border_subtle(), theme::text_secondary())
             };
 
             ui.painter().rect(
@@ -1088,13 +1111,14 @@ pub fn danger_icon_btn<'a>(icon: Icon, text: &'a str) -> impl egui::Widget + 'a 
                 Pos2::new(rect.min.x + padding.x, rect.center().y - icon_size / 2.0),
                 Vec2::splat(icon_size),
             );
-            draw_icon(ui.painter(), icon_rect, icon, theme::danger());
+            draw_icon(ui.painter(), icon_rect, icon, fg_color);
 
+            let galley = ui.painter().layout_no_wrap(text_str, font_id, fg_color);
             let text_pos = Pos2::new(
                 icon_rect.max.x + icon_gap,
                 rect.center().y - galley.size().y / 2.0,
             );
-            ui.painter().galley(text_pos, galley, theme::danger());
+            ui.painter().galley(text_pos, galley, fg_color);
         }
         resp
     }

@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use crate::gui::theme;
 use crate::proxy::ProxyState;
 use eframe::egui::Color32;
 
@@ -29,7 +30,7 @@ impl ProxyViewModel {
             (text, Color32::from_rgb(234, 179, 8))
         } else {
             match proxy_state {
-                ProxyState::Running => ("运行中".to_string(), Color32::from_rgb(34, 197, 94)),
+                ProxyState::Running => ("运行中".to_string(), theme::accent()),
                 ProxyState::Degraded => ("降级运行".to_string(), Color32::from_rgb(249, 115, 22)),
                 ProxyState::Starting => ("正在启动".to_string(), Color32::from_rgb(59, 130, 246)),
                 ProxyState::Stopping => ("正在停止".to_string(), Color32::from_rgb(168, 85, 247)),

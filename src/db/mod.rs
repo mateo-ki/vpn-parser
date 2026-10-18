@@ -488,6 +488,7 @@ mod tests {
                 publisher_api: None,
                 publisher_token: None,
                 ui_theme: None,
+                app_icon_style: None,
                 ui_language: None,
                 ui_scale: None,
                 ui_dark: None,

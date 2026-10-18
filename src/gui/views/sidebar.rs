@@ -13,27 +13,16 @@ impl VpnApp {
 
         // App Logo 居中呈现
         ui.vertical_centered(|ui| {
-            let texture = self.logo_texture.get_or_insert_with(|| {
-                let img = image::load_from_memory(include_bytes!("../../../assets/app-icon.png"))
-                    .expect("load app-icon.png")
-                    .to_rgba8();
-                let (w, h) = img.dimensions();
-                let color_image = egui::ColorImage::from_rgba_unmultiplied(
-                    [w as usize, h as usize],
-                    &img.into_raw(),
-                );
-                ui.ctx()
-                    .load_texture("app-logo", color_image, egui::TextureOptions::LINEAR)
-            });
+            let texture = self.ensure_logo_texture(ui.ctx());
             ui.add(
-                egui::Image::new(&*texture)
+                egui::Image::new(&texture)
                     .fit_to_exact_size(Vec2::splat(36.0))
                     .corner_radius(CornerRadius::same(8)),
             );
             if let Some(tag) = self.pending_update_tag() {
                 ui.add_space(2.0);
                 if ui
-                    .link(RichText::new("↑ 更新").small().strong().color(theme::success()))
+                    .link(RichText::new("↑ 更新").small().strong().color(theme::accent_strong()))
                     .on_hover_text(format!("发现新版本 {tag}，点击去「关于」页下载更新"))
                     .clicked()
                 {
@@ -52,7 +41,7 @@ impl VpnApp {
         ui.add_space(8.0);
 
         let is_running = matches!(self.proxy_status.state, ProxyState::Running);
-        let proxy_dot = if is_running { Some(theme::success()) } else { None };
+        let proxy_dot = if is_running { Some(theme::accent()) } else { None };
         let nodes_tip = self
             .stats
             .as_ref()
@@ -98,7 +87,7 @@ impl VpnApp {
             let icon_color = if resp.hovered() {
                 theme::accent()
             } else {
-                theme::sidebar_muted()
+                theme::icon_secondary()
             };
             crate::gui::icons::draw_icon(&painter, icon_rect, icon, icon_color);
 
@@ -185,11 +174,11 @@ impl VpnApp {
                     ui,
                     "启用",
                     &s.enabled_source_count.to_string(),
-                    theme::success(),
+                    theme::accent_strong(),
                 );
                 stat_chip(ui, "节点", &s.node_count.to_string(), theme::accent());
                 stat_chip(ui, "已测", &s.tested_count.to_string(), theme::warning());
-                stat_chip(ui, "可用", &s.alive_count.to_string(), theme::success());
+                stat_chip(ui, "可用", &s.alive_count.to_string(), theme::accent_strong());
 
                 // 仅在「节点池」上方展示协议首字母缩写图标 + 数量
                 if is_nodes_tab {
@@ -225,13 +214,13 @@ pub(crate) fn sidebar_update_marker(ui: &mut Ui, tag: &str) -> bool {
             RichText::new('\u{2191}')
                 .strong()
                 .size(12.5)
-                .color(theme::success()),
+                .color(theme::accent_strong()),
         );
         ui.label(
             RichText::new(format!("{tag} 可更新"))
                 .small()
                 .strong()
-                .color(theme::success()),
+                .color(theme::accent_strong()),
         );
     });
     row.response

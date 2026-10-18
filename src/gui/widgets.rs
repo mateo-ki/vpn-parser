@@ -74,9 +74,9 @@ pub fn primary_btn(text: &str) -> egui::Button<'_> {
 }
 
 pub fn danger_btn(text: &str) -> egui::Button<'_> {
-    egui::Button::new(RichText::new(text).strong().color(theme::danger()))
-        .fill(theme::danger_bg())
-        .stroke(Stroke::new(1.0_f32, theme::danger_stroke()))
+    egui::Button::new(RichText::new(text).color(theme::text_secondary()))
+        .fill(theme::panel_hover())
+        .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
 }
 
 pub fn section_title(ui: &mut Ui, title: &str, subtitle: &str) {
@@ -88,13 +88,16 @@ pub fn section_title(ui: &mut Ui, title: &str, subtitle: &str) {
                 .color(theme::text_primary()),
         );
         ui.add_space(4.0);
-        ui.label(
-            RichText::new(subtitle)
-                .small()
-                .color(theme::text_secondary()),
+        ui.add(
+            egui::Label::new(
+                RichText::new(subtitle)
+                    .size(11.5)
+                    .color(theme::muted()),
+            )
+            .truncate(),
         );
     });
-    ui.add_space(6.0);
+    ui.add_space(8.0);
 }
 
 /// 纯图标导航项（macOS Dock 风格）：无文字、无角标数字，只保留语义矢量图标与状态圆点
@@ -117,7 +120,7 @@ pub fn nav_item_icon_only(
         (
             Color32::TRANSPARENT,
             Stroke::NONE,
-            theme::sidebar_muted(),
+            theme::icon_secondary(),
         )
     };
 
@@ -159,7 +162,7 @@ pub fn nav_item_icon_only(
     let icon_size = 20.0;
     let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(icon_size));
     let active_icon_color = if is_hovered && !selected {
-        theme::text_primary()
+        theme::icon_primary()
     } else {
         icon_color
     };
@@ -428,11 +431,10 @@ pub fn compact_node_card(
             ui.set_min_width(ui.available_width());
             ui.set_min_height(52.0);
 
-            // 第一行：国旗 + 节点名称 + 右侧活跃药丸
+            // 第一行：国家大写字母（方案 B 极简无框双色字母） + 节点名称 + 右侧活跃药丸
             ui.horizontal(|ui| {
-                let (flag, _country_name) =
-                    country_flag_and_name(node.country.as_deref().unwrap_or(""));
-                ui.label(RichText::new(flag).size(14.0));
+                render_country_code_badge(ui, node.country.as_deref().unwrap_or(""));
+                ui.add_space(2.0);
 
                 let name_color = if is_switching {
                     theme::warning()
@@ -459,12 +461,13 @@ pub fn compact_node_card(
                 name_label.on_hover_text(&node.name);
 
                 if is_active {
+                    let active_green = Color32::from_rgb(52, 199, 89);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         Frame::NONE
-                            .fill(Color32::from_rgb(52, 199, 89).gamma_multiply(0.18))
+                            .fill(active_green.gamma_multiply(0.18))
                             .stroke(Stroke::new(
                                 1.0_f32,
-                                Color32::from_rgb(52, 199, 89).gamma_multiply(0.4),
+                                active_green.gamma_multiply(0.4),
                             ))
                             .corner_radius(CornerRadius::same(8))
                             .inner_margin(Margin::symmetric(5, 1))
@@ -475,13 +478,13 @@ pub fn compact_node_card(
                                     ui.painter().circle_filled(
                                         beacon.center(),
                                         2.5,
-                                        Color32::from_rgb(52, 199, 89),
+                                        active_green,
                                     );
                                     ui.label(
                                         RichText::new("活跃")
                                             .small()
                                             .strong()
-                                            .color(Color32::from_rgb(52, 199, 89)),
+                                            .color(active_green),
                                     );
                                 });
                             });
@@ -633,11 +636,11 @@ pub fn render_fetch_ticks(ui: &mut Ui, rows: Option<&Vec<crate::db::telemetry::F
         let fill = match rows.get(slot) {
             Some(row) if row.ok == 1 => {
                 ok_count += 1;
-                theme::success()
+                theme::accent()
             }
             Some(_) => {
                 fail_count += 1;
-                theme::text_primary()
+                theme::muted()
             }
             None => theme::border(),
         };
@@ -732,11 +735,11 @@ pub fn render_traffic_sparkline(
     };
 
     // 上传先画、下载压在它上面：下载通常大一个量级，反过来画上传会被盖住。
-    let up_color = theme::accent();
+    let up_color = theme::accent().gamma_multiply(0.65);
     for dash in egui::Shape::dashed_line(&curve(&ups), Stroke::new(1.3_f32, up_color), 3.0, 2.5) {
         painter.add(dash);
     }
-    let down_color = theme::success();
+    let down_color = theme::accent();
     painter.add(egui::Shape::line(
         curve(&downs),
         Stroke::new(1.6_f32, down_color),
@@ -776,11 +779,11 @@ pub fn render_signal_bars(ui: &mut Ui, latency_ms: Option<i64>) {
     let heights = [3.5_f32, 6.5_f32, 9.5_f32, 12.5_f32];
 
     let (active_bars, bar_color) = match latency_ms {
-        Some(ms) if ms < 100 => (4, theme::success()),
-        Some(ms) if ms < 220 => (3, theme::success()),
-        Some(ms) if ms < 450 => (2, theme::warning()),
-        Some(_) => (1, Color32::from_rgb(239, 68, 68)),
-        None => (0, theme::muted()),
+        Some(ms) if ms < 100 => (4, theme::accent()),
+        Some(ms) if ms < 220 => (3, theme::accent_strong()),
+        Some(ms) if ms < 450 => (2, theme::text_secondary()),
+        Some(_) => (1, theme::muted()),
+        None => (0, theme::border_subtle()),
     };
 
     let dim_color = theme::border_subtle();
@@ -1048,9 +1051,9 @@ pub fn render_traffic_waveform_card(
         Stroke::new(0.8_f32, theme::border_subtle().gamma_multiply(0.4)),
     );
 
-    // 绘制下行半透明发光渐变区域填充（逐梯形填充，避免凹多边形变形）
-    let down_color = theme::success();
-    let fill_color = down_color.gamma_multiply(0.12);
+    // 绘制下行半透明发光渐变区域填充（采用主题强调色，逐梯形填充避免凹多边形变形）
+    let down_color = theme::accent();
+    let fill_color = down_color.gamma_multiply(0.14);
     for window in down_curve.windows(2) {
         let p1 = window[0];
         let p2 = window[1];
@@ -1063,8 +1066,12 @@ pub fn render_traffic_waveform_card(
         ));
     }
 
-    // 绘制上行曲线（虚线）
-    let up_color = theme::accent();
+    // 绘制上行曲线（虚线）：浅色下加深对比度，深色下微透光
+    let up_color = if theme::is_light() {
+        theme::accent_strong()
+    } else {
+        theme::accent().gamma_multiply(0.65)
+    };
     for dash in egui::Shape::dashed_line(&up_curve, Stroke::new(1.3_f32, up_color), 3.0, 2.5) {
         painter.add(dash);
     }
@@ -1118,13 +1125,24 @@ pub fn render_protocol_donut_chart(
     stats: &[crate::models::ProtocolStat],
     total_nodes: i64,
 ) {
-    let size = egui::vec2(96.0, 96.0);
+    render_protocol_donut_chart_sized(ui, stats, total_nodes, 96.0);
+}
+
+/// 支持自定义外径尺寸的协议分布环形图 (Donut Chart)
+pub fn render_protocol_donut_chart_sized(
+    ui: &mut Ui,
+    stats: &[crate::models::ProtocolStat],
+    total_nodes: i64,
+    size_px: f32,
+) {
+    let size = egui::vec2(size_px, size_px);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter_at(rect);
 
     let center = rect.center();
-    let radius = 37.0;
-    let stroke_width = 9.5_f32;
+    let scale = size_px / 96.0;
+    let radius = 37.0 * scale;
+    let stroke_width = 9.5_f32 * scale;
 
     if total_nodes <= 0 || stats.is_empty() {
         painter.circle_stroke(
@@ -1136,7 +1154,7 @@ pub fn render_protocol_donut_chart(
             center,
             egui::Align2::CENTER_CENTER,
             "0",
-            egui::FontId::proportional(14.0),
+            egui::FontId::proportional(14.0 * scale),
             theme::muted(),
         );
         return;
@@ -1148,7 +1166,7 @@ pub fn render_protocol_donut_chart(
     let mut tooltip_lines = Vec::new();
     tooltip_lines.push(format!("节点协议分布 (共 {total_nodes} 节点):"));
 
-    for s in stats {
+    for (idx, s) in stats.iter().enumerate() {
         let ratio = (s.count as f32 / total_nodes as f32).clamp(0.0, 1.0);
         if ratio < 0.005 {
             continue;
@@ -1168,7 +1186,15 @@ pub fn render_protocol_donut_chart(
             })
             .collect();
 
-        let color = protocol_color(&s.protocol);
+        // 方案二：莫兰迪低饱和环形图色彩体系 (柔和护眼 · 层次丰富)
+        let color = match idx {
+            0 => theme::accent(),
+            1 => Color32::from_rgb(82, 121, 111),  // 莫兰迪鼠尾草绿 #52796F
+            2 => Color32::from_rgb(168, 101, 116), // 莫兰迪陶土玫瑰 #A86574
+            3 => Color32::from_rgb(122, 154, 139), // 莫兰迪柔和橄榄 #7A9A8B
+            4 => Color32::from_rgb(136, 132, 158), // 莫兰迪雾霭紫 #88849E
+            _ => theme::border(),
+        };
         painter.add(egui::Shape::line(
             arc_points,
             Stroke::new(stroke_width, color),
@@ -1190,17 +1216,17 @@ pub fn render_protocol_donut_chart(
     };
 
     painter.text(
-        egui::pos2(center.x, center.y - 7.0),
+        egui::pos2(center.x, center.y - 7.0 * scale),
         egui::Align2::CENTER_CENTER,
         total_str,
-        egui::FontId::proportional(13.5),
+        egui::FontId::proportional(13.5 * scale),
         theme::text_primary(),
     );
     painter.text(
-        egui::pos2(center.x, center.y + 9.0),
+        egui::pos2(center.x, center.y + 9.0 * scale),
         egui::Align2::CENTER_CENTER,
         "节点",
-        egui::FontId::proportional(10.0),
+        egui::FontId::proportional(10.0 * scale),
         theme::muted(),
     );
 
@@ -1240,22 +1266,23 @@ pub fn render_node_health_bar(
     let alive_w = (alive_f / total_f) * rect.width();
     let dead_w = (dead_f / total_f) * rect.width();
 
-    // 绘制可用分段 (绿色)
+    // 绘制可用分段 (主题强调色)
     if alive_w > 1.0 {
         let r = egui::Rect::from_min_max(
             egui::pos2(rect.min.x, bar_y),
             egui::pos2(rect.min.x + alive_w, bar_y + bar_h),
         );
-        painter.rect_filled(r, CornerRadius::same(2), theme::success());
+        painter.rect_filled(r, CornerRadius::same(2), theme::accent());
     }
 
-    // 绘制失效分段 (警示红/深色)
+    // 绘制失效分段 (优雅暗灰/石墨低对比度，杜绝刺眼大红)
     if dead_w > 1.0 {
         let r = egui::Rect::from_min_max(
             egui::pos2(rect.min.x + alive_w, bar_y),
             egui::pos2(rect.min.x + alive_w + dead_w, bar_y + bar_h),
         );
-        painter.rect_filled(r, CornerRadius::same(0), Color32::from_rgb(239, 68, 68));
+        let dead_color = health_failed_color();
+        painter.rect_filled(r, CornerRadius::same(0), dead_color);
     }
 
     let pct = if tested > 0 {
@@ -1298,11 +1325,11 @@ pub fn render_mini_progress_bar(ui: &mut Ui, current: i64, total: i64) {
             egui::pos2(rect.min.x + fill_w, rect.max.y),
         );
         let color = if ratio >= 0.7 {
-            theme::success()
+            theme::accent()
         } else if ratio >= 0.3 {
-            theme::warning()
+            theme::accent_strong()
         } else {
-            Color32::from_rgb(239, 68, 68)
+            theme::muted()
         };
         painter.rect_filled(fill_rect, CornerRadius::same(2), color);
     }
@@ -1454,11 +1481,12 @@ pub fn render_latency_spectrum(
 
     painter.rect_filled(rect, CornerRadius::same(6), theme::sidebar());
 
+    // 方案二：莫兰迪低饱和延迟阶梯色系（柔和护眼 · 语义保留，彻底替代刺眼荧光大红大绿）
     let tiers: [(&str, usize, Color32); 5] = [
-        ("极速 <100ms", stats.ultra_fast, Color32::from_rgb(16, 185, 129)),
-        ("良好 100-200ms", stats.fast, Color32::from_rgb(52, 211, 153)),
-        ("中等 200-400ms", stats.medium, Color32::from_rgb(245, 158, 11)),
-        ("迟缓 >400ms", stats.slow, Color32::from_rgb(239, 68, 68)),
+        ("极速 <100ms", stats.ultra_fast, Color32::from_rgb(82, 121, 111)),  // 莫兰迪鼠尾草绿 #52796F
+        ("良好 100-200ms", stats.fast, Color32::from_rgb(122, 154, 139)),   // 莫兰迪柔和橄榄 #7A9A8B
+        ("中等 200-400ms", stats.medium, Color32::from_rgb(198, 138, 76)),  // 莫兰迪暖沙琥珀 #C68A4C
+        ("迟缓 >400ms", stats.slow, Color32::from_rgb(158, 90, 84)),       // 莫兰迪陶土玫瑰粉褐 #9E5A54 替代大红
         ("未测速", stats.untested, theme::border_subtle()),
     ];
 
@@ -1564,17 +1592,13 @@ pub fn render_top_processes_card(
 
 /// 24 小时出口健康条：一小时一格，最右是"现在"。
 /// 红=那一小时至少有一次不通，绿=那一小时全部实测通过，浅描边=那一小时没测到。
-///
-/// "坏"为什么是红：他 2026-10-15 点名要红。主题里 `danger` 是石墨蓝灰（2026-10-06 定的
-/// "页面上不要红/黄"），拿它当"红"用画出来还是深色，所以这里给一个**只属于这条带子**的
-/// 真红，不去动 `danger` —— 其余界面继续没有红。
-pub const HEALTH_FAILED: Color32 = Color32::from_rgb(0xB3, 0x2A, 0x2A);
+/// 方案二：莫兰迪低饱和出海健康度状态色（陶土玫瑰粉褐替代鲜红大红，鼠尾草绿替代大绿）
+pub const HEALTH_FAILED: Color32 = Color32::from_rgb(158, 90, 84);
 
-/// 夜间那支红：同一个色相往白里提一档。`HEALTH_FAILED` 压在夜间卡片 `#1A1A1A` 上
-/// 只有约 2.4:1，看着像"没点亮"；提到这个值才在纯黑/深灰底上仍然读得出"这里不通"。
-pub const HEALTH_FAILED_DARK: Color32 = Color32::from_rgb(0xE5, 0x6A, 0x6A);
+/// 夜间那支未通/异常色：莫兰迪陶土玫瑰粉褐 #9E5A54。
+pub const HEALTH_FAILED_DARK: Color32 = Color32::from_rgb(158, 90, 84);
 
-/// 当前主题下该用哪支红。
+/// 当前主题下该用哪支未通状态色（克制中性色替代大红）。
 #[inline]
 pub fn health_failed_color() -> Color32 {
     if theme::is_light() {
@@ -1612,12 +1636,10 @@ pub fn health_hour_buckets(rows: &[crate::db::telemetry::HealthRow]) -> [i8; 24]
 
 pub fn render_health_strip(ui: &mut Ui, buckets: &[i8; 24]) {
     const GAP: f32 = 2.0;
-    const CELL_H: f32 = 18.0;
+    const CELL_H: f32 = 8.0;
     const CELLS: usize = 24;
 
-    // 2026-10-08 他要放大：高度直接给到 18（原来是 12，和旁边 13px 的图标差不多高，
-    // 一眼扫不出哪几小时红过）。宽度按这一行还剩多少伸缩 —— 宽窗口每条 10px，
-    // 窄窗口退回 6px，宁可挤小也别让整条健康条折到第二行去顶高卡片。
+    // 精致极简 8px 高度细胶囊，紧凑轻盈，与香槟金主题高度呼应
     let cell_w = ((ui.available_width() - 16.0) / CELLS as f32 - GAP).clamp(6.0, 10.0);
     let size = Vec2::new(CELLS as f32 * (cell_w + GAP), CELL_H);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
@@ -1638,11 +1660,11 @@ pub fn render_health_strip(ui: &mut Ui, buckets: &[i8; 24]) {
             }
             1 => {
                 passed += 1;
-                theme::success()
+                theme::accent()
             }
             _ => theme::border(),
         };
-        painter.rect_filled(cell, 1.0, fill);
+        painter.rect_filled(cell, 2.0, fill);
     }
     let silent = CELLS - passed - failed;
     response.on_hover_text(format!(
@@ -1938,7 +1960,7 @@ pub fn latency_text(n: &NodeSummary) -> RichText {
         (Some(true), Some(GOOGLE_PROXY_TEST_KIND)) => {
             let ms = n.latency_ms.unwrap_or(0);
             let color = if ms < 300 {
-                theme::success()
+                theme::accent()
             } else if ms < 800 {
                 theme::text_secondary()
             } else {
@@ -1947,7 +1969,7 @@ pub fn latency_text(n: &NodeSummary) -> RichText {
             RichText::new(format!("{ms} ms")).color(color)
         }
         (Some(false), Some(GOOGLE_PROXY_TEST_KIND)) => {
-            RichText::new("超时").color(theme::danger())
+            RichText::new("超时").color(theme::muted())
         }
         (Some(true), _) => {
             let ms = n.latency_ms.unwrap_or(0);
@@ -2013,6 +2035,47 @@ pub fn country_flag_and_name(code: &str) -> (&'static str, &'static str) {
     }
 }
 
+/// 方案 B：国家/地区专属两字母大写代码与鲜明地域色彩 (Pure Typography)
+pub fn country_code_and_color(code: &str) -> (&'static str, Color32) {
+    match code.to_ascii_uppercase().as_str() {
+        "HK" => ("HK", Color32::from_rgb(168, 85, 247)), // 紫荆洋紫
+        "JP" => ("JP", Color32::from_rgb(239, 68, 68)),  // 樱花绯红
+        "US" => ("US", Color32::from_rgb(59, 130, 246)),  // 经典钴蓝
+        "SG" => ("SG", Color32::from_rgb(244, 63, 94)),  // 鱼尾狮红
+        "TW" => ("TW", Color32::from_rgb(6, 182, 212)),  // 海岛翠碧
+        "KR" => ("KR", Color32::from_rgb(99, 102, 241)),  // 太极靛蓝
+        "GB" | "UK" => ("UK", Color32::from_rgb(79, 70, 229)), // 大英深蓝
+        "DE" => ("DE", Color32::from_rgb(245, 158, 11)), // 黑金暖琥珀
+        "FR" => ("FR", Color32::from_rgb(37, 99, 235)),  // 法兰西蓝
+        "CA" => ("CA", Color32::from_rgb(248, 113, 113)),// 枫叶艳红
+        "AU" => ("AU", Color32::from_rgb(16, 185, 129)), // 欧泊翠绿
+        "CN" => ("CN", Color32::from_rgb(225, 29, 72)),  // 中国红
+        "RU" => ("RU", Color32::from_rgb(100, 116, 139)),// 石板蓝灰
+        "IN" => ("IN", Color32::from_rgb(234, 88, 12)),  // 藏红花橙
+        "NL" => ("NL", Color32::from_rgb(249, 115, 22)), // 郁金香橙
+        "MY" => ("MY", Color32::from_rgb(234, 179, 8)),  // 马来琥珀黄
+        "TH" => ("TH", Color32::from_rgb(139, 92, 246)), // 暹罗紫
+        "PH" => ("PH", Color32::from_rgb(2, 132, 199)),  // 菲律宾海蓝
+        "VN" => ("VN", Color32::from_rgb(220, 38, 38)),  // 越南赤红
+        "TR" => ("TR", Color32::from_rgb(225, 29, 72)),  // 土耳其红
+        _ => ("GL", Color32::from_rgb(142, 142, 147)),   // 全球/未知 (中性灰)
+    }
+}
+
+/// 方案 B：极简双色无框字母国旗标识 (Pure Typography Country Code)
+pub fn render_country_code_badge(ui: &mut Ui, code: &str) -> egui::Response {
+    let (code_str, color) = country_code_and_color(code);
+    let (_flag, country_name) = country_flag_and_name(code);
+    ui.add(
+        egui::Label::new(
+            RichText::new(code_str)
+                .strong()
+                .size(12.0)
+                .color(color),
+        ),
+    )
+    .on_hover_text(format!("地区: {country_name} ({code_str})"))
+}
 
 pub fn tun_stack_label(stack: TunStack) -> &'static str {
     match stack {
@@ -2257,7 +2320,7 @@ mod sparkline_tests {
                                 list.all_entries()
                                     .filter_map(|shape| match &shape.shape {
                                         egui::Shape::Rect(rect)
-                                            if (rect.rect.height() - 18.0).abs() < 0.1 =>
+                                            if (rect.rect.height() - 8.0).abs() < 0.1 =>
                                         {
                                             Some(rect.fill)
                                         }
@@ -2292,10 +2355,10 @@ mod sparkline_tests {
         assert_eq!(
             painted
                 .iter()
-                .filter(|c| **c == super::theme::success())
+                .filter(|c| **c == super::theme::accent())
                 .count(),
             3,
-            "绿格数不对"
+            "正常格数不对"
         );
         assert_eq!(
             painted

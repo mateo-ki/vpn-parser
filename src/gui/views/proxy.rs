@@ -7,7 +7,7 @@ use crate::gui::view_models::nodes_vm::{NodeCardAction, NodesViewModel};
 use crate::gui::widgets::{
     card_frame, compact_node_card, country_flag_and_name, danger_btn, dns_mode_label,
     format_bytes, format_speed, header_cell, macos_segmented_tabs, panel_frame, panel_tab, primary_btn,
-    protocol_pill, render_health_strip, render_signal_bars, render_speedometer,
+    protocol_pill, render_country_code_badge, render_health_strip, render_signal_bars, render_speedometer,
     render_traffic_waveform_card, routing_mode_description, routing_mode_detail,
     rule_action_label, rule_matcher_label, sanitize_node_name, section_title, status_badge, tun_stack_label,
 };
@@ -222,6 +222,8 @@ impl VpnApp {
     }
 
     pub(crate) fn ui_proxy_charts(&mut self, ui: &mut Ui) {
+        section_title(ui, self.tr("控制台"), "核心代理 · 流量监控 · 策略分流");
+
         let selected_node = self
             .selected_proxy_node_id
             .as_ref()
@@ -260,7 +262,8 @@ impl VpnApp {
                         // --- 第 1 行：状态呼吸光环 + 标题与监听端口 ---
                         ui.horizontal(|ui| {
                             let (beacon_color, pulse_color) = if is_running {
-                                (theme::success(), theme::success().gamma_multiply(0.25))
+                                let active_green = Color32::from_rgb(52, 199, 89);
+                                (active_green, active_green.gamma_multiply(0.25))
                             } else if is_starting || self.switching_node_id.is_some() {
                                 (theme::warning(), theme::warning().gamma_multiply(0.25))
                             } else if prepared {
@@ -327,10 +330,13 @@ impl VpnApp {
                                 ui.set_min_height(24.0);
                                 ui.horizontal(|ui| {
                                     if let Some(node) = &selected_node {
-                                        let (flag, country_name) =
-                                            country_flag_and_name(node.country.as_deref().unwrap_or(""));
+                                        let country_code = node.country.as_deref().unwrap_or("");
+                                        let (_flag, country_name) =
+                                            country_flag_and_name(country_code);
+                                        render_country_code_badge(ui, country_code);
+                                        ui.add_space(2.0);
                                         ui.label(
-                                            RichText::new(format!("{flag} {country_name}"))
+                                            RichText::new(country_name)
                                                 .strong()
                                                 .size(13.0)
                                                 .color(theme::text_primary()),
@@ -375,7 +381,7 @@ impl VpnApp {
                                             ui.label(
                                                 RichText::new(format!("↑ {}", format_speed(self.traffic_up_rate)))
                                                     .small()
-                                                    .color(theme::success()),
+                                                    .color(theme::text_secondary()),
                                             );
                                             ui.label(
                                                 RichText::new(format!("↓ {}", format_speed(self.traffic_down_rate)))
@@ -409,7 +415,7 @@ impl VpnApp {
                                             ui.label(
                                                 RichText::new(format!("↑ {}", format_speed(self.traffic_up_rate)))
                                                     .small()
-                                                    .color(theme::success()),
+                                                    .color(theme::text_secondary()),
                                             );
                                             ui.label(
                                                 RichText::new(format!("↓ {}", format_speed(self.traffic_down_rate)))
@@ -526,7 +532,7 @@ impl VpnApp {
                                 if self.auto_failover {
                                     ui.add_space(6.0);
                                     ui.horizontal(|ui| {
-                                        icon_label(ui, Icon::Shield, 11.0, theme::success());
+                                        icon_label(ui, Icon::Shield, 11.0, theme::accent_strong());
                                         let detail = self
                                             .failover_last_reason
                                             .as_deref()
@@ -566,8 +572,8 @@ impl VpnApp {
                     let total_w = ui.available_width();
                     let gap = 10.0;
                     let left_w = ((total_w - gap) * 0.48).max(280.0);
-                    let row_h = 164.0_f32; // 原 104.0 增加 60px
-                    let inner_h = row_h - 20.0; // 144.0_f32
+                    let row_h = 114.0_f32; // 高度减少 50px（原 164.0）
+                    let inner_h = row_h - 20.0; // 94.0_f32
 
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                         // 左翼卡片：全网延迟阶梯频谱分布
@@ -589,20 +595,20 @@ impl VpnApp {
                                                 .color(theme::text_primary()),
                                         );
                                     });
-                                    ui.add_space(14.0);
+                                    ui.add_space(10.0);
                                     let spectrum = crate::gui::widgets::LatencySpectrumStats::from_latencies(
                                         self.nodes.iter().map(|n| n.latency_ms),
                                     );
                                     crate::gui::widgets::render_latency_spectrum(ui, &spectrum);
-                                    ui.add_space(16.0);
+                                    ui.add_space(10.0);
                                     ui.horizontal(|ui| {
-                                        ui.label(RichText::new(format!("⚡ <100ms: {}", spectrum.ultra_fast)).small().strong().color(Color32::from_rgb(16, 185, 129)));
+                                        ui.label(RichText::new(format!("⚡ <100ms: {}", spectrum.ultra_fast)).small().strong().color(Color32::from_rgb(82, 121, 111)));
                                         ui.separator();
-                                        ui.label(RichText::new(format!("🟢 100-200ms: {}", spectrum.fast)).small().strong().color(Color32::from_rgb(52, 211, 153)));
+                                        ui.label(RichText::new(format!("● 100-200ms: {}", spectrum.fast)).small().strong().color(Color32::from_rgb(122, 154, 139)));
                                         ui.separator();
-                                        ui.label(RichText::new(format!("🟡 200-400ms: {}", spectrum.medium)).small().strong().color(Color32::from_rgb(245, 158, 11)));
+                                        ui.label(RichText::new(format!("● 200-400ms: {}", spectrum.medium)).small().strong().color(Color32::from_rgb(198, 138, 76)));
                                         ui.separator();
-                                        ui.label(RichText::new(format!("🔴 >400ms: {}", spectrum.slow)).small().strong().color(Color32::from_rgb(239, 68, 68)));
+                                        ui.label(RichText::new(format!("● >400ms: {}", spectrum.slow)).small().strong().color(Color32::from_rgb(158, 90, 84)));
                                     });
                                 });
                                 let used = ui.min_rect().height();
@@ -624,7 +630,7 @@ impl VpnApp {
                                 ui.set_width(right_w);
                                 ui.set_min_height(inner_h);
                                 ui.horizontal(|ui| {
-                                    crate::gui::widgets::render_protocol_donut_chart(ui, &s.protocol_stats, s.node_count);
+                                    crate::gui::widgets::render_protocol_donut_chart_sized(ui, &s.protocol_stats, s.node_count, 80.0);
                                     ui.add_space(12.0);
                                     ui.vertical(|ui| {
                                         ui.horizontal(|ui| {
@@ -646,10 +652,10 @@ impl VpnApp {
                                                 RichText::new(format!("可用: {} 个", s.alive_count))
                                                     .small()
                                                     .strong()
-                                                    .color(theme::success()),
+                                                    .color(Color32::from_rgb(82, 121, 111)),
                                             );
                                         });
-                                        ui.add_space(10.0);
+                                        ui.add_space(8.0);
 
                                         let mut all_stats: Vec<(String, i64, f64)> = s
                                             .protocol_stats
@@ -964,6 +970,8 @@ impl VpnApp {
     }
 
     pub(crate) fn ui_proxy_groups(&mut self, ui: &mut Ui) {
+        section_title(ui, self.tr("分流策略组"), "场景调度 · 延迟选优 · 故障转移 · 负载均衡");
+
         ui.horizontal(|ui| {
             if ui
                 .selectable_label(self.groups_tab == GroupsTab::View, "视图")
@@ -1012,8 +1020,8 @@ impl VpnApp {
                         // 4 路由拓扑晶体微卡片
                         let routes = [
                             ("🤖 AI 分组", "专线原生 IP", "ChatGPT · Claude · Grok", theme::accent()),
-                            ("🇺🇸 美国专线", "URL-Test 选优", "Google · YouTube · 选优", Color32::from_rgb(52, 199, 89)),
-                            ("⚡ 并发加速", "Load-Balance", "多路并发 · 迅雷 · 网盘下载", Color32::from_rgb(245, 158, 11)),
+                            ("🇺🇸 美国专线", "URL-Test 选优", "Google · YouTube · 选优", theme::accent_strong()),
+                            ("⚡ 并发加速", "Load-Balance", "多路并发 · 迅雷 · 网盘下载", theme::accent_strong()),
                             ("🇨🇳 国内直连", "DIRECT 放行", "微信 · 淘宝 · B站 (0消耗)", theme::text_secondary()),
                         ];
 
@@ -1167,7 +1175,7 @@ impl VpnApp {
                                                             RichText::new(format!("当前出口: {now}"))
                                                                 .small()
                                                                 .strong()
-                                                                .color(theme::success()),
+                                                                .color(theme::accent_strong()),
                                                         );
                                                     }
                                                 },
@@ -1443,6 +1451,8 @@ impl VpnApp {
     }
 
     pub(crate) fn ui_proxy_nodes(&mut self, ui: &mut Ui) {
+        section_title(ui, self.tr("可用节点"), "多节点状态 · 快速测速 · 节点切换");
+
         if self.selected_proxy_source_id.as_deref() != Some("all") {
             self.selected_proxy_source_id = Some("all".to_string());
             self.reload_proxy_nodes();
@@ -1829,7 +1839,7 @@ impl VpnApp {
                                             ui.close_menu();
                                         }
                                     } else {
-                                        ui.label(RichText::new("✓ 当前活动节点").small().color(theme::success()));
+                                        ui.label(RichText::new("✓ 当前活动节点").small().color(theme::accent_strong()));
                                     }
                                     ui.separator();
                                     if ui.button("ℹ️ 查看详情").clicked() {
@@ -1996,8 +2006,15 @@ impl VpnApp {
 
                 ui.add_space(8.0);
                 let add_btn = ui.add(
-                    egui::Button::new(RichText::new("➕ 添加映射").strong().color(Color32::WHITE))
-                        .fill(theme::primary_btn()),
+                    egui::Button::new(
+                        RichText::new("➕ 添加映射")
+                            .strong()
+                            .size(12.5)
+                            .color(theme::accent_strong()),
+                    )
+                    .fill(theme::accent_bg())
+                    .stroke(Stroke::new(1.0_f32, theme::accent().gamma_multiply(0.40)))
+                    .corner_radius(CornerRadius::same(8)),
                 );
                 if add_btn.clicked() {
                     match self.new_mapping_port.trim().parse::<u16>() {
@@ -2083,14 +2100,14 @@ impl VpnApp {
                     for (idx, mapping) in self.proxy_config.port_mappings.iter_mut().enumerate() {
                         ui.horizontal(|ui| {
                             // 启用/停用按钮
-                            let status_text = if mapping.enabled { "🟢 启用" } else { "⚪ 停用" };
+                            let status_text = if mapping.enabled { "● 启用" } else { "○ 停用" };
                             let btn_fill = if mapping.enabled {
-                                theme::success_bg()
+                                theme::accent_bg()
                             } else {
                                 theme::panel_hover()
                             };
                             let btn_color = if mapping.enabled {
-                                theme::success()
+                                theme::accent_strong()
                             } else {
                                 theme::muted()
                             };
@@ -2144,7 +2161,7 @@ impl VpnApp {
 
                             // 操作：删除
                             if ui
-                                .button(RichText::new("🗑️").color(theme::danger()))
+                                .button("🗑️")
                                 .on_hover_text("删除该端口映射")
                                 .clicked()
                             {
@@ -2171,20 +2188,27 @@ impl VpnApp {
     }
 
     pub(crate) fn ui_proxy_security(&mut self, ui: &mut Ui) {
+        section_title(ui, "安全隐私", "uTLS 指纹伪装 · WebRTC 防泄漏 · 隐私追踪拦截 · 端口跳跃");
+
         let mut changed = false;
 
         // 顶部总览卡片
         panel_frame().show(ui, |ui| {
             ui.horizontal(|ui| {
-                icon_label(ui, Icon::Shield, 18.0, theme::success());
-                ui.label(RichText::new("安全隐私与抗追踪防护中心").strong().size(15.0));
+                icon_label(ui, Icon::Shield, 18.0, theme::accent());
+                ui.label(RichText::new("抗追踪与身份安全防护中心").strong().size(15.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add(
                             egui::Button::new(
-                                RichText::new("🛡️ 一键开启最佳防护").strong().color(Color32::WHITE),
+                                RichText::new("⚡ 一键开启最佳防护")
+                                    .strong()
+                                    .size(12.5)
+                                    .color(theme::accent_strong()),
                             )
-                            .fill(theme::primary_btn()),
+                            .fill(theme::accent_bg())
+                            .stroke(Stroke::new(1.0_f32, theme::accent().gamma_multiply(0.40)))
+                            .corner_radius(CornerRadius::same(8)),
                         )
                         .on_hover_text("一键启用 Chrome 指纹伪装、WebRTC 防泄漏与隐私追踪广告过滤")
                         .clicked()
@@ -2281,9 +2305,9 @@ impl VpnApp {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let (btn_text, btn_fill, btn_color) = if self.proxy_config.block_webrtc {
-                            ("🟢 已启用防御", theme::success_bg(), theme::success())
+                            ("● 已启用防御", theme::accent_bg(), theme::accent_strong())
                         } else {
-                            ("⚪ 未启用", theme::panel_hover(), theme::muted())
+                            ("○ 未启用", theme::panel_hover(), theme::muted())
                         };
                         if ui
                             .add(
@@ -2315,7 +2339,7 @@ impl VpnApp {
             // -------------------------------------------------------------
             panel_frame().show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    icon_label(ui, Icon::Alert, 16.0, theme::danger());
+                    icon_label(ui, Icon::Alert, 16.0, theme::accent());
                     ui.label(
                         RichText::new("隐私与行为追踪广告过滤 (Tracker & Telemetry Blocking)")
                             .strong()
@@ -2323,9 +2347,9 @@ impl VpnApp {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let (btn_text, btn_fill, btn_color) = if self.proxy_config.block_trackers {
-                            ("🟢 已启用拦截", theme::success_bg(), theme::success())
+                            ("● 已启用拦截", theme::accent_bg(), theme::accent_strong())
                         } else {
-                            ("⚪ 未启用", theme::panel_hover(), theme::muted())
+                            ("○ 未启用", theme::panel_hover(), theme::muted())
                         };
                         if ui
                             .add(
@@ -2365,9 +2389,9 @@ impl VpnApp {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let (btn_text, btn_fill, btn_color) = if self.proxy_config.udp_port_hopping {
-                            ("🟢 已启用", theme::success_bg(), theme::success())
+                            ("● 已启用", theme::accent_bg(), theme::accent_strong())
                         } else {
-                            ("⚪ 未启用", theme::panel_hover(), theme::muted())
+                            ("○ 未启用", theme::panel_hover(), theme::muted())
                         };
                         if ui
                             .add(
@@ -2474,10 +2498,11 @@ impl VpnApp {
                             count += 1;
 
                             ui.horizontal(|ui| {
-                                let (flag, _) = country_flag_and_name(
+                                render_country_code_badge(
+                                    ui,
                                     node.country.as_deref().unwrap_or(""),
                                 );
-                                ui.label(RichText::new(flag).size(14.0));
+                                ui.add_space(2.0);
                                 protocol_pill(ui, &node.protocol.to_uppercase());
 
                                 let clean_name = sanitize_node_name(&node.name);
@@ -2822,7 +2847,7 @@ impl VpnApp {
 
                                 let segments = [
                                     ("代理分流 (Proxy)", proxy_conns as f32, theme::accent()),
-                                    ("国内直连 (Direct)", direct_conns as f32, theme::success()),
+                                    ("国内直连 (Direct)", direct_conns as f32, theme::border()),
                                 ];
                                 crate::gui::widgets::render_distribution_bar(ui, &segments, total_conns, 8.0);
                                 ui.add_space(4.0);
@@ -2845,7 +2870,7 @@ impl VpnApp {
                                             format_bytes(direct_bytes)
                                         ))
                                         .small()
-                                        .color(theme::success()),
+                                        .color(theme::text_secondary()),
                                     );
                                 });
                             });
@@ -2905,7 +2930,7 @@ impl VpnApp {
                                             let net_upper = c.network.to_uppercase();
                                             let (net_fill, net_color) = match net_upper.as_str() {
                                                 "TCP" => (theme::accent_bg(), theme::accent_strong()),
-                                                "UDP" => (Color32::from_rgba_unmultiplied(245, 158, 11, 35), Color32::from_rgb(245, 158, 11)),
+                                                "UDP" => (theme::panel_hover(), theme::text_secondary()),
                                                 _ => (theme::sidebar(), theme::muted()),
                                             };
                                             Frame::NONE
@@ -2940,7 +2965,7 @@ impl VpnApp {
                                             // 4. 分流规则微标
                                             let is_direct = c.target.eq_ignore_ascii_case("direct") || c.rule.contains("DIRECT");
                                             let (rule_fill, rule_color) = if is_direct {
-                                                (theme::success_bg(), theme::success())
+                                                (theme::panel_hover(), theme::text_secondary())
                                             } else {
                                                 (theme::accent_bg(), theme::accent_strong())
                                             };
@@ -2956,7 +2981,7 @@ impl VpnApp {
                                             ui.label(
                                                 RichText::new(format!("↑ {}", format_bytes(c.upload)))
                                                     .small()
-                                                    .color(theme::success()),
+                                                    .color(theme::text_secondary()),
                                             );
 
                                             // 6. 下载
@@ -3088,12 +3113,12 @@ impl VpnApp {
                                                     ui.label(RichText::new(format!("代理:{prx_count}")).small().color(theme::accent_strong()));
                                                 }
                                                 if dir_count > 0 {
-                                                    ui.label(RichText::new(format!("直连:{dir_count}")).small().color(theme::success()));
+                                                    ui.label(RichText::new(format!("直连:{dir_count}")).small().color(theme::text_secondary()));
                                                 }
                                             });
 
                                             // 4. 上行
-                                            ui.label(RichText::new(format!("↑ {}", format_bytes(upload))).small().color(theme::success()));
+                                            ui.label(RichText::new(format!("↑ {}", format_bytes(upload))).small().color(theme::text_secondary()));
 
                                             // 5. 下行
                                             ui.label(RichText::new(format!("↓ {}", format_bytes(download))).small().strong().color(theme::accent_strong()));
@@ -3151,7 +3176,7 @@ impl VpnApp {
                             icon_label(ui, Icon::Globe, 14.0, theme::accent());
                             ui.label(RichText::new("DNS 架构状态:").strong().color(theme::text_primary()));
                             let (mode_str, mode_color) = match self.proxy_config.dns.enhanced_mode {
-                                DnsEnhancedMode::FakeIp => ("Fake-IP (秒级并发映射)", theme::success()),
+                                DnsEnhancedMode::FakeIp => ("Fake-IP (秒级并发映射)", theme::accent_strong()),
                                 DnsEnhancedMode::RedirHost => ("Redir-Host (真实解析直通)", theme::accent()),
                             };
                             ui.label(RichText::new(mode_str).strong().color(mode_color));
@@ -3233,7 +3258,7 @@ impl VpnApp {
 
                                             // 5. 协议
                                             let (net_fill, net_color) = if r.network == "UDP" {
-                                                (Color32::from_rgba_unmultiplied(245, 158, 11, 35), Color32::from_rgb(245, 158, 11))
+                                                (theme::panel_hover(), theme::text_secondary())
                                             } else {
                                                 (theme::accent_bg(), theme::accent_strong())
                                             };
@@ -3248,7 +3273,7 @@ impl VpnApp {
                                             // 6. 分流动作
                                             let is_direct = r.target.eq_ignore_ascii_case("direct") || r.rule.contains("DIRECT");
                                             let (rule_fill, rule_color) = if is_direct {
-                                                (theme::success_bg(), theme::success())
+                                                (theme::panel_hover(), theme::text_secondary())
                                             } else {
                                                 (theme::accent_bg(), theme::accent_strong())
                                             };
@@ -3303,6 +3328,8 @@ impl VpnApp {
     /// 分流规则面板：拆成「规则配置」和「命中记录」两个分区。
     /// 导入/导出挂在配置那一侧 —— 它们动的是规则表本身。
     pub(crate) fn ui_proxy_rules(&mut self, ui: &mut Ui) {
+        section_title(ui, self.tr("分流规则"), "域名匹配 · IP 分流 · 端口过滤 · 规则集与命中统计");
+
         // 两个闭包都要动 self，所以 tab 状态先取副本、动作先记成枚举，出框后再落地。
         let mut tab = self.rules_tab;
         // 动作组按"这一帧进来时"的分区决定画不画；`tab` 被左闭包可变借用，这里另存一份。
@@ -3449,9 +3476,9 @@ impl VpnApp {
                 }
             }
             let segments = [
-                ("国内直连 (DIRECT)", direct_hits, theme::success()),
+                ("国内直连 (DIRECT)", direct_hits, theme::border()),
                 ("出海代理 (PROXY)", proxy_hits, theme::accent()),
-                ("智能策略分流", other_hits, Color32::from_rgb(245, 158, 11)),
+                ("智能策略分流", other_hits, theme::accent_strong()),
             ];
             crate::gui::widgets::render_distribution_bar(ui, &segments, total as f32, 7.0);
             ui.add_space(6.0);
@@ -3667,7 +3694,7 @@ impl VpnApp {
                             .add(icons::button_with_icon(
                                 Icon::Plus,
                                 "国内开发镜像直连 (npm / 清华源 / 阿里源)",
-                                theme::success(),
+                                theme::accent_strong(),
                             ))
                             .on_hover_text("国内常见开源包与镜像站直连加速")
                             .clicked()
@@ -3685,7 +3712,7 @@ impl VpnApp {
                             .add(icons::button_with_icon(
                                 Icon::Plus,
                                 "游戏平台直连 (Steam / Epic)",
-                                theme::success(),
+                                theme::accent_strong(),
                             ))
                             .on_hover_text("Steam 下载 CDN 与游戏商店直连")
                             .clicked()
@@ -3703,7 +3730,7 @@ impl VpnApp {
                             .add(icons::button_with_icon(
                                 Icon::Shield,
                                 "广告与 QUIC 拦截",
-                                theme::danger(),
+                                theme::accent(),
                             ))
                             .on_hover_text("拦截常见广告并阻止 QUIC 降速")
                             .clicked()
@@ -4524,8 +4551,8 @@ impl VpnApp {
                                 ui.horizontal(|ui| {
                                     let (chip_icon, chip_color) = match kernel.kind {
                                         KernelKind::Mihomo => (Icon::Cpu, theme::accent()),
-                                        KernelKind::SingBox => (Icon::Lightning, Color32::from_rgb(52, 211, 153)),
-                                        KernelKind::Xray => (Icon::Radar, Color32::from_rgb(245, 158, 11)),
+                                        KernelKind::SingBox => (Icon::Lightning, theme::accent_strong()),
+                                        KernelKind::Xray => (Icon::Radar, theme::text_secondary()),
                                     };
                                     icon_label(ui, chip_icon, 15.0, chip_color);
                                     ui.add(
@@ -4541,8 +4568,8 @@ impl VpnApp {
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                         if is_running {
                                             let (beacon, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-                                            ui.painter().circle_filled(beacon.center(), 4.0, theme::success());
-                                            ui.label(RichText::new("运行中").small().strong().color(theme::success()));
+                                            ui.painter().circle_filled(beacon.center(), 4.0, theme::accent());
+                                            ui.label(RichText::new("运行中").small().strong().color(theme::accent_strong()));
                                         } else if kernel.available {
                                             ui.label(RichText::new("● 就绪").small().color(theme::accent_strong()));
                                         } else {
@@ -4809,7 +4836,7 @@ impl VpnApp {
                     return;
                 };
 
-                let color = if risk.datacenter { theme::warning() } else { theme::success() };
+                let color = if risk.datacenter { theme::warning() } else { theme::accent_strong() };
                 ui.label(
                     RichText::new("入口（节点服务器 IP）")
                         .small()
@@ -4819,7 +4846,7 @@ impl VpnApp {
                     .fill(if risk.datacenter {
                         theme::warning_bg()
                     } else {
-                        theme::success_bg()
+                        theme::accent_bg()
                     })
                     .stroke(Stroke::new(1.0_f32, color))
                     .corner_radius(CornerRadius::same(6))
@@ -4913,12 +4940,12 @@ impl VpnApp {
                         );
                     });
                 } else if let Some(egress) = egress {
-                    let color = if egress.datacenter { theme::warning() } else { theme::success() };
+                    let color = if egress.datacenter { theme::warning() } else { theme::accent_strong() };
                     Frame::NONE
                         .fill(if egress.datacenter {
                             theme::warning_bg()
                         } else {
-                            theme::success_bg()
+                            theme::accent_bg()
                         })
                         .stroke(Stroke::new(1.0_f32, color))
                         .corner_radius(CornerRadius::same(6))
@@ -5361,7 +5388,7 @@ fn ui_rule_import_help_body(ui: &mut Ui, scroll_height: f32) -> RuleHelpMsg {
                             let (badge, color) = if example.expected_rules > 0 {
                                 (
                                     format!("可导入 {} 条", example.expected_rules),
-                                    theme::success(),
+                                    theme::accent_strong(),
                                 )
                             } else {
                                 (

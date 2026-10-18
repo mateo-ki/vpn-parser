@@ -1,20 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
   <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#181a20"/>
-      <stop offset="100%" stop-color="#0e1014"/>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#262830"/>
+      <stop offset="100%" stop-color="#18191E"/>
+    </linearGradient>
+    <linearGradient id="goldV" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F5E4B2"/>
+      <stop offset="100%" stop-color="#C5A059"/>
     </linearGradient>
   </defs>
 
-  <!-- Deep Obsidian Squircle Base - Maximized to edges for bold taskbar/tray presence -->
-  <rect x="2" y="2" width="252" height="252" rx="56" fill="url(#bgGrad)"/>
-  <rect x="2" y="2" width="252" height="252" rx="56" fill="none" stroke="#2e323d" stroke-width="2"/>
+  <!-- Squircle Base with Champagne Gold Glow Border -->
+  <rect x="4" y="4" width="248" height="248" rx="58" fill="url(#bgGrad)"/>
+  <rect x="4" y="4" width="248" height="248" rx="58" fill="none" stroke="rgba(212,175,55,0.35)" stroke-width="2.5"/>
 
-  <!-- Minimalist Precision White "V" Lettermark -->
-  <path d="M 52,66 L 128,198 L 204,66 L 168,66 L 128,138 L 88,66 Z"
-        fill="#ffffff"
-        stroke="#ffffff"
-        stroke-width="5"
+  <!-- Champagne Gold Liquid Metal V Lettermark -->
+  <path d="M 64,74 L 128,188 L 192,74 L 162,74 L 128,136 L 94,74 Z"
+        fill="url(#goldV)"
+        stroke="url(#goldV)"
+        stroke-width="3.5"
         stroke-linejoin="round"
         stroke-linecap="round"/>
 </svg>

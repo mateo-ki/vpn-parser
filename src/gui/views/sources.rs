@@ -4,7 +4,7 @@ use crate::gui::types::{SourceStatusFilter, SourcesPanel};
 use crate::gui::view_models::nodes_vm::{NodeCardAction, NodesViewModel};
 use crate::gui::widgets::{
     card_frame, header_cell, primary_btn, render_fetch_ticks, render_mini_progress_bar,
-    render_radial_metric, source_status_failed, status_badge,
+    render_radial_metric, section_title, source_status_failed, status_badge,
 };
 use crate::gui::VpnApp;
 use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
@@ -13,6 +13,8 @@ impl VpnApp {
     pub(crate) fn ui_sources(&mut self, ui: &mut Ui) {
         self.ui_clear_sources_confirm(ui.ctx());
         self.ui_gist_config_modal(ui.ctx());
+
+        section_title(ui, self.tr("订阅源"), "多源汇聚 · 自动拉取 · 节点解析");
 
         ui.horizontal(|ui| {
             if ui
@@ -32,13 +34,13 @@ impl VpnApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.settings.auto_fetch_enabled {
                     ui.horizontal(|ui| {
-                        icon_label(ui, Icon::Sync, 12.0, theme::success());
+                        icon_label(ui, Icon::Sync, 12.0, theme::accent_strong());
                         ui.label(
                             RichText::new(format!(
                                 "自动拉取 每 {} 分钟",
                                 self.settings.auto_fetch_interval_min
                             ))
-                            .color(theme::success())
+                            .color(theme::accent_strong())
                             .small(),
                         );
                     });
@@ -73,7 +75,7 @@ impl VpnApp {
                         } else {
                             0.0
                         };
-                        render_radial_metric(ui, "节点可用率", yield_ratio, theme::success());
+                        render_radial_metric(ui, "节点可用率", yield_ratio, theme::accent_strong());
                         ui.add_space(14.0);
 
                         ui.vertical(|ui| {
@@ -92,7 +94,7 @@ impl VpnApp {
                             });
                             ui.add_space(2.0);
                             ui.horizontal(|ui| {
-                                icon_label(ui, Icon::Radar, 13.0, theme::success());
+                                icon_label(ui, Icon::Radar, 13.0, theme::accent_strong());
                                 ui.label(
                                     RichText::new(format!(
                                         "累计解析节点: {} 个 · 实测可用: {} 个",
@@ -298,7 +300,7 @@ impl VpnApp {
                                     .wrap(),
                                 );
                                 let badge = if s.enabled { "启用" } else { "停用" };
-                                let color = if s.enabled { theme::success() } else { theme::danger() };
+                                let color = if s.enabled { theme::accent_strong() } else { theme::muted() };
                                 ui.vertical(|ui| {
                                     ui.label(RichText::new(badge).color(color));
                                     if s.push_disabled {
@@ -318,7 +320,7 @@ impl VpnApp {
                                                 s.fail_streak
                                             ))
                                             .small()
-                                            .color(theme::danger()),
+                                            .color(theme::warning()),
                                         );
                                     }
                                     if let Some(reports) = &self.homogeneity_reports {
@@ -326,11 +328,11 @@ impl VpnApp {
                                             if rep.total_nodes == 0 {
                                                 // 空源不能写"同质化 0%"：重合率是 0 恰恰因为它
                                                 // 什么都没贡献，剔除理由是"空"不是"重"。
-                                                status_badge(ui, "⚠️ 空源 · 建议剔除", theme::danger());
+                                                status_badge(ui, "⚠️ 空源 · 建议剔除", theme::warning());
                                             } else if rep.is_redundant {
-                                                status_badge(ui, &format!("⚠️ 同质化 {:.0}%", rep.overlap_rate_pct), theme::danger());
+                                                status_badge(ui, &format!("⚠️ 同质化 {:.0}%", rep.overlap_rate_pct), theme::warning());
                                             } else if rep.unique_alive_nodes > 0 {
-                                                status_badge(ui, &format!("独有可用 {}", rep.unique_alive_nodes), theme::success());
+                                                status_badge(ui, &format!("独有可用 {}", rep.unique_alive_nodes), theme::accent_strong());
                                             }
                                         }
                                     }
@@ -443,7 +445,7 @@ impl VpnApp {
                                         self.toggle_source_push(s.id.clone(), !s.push_disabled);
                                     }
 
-                                    if ui.button(RichText::new("删除").color(theme::danger())).clicked() {
+                                    if ui.button("删除").clicked() {
                                         self.delete_source(s.id.clone());
                                     }
                                 });
@@ -481,9 +483,9 @@ impl VpnApp {
                                 ui.label(
                                     RichText::new(if result.success { "成功" } else { "失败" })
                                         .color(if result.success {
-                                            theme::success()
+                                            theme::accent_strong()
                                         } else {
-                                            theme::danger()
+                                            theme::muted()
                                         }),
                                 );
                                 ui.label(result.node_count.to_string());
@@ -532,14 +534,14 @@ impl VpnApp {
             crate::gui::widgets::note_text_field(ui, &url_field);
             // 认出来就当场说明这一类源的规矩，别等拉取失败才发现要挂代理。
             if let Some(channel) = crate::collector::telegram::channel_name(&self.form_url) {
-                ui.label(
-                    RichText::new(format!(
-                        "Telegram 频道 · @{channel} —— 读公开网页预览；节点只增不删，\
-                         旧节点交给测速淘汰。t.me 直连不通，拉取时得挂着代理。"
-                    ))
-                    .small()
-                    .color(theme::success()),
-                );
+                    ui.label(
+                        RichText::new(format!(
+                            "Telegram 频道 · @{channel} —— 读公开网页预览；节点只增不删，\
+                             旧节点交给测速淘汰。t.me 直连不通，拉取时得挂着代理。"
+                        ))
+                        .small()
+                        .color(theme::accent_strong()),
+                    );
             }
             ui.checkbox(&mut self.form_enabled, "启用");
             ui.horizontal(|ui| {
@@ -655,23 +657,23 @@ impl VpnApp {
                                     ui.label(r.total_nodes.to_string());
                                     ui.label(
                                         RichText::new(r.alive_nodes.to_string())
-                                            .color(if r.alive_nodes > 0 { theme::success() } else { theme::muted() }),
+                                            .color(if r.alive_nodes > 0 { theme::accent_strong() } else { theme::muted() }),
                                     );
                                     ui.label(
                                         RichText::new(format!("{:.1}%", r.overlap_rate_pct))
-                                            .color(if r.overlap_rate_pct >= 90.0 { theme::danger() } else { theme::muted() }),
+                                            .color(if r.overlap_rate_pct >= 90.0 { theme::warning() } else { theme::muted() }),
                                     );
                                     ui.label(
                                         RichText::new(r.unique_alive_nodes.to_string())
                                             .strong()
-                                            .color(if r.unique_alive_nodes > 0 { theme::success() } else { theme::danger() }),
+                                            .color(if r.unique_alive_nodes > 0 { theme::accent_strong() } else { theme::muted() }),
                                     );
 
                                     let verdict_color = match r.verdict() {
                                         crate::models::HomogeneityVerdict::Redundant => {
-                                            theme::danger()
+                                            theme::warning()
                                         }
-                                        crate::models::HomogeneityVerdict::Core => theme::success(),
+                                        crate::models::HomogeneityVerdict::Core => theme::accent_strong(),
                                     };
                                     status_badge(ui, r.verdict_label(), verdict_color);
                                     ui.end_row();
@@ -980,13 +982,13 @@ impl VpnApp {
 
                     let is_alive = self.source_modal_only_alive;
                     let (color_alive, stroke_alive) = if is_alive {
-                        (theme::success_bg(), Stroke::new(1.0_f32, theme::success()))
+                        (theme::accent_bg(), Stroke::new(1.0_f32, theme::accent()))
                     } else {
                         (theme::sidebar(), Stroke::new(1.0_f32, theme::border_subtle()))
                     };
                     if ui
                         .add(
-                            egui::Button::new(RichText::new("🟢 仅看可用").small().strong())
+                            egui::Button::new(RichText::new("● 仅看可用").small().strong())
                                 .fill(color_alive)
                                 .stroke(stroke_alive)
                                 .corner_radius(CornerRadius::same(10)),

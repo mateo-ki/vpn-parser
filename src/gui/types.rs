@@ -470,6 +470,7 @@ pub struct SettingsEditState {
     pub bandwidth_guard: bool,
     pub bandwidth_min_kbps: u32,
     pub ui_theme: String,
+    pub app_icon_style: String,
     pub ui_language: String,
     pub ui_scale: f32,
     pub ui_dark: bool,
@@ -509,6 +510,7 @@ impl SettingsEditState {
             bandwidth_guard: s.bandwidth_guard,
             bandwidth_min_kbps: s.bandwidth_min_kbps,
             ui_theme: s.ui_theme.clone(),
+            app_icon_style: s.app_icon_style.clone(),
             ui_language: s.ui_language.clone(),
             ui_scale: s.ui_scale,
             ui_dark: s.ui_dark,
@@ -550,6 +552,7 @@ impl SettingsEditState {
             // save_settings 才看起来正常）。它们能放进来靠的是 `settings_seeded` —— 第一次
             // 加载设置会无条件把库里的值灌进编辑态，否则启动时一比就脏，同步永远不发生。
             || self.ui_theme != s.ui_theme
+            || self.app_icon_style != s.app_icon_style
             || self.ui_language != s.ui_language
             || (self.ui_scale - s.ui_scale).abs() > 0.001
             || self.ui_dark != s.ui_dark

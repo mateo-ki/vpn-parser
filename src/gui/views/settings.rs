@@ -2,7 +2,7 @@ use crate::gui::icons::{self, icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::types::{BgMsg, SettingsTab};
 use crate::gui::widgets::{
-    card_frame, normalize_api_base, panel_tab, primary_btn, status_badge,
+    card_frame, normalize_api_base, panel_tab, primary_btn, section_title, status_badge,
 };
 
 /// 系统设置表头右侧动作组（保存设置 + 重置修改 + 状态）预留宽度。
@@ -13,6 +13,8 @@ use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Sense, Stroke, U
 
 impl VpnApp {
     pub(crate) fn ui_settings(&mut self, ui: &mut Ui) {
+        section_title(ui, self.tr("系统设置"), "应用行为 · 定时拉取 · 测速参数 · 网络与自愈服务");
+
         let mut tab = self.settings_tab;
         let mut save_clicked = false;
         let mut reset_clicked = false;
@@ -92,7 +94,7 @@ impl VpnApp {
                             .small(),
                     );
                 } else {
-                    ui.label(RichText::new(format!("✓ {}", tr_synced)).color(theme::success()).small());
+                    ui.label(RichText::new(format!("✓ {}", tr_synced)).color(theme::accent_strong()).small());
                 }
             },
         );
@@ -241,6 +243,93 @@ impl VpnApp {
             });
 
             ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.label(RichText::new("应用图标风格").strong());
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                let icon_options = [
+                    ("classic", "经典黑曜石 (原版)", egui::Color32::from_rgb(30, 32, 40)),
+                    ("champagne", "流光香槟金 (推荐)", egui::Color32::from_rgb(212, 175, 55)),
+                ];
+                for (style_id, style_name, dot_color) in icon_options {
+                    let selected = self.edit_app_icon_style == style_id;
+                    let padding = egui::vec2(10.0, 5.0);
+                    let font = egui::FontId::proportional(12.5);
+                    let galley = ui.painter().layout_no_wrap(
+                        style_name.to_string(),
+                        font,
+                        if selected {
+                            theme::accent_strong()
+                        } else {
+                            theme::text_primary()
+                        },
+                    );
+                    let dot_size = 9.0;
+                    let gap = 6.0;
+                    let desired_size = egui::vec2(
+                        galley.size().x + dot_size + gap + padding.x * 2.0,
+                        galley.size().y.max(dot_size) + padding.y * 2.0,
+                    );
+                    let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click());
+                    if ui.is_rect_visible(rect) {
+                        let painter = ui.painter();
+                        let bg = if selected {
+                            theme::accent_bg()
+                        } else if response.hovered() {
+                            theme::panel_hover()
+                        } else {
+                            theme::panel()
+                        };
+                        let stroke = if selected {
+                            egui::Stroke::new(1.2_f32, dot_color)
+                        } else {
+                            egui::Stroke::new(1.0_f32, theme::border_subtle())
+                        };
+                        painter.rect(
+                            rect,
+                            egui::CornerRadius::same(7),
+                            bg,
+                            stroke,
+                            egui::StrokeKind::Inside,
+                        );
+
+                        let dot_center =
+                            egui::pos2(rect.min.x + padding.x + dot_size / 2.0, rect.center().y);
+                        painter.circle_filled(dot_center, dot_size / 2.0, dot_color);
+                        if selected {
+                            painter.circle_stroke(
+                                dot_center,
+                                dot_size / 2.0 + 2.0,
+                                egui::Stroke::new(1.0_f32, dot_color),
+                            );
+                        }
+
+                        let text_pos = egui::pos2(
+                            dot_center.x + dot_size / 2.0 + gap,
+                            rect.center().y - galley.size().y / 2.0,
+                        );
+                        painter.galley(
+                            text_pos,
+                            galley,
+                            if selected {
+                                theme::accent_strong()
+                            } else {
+                                theme::text_primary()
+                            },
+                        );
+                    }
+                    if response.clicked() {
+                        self.edit_app_icon_style = style_id.to_string();
+                        self.settings.app_icon_style = style_id.to_string();
+                        self.logo_texture = None;
+                        auto_save = true;
+                    }
+                }
+            });
+
+            ui.add_space(10.0);
             // 夜间：只换中性色，强调色仍然是上面那 5 支里选的一支（两条轴正交）。
             let mut dark = self.edit_ui_dark;
             if ui
@@ -327,7 +416,7 @@ impl VpnApp {
                 icon_label(ui, Icon::Gear, 16.0, theme::accent());
                 ui.label(RichText::new("桌面窗口与运行模式").strong().size(15.0));
                 let tray_badge = if self.edit_close_to_tray {
-                    ("托盘常驻", theme::success())
+                    ("托盘常驻", theme::accent_strong())
                 } else {
                     ("直接退出", theme::muted())
                 };
@@ -405,7 +494,7 @@ impl VpnApp {
                 ui.label(RichText::new("系统资源与防火墙放行").strong().size(15.0));
                 let elevated = crate::platform::is_elevated();
                 let perm_badge = if elevated {
-                    ("管理员权限", theme::success())
+                    ("管理员权限", theme::accent_strong())
                 } else {
                     ("标准用户权限", theme::muted())
                 };
@@ -440,7 +529,7 @@ impl VpnApp {
                     self.trim_memory();
                 }
                 if let Some(status) = &self.memory_trimmed_status {
-                    ui.label(RichText::new(status).small().color(theme::success()));
+                    ui.label(RichText::new(status).small().color(theme::accent_strong()));
                 }
             });
 
@@ -509,7 +598,7 @@ impl VpnApp {
                 icon_label(ui, Icon::Subscription, 16.0, theme::accent());
                 ui.label(RichText::new("订阅源定时同步").strong().size(15.0));
                 let (badge_text, badge_color) = if self.edit_auto_fetch {
-                    ("自动同步已开启", theme::success())
+                    ("自动同步已开启", theme::accent_strong())
                 } else {
                     ("已关闭", theme::muted())
                 };
@@ -620,7 +709,7 @@ impl VpnApp {
                 icon_label(ui, Icon::Lightning, 16.0, theme::accent());
                 ui.label(RichText::new("节点测速与质量检验").strong().size(15.0));
                 let (badge_text, badge_color) = if self.edit_auto_speed {
-                    ("拉取联动测速开启", theme::success())
+                    ("拉取联动测速开启", theme::accent_strong())
                 } else {
                     ("手动测速模式", theme::muted())
                 };
@@ -822,7 +911,7 @@ impl VpnApp {
                 icon_label(ui, Icon::Shield, 16.0, theme::accent());
                 ui.label(RichText::new("节点故障自愈与代理守护").strong().size(15.0));
                 let (badge_text, badge_color) = if self.auto_failover {
-                    ("自动切换已开启", theme::success())
+                    ("自动切换已开启", theme::accent_strong())
                 } else {
                     ("自动切换已关闭", theme::muted())
                 };
@@ -967,7 +1056,7 @@ impl VpnApp {
                 ui.label(RichText::new("分流规则与外部服务接口").strong().size(15.0));
                 let is_running = self.api_controller.is_running();
                 let (badge_text, badge_color) = if is_running {
-                    ("HTTP 服务运行中", theme::success())
+                    ("HTTP 服务运行中", theme::accent_strong())
                 } else {
                     ("HTTP 服务已停止", theme::muted())
                 };
@@ -1069,7 +1158,7 @@ impl VpnApp {
         let is_running = self.api_controller.is_running();
         ui.horizontal(|ui| {
             if is_running {
-                status_badge(ui, "服务运行中", theme::success());
+                status_badge(ui, "服务运行中", theme::accent_strong());
                 ui.label(format!("本地监听地址: http://{}", self.api_addr));
                 if let Some(token) = self.api_controller.token() {
                     ui.horizontal(|ui| {

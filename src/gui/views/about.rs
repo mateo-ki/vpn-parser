@@ -2,7 +2,7 @@ use crate::app_update::{self, AppUpdateProgress, AppUpdateStage};
 use crate::gui::icons::Icon;
 use crate::gui::theme;
 use crate::gui::types::BgMsg;
-use crate::gui::widgets::{card_frame, icon_tile, pill, primary_btn};
+use crate::gui::widgets::{card_frame, icon_tile, pill, primary_btn, section_title};
 use crate::gui::VpnApp;
 use eframe::egui::{self, CornerRadius, ProgressBar, RichText, Stroke, Ui, Vec2};
 
@@ -13,24 +13,7 @@ const TAGLINE: &str = "采集订阅 · 解析节点 · 本地跑代理 · 把代
 
 impl VpnApp {
     pub(crate) fn ui_about(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("关于")
-                    .strong()
-                    .size(17.0)
-                    .color(theme::text_primary()),
-            );
-            ui.add_space(4.0);
-            ui.add(
-                egui::Label::new(
-                    RichText::new("本机版本 · 在线更新")
-                        .size(11.5)
-                        .color(theme::muted()),
-                )
-                .truncate(),
-            );
-        });
-        ui.add_space(8.0);
+        section_title(ui, self.tr("关于"), "本机版本 · 在线更新");
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -41,12 +24,17 @@ impl VpnApp {
             });
     }
 
-    fn ui_about_identity(&self, ui: &mut Ui) {
+    fn ui_about_identity(&mut self, ui: &mut Ui) {
         card_frame().show(ui, |ui| {
             let mut open_repo = false;
             ui.horizontal(|ui| {
-                icon_tile(ui, Icon::Brand, theme::accent(), theme::accent_bg());
-                ui.add_space(4.0);
+                let texture = self.ensure_logo_texture(ui.ctx());
+                ui.add(
+                    egui::Image::new(&texture)
+                        .fit_to_exact_size(Vec2::splat(44.0))
+                        .corner_radius(CornerRadius::same(9)),
+                );
+                ui.add_space(6.0);
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
                         ui.label(
@@ -102,8 +90,8 @@ impl VpnApp {
                 ),
                 Some(info) => (
                     format!("已是最新 · v{}", info.current_version),
-                    theme::success(),
-                    theme::success(),
+                    theme::accent_strong(),
+                    theme::accent(),
                 ),
                 None if self.app_update_busy => (
                     "正在检查更新…".to_string(),

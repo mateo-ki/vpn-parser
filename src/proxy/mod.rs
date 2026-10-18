@@ -30,6 +30,7 @@ pub use config::*;
 
 const STARTUP_PROXY_TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_PROXY_VERIFY_TIMEOUT: Duration = Duration::from_millis(1_500);
+#[allow(dead_code)]
 const STARTUP_SYSTEM_PROXY_RESERVE: Duration = Duration::from_millis(250);
 const STARTUP_PORT_CONNECT_TIMEOUT: Duration = Duration::from_millis(60);
 const VERIFY_CONNECTIVITY_ON_START: bool = true;
@@ -84,6 +85,14 @@ pub const SMART_ROUTING_PREPEND_RULES: &[&str] = &[
     // 国内直连
     "DOMAIN-SUFFIX,bing.com,DIRECT",
     "DOMAIN-SUFFIX,feishu.cn,DIRECT",
+    // 系统连通性探测直连（防 Windows NCSI 挂起）与 OCSP/CRL 证书吊销检查直连
+    "DOMAIN-SUFFIX,msftconnecttest.com,DIRECT",
+    "DOMAIN-SUFFIX,msftncsi.com,DIRECT",
+    "DOMAIN-SUFFIX,digicert.com,DIRECT",
+    "DOMAIN-SUFFIX,sectigo.com,DIRECT",
+    "DOMAIN-SUFFIX,globalsign.com,DIRECT",
+    "DOMAIN-SUFFIX,letsencrypt.org,DIRECT",
+    "DOMAIN-SUFFIX,lencr.org,DIRECT",
     "PROCESS-NAME,steam.exe,DIRECT",
     "PROCESS-NAME,BaiduNetdisk.exe,DIRECT",
     "PROCESS-NAME,QQ.exe,DIRECT",
@@ -764,7 +773,6 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
         privacy_rules.push("DST-PORT,3478,REJECT".into());
         privacy_rules.push("DST-PORT,5349,REJECT".into());
         privacy_rules.push("DOMAIN-KEYWORD,stun,REJECT".into());
-        privacy_rules.push("DOMAIN-KEYWORD,turn,REJECT".into());
     }
     if options.block_trackers {
         privacy_rules.push("GEOSITE,category-ads-all,REJECT".into());
@@ -799,6 +807,12 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
                 "8.8.8.8"
             ],
             "nameserver": options.dns.nameservers,
+            "nameserver-policy": {
+                "geosite:cn": [
+                    "223.5.5.5",
+                    "119.29.29.29"
+                ]
+            },
             "fake-ip-filter": [
                 "*.lan",
                 "*.local",
@@ -1504,109 +1518,6 @@ impl ProxyManager {
             "代理启动阶段完成"
         );
 
-        if VERIFY_CONNECTIVITY_ON_START {
-            let remaining = startup_deadline.saturating_duration_since(tokio::time::Instant::now());
-            let system_proxy_reserve = if runtime.options.mode == ProxyMode::System
-                && preserved_system_proxy_snapshot.is_none()
-            {
-                STARTUP_SYSTEM_PROXY_RESERVE
-            } else {
-                Duration::ZERO
-            };
-            let verify_timeout = remaining
-                .saturating_sub(system_proxy_reserve)
-                .min(STARTUP_PROXY_VERIFY_TIMEOUT);
-            if verify_timeout.is_zero() {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-                let _ = work_dir.cleanup().await;
-                let message = format!(
-                    "{} 启动超过 {} 秒，节点验证未执行",
-                    kernel.display_name(),
-                    STARTUP_PROXY_TOTAL_TIMEOUT.as_secs()
-                );
-                mark_failed(&mut runtime, message.clone());
-                return Err(anyhow!(message));
-            }
-            if let Err(error) = verify_local_proxy(runtime.options.mixed_port, verify_timeout).await
-            {
-                let detail = tokio::fs::read_to_string(work_dir.log_path())
-                    .await
-                    .unwrap_or_default();
-                let diagnostic = format_kernel_diagnostic(&detail);
-                if diagnostic.contains("规则加载中")
-                    || diagnostic.contains("自动建立连接")
-                    || diagnostic.contains("start initial configuration")
-                {
-                    if runtime.options.mode == ProxyMode::System && self.system_proxy.supported() {
-                        if let Some(snapshot) = preserved_system_proxy_snapshot.take() {
-                            runtime.system_proxy_snapshot = Some(snapshot);
-                        } else if runtime.system_proxy_snapshot.is_none() {
-                            let server = format!("127.0.0.1:{}", runtime.options.mixed_port);
-                            let terminal_port = runtime
-                                .options
-                                .terminal_proxy
-                                .then_some(runtime.options.mixed_port);
-                            runtime.system_proxy_snapshot = Some(
-                                activate_system_proxy(
-                                    self.system_proxy.clone(),
-                                    server,
-                                    terminal_port,
-                                )
-                                .await?,
-                            );
-                        }
-                    }
-                    runtime.status.state = ProxyState::Running;
-                    runtime.status.local_proxy_ready = true;
-                    runtime.status.system_proxy_enabled = runtime.system_proxy_snapshot.is_some();
-                    runtime.status.last_error = None;
-                    runtime.status.message =
-                        format!("{} 运行中（初次连接自动建立中）", kernel.display_name());
-                    runtime.child = Some(child);
-                    runtime.work_dir = Some(work_dir);
-                    return Ok(());
-                }
-                let message = if detail.trim().is_empty() {
-                    format!("节点连通性验证失败: {error}")
-                } else {
-                    format!(
-                        "节点连通性验证失败: {error}; {}: {diagnostic}",
-                        kernel.display_name()
-                    )
-                };
-                if runtime.options.mode == ProxyMode::System && self.system_proxy.supported() {
-                    if let Some(snapshot) = preserved_system_proxy_snapshot.take() {
-                        runtime.system_proxy_snapshot = Some(snapshot);
-                    } else if runtime.system_proxy_snapshot.is_none() {
-                        let server = format!("127.0.0.1:{}", runtime.options.mixed_port);
-                        let terminal_port = runtime
-                            .options
-                            .terminal_proxy
-                            .then_some(runtime.options.mixed_port);
-                        runtime.system_proxy_snapshot = Some(
-                            activate_system_proxy(self.system_proxy.clone(), server, terminal_port)
-                                .await?,
-                        );
-                    }
-                }
-                runtime.status.state = ProxyState::Degraded;
-                runtime.status.system_proxy_enabled = runtime.system_proxy_snapshot.is_some();
-                runtime.status.last_error = Some(message.clone());
-                runtime.status.message = format!("{} 降级运行: {message}", kernel.display_name());
-                runtime.child = Some(child);
-                runtime.work_dir = Some(work_dir);
-                return Ok(());
-            }
-
-            tracing::info!(
-                kernel = kernel.display_name(),
-                stage = "connectivity_verified",
-                elapsed_ms = startup_started.elapsed().as_millis() as u64,
-                "代理启动阶段完成"
-            );
-        }
-
         if runtime.options.mode == ProxyMode::System && self.system_proxy.supported() {
             if tokio::time::Instant::now() >= startup_deadline {
                 let _ = child.kill().await;
@@ -1664,6 +1575,52 @@ impl ProxyManager {
             self.system_proxy.supported(),
             runtime.options.mixed_port,
         );
+
+        if VERIFY_CONNECTIVITY_ON_START {
+            let runtime_clone = self.runtime.clone();
+            let mixed_port = runtime.options.mixed_port;
+            let kernel_name = kernel.display_name().to_string();
+            let log_path = work_dir.log_path().to_path_buf();
+            tokio::spawn(async move {
+                // 等待内核加载并与远程服务器建立初始连接
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                if let Err(error) = verify_local_proxy(mixed_port, STARTUP_PROXY_VERIFY_TIMEOUT.max(Duration::from_secs(3))).await {
+                    let detail = tokio::fs::read_to_string(&log_path)
+                        .await
+                        .unwrap_or_default();
+                    let diagnostic = format_kernel_diagnostic(&detail);
+                    if diagnostic.contains("规则加载中")
+                        || diagnostic.contains("自动建立连接")
+                        || diagnostic.contains("start initial configuration")
+                    {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        if verify_local_proxy(mixed_port, Duration::from_secs(2)).await.is_ok() {
+                            tracing::info!(kernel = %kernel_name, "内核初始握手完成，连通性验证通过");
+                            return;
+                        }
+                    }
+                    let mut rt = runtime_clone.lock().await;
+                    if rt.status.state == ProxyState::Running && rt.options.mixed_port == mixed_port {
+                        let message = if detail.trim().is_empty() {
+                            format!("节点连通性验证失败: {error}")
+                        } else {
+                            format!("节点连通性验证失败: {error}; {kernel_name}: {diagnostic}")
+                        };
+                        tracing::warn!(kernel = %kernel_name, %message, "后台连通性验证未通过，置为降级运行");
+                        rt.status.state = ProxyState::Degraded;
+                        rt.status.last_error = Some(message.clone());
+                        rt.status.message = format!("{kernel_name} 降级运行: {message}");
+                    }
+                } else {
+                    tracing::info!(
+                        kernel = %kernel_name,
+                        stage = "connectivity_verified",
+                        "后台连通性验证通过"
+                    );
+                }
+            });
+        }
+
         runtime.child = Some(child);
         runtime.work_dir = Some(work_dir);
         Ok(())
@@ -1982,7 +1939,7 @@ async fn wait_for_port(child: &mut Child, port: u16, timeout: Duration) -> bool 
         {
             return true;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
     false
 }

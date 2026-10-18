@@ -258,6 +258,9 @@ pub struct AppSettings {
     /// 界面配色主题 id（见 `gui::theme::THEMES`）。未知 id 会退回默认。
     #[serde(default = "default_ui_theme")]
     pub ui_theme: String,
+    /// 应用主图标风格："classic"（原版黑曜石白V）/ "champagne"（流光香槟金）
+    #[serde(default = "default_app_icon_style")]
+    pub app_icon_style: String,
     /// 界面语言代码（见 `i18n::Language`），默认 "zh-CN"。
     #[serde(default = "default_ui_language")]
     pub ui_language: String,
@@ -326,7 +329,11 @@ fn default_kernel_source() -> String {
 fn default_ui_theme() -> String {
     // 字面量：models 不能反向依赖 gui（gui 是 feature-gated 的）。
     // gui::theme::DEFAULT_THEME 必须和这里一致，`theme::tests::models_default_theme_matches` 守着。
-    "mac-sequoia".to_string()
+    "theme-champagne".to_string()
+}
+
+fn default_app_icon_style() -> String {
+    "classic".to_string()
 }
 
 fn default_ui_language() -> String {
@@ -423,6 +430,7 @@ impl Default for AppSettings {
             publisher_api: String::new(),
             publisher_token: String::new(),
             ui_theme: default_ui_theme(),
+            app_icon_style: default_app_icon_style(),
             ui_language: default_ui_language(),
             ui_scale: default_ui_scale(),
             ui_dark: true,
@@ -470,6 +478,7 @@ pub struct UpdateSettings {
     pub publisher_api: Option<String>,
     pub publisher_token: Option<String>,
     pub ui_theme: Option<String>,
+    pub app_icon_style: Option<String>,
     pub ui_language: Option<String>,
     pub ui_scale: Option<f32>,
     pub ui_dark: Option<bool>,

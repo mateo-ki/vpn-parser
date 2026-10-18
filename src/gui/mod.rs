@@ -329,6 +329,7 @@ pub struct VpnApp {
     pub(crate) edit_bandwidth_guard: bool,
     pub(crate) edit_bandwidth_min_kbps: u32,
     pub(crate) edit_ui_theme: String,
+    pub(crate) edit_app_icon_style: String,
     pub(crate) edit_ui_language: String,
     /// 字体/界面大小（1.0 = 100%），落库后乘在系统缩放上当 pixels_per_point。
     pub(crate) edit_ui_scale: f32,
@@ -614,6 +615,7 @@ impl VpnApp {
             edit_bandwidth_guard: false,
             edit_bandwidth_min_kbps: 0,
             edit_ui_theme: theme::DEFAULT_THEME.to_string(),
+            edit_app_icon_style: "classic".to_string(),
             edit_ui_language: "zh-CN".to_string(),
             edit_ui_scale: 1.0,
             edit_ui_dark: false,
@@ -1493,8 +1495,22 @@ impl VpnApp {
                             self.proxy_busy = false;
                             self.switching_node_id = None;
                             match result {
-                                Ok(message) => self.status = message,
-                                Err(error) => self.status = format!("代理操作失败: {error}"),
+                                Ok(message) => {
+                                    self.status = message;
+                                    if self.status.contains("已停止") {
+                                        self.proxy_status.state = ProxyState::Stopped;
+                                        self.proxy_status.local_proxy_ready = false;
+                                        self.proxy_status.system_proxy_enabled = false;
+                                    } else {
+                                        self.proxy_status.state = ProxyState::Running;
+                                        self.proxy_status.local_proxy_ready = true;
+                                        self.proxy_status.system_proxy_enabled = self.proxy_config.mode == ProxyMode::System;
+                                    }
+                                }
+                                Err(error) => {
+                                    self.status = format!("代理操作失败: {error}");
+                                    self.proxy_status.state = ProxyState::Failed;
+                                }
                             }
                             self.reload_proxy();
                             self.reload_proxy_nodes();
@@ -3224,6 +3240,8 @@ impl VpnApp {
         let candidate_blacklist = self.router.blacklisted(std::time::Instant::now());
         let tx = self.tx.clone();
         self.proxy_busy = true;
+        self.proxy_status.state = ProxyState::Starting;
+        self.proxy_status.message = "正在启动代理...".into();
         self.status = "正在启动代理...".into();
         self.rt.spawn(async move {
             let result = match db.get_node(&node_id).await {
@@ -3245,14 +3263,18 @@ impl VpnApp {
                     .await;
                     let previous = manager.config().await;
                     let operation = match manager.update_config(options.clone()).await {
-                        Ok(()) => match db.update_proxy_config(&options).await {
-                            Ok(()) => manager.start(&node).await,
-                            Err(error) => {
-                                let _ = manager.update_config(previous).await;
-                                Err(error)
-                            }
-                        },
-                        Err(error) => Err(error),
+                        Ok(()) => {
+                            let db_clone = db.clone();
+                            let opt_clone = options.clone();
+                            tokio::spawn(async move {
+                                let _ = db_clone.update_proxy_config(&opt_clone).await;
+                            });
+                            manager.start(&node).await
+                        }
+                        Err(error) => {
+                            let _ = manager.update_config(previous).await;
+                            Err(error)
+                        }
                     };
                     match operation {
                         Ok(()) => {
@@ -3336,6 +3358,8 @@ impl VpnApp {
         let manager = self.proxy_manager.clone();
         let tx = self.tx.clone();
         self.proxy_busy = true;
+        self.proxy_status.state = ProxyState::Stopping;
+        self.proxy_status.message = "正在停止代理...".into();
         self.status = "正在停止代理...".into();
         self.rt.spawn(async move {
             let result = manager
@@ -3996,6 +4020,7 @@ impl VpnApp {
     pub(crate) fn settings_edit_state(&self) -> SettingsEditState {
         SettingsEditState {
             ui_theme: self.edit_ui_theme.clone(),
+            app_icon_style: self.edit_app_icon_style.clone(),
             ui_language: self.edit_ui_language.clone(),
             ui_scale: self.edit_ui_scale,
             ui_dark: self.edit_ui_dark,
@@ -4072,6 +4097,7 @@ impl VpnApp {
         self.edit_bandwidth_guard = state.bandwidth_guard;
         self.edit_bandwidth_min_kbps = state.bandwidth_min_kbps;
         self.edit_ui_theme = state.ui_theme.clone();
+        self.edit_app_icon_style = state.app_icon_style.clone();
         self.edit_ui_language = state.ui_language.clone();
         self.edit_ui_scale = state.ui_scale;
         self.edit_ui_dark = state.ui_dark;
@@ -4109,6 +4135,7 @@ impl VpnApp {
             bandwidth_guard: Some(self.edit_bandwidth_guard),
             bandwidth_min_kbps: Some(self.edit_bandwidth_min_kbps),
             ui_theme: Some(self.edit_ui_theme.clone()),
+            app_icon_style: Some(self.edit_app_icon_style.clone()),
             ui_language: Some(self.edit_ui_language.clone()),
             ui_scale: Some(crate::models::clamp_ui_scale(self.edit_ui_scale)),
             ui_dark: Some(self.edit_ui_dark),
@@ -4724,6 +4751,31 @@ impl eframe::App for VpnApp {
     }
 }
 
+impl VpnApp {
+    pub(crate) fn ensure_logo_texture(&mut self, ctx: &egui::Context) -> egui::TextureHandle {
+        let is_gold = self.settings.app_icon_style == "champagne" || self.settings.app_icon_style == "gold";
+        if let Some(texture) = &self.logo_texture {
+            return texture.clone();
+        }
+        let bytes: &[u8] = if is_gold {
+            include_bytes!("../../assets/app-icon-gold.png")
+        } else {
+            include_bytes!("../../assets/app-icon-classic.png")
+        };
+        let img = image::load_from_memory(bytes)
+            .expect("load app-icon")
+            .to_rgba8();
+        let (w, h) = img.dimensions();
+        let color_image = egui::ColorImage::from_rgba_unmultiplied(
+            [w as usize, h as usize],
+            &img.into_raw(),
+        );
+        let tex = ctx.load_texture("app-logo", color_image, egui::TextureOptions::LINEAR);
+        self.logo_texture = Some(tex.clone());
+        tex
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4874,6 +4926,26 @@ mod tests {
         assert_eq!(country_flag_and_name("TW"), ("🇨🇳", "台湾"));
         assert_eq!(country_flag_and_name("KR"), ("🇰🇷", "韩国"));
         assert_eq!(country_flag_and_name("unknown"), ("🌐", "其它"));
+    }
+
+    #[test]
+    fn country_code_and_color_mappings() {
+        assert_eq!(country_code_and_color("US").0, "US");
+        assert_eq!(country_code_and_color("us").0, "US");
+        assert_eq!(country_code_and_color("SG").0, "SG");
+        assert_eq!(country_code_and_color("HK").0, "HK");
+        assert_eq!(country_code_and_color("JP").0, "JP");
+        assert_eq!(country_code_and_color("TW").0, "TW");
+        assert_eq!(country_code_and_color("UK").0, "UK");
+        assert_eq!(country_code_and_color("GB").0, "UK");
+        assert_eq!(country_code_and_color("unknown").0, "GL");
+
+        // 验证特定国家色彩非黑且鲜明
+        let (_, us_color) = country_code_and_color("US");
+        let (_, sg_color) = country_code_and_color("SG");
+        let (_, hk_color) = country_code_and_color("HK");
+        assert_ne!(us_color, sg_color);
+        assert_ne!(us_color, hk_color);
     }
 
     #[test]

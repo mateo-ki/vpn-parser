@@ -2,7 +2,7 @@ use crate::gui::icons::{icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::view_models::nodes_vm::{NodeCardAction, NodesViewModel};
 use crate::gui::widgets::{
-    card_frame, compact_node_card, panel_frame, sort_label,
+    card_frame, compact_node_card, panel_frame, section_title, sort_label,
 };
 use crate::gui::VpnApp;
 use crate::speedtest::SpeedtestIntensity;
@@ -10,6 +10,7 @@ use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
 
 impl VpnApp {
     pub(crate) fn ui_nodes(&mut self, ui: &mut Ui) {
+        section_title(ui, self.tr("节点池"), "多源汇聚 · 强度测速 · 智能筛选清理");
         let mut filter_changed = false;
         let mut delete_dead = false;
         let mut prune_stale = false;
@@ -76,11 +77,11 @@ impl VpnApp {
 
                             let is_alive = self.only_available_nodes || self.latency_filter == "alive";
                             let (color_alive, stroke_alive) = if is_alive {
-                                (theme::success_bg(), Stroke::new(1.0_f32, theme::success()))
+                                (theme::accent_bg(), Stroke::new(1.0_f32, theme::accent()))
                             } else {
                                 (theme::sidebar(), Stroke::new(1.0_f32, theme::border_subtle()))
                             };
-                            if ui.add(egui::Button::new(RichText::new("🟢 仅看可用").small().strong()).fill(color_alive).stroke(stroke_alive).corner_radius(CornerRadius::same(10))).clicked() {
+                            if ui.add(egui::Button::new(RichText::new("● 仅看可用").small().strong()).fill(color_alive).stroke(stroke_alive).corner_radius(CornerRadius::same(10))).clicked() {
                                 self.only_available_nodes = !self.only_available_nodes;
                                 self.latency_filter = if self.only_available_nodes { "alive".to_string() } else { "all".to_string() };
                                 filter_changed = true;
@@ -309,9 +310,7 @@ impl VpnApp {
                                 delete_dead = ui.button("删除当前超时/失败节点").clicked();
                                 delete_invalid = ui.button("删除内网/无效主机").clicked();
                                 ui.separator();
-                                clear_all = ui
-                                    .button(RichText::new("清空全部节点").color(theme::danger()))
-                                    .clicked();
+                                clear_all = ui.button("清空全部节点").clicked();
                             });
                         });
 
@@ -508,7 +507,7 @@ pub fn render_node_cards_grid(
                                         ui.close_menu();
                                     }
                                 } else {
-                                    ui.label(RichText::new("✓ 当前活动节点").small().color(theme::success()));
+                                    ui.label(RichText::new("✓ 当前活动节点").small().color(theme::accent_strong()));
                                 }
                                 ui.separator();
                                 if ui
@@ -527,10 +526,7 @@ pub fn render_node_cards_grid(
                                     ui.close_menu();
                                 }
                                 ui.separator();
-                                if ui
-                                    .button(RichText::new("🗑️ 删除节点").color(theme::danger()))
-                                    .clicked()
-                                {
+                                if ui.button("🗑️ 删除节点").clicked() {
                                     card_action = Some(NodeCardAction::Delete(node.id.clone()));
                                     ui.close_menu();
                                 }
