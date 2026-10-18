@@ -1704,11 +1704,10 @@ impl VpnApp {
                                 };
                                 let is_switching = switching_id.as_deref() == Some(&node.id);
 
-                                let card_tip = if self.proxy_selected_group != "全部" && self.proxy_selected_group != "PROXY" {
-                                    "点击将该节点设为当前策略组出口，右键查看详情 / 测速 / IP 检测"
-                                } else {
-                                    "点击连接该节点（若处于自动选优将自动切换为手动指定），右键查看详情 / 测速 / IP 检测"
-                                };
+                                let card_tip = format!(
+                                    "{}:{}\n左键点击选中，右键设为活动节点",
+                                    node.server, node.port
+                                );
 
                                 let response = compact_node_card(
                                     column_ui,
@@ -1718,43 +1717,44 @@ impl VpnApp {
                                 )
                                 .on_hover_text(card_tip);
 
-                                if response.clicked() {
-                                    // 点击节点时：如果当前策略不是手动指定，自动将策略切换为手动指定
-                                    if is_auto {
-                                        switch_to_manual = true;
-                                    }
-                                    if !is_selected {
-                                        selected = Some((node.id.clone(), node.name.clone()));
-                                    }
-
-                                    // 若当前过滤的策略组是可手动选择的 Selector 组且包含该节点，也同步让内核切换该策略组
-                                    if running && self.proxy_selected_group != "全部" && self.proxy_selected_group != "PROXY" {
-                                        let is_select_group = self.kernel_groups.iter().any(|g| {
-                                            g.name == self.proxy_selected_group
-                                                && (g.kind.eq_ignore_ascii_case("select") || g.kind.eq_ignore_ascii_case("selector"))
-                                                && g.members.iter().any(|m| m == &node.name)
-                                        });
-                                        if is_select_group {
-                                            group_switch_member = Some((self.proxy_selected_group.clone(), node.name.clone()));
-                                        }
-                                    }
-                                }
+                                let clicked = response.clicked();
+                                let double_clicked = response.double_clicked();
 
                                 let node_id = node.id.clone();
                                 let node_name = node.name.clone();
                                 response.context_menu(|ui| {
-                                    if ui.button("查看详情").clicked() {
+                                    if !is_selected {
+                                        let label = if self.proxy_selected_group != "全部" && self.proxy_selected_group != "PROXY" {
+                                            format!("🚀 设为「{}」活动出口", self.proxy_selected_group)
+                                        } else {
+                                            "🚀 设为活动节点".to_string()
+                                        };
+                                        if ui.button(label).clicked() {
+                                            if is_auto {
+                                                switch_to_manual = true;
+                                            }
+                                            selected = Some((node_id.clone(), node_name.clone()));
+                                            if running && self.proxy_selected_group != "全部" && self.proxy_selected_group != "PROXY" {
+                                                group_switch_member = Some((self.proxy_selected_group.clone(), node_name.clone()));
+                                            }
+                                            ui.close_menu();
+                                        }
+                                    } else {
+                                        ui.label(RichText::new("✓ 当前活动节点").small().color(theme::success()));
+                                    }
+                                    ui.separator();
+                                    if ui.button("ℹ️ 查看详情").clicked() {
                                         menu_action = Some(NodeCardAction::ShowDetail(node_id.clone()));
                                         ui.close_menu();
                                     }
                                     if ui
-                                        .add_enabled(!is_busy, egui::Button::new("测速节点"))
+                                        .add_enabled(!is_busy, egui::Button::new("⚡ 测速节点"))
                                         .clicked()
                                     {
                                         menu_action = Some(NodeCardAction::Speedtest(node_id.clone()));
                                         ui.close_menu();
                                     }
-                                    if ui.button("IP 检测").clicked() {
+                                    if ui.button("🛡️ IP 检测").clicked() {
                                         menu_action = Some(NodeCardAction::CheckIpRisk(node_id.clone()));
                                         ui.close_menu();
                                     }
@@ -1766,6 +1766,21 @@ impl VpnApp {
                                         }
                                     }
                                 });
+
+                                if double_clicked && !is_selected {
+                                    if is_auto {
+                                        switch_to_manual = true;
+                                    }
+                                    selected = Some((node_id.clone(), node_name.clone()));
+                                    if running && self.proxy_selected_group != "全部" && self.proxy_selected_group != "PROXY" {
+                                        group_switch_member = Some((self.proxy_selected_group.clone(), node_name.clone()));
+                                    }
+                                } else if clicked && !is_selected {
+                                    menu_action = Some(NodeCardAction::Select {
+                                        id: node_id.clone(),
+                                        name: node_name.clone(),
+                                    });
+                                }
                             }
                         });
                         ui.add_space(8.0);
