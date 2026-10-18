@@ -898,8 +898,8 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
         config["geo-auto-update"] = json!(false);
         config["geo-update-interval"] = json!(24);
         config["geox-url"] = json!({
-            "geoip": "https://gh-proxy.com/https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat",
-            "geosite": "https://gh-proxy.com/https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat"
+            "geoip": "https://fastly.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat",
+            "geosite": "https://fastly.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"
         });
     }
     if options.mode == ProxyMode::Tun {
@@ -2504,9 +2504,9 @@ mod tests {
         assert_eq!(config["external-controller"], "127.0.0.1:9090");
         assert_eq!(config["proxies"].as_array().unwrap().len(), 1);
         assert_eq!(config["proxy-groups"][0]["name"], "PROXY");
-        // 没有用户规则时，只剩两条"镜像钉直连"+ 兜底 MATCH。
+        // 没有用户规则时，只剩镜像钉直连 + 兜底 MATCH。
         let rules = config["rules"].as_array().unwrap();
-        assert_eq!(rules.len(), 3);
+        assert_eq!(rules.len(), crate::geo::MIRROR_DIRECT_HOSTS.len() + 1);
         assert_eq!(rules.last().unwrap(), "MATCH,PROXY");
     }
 
@@ -2531,8 +2531,8 @@ mod tests {
         let rules = config["rules"].as_array().unwrap();
 
         assert_eq!(config["geodata-mode"], true);
-        // 18 条用户规则 + 两条"镜像钉直连"，MATCH 仍是最后一条。
-        assert_eq!(rules.len(), 20);
+        // 18 条用户规则 + 镜像钉直连 + MATCH 仍是最后一条。
+        assert_eq!(rules.len(), 18 + crate::geo::MIRROR_DIRECT_HOSTS.len());
         assert_eq!(rules[11], "GEOSITE,category-ads-all,REJECT");
         assert_eq!(rules[12], "GEOSITE,cn,DIRECT");
         assert_eq!(rules[13], "GEOSITE,google,PROXY");
@@ -2809,9 +2809,10 @@ mod tests {
             config["rules"][4],
             "AND,((NETWORK,udp),(DST-PORT,443)),REJECT"
         );
-        assert_eq!(config["rules"][5], "DOMAIN-SUFFIX,gh-proxy.com,DIRECT");
-        assert_eq!(config["rules"][6], "DOMAIN-SUFFIX,ghfast.top,DIRECT");
-        assert_eq!(config["rules"][7], "MATCH,PROXY");
+        for (i, host) in crate::geo::MIRROR_DIRECT_HOSTS.iter().enumerate() {
+            assert_eq!(config["rules"][5 + i], format!("DOMAIN-SUFFIX,{host},DIRECT"));
+        }
+        assert_eq!(config["rules"].as_array().unwrap().last().unwrap(), "MATCH,PROXY");
     }
 
     #[test]

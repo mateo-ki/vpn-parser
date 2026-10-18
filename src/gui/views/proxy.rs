@@ -3600,19 +3600,23 @@ impl VpnApp {
                         let running = self.proxy_status.state == ProxyState::Running;
                         if ui
                             .add_enabled(
-                                running && !self.geo_updating,
+                                !self.geo_updating,
                                 primary_btn("一键更新 Geo 规则"),
                             )
-                            .on_hover_text(
-                                "向内核发送指令在线拉取并重新载入最新的 GeoIP 与 GeoSite 数据",
-                            )
+                            .on_hover_text(if running {
+                                "向当前运行的内核发送指令在线拉取并热重载最新的 Geo 数据库"
+                            } else {
+                                "直连极速 CDN 高速拉取并保存最新的 GeoIP 与 GeoSite 数据库（无需开启代理）"
+                            })
                             .clicked()
                         {
                             self.update_geo_data();
                         }
                         if self.geo_updating {
                             ui.spinner();
-                            ui.label(RichText::new("正在更新 Geo 规则...").small().color(theme::accent()));
+                            ui.label(RichText::new("正在高速下载更新 Geo 规则...").small().color(theme::accent()));
+                        } else if !running {
+                            ui.label(RichText::new("（直连极速 CDN，无需开启代理）").small().color(theme::muted()));
                         }
                     });
                 });

@@ -1085,19 +1085,23 @@ impl VpnApp {
                 let running = self.proxy_status.state == ProxyState::Running;
                 if ui
                     .add_enabled(
-                        running && !self.geo_updating,
+                        !self.geo_updating,
                         egui::Button::new("在线更新 Geo 数据库"),
                     )
-                    .on_hover_text("向当前代理内核发送指令，在线拉取并热重载最新的 Geo 规则数据库")
+                    .on_hover_text(if running {
+                        "向当前代理内核发送指令，在线拉取并热重载最新的 Geo 规则数据库"
+                    } else {
+                        "直连极速 CDN 高速拉取并保存最新的 GeoIP 与 GeoSite 数据库（无需开启代理）"
+                    })
                     .clicked()
                 {
                     self.update_geo_data();
                 }
                 if self.geo_updating {
                     ui.spinner();
-                    ui.label(RichText::new("正在更新 Geo 规则...").small().color(theme::accent()));
+                    ui.label(RichText::new("正在高速下载更新 Geo 规则...").small().color(theme::accent()));
                 } else if !running {
-                    ui.label(RichText::new("（需先启动代理）").small().color(theme::muted()));
+                    ui.label(RichText::new("（直连极速 CDN，无需开启代理）").small().color(theme::muted()));
                 }
             });
 

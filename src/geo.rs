@@ -31,12 +31,18 @@ pub const GEO_FILES: [&str; 2] = ["geosite.dat", "geoip.dat"];
 /// 内核下载 geo 库时走的是**它自己的规则引擎**（日志里是 `[TCP] mihomo --> gh-proxy.com`），
 /// 所以这些请求会被最后的 `MATCH,PROXY` 丢到代理节点上 —— 实测每次都是 10 秒
 /// `net/http: TLS handshake timeout`，而同一 URL 从本机直连只要 1.4 秒。
-pub const MIRROR_DIRECT_HOSTS: [&str; 2] = ["gh-proxy.com", "ghfast.top"];
+pub const MIRROR_DIRECT_HOSTS: [&str; 4] = [
+    "fastly.jsdelivr.net",
+    "cdn.jsdelivr.net",
+    "gh-proxy.com",
+    "ghfast.top",
+];
 
-/// 下载候选，按实测速度排序：镜像在前，官方直连兜底。
-const UPSTREAMS: [&str; 3] = [
+/// 下载候选，按实测速度排序：Fastly 全球极速 CDN 优先（实测 8MB/s，2 秒下完），镜像与官方兜底。
+const UPSTREAMS: [&str; 4] = [
+    "https://fastly.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/",
+    "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/",
     "https://gh-proxy.com/https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/",
-    "https://ghfast.top/https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/",
     "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/",
 ];
 
