@@ -60,6 +60,7 @@ pub enum ProxyPanel {
     #[default]
     Charts,
     Nodes,
+    PortMappings,
     Groups,
     Connections,
     Rules,

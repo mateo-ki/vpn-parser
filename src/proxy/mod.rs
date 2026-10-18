@@ -147,6 +147,21 @@ impl AutoRoutingStrategy {
     }
 }
 
+/// 一节点一端口：多端口独立入站映射规则
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortMapping {
+    pub id: String,
+    pub port: u16,
+    pub node_id: String,
+    pub node_name: String,
+    #[serde(default = "default_port_mapping_enabled")]
+    pub enabled: bool,
+}
+
+fn default_port_mapping_enabled() -> bool {
+    true
+}
+
 // 不派生 Eq：url-test 候选里带着 Node（含浮点字段），只能做近似比较。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MihomoConfigOptions {
@@ -189,6 +204,12 @@ pub struct MihomoConfigOptions {
     /// 用户自定义配置覆写（YAML 或 脚本扩展片段）
     #[serde(default)]
     pub override_yaml: Option<String>,
+    /// 一节点一端口多端口转发规则列表
+    #[serde(default)]
+    pub port_mappings: Vec<PortMapping>,
+    /// 端口映射的目标节点对象（已转为 clash proxy 对象）：启动前注入，不落盘。
+    #[serde(default, skip)]
+    pub port_mapping_nodes: Vec<(u16, String, Value)>,
 }
 
 fn default_url_test_size() -> u16 {
@@ -215,6 +236,8 @@ impl Default for MihomoConfigOptions {
             url_test_nodes: Vec::new(),
             smart_routing: false,
             override_yaml: None,
+            port_mappings: Vec::new(),
+            port_mapping_nodes: Vec::new(),
         }
     }
 }
@@ -223,6 +246,21 @@ impl MihomoConfigOptions {
     pub fn validate(&self) -> Result<()> {
         if self.mixed_port == self.controller_port {
             return Err(anyhow!("代理端口和控制端口不能相同"));
+        }
+        let mut mapped_ports = std::collections::HashSet::new();
+        for mapping in &self.port_mappings {
+            if mapping.port < 1024 {
+                return Err(anyhow!("映射端口 {} 低于 1024 保留端口", mapping.port));
+            }
+            if mapping.port == self.mixed_port {
+                return Err(anyhow!("映射端口 {} 与主代理端口冲突", mapping.port));
+            }
+            if mapping.port == self.controller_port {
+                return Err(anyhow!("映射端口 {} 与控制台端口冲突", mapping.port));
+            }
+            if !mapped_ports.insert(mapping.port) {
+                return Err(anyhow!("存在重复的映射端口: {}", mapping.port));
+            }
         }
         self.dns.validate()?;
         for rule in &self.rules {
@@ -351,6 +389,49 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
             candidate_proxies.push(Value::Object(object));
         }
     }
+
+    // 处理一节点一端口映射：将所有启用的端口映射节点也加入 candidate_proxies，并生成 listeners 与专属路由规则
+    let mut port_listeners: Vec<Value> = Vec::new();
+    let mut port_rules: Vec<String> = Vec::new();
+    for (port, raw_name, clash_obj) in &options.port_mapping_nodes {
+        let mut target_proxy_name = None;
+        for existing in &candidate_proxies {
+            let is_same = existing.get("server") == clash_obj.get("server")
+                && existing.get("port") == clash_obj.get("port")
+                && existing.get("type") == clash_obj.get("type");
+            if is_same {
+                if let Some(n) = existing.get("name").and_then(Value::as_str) {
+                    target_proxy_name = Some(n.to_string());
+                    break;
+                }
+            }
+        }
+        let target_name = match target_proxy_name {
+            Some(n) => n,
+            None => {
+                let mut name = raw_name.clone();
+                let mut index = 2;
+                while !used_names.insert(name.clone()) {
+                    name = format!("{raw_name} #{index}");
+                    index += 1;
+                }
+                let mut obj = clash_obj.as_object().cloned().unwrap_or_default();
+                obj.insert("name".into(), Value::String(name.clone()));
+                candidate_proxies.push(Value::Object(obj));
+                name
+            }
+        };
+
+        port_listeners.push(json!({
+            "name": format!("inbound-{}", port),
+            "type": "mixed",
+            "port": port,
+            "listen": if options.allow_lan { "0.0.0.0" } else { "127.0.0.1" },
+            "proxy": target_name
+        }));
+        port_rules.push(format!("IN-PORT,{},{}", port, target_name));
+    }
+
     let candidate_names: Vec<String> = candidate_proxies
         .iter()
         .filter_map(|item| item.get("name").and_then(Value::as_str).map(str::to_owned))
@@ -595,6 +676,11 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
         }
     }
 
+    // 独占端口转发规则插入在所有规则最顶端，优先匹配
+    if !port_rules.is_empty() {
+        final_rules.splice(0..0, port_rules);
+    }
+
     let mut config = json!({
         "mixed-port": options.mixed_port,
         "external-controller": format!("127.0.0.1:{}", options.controller_port),
@@ -700,6 +786,10 @@ pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<
             "strict-route": true,
             "endpoint-independent-nat": true
         });
+    }
+
+    if !port_listeners.is_empty() {
+        config["listeners"] = Value::Array(port_listeners);
     }
 
     Ok(config)
@@ -933,6 +1023,19 @@ impl ProxyManager {
         let mut runtime = self.runtime.lock().await;
         runtime.options.url_test_nodes = proxies;
         count
+    }
+
+    /// 启动前或热重载前注入一节点一端口映射目标节点（不持久化，只影响本次生成的配置）。
+    pub async fn set_port_mapping_nodes(&self, items: Vec<(u16, Node)>) {
+        let mut mapping_nodes = Vec::with_capacity(items.len());
+        for (port, node) in items {
+            let clash = crate::export::nodes_to_clash_proxies(&[node.clone()]);
+            if let Some(proxy_obj) = clash.into_iter().next() {
+                mapping_nodes.push((port, node.name, proxy_obj));
+            }
+        }
+        let mut runtime = self.runtime.lock().await;
+        runtime.options.port_mapping_nodes = mapping_nodes;
     }
 
     pub async fn update_config(&self, options: MihomoConfigOptions) -> Result<()> {
@@ -2916,5 +3019,89 @@ mod tests {
         let formatted3 = format_kernel_diagnostic(raw3);
         assert!(formatted3.contains("目标服务器无法连通") || formatted3.contains("节点连接超时"));
         assert!(!formatted3.contains("\u{1b}"));
+    }
+
+    #[test]
+    fn port_mapping_validation_checks() {
+        let mut options = MihomoConfigOptions::default();
+        options.port_mappings = vec![PortMapping {
+            id: "1".into(),
+            port: 80, // < 1024
+            node_id: "n1".into(),
+            node_name: "Node 1".into(),
+            enabled: true,
+        }];
+        assert!(options.validate().unwrap_err().to_string().contains("保留端口"));
+
+        options.port_mappings[0].port = 9980; // mixed_port
+        assert!(options.validate().unwrap_err().to_string().contains("主代理端口冲突"));
+
+        options.port_mappings[0].port = 9090; // controller_port
+        assert!(options.validate().unwrap_err().to_string().contains("控制台端口冲突"));
+
+        options.port_mappings = vec![
+            PortMapping {
+                id: "1".into(),
+                port: 10810,
+                node_id: "n1".into(),
+                node_name: "Node 1".into(),
+                enabled: true,
+            },
+            PortMapping {
+                id: "2".into(),
+                port: 10810,
+                node_id: "n2".into(),
+                node_name: "Node 2".into(),
+                enabled: true,
+            },
+        ];
+        assert!(options.validate().unwrap_err().to_string().contains("重复"));
+
+        options.port_mappings[1].port = 10811;
+        assert!(options.validate().is_ok());
+    }
+
+    #[test]
+    fn port_mappings_generate_mihomo_listeners_and_in_port_rules() {
+        let current = node(
+            "vless",
+            json!({"server": "1.2.3.4", "port": 443, "uuid": "u1", "network": "ws", "security": "tls"}),
+        );
+        let mapped_node = node(
+            "vless",
+            json!({"server": "5.6.7.8", "port": 443, "uuid": "u2", "network": "ws", "security": "tls"}),
+        );
+        let clash_proxies = crate::export::nodes_to_clash_proxies(&[mapped_node.clone()]);
+        let mut options = MihomoConfigOptions {
+            port_mappings: vec![PortMapping {
+                id: "m1".into(),
+                port: 10810,
+                node_id: mapped_node.id.clone(),
+                node_name: mapped_node.name.clone(),
+                enabled: true,
+            }],
+            port_mapping_nodes: vec![(10810, mapped_node.name.clone(), clash_proxies[0].clone())],
+            ..MihomoConfigOptions::default()
+        };
+
+        let config = build_mihomo_config(&current, options.clone()).unwrap();
+        let listeners = config["listeners"].as_array().expect("listeners array");
+        assert_eq!(listeners.len(), 1);
+        assert_eq!(listeners[0]["name"], "inbound-10810");
+        assert_eq!(listeners[0]["port"], 10810);
+        assert_eq!(listeners[0]["type"], "mixed");
+
+        let rules = config["rules"].as_array().expect("rules array");
+        assert!(rules[0].as_str().unwrap().starts_with("IN-PORT,10810,"));
+
+        // 验证 required_ports 包含启用的映射端口
+        let adapter = kernel_adapter(KernelKind::Mihomo);
+        let ports = adapter.required_ports(&options);
+        assert!(ports.contains(&10810));
+
+        // 禁用后不应包含在 required_ports
+        options.port_mappings[0].enabled = false;
+        let ports_disabled = adapter.required_ports(&options);
+        assert!(!ports_disabled.contains(&10810));
     }
 }

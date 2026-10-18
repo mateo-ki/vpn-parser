@@ -91,7 +91,13 @@ impl KernelAdapter for MihomoAdapter {
     }
 
     fn required_ports(&self, options: &MihomoConfigOptions) -> Vec<u16> {
-        vec![options.mixed_port, options.controller_port]
+        let mut ports = vec![options.mixed_port, options.controller_port];
+        for mapping in &options.port_mappings {
+            if mapping.enabled {
+                ports.push(mapping.port);
+            }
+        }
+        ports
     }
 
     fn batch_size(&self) -> usize {
@@ -148,7 +154,13 @@ impl KernelAdapter for SingBoxAdapter {
     }
 
     fn required_ports(&self, options: &MihomoConfigOptions) -> Vec<u16> {
-        vec![options.mixed_port]
+        let mut ports = vec![options.mixed_port];
+        for mapping in &options.port_mappings {
+            if mapping.enabled {
+                ports.push(mapping.port);
+            }
+        }
+        ports
     }
 
     fn batch_size(&self) -> usize {
@@ -213,7 +225,13 @@ impl KernelAdapter for XrayAdapter {
     }
 
     fn required_ports(&self, options: &MihomoConfigOptions) -> Vec<u16> {
-        vec![options.mixed_port]
+        let mut ports = vec![options.mixed_port];
+        for mapping in &options.port_mappings {
+            if mapping.enabled {
+                ports.push(mapping.port);
+            }
+        }
+        ports
     }
 
     fn batch_size(&self) -> usize {

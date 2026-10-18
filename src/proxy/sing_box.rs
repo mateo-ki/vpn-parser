@@ -336,6 +336,26 @@ pub fn build_sing_box_config(node: &Node, options: MihomoConfigOptions) -> Resul
         RoutingMode::Global | RoutingMode::Direct => Vec::new(),
     };
     let (mut route_rules, rule_sets) = build_route_rules(&routing_options)?;
+    for mapping in &options.port_mappings {
+        if !mapping.enabled {
+            continue;
+        }
+        let in_tag = format!("inbound-{}", mapping.port);
+        inbounds.push(json!({
+            "type": "mixed",
+            "tag": in_tag.clone(),
+            "listen": if options.allow_lan { "0.0.0.0" } else { "127.0.0.1" },
+            "listen_port": mapping.port
+        }));
+        route_rules.insert(
+            0,
+            json!({
+                "inbound": [in_tag],
+                "action": "route",
+                "outbound": "proxy"
+            }),
+        );
+    }
     if options.mode == ProxyMode::Tun {
         route_rules.insert(
             0,

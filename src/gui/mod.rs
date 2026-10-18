@@ -160,6 +160,13 @@ pub struct VpnApp {
     pub(crate) rule_import_text: String,
     pub(crate) rule_import_preview: Option<crate::proxy::rule_io::RuleImport>,
 
+    pub(crate) new_mapping_port: String,
+    pub(crate) new_mapping_node_id: Option<String>,
+    pub(crate) new_mapping_node_name: Option<String>,
+    pub(crate) node_picker_open: bool,
+    pub(crate) node_picker_search: String,
+    pub(crate) node_picker_target_index: Option<usize>,
+
     pub(crate) editing_id: Option<String>,
     pub(crate) form_name: String,
     pub(crate) form_url: String,
@@ -480,6 +487,12 @@ impl VpnApp {
             show_rule_import_help: false,
             rule_import_text: String::new(),
             rule_import_preview: None,
+            new_mapping_port: String::new(),
+            new_mapping_node_id: None,
+            new_mapping_node_name: None,
+            node_picker_open: false,
+            node_picker_search: String::new(),
+            node_picker_target_index: None,
             editing_id: None,
             form_name: String::new(),
             form_url: String::new(),
@@ -2759,6 +2772,7 @@ impl VpnApp {
         let tx = self.tx.clone();
         let url_test = self.proxy_config.url_test;
         let url_test_size = self.proxy_config.url_test_size;
+        let port_mappings = self.proxy_config.port_mappings.clone();
         let candidate_blacklist = self.router.blacklisted(std::time::Instant::now());
         let node_id = id.clone();
         self.status = format!("⚡ 正在极速异步切换至「{name}」...");
@@ -2772,6 +2786,12 @@ impl VpnApp {
                         url_test,
                         url_test_size,
                         &candidate_blacklist,
+                    )
+                    .await;
+                    Self::prime_port_mapping_candidates(
+                        &db,
+                        &manager,
+                        &port_mappings,
                     )
                     .await;
                     let res = manager.switch_node(&node).await;
@@ -2824,6 +2844,28 @@ impl VpnApp {
             }
             Err(error) => tracing::warn!(%error, "读取 url-test 候选节点失败"),
         }
+    }
+
+    /// 注入一节点一端口多端口映射的目标节点数据
+    async fn prime_port_mapping_candidates(
+        db: &Database,
+        manager: &ProxyManager,
+        port_mappings: &[crate::proxy::PortMapping],
+    ) {
+        if port_mappings.is_empty() {
+            manager.set_port_mapping_nodes(Vec::new()).await;
+            return;
+        }
+        let mut items = Vec::new();
+        for m in port_mappings {
+            if !m.enabled {
+                continue;
+            }
+            if let Ok(Some(node)) = db.get_node(&m.node_id).await {
+                items.push((m.port, node));
+            }
+        }
+        manager.set_port_mapping_nodes(items).await;
     }
 
     /// 要放行的程序：本程序 + 已下载的内核 exe（按路径，重编译/换版本路径不变）。
@@ -2926,6 +2968,7 @@ impl VpnApp {
         self.status = "正在保存分流配置并应用...".into();
         self.rt.spawn(async move {
             let previous = manager.config().await;
+            Self::prime_port_mapping_candidates(&db, &manager, &options.port_mappings).await;
             let result = match manager.reload_config(options.clone()).await {
                 Ok(_) => match db.update_proxy_config(&options).await {
                     Ok(()) => Ok(options),
@@ -3166,6 +3209,12 @@ impl VpnApp {
                         options.url_test,
                         options.url_test_size,
                         &candidate_blacklist,
+                    )
+                    .await;
+                    Self::prime_port_mapping_candidates(
+                        &db,
+                        &manager,
+                        &options.port_mappings,
                     )
                     .await;
                     let previous = manager.config().await;
@@ -4488,6 +4537,7 @@ impl eframe::App for VpnApp {
         self.ui_command_palette(ctx);
         self.ui_paste_dialog(ctx);
         self.ui_source_nodes_modal(ctx);
+        self.ui_node_picker_modal(ctx);
 
         // Ctrl+V 走的是这里，不是 Key 事件：egui-winit 一认出粘贴组合就把它换成
         // `Event::Paste(剪贴板内容)`，然后**直接 return，不再发 `Event::Key{V}`**

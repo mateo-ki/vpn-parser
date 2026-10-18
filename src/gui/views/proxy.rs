@@ -194,6 +194,7 @@ impl VpnApp {
         let tabs = [
             (ProxyPanel::Charts, Icon::Dashboard, tr_charts),
             (ProxyPanel::Nodes, Icon::Pin, tr_nodes),
+            (ProxyPanel::PortMappings, Icon::Plug, "一节点一端口"),
             (ProxyPanel::Groups, Icon::Shield, tr_groups),
             (ProxyPanel::Connections, Icon::Radar, &conn_label),
             (ProxyPanel::Rules, Icon::Rules, tr_rules),
@@ -208,6 +209,7 @@ impl VpnApp {
         match self.proxy_panel {
             ProxyPanel::Charts => self.ui_proxy_charts(ui),
             ProxyPanel::Nodes => self.ui_proxy_nodes(ui),
+            ProxyPanel::PortMappings => self.ui_proxy_port_mappings(ui),
             ProxyPanel::Groups => self.ui_proxy_groups(ui),
             ProxyPanel::Connections => self.ui_proxy_connections(ui),
             ProxyPanel::Rules => self.ui_proxy_rules(ui),
@@ -1852,6 +1854,338 @@ impl VpnApp {
             .iter()
             .find(|group| group.name == URL_TEST_GROUP)
             .and_then(|group| group.now.clone())
+    }
+
+    pub(crate) fn ui_proxy_port_mappings(&mut self, ui: &mut Ui) {
+        panel_frame().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                icon_label(ui, Icon::Plug, 16.0, theme::accent());
+                ui.label(RichText::new("一节点一端口（多端口独立转发）").strong().size(15.0));
+            });
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("为指定节点分配专用的本地监听端口（如 127.0.0.1:10810）。外部应用、爬虫或浏览器插件连接该端口时，流量将独占转发给绑定的节点，完全绕过全局代理路由。")
+                    .small()
+                    .color(theme::text_secondary()),
+            );
+            ui.add_space(10.0);
+
+            // 顶部添加表单
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("本地端口:").strong());
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.new_mapping_port)
+                        .desired_width(85.0)
+                        .hint_text("如 10810"),
+                );
+
+                ui.add_space(8.0);
+                ui.label(RichText::new("转发目标节点:").strong());
+
+                let (btn_text, btn_color) = if let Some(ref name) = self.new_mapping_node_name {
+                    (format!("🎯 {name}"), theme::accent())
+                } else {
+                    ("➕ 点击选择目标节点...".to_string(), theme::text_secondary())
+                };
+
+                if ui
+                    .button(RichText::new(btn_text).color(btn_color))
+                    .on_hover_text("点击弹窗搜索并选择目标节点")
+                    .clicked()
+                {
+                    self.node_picker_target_index = None;
+                    self.node_picker_search.clear();
+                    self.node_picker_open = true;
+                }
+
+                if self.new_mapping_node_id.is_some() {
+                    if ui.button("✕").on_hover_text("清除选中的节点").clicked() {
+                        self.new_mapping_node_id = None;
+                        self.new_mapping_node_name = None;
+                    }
+                }
+
+                ui.add_space(8.0);
+                let add_btn = ui.add(
+                    egui::Button::new(RichText::new("➕ 添加映射").strong().color(Color32::WHITE))
+                        .fill(theme::primary_btn()),
+                );
+                if add_btn.clicked() {
+                    match self.new_mapping_port.trim().parse::<u16>() {
+                        Ok(port) => {
+                            if port < 1024 {
+                                self.status = format!("端口 {port} 属于系统保留端口（须大于等于 1024）");
+                            } else if port == self.proxy_config.mixed_port {
+                                self.status = format!(
+                                    "端口 {port} 与主代理端口 ({}) 冲突",
+                                    self.proxy_config.mixed_port
+                                );
+                            } else if port == self.proxy_config.controller_port {
+                                self.status = format!(
+                                    "端口 {port} 与控制台端口 ({}) 冲突",
+                                    self.proxy_config.controller_port
+                                );
+                            } else if self.proxy_config.port_mappings.iter().any(|m| m.port == port) {
+                                self.status = format!("端口 {port} 已存在映射规则中");
+                            } else if self.new_mapping_node_id.is_none() {
+                                self.status = "请先点击选择目标节点".to_string();
+                            } else {
+                                let mapping = crate::proxy::PortMapping {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    port,
+                                    node_id: self.new_mapping_node_id.take().unwrap_or_default(),
+                                    node_name: self.new_mapping_node_name.take().unwrap_or_default(),
+                                    enabled: true,
+                                };
+                                self.proxy_config.port_mappings.push(mapping);
+                                self.new_mapping_port.clear();
+                                self.save_proxy_config();
+                                self.status = format!("已添加端口 {port} 映射规则并启用");
+                            }
+                        }
+                        Err(_) => {
+                            self.status = "请输入有效的端口号（1024 - 65535）".to_string();
+                        }
+                    }
+                }
+            });
+        });
+
+        ui.add_space(8.0);
+        panel_frame().show(ui, |ui| {
+            if self.proxy_config.port_mappings.is_empty() {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(30.0);
+                    icon_label(ui, Icon::Plug, 28.0, theme::muted());
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("暂无一节点一端口映射规则").color(theme::text_secondary()));
+                    ui.label(
+                        RichText::new("在上方输入本地端口并选择节点，即可为特定应用分配独占出口")
+                            .small()
+                            .color(theme::muted()),
+                    );
+                    ui.add_space(30.0);
+                });
+                return;
+            }
+
+            let mut to_delete = None;
+            let mut changed = false;
+            let mut pick_for_index = None;
+
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    // 表头
+                    ui.horizontal(|ui| {
+                        ui.add_sized([70.0, 20.0], egui::Label::new(RichText::new("状态").strong()));
+                        ui.add_sized(
+                            [160.0, 20.0],
+                            egui::Label::new(RichText::new("本地监听地址").strong()),
+                        );
+                        ui.add_sized(
+                            [ui.available_width() - 80.0, 20.0],
+                            egui::Label::new(RichText::new("转发目标节点").strong()),
+                        );
+                        ui.add_sized([60.0, 20.0], egui::Label::new(RichText::new("操作").strong()));
+                    });
+                    ui.separator();
+
+                    for (idx, mapping) in self.proxy_config.port_mappings.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            // 启用/停用按钮
+                            let status_text = if mapping.enabled { "🟢 启用" } else { "⚪ 停用" };
+                            let btn_fill = if mapping.enabled {
+                                theme::success_bg()
+                            } else {
+                                theme::panel_hover()
+                            };
+                            let btn_color = if mapping.enabled {
+                                theme::success()
+                            } else {
+                                theme::muted()
+                            };
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new(status_text).size(12.0).color(btn_color),
+                                    )
+                                    .fill(btn_fill),
+                                )
+                                .on_hover_text(if mapping.enabled {
+                                    "点击停用该端口映射"
+                                } else {
+                                    "点击启用该端口映射"
+                                })
+                                .clicked()
+                            {
+                                mapping.enabled = !mapping.enabled;
+                                changed = true;
+                            }
+
+                            // 本地监听地址 + 复制
+                            let addr_str = format!("127.0.0.1:{}", mapping.port);
+                            ui.add_sized([160.0, 20.0], |ui: &mut Ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(&addr_str).strong());
+                                    if ui.button("📋").on_hover_text("复制本地代理地址").clicked() {
+                                        ui.ctx().copy_text(addr_str.clone());
+                                    }
+                                })
+                                .response
+                            });
+
+                            // 目标节点（点击可更换）
+                            let target_width = (ui.available_width() - 70.0).max(100.0);
+                            ui.add_sized([target_width, 20.0], |ui: &mut Ui| {
+                                let display_name = if mapping.node_name.is_empty() {
+                                    "（未命名节点）".to_string()
+                                } else {
+                                    mapping.node_name.clone()
+                                };
+                                let btn = ui.add(
+                                    egui::Button::new(RichText::new(format!("🎯 {display_name}"))).truncate(),
+                                )
+                                .on_hover_text("点击更换该端口绑定的目标节点");
+                                if btn.clicked() {
+                                    pick_for_index = Some(idx);
+                                }
+                                btn
+                            });
+
+                            // 操作：删除
+                            if ui
+                                .button(RichText::new("🗑️").color(theme::danger()))
+                                .on_hover_text("删除该端口映射")
+                                .clicked()
+                            {
+                                to_delete = Some(idx);
+                            }
+                        });
+                        ui.separator();
+                    }
+                });
+
+            if let Some(idx) = pick_for_index {
+                self.node_picker_target_index = Some(idx);
+                self.node_picker_search.clear();
+                self.node_picker_open = true;
+            }
+            if let Some(idx) = to_delete {
+                self.proxy_config.port_mappings.remove(idx);
+                changed = true;
+            }
+            if changed {
+                self.save_proxy_config();
+            }
+        });
+    }
+
+    pub(crate) fn ui_node_picker_modal(&mut self, ctx: &egui::Context) {
+        if !self.node_picker_open {
+            return;
+        }
+        let mut open = self.node_picker_open;
+        let mut picked_node = None;
+
+        egui::Window::new("选择转发目标节点")
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .resizable(true)
+            .default_size([500.0, 520.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    icon_label(ui, Icon::Search, 14.0, theme::muted());
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.node_picker_search)
+                            .desired_width(ui.available_width() - 30.0)
+                            .hint_text("搜索节点名称、国家、协议、服务器..."),
+                    );
+                    if !self.node_picker_search.is_empty() && ui.button("✕").clicked() {
+                        self.node_picker_search.clear();
+                    }
+                });
+                ui.separator();
+
+                let search = self.node_picker_search.trim().to_lowercase();
+                let all_nodes = self.proxy_nodes.iter().chain(self.nodes.iter());
+
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let mut count = 0;
+                        let mut seen_ids = std::collections::HashSet::new();
+                        for node in all_nodes {
+                            if !seen_ids.insert(&node.id) {
+                                continue;
+                            }
+                            if !search.is_empty() {
+                                let matches = node.name.to_lowercase().contains(&search)
+                                    || node.server.to_lowercase().contains(&search)
+                                    || node.protocol.to_lowercase().contains(&search)
+                                    || node
+                                        .country
+                                        .as_deref()
+                                        .unwrap_or("")
+                                        .to_lowercase()
+                                        .contains(&search);
+                                if !matches {
+                                    continue;
+                                }
+                            }
+                            count += 1;
+
+                            ui.horizontal(|ui| {
+                                let (flag, _) = country_flag_and_name(
+                                    node.country.as_deref().unwrap_or(""),
+                                );
+                                ui.label(RichText::new(flag).size(14.0));
+                                protocol_pill(ui, &node.protocol.to_uppercase());
+
+                                let name_label = ui.add_sized(
+                                    [ui.available_width() - 80.0, 18.0],
+                                    egui::Label::new(RichText::new(&node.name).strong()).truncate(),
+                                );
+                                name_label.on_hover_text(format!(
+                                    "{}\n{}:{}",
+                                    node.name, node.server, node.port
+                                ));
+
+                                if ui.button("选择").clicked() {
+                                    picked_node = Some((node.id.clone(), node.name.clone()));
+                                }
+                            });
+                            ui.separator();
+                        }
+
+                        if count == 0 {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(30.0);
+                                ui.label(
+                                    RichText::new("没有找到匹配的节点").color(theme::muted()),
+                                );
+                            });
+                        }
+                    });
+            });
+
+        if !open {
+            self.node_picker_open = false;
+        }
+        if let Some((id, name)) = picked_node {
+            if let Some(target_idx) = self.node_picker_target_index {
+                if let Some(mapping) = self.proxy_config.port_mappings.get_mut(target_idx) {
+                    mapping.node_id = id;
+                    mapping.node_name = name;
+                    self.save_proxy_config();
+                }
+            } else {
+                self.new_mapping_node_id = Some(id);
+                self.new_mapping_node_name = Some(name);
+            }
+            self.node_picker_open = false;
+            self.node_picker_target_index = None;
+        }
     }
 
     /// 「下载内核」弹框：镜像竞速 / 官方直连 / 走代理 / 本地导入 四种方式（防火墙放行开关在系统设置页）。

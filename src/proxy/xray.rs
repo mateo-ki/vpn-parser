@@ -249,20 +249,42 @@ pub fn build_xray_config(node: &Node, options: MihomoConfigOptions) -> Result<Va
     } else {
         vec!["localhost".into()]
     };
-    let routing_rules = build_routing_rules(&options)?;
+    let mut inbounds = vec![json!({
+        "tag": "local-http",
+        "listen": if options.allow_lan { "0.0.0.0" } else { "127.0.0.1" },
+        "port": options.mixed_port,
+        "protocol": "http",
+        "settings": { "allowTransparent": false }
+    })];
+    let mut routing_rules = build_routing_rules(&options)?;
+    for mapping in &options.port_mappings {
+        if !mapping.enabled {
+            continue;
+        }
+        let in_tag = format!("inbound-{}", mapping.port);
+        inbounds.push(json!({
+            "tag": in_tag.clone(),
+            "listen": if options.allow_lan { "0.0.0.0" } else { "127.0.0.1" },
+            "port": mapping.port,
+            "protocol": "socks",
+            "settings": { "auth": "noauth", "udp": true }
+        }));
+        routing_rules.insert(
+            0,
+            json!({
+                "type": "field",
+                "inboundTag": [in_tag],
+                "outboundTag": "proxy"
+            }),
+        );
+    }
     Ok(json!({
         "log": { "loglevel": "warning" },
         "dns": {
             "servers": dns_servers,
             "queryStrategy": if options.dns.ipv6 { "UseIP" } else { "UseIPv4" }
         },
-        "inbounds": [{
-            "tag": "local-http",
-            "listen": "127.0.0.1",
-            "port": options.mixed_port,
-            "protocol": "http",
-            "settings": { "allowTransparent": false }
-        }],
+        "inbounds": inbounds,
         "outbounds": [
             outbound,
             { "tag": "direct", "protocol": "freedom", "settings": {} },
