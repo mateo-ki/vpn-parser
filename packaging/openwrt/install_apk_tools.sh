@@ -18,7 +18,7 @@ echo "==> apk-tools with mkpkg not found. Preparing to build apk-tools v3.0.8...
 
 # Determine installation destination
 TARGET_BIN="/usr/local/bin/apk"
-if [ ! -w "/usr/local/bin" ] && [ "$(id -u)" -ne 0 ]; then
+if [ ! -w "/usr/local/bin" ] && [ "$(id -u)" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
     TARGET_BIN="$HOME/.local/bin/apk"
     mkdir -p "$HOME/.local/bin"
     export PATH="$HOME/.local/bin:$PATH"
@@ -32,24 +32,24 @@ if command -v apt-get >/dev/null 2>&1; then
     echo "==> Installing build dependencies via apt-get..."
     if [ "$(id -u)" -eq 0 ]; then
         apt-get update -qq
-        apt-get install -y -qq meson ninja-build libssl-dev zlib1g-dev libzstd-dev git gcc
+        apt-get install -y -qq meson ninja-build pkg-config pkgconf libssl-dev zlib1g-dev libzstd-dev git gcc
     elif command -v sudo >/dev/null 2>&1; then
         sudo apt-get update -qq
-        sudo apt-get install -y -qq meson ninja-build libssl-dev zlib1g-dev libzstd-dev git gcc
+        sudo apt-get install -y -qq meson ninja-build pkg-config pkgconf libssl-dev zlib1g-dev libzstd-dev git gcc
     fi
 elif command -v dnf >/dev/null 2>&1; then
     echo "==> Installing build dependencies via dnf..."
     if [ "$(id -u)" -eq 0 ]; then
-        dnf install -y -q meson ninja-build openssl-devel zlib-devel libzstd-devel git gcc
+        dnf install -y -q meson ninja-build pkgconf pkgconf-pkg-config openssl-devel zlib-devel libzstd-devel git gcc
     elif command -v sudo >/dev/null 2>&1; then
-        sudo dnf install -y -q meson ninja-build openssl-devel zlib-devel libzstd-devel git gcc
+        sudo dnf install -y -q meson ninja-build pkgconf pkgconf-pkg-config openssl-devel zlib-devel libzstd-devel git gcc
     fi
 elif command -v pacman >/dev/null 2>&1; then
     echo "==> Installing build dependencies via pacman..."
     if [ "$(id -u)" -eq 0 ]; then
-        pacman -Sy --noconfirm meson ninja openssl zlib zstd git gcc
+        pacman -Sy --noconfirm meson ninja pkgconf openssl zlib zstd git gcc
     elif command -v sudo >/dev/null 2>&1; then
-        sudo pacman -Sy --noconfirm meson ninja openssl zlib zstd git gcc
+        sudo pacman -Sy --noconfirm meson ninja pkgconf openssl zlib zstd git gcc
     fi
 fi
 
@@ -90,4 +90,7 @@ else
 fi
 
 echo "==> Successfully installed: $TARGET_BIN"
+if [ -n "${GITHUB_PATH:-}" ]; then
+    echo "$(dirname "$TARGET_BIN")" >> "$GITHUB_PATH"
+fi
 "$TARGET_BIN" --version 2>/dev/null || true

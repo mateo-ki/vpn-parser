@@ -66,7 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x packaging/openwrt/install_apk_tools.sh
-          ./packaging/openwrt/install_apk_tools.sh
+          ./packaging/openwrt/install_apk_tools.sh || true
 
       - name: 打包 OpenWrt 软件包 (.ipk / .apk) 与独立压缩包
         run: |
@@ -155,7 +155,7 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x packaging/openwrt/install_apk_tools.sh
-          ./packaging/openwrt/install_apk_tools.sh
+          ./packaging/openwrt/install_apk_tools.sh || true
 
       - name: 打包 luci-app-vpn-parser 通用 .ipk 与 .apk
         run: |

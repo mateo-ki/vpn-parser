@@ -746,10 +746,12 @@ fn cjk_font_candidates() -> Vec<std::path::PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let fixed = [
-            "/System/Library/Fonts/PingFang.ttc",
             "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/System/Library/Fonts/Supplemental/Hiragino Sans GB.ttc",
+            "/Library/Fonts/Hiragino Sans GB.ttc",
             "/System/Library/Fonts/STHeiti Light.ttc",
             "/System/Library/Fonts/STHeiti Medium.ttc",
+            "/System/Library/Fonts/PingFang.ttc",
             "/System/Library/Fonts/Supplemental/Songti.ttc",
             "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
             "/System/Library/Fonts/Supplemental/Kaiti.ttc",
@@ -806,9 +808,17 @@ fn setup_chinese_fonts(ctx: &egui::Context) {
 
             info!(path = %path.display(), font = %font_name, "loaded CJK font for GUI");
 
+            let mut font_data = egui::FontData::from_owned(bytes);
+            if font_name.to_lowercase().contains("pingfang") {
+                font_data.tweak = egui::FontTweak {
+                    y_offset_factor: -0.18,
+                    ..Default::default()
+                };
+            }
+
             fonts.font_data.insert(
                 font_name.clone(),
-                std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+                std::sync::Arc::new(font_data),
             );
             loaded_names.push(font_name);
 

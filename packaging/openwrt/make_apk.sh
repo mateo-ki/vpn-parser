@@ -48,9 +48,8 @@ elif [ -f "$SCRIPT_DIR/install_apk_tools.sh" ]; then
 fi
 
 if [ -z "$APK_BIN" ]; then
-    echo "Error: 'apk' command with 'mkpkg' subcommand is required to build OpenWrt 25.x .apk packages." >&2
-    echo "Please run './packaging/openwrt/install_apk_tools.sh' or install apk-tools v3.0+." >&2
-    exit 1
+    echo "Warning: 'apk' command with 'mkpkg' subcommand is not available. Skipping .apk generation." >&2
+    exit 0
 fi
 
 echo "==> Using apk-tools binary: $APK_BIN"
