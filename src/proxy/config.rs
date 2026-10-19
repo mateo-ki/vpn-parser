@@ -188,6 +188,7 @@ impl NetworkProtocol {
 pub enum RuleMatcher {
     Domain(String),
     DomainSuffix(String),
+    DomainKeyword(String),
     GeoSite(String),
     GeoIp(String),
     IpCidr(String),
@@ -225,9 +226,13 @@ pub fn optimize_traffic_rules(rules: &[TrafficRule]) -> Vec<TrafficRule> {
 fn shadows(earlier: &TrafficRule, later: &TrafficRule) -> bool {
     use RuleMatcher::*;
     match (&earlier.matcher, &later.matcher) {
-        (Domain(a), Domain(b)) | (GeoSite(a), GeoSite(b)) | (IpCidr(a), IpCidr(b)) => a == b,
+        (Domain(a), Domain(b))
+        | (DomainKeyword(a), DomainKeyword(b))
+        | (GeoSite(a), GeoSite(b))
+        | (IpCidr(a), IpCidr(b)) => a == b,
         (DomainSuffix(a), DomainSuffix(b)) => b == a || b.ends_with(&format!(".{a}")),
         (DomainSuffix(a), Domain(b)) => b == a || b.ends_with(&format!(".{a}")),
+        (DomainKeyword(a), Domain(b)) | (DomainKeyword(a), DomainSuffix(b)) => b.contains(a),
         (GeoIp(a), GeoIp(b)) => a.eq_ignore_ascii_case(b),
         (DestinationPort(a), DestinationPort(b)) => a == b,
         (ProcessName(a), ProcessName(b)) => a == b,
@@ -244,6 +249,7 @@ impl TrafficRule {
         let rule = match &self.matcher {
             RuleMatcher::Domain(value) => render_value_rule("DOMAIN", value, target)?,
             RuleMatcher::DomainSuffix(value) => render_value_rule("DOMAIN-SUFFIX", value, target)?,
+            RuleMatcher::DomainKeyword(value) => render_value_rule("DOMAIN-KEYWORD", value, target)?,
             RuleMatcher::GeoSite(value) => render_value_rule("GEOSITE", value, target)?,
             RuleMatcher::GeoIp(value) => {
                 let rendered = render_value_rule("GEOIP", value, target)?;

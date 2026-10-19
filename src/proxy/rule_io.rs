@@ -16,7 +16,6 @@ use serde_json::Value;
 /// 本程序没有对应匹配类型的规则：导入时点名跳过，不假装成功。
 /// 帮助弹框里"会跳过的类型"那一行也读这份清单，所以 match 分支必须用它。
 pub const UNSUPPORTED_KINDS: &[&str] = &[
-    "DOMAIN-KEYWORD",
     "IP-CIDR6",
     "SRC-IP-CIDR",
     "PROCESS-CNAME",
@@ -113,6 +112,18 @@ pub fn parse_rules_text(text: &str) -> RuleImport {
     import
 }
 
+/// 解析单行规则字符串，成功返回 TrafficRule，无法解析或不受支持返回 None。
+pub fn parse_single_rule(raw: &str) -> Option<TrafficRule> {
+    let line = clean_line(raw);
+    if line.is_empty() {
+        return None;
+    }
+    match parse_rule_line(&line) {
+        Parsed::Rule(rule, _) => Some(rule),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct Flags {
     remapped: bool,
@@ -134,6 +145,7 @@ pub struct ImportExample {
 pub const SUPPORTED_KINDS: &[&str] = &[
     "DOMAIN",
     "DOMAIN-SUFFIX",
+    "DOMAIN-KEYWORD",
     "GEOSITE",
     "GEOIP",
     "IP-CIDR",
@@ -187,8 +199,8 @@ pub fn import_examples() -> Vec<ImportExample> {
             title: "支持的匹配类型",
             note: "GEOIP 的 no-resolve 由本程序自动加；QUIC 简写和 AND 展开写法都收；DST-PORT 也可写成 DEST-PORT。",
             body: supported_kinds_example_body(),
-            // 12 行：NETWORK 有 tcp/udp 两条，QUIC 的简写与 AND 展开写法各一条。
-            expected_rules: 12,
+            // 13 行：NETWORK 有 tcp/udp 两条，QUIC 的简写与 AND 展开写法各一条，DOMAIN-KEYWORD 一条。
+            expected_rules: 13,
             expected_unsupported: 0,
         },
         ImportExample {
@@ -205,6 +217,7 @@ fn supported_kinds_example_body() -> &'static str {
     // 手写而非拼接：例子内文要能直接读，且由测试保证与 SUPPORTED_KINDS 同步。
     "DOMAIN,example.com,PROXY\n\
      DOMAIN-SUFFIX,example.com,PROXY\n\
+     DOMAIN-KEYWORD,openai,PROXY\n\
      GEOSITE,cn,DIRECT\n\
      GEOIP,CN,DIRECT\n\
      IP-CIDR,10.0.0.0/8,DIRECT,no-resolve\n\
@@ -218,8 +231,7 @@ fn supported_kinds_example_body() -> &'static str {
 }
 
 fn skipped_kinds_example_body() -> &'static str {
-    "DOMAIN-KEYWORD,runwaym1,PROXY\n\
-     IP-CIDR6,fc00::/7,DIRECT\n\
+    "IP-CIDR6,fc00::/7,DIRECT\n\
      SRC-IP-CIDR,10.0.0.0/8,PROXY\n\
      PROCESS-CNAME,chrome,DIRECT\n\
      DSCP,46,PROXY\n\
@@ -373,6 +385,9 @@ fn parse_rule_line(line: &str) -> Parsed {
     let matcher = match kind.as_str() {
         "DOMAIN" if !payload.is_empty() => RuleMatcher::Domain(payload.to_string()),
         "DOMAIN-SUFFIX" if !payload.is_empty() => RuleMatcher::DomainSuffix(payload.to_string()),
+        "DOMAIN-KEYWORD" if !payload.is_empty() => {
+            RuleMatcher::DomainKeyword(payload.to_string())
+        }
         "GEOSITE" if !payload.is_empty() => RuleMatcher::GeoSite(payload.to_string()),
         "GEOIP" if !payload.is_empty() => RuleMatcher::GeoIp(payload.to_string()),
         "IP-CIDR" if !payload.is_empty() => RuleMatcher::IpCidr(payload.to_string()),
@@ -484,18 +499,18 @@ mod tests {
     /// 不支持的类型必须点名，不能假装导成功 —— 域名关键词和 IPv6 在真实规则表里很常见。
     #[test]
     fn reports_unsupported_types_instead_of_dropping_them() {
-        let text = "[\"DOMAIN-KEYWORD,runwaym1,自定义组B\",\"IP-CIDR6,fc00::/7,DIRECT\",\"DOMAIN-SUFFIX,a.com,PROXY\"]";
+        let text = "[\"SRC-IP-CIDR,10.0.0.0/8,PROXY\",\"IP-CIDR6,fc00::/7,DIRECT\",\"DOMAIN-SUFFIX,a.com,PROXY\"]";
         let import = parse_rules_text(text);
         assert_eq!(import.rules.len(), 1);
         assert_eq!(
             import.unsupported,
             vec![
-                ("DOMAIN-KEYWORD".to_string(), 1),
-                ("IP-CIDR6".to_string(), 1)
+                ("IP-CIDR6".to_string(), 1),
+                ("SRC-IP-CIDR".to_string(), 1)
             ]
         );
         assert!(
-            import.summary().contains("DOMAIN-KEYWORD×1"),
+            import.summary().contains("IP-CIDR6×1、SRC-IP-CIDR×1"),
             "{}",
             import.summary()
         );
@@ -654,17 +669,16 @@ mod verge_script_tests {
         let import = parse_rules_text(VERGE_BODY);
         assert_eq!(
             import.rules.len(),
-            9,
-            "9 条能落进规则表：{}",
+            10,
+            "10 条能落进规则表：{}",
             import.summary()
         );
-        assert_eq!(import.remapped_groups, 5, "五个自定义组名要点名");
+        assert_eq!(import.remapped_groups, 6, "六个自定义组名要点名");
         // 只数真正导入的那些：两条 IP-CIDR6 带着 no-resolve 但整条被跳过，不该计进来。
         assert_eq!(import.no_resolve, 3);
         assert_eq!(
             import.unsupported,
             vec![
-                ("DOMAIN-KEYWORD".to_string(), 1),
                 ("IP-CIDR6".to_string(), 2)
             ]
         );
@@ -681,7 +695,7 @@ mod verge_script_tests {
         assert!(
             import
                 .summary()
-                .contains("不支持 DOMAIN-KEYWORD×1、IP-CIDR6×2"),
+                .contains("不支持 IP-CIDR6×2"),
             "{}",
             import.summary()
         );

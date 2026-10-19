@@ -4,7 +4,7 @@ pub mod openrung;
 mod uri;
 pub mod warp_masque;
 
-pub use clash::parse_clash_yaml;
+pub use clash::{extract_clash_rules, parse_clash_yaml};
 pub use common::{
     decode_maybe_base64, expand_url_template, extract_uris, normalize_subscription_text,
 };
@@ -18,6 +18,31 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::json;
 use uuid::Uuid;
+
+/// Extract traffic routing rules from a free-form subscription body (e.g. Clash YAML, base64 Clash).
+pub fn extract_subscription_rules(content: &str) -> Vec<crate::proxy::TrafficRule> {
+    let content = normalize_subscription_text(content);
+    let content = content.trim();
+    if content.is_empty() {
+        return Vec::new();
+    }
+    if looks_like_clash(content) {
+        let rules = extract_clash_rules(content);
+        if !rules.is_empty() {
+            return rules;
+        }
+    }
+    if let Some(decoded) = decode_maybe_base64(content) {
+        let decoded = normalize_subscription_text(&decoded);
+        if looks_like_clash(&decoded) {
+            let rules = extract_clash_rules(&decoded);
+            if !rules.is_empty() {
+                return rules;
+            }
+        }
+    }
+    Vec::new()
+}
 
 /// Parse free-form subscription body into nodes.
 /// Supports:
@@ -89,7 +114,7 @@ pub fn parse_subscription(content: &str, source_id: Option<&str>) -> Vec<Node> {
     dedup_nodes(nodes)
 }
 
-fn looks_like_clash(content: &str) -> bool {
+pub fn looks_like_clash(content: &str) -> bool {
     let lower = content.to_ascii_lowercase();
     lower.contains("proxies:")
         || lower.contains("proxy-groups:")

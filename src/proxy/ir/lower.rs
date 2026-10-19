@@ -229,6 +229,7 @@ fn convert_matcher(matcher: &RuleMatcher) -> (IRMatcher, bool) {
     match matcher {
         RuleMatcher::Domain(d) => (IRMatcher::Domain(d.clone()), false),
         RuleMatcher::DomainSuffix(d) => (IRMatcher::DomainSuffix(d.clone()), false),
+        RuleMatcher::DomainKeyword(k) => (IRMatcher::DomainKeyword(k.clone()), false),
         RuleMatcher::GeoSite(s) => (IRMatcher::GeoSite(s.clone()), false),
         RuleMatcher::GeoIp(country) => (IRMatcher::GeoIp(country.clone()), true),
         RuleMatcher::IpCidr(cidr) => (IRMatcher::IpCidr(cidr.clone()), false),

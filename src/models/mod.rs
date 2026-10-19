@@ -157,7 +157,7 @@ pub struct ProtocolStat {
     pub count: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FetchResult {
     pub source_id: String,
     pub source_name: String,
@@ -165,6 +165,8 @@ pub struct FetchResult {
     pub success: bool,
     pub message: String,
     pub node_count: usize,
+    #[serde(default)]
+    pub extracted_rules: Vec<crate::proxy::TrafficRule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -29,6 +29,26 @@ pub fn parse_clash_yaml(content: &str, source_id: Option<&str>) -> anyhow::Resul
     Ok(nodes)
 }
 
+/// 从 Clash YAML 订阅文本中提取自带的分流规则（rules: 字段）。
+pub fn extract_clash_rules(content: &str) -> Vec<crate::proxy::TrafficRule> {
+    let Ok(root) = serde_yaml::from_str::<Value>(content) else {
+        return Vec::new();
+    };
+    let Some(rules_val) = root.get("rules").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut rules = Vec::with_capacity(rules_val.len());
+    for item in rules_val {
+        let Some(line) = item.as_str() else {
+            continue;
+        };
+        if let Some(rule) = crate::proxy::rule_io::parse_single_rule(line) {
+            rules.push(rule);
+        }
+    }
+    crate::proxy::optimize_traffic_rules(&rules)
+}
+
 fn proxy_to_node(item: &Value, source_id: Option<&str>) -> Option<Node> {
     let obj = item.as_object()?;
     let ty = obj
@@ -96,4 +116,64 @@ fn proxy_to_node(item: &Value, source_id: Option<&str>) -> Option<Node> {
     Some(make_node(
         protocol, &name, &server, port, &raw, config, source_id,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proxy::{RuleAction, RuleMatcher};
+
+    #[test]
+    fn extracts_clash_rules_successfully() {
+        let yaml = r#"
+port: 7890
+rules:
+  - "DOMAIN-SUFFIX,google.com,节点选择"
+  - "DOMAIN-KEYWORD,openai,AI分组"
+  - "IP-CIDR,192.168.0.0/16,DIRECT"
+  - "GEOIP,CN,DIRECT"
+  - "MATCH,漏网之鱼"
+proxies:
+  - name: "HK 01"
+    type: ss
+    server: 1.1.1.1
+    port: 443
+    cipher: aes-256-gcm
+    password: pass
+"#;
+        let rules = extract_clash_rules(yaml);
+        assert_eq!(rules.len(), 4); // MATCH is dropped as expected
+        assert_eq!(
+            rules[0].matcher,
+            RuleMatcher::DomainSuffix("google.com".into())
+        );
+        assert_eq!(rules[0].action, RuleAction::Proxy);
+        assert_eq!(
+            rules[1].matcher,
+            RuleMatcher::DomainKeyword("openai".into())
+        );
+        assert_eq!(rules[1].action, RuleAction::Proxy);
+        assert_eq!(
+            rules[2].matcher,
+            RuleMatcher::IpCidr("192.168.0.0/16".into())
+        );
+        assert_eq!(rules[2].action, RuleAction::Direct);
+        assert_eq!(rules[3].matcher, RuleMatcher::GeoIp("CN".into()));
+        assert_eq!(rules[3].action, RuleAction::Direct);
+    }
+
+    #[test]
+    fn returns_empty_when_no_rules_present() {
+        let yaml = r#"
+proxies:
+  - name: "US 01"
+    type: ss
+    server: 2.2.2.2
+    port: 443
+    cipher: aes-256-gcm
+    password: pass
+"#;
+        let rules = extract_clash_rules(yaml);
+        assert!(rules.is_empty());
+    }
 }

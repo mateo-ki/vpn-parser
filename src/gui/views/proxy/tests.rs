@@ -95,9 +95,9 @@ mod rule_import_help_probe_tests {
                 painted.contains("认这些类型") && painted.contains("点名跳过"),
                 "{screen_width:.0} 宽时类型清单没画出来"
             );
-            // 卡片比原来的裸文本各高 ~30pt：620 逻辑宽以上能不滚动看见前三段，
-            // 更窄（960 物理 ÷ 150% 缩放 ÷ 140% 字体）只保证前两段，剩下的靠滚动。
-            let visible = if screen_width >= 620.0 { 3 } else { 2 };
+            // 卡片比原来的裸文本各高 ~30pt：宽屏（>=800）能不滚动看见前三段，
+            // 更窄（660/480 等，对应高缩放）只保证前两段，剩下的靠滚动。
+            let visible = if screen_width >= 800.0 { 3 } else { 2 };
             for example in &examples[..visible] {
                 assert!(
                     painted.contains(example.title),

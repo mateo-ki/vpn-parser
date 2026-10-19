@@ -936,6 +936,14 @@ impl VpnApp {
                 self.paste_outcome = None;
                 self.import_from_clipboard();
             }
+            Some(DialogAction::ImportClashConfig) => {
+                self.paste_outcome = None;
+                self.import_clash_from_clipboard();
+            }
+            Some(DialogAction::ImportRules) => {
+                self.paste_outcome = None;
+                self.import_rules_from_clipboard();
+            }
             None => {}
         }
     }

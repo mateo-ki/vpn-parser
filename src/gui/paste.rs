@@ -37,6 +37,10 @@ pub enum PasteOutcome {
     },
     /// 认出来了，但这个地址已经在订阅源里。
     Duplicate { name: String },
+    /// 剪贴板是一份完整的 Clash 配置（包含节点与分流规则）。
+    ClashConfig { nodes: usize, rules: usize },
+    /// 剪贴板是多条分流规则。
+    Rules { count: usize },
     /// 粘的是节点链接：给一条"按节点导入"的出口，不建源。
     NodeLinks { count: usize },
     /// 没认出来。
@@ -47,6 +51,10 @@ pub enum PasteOutcome {
 pub enum Detected {
     /// 一个可以当订阅源的地址。`name` 是按主机名/频道名推出来的建议名称。
     Subscription { url: String, name: String },
+    /// 完整 Clash 配置。
+    ClashConfig { nodes: usize, rules: usize },
+    /// 纯规则文本。
+    Rules { count: usize },
     /// 粘的是节点链接（N 条）：走"导入剪贴板节点"那条路，不建源。
     NodeLinks { count: usize },
     /// 不是我们能吃的东西，弹框要说清楚看到的是什么。
@@ -76,7 +84,7 @@ fn first_url(text: &str) -> Option<String> {
         // 裸地址：必须有主机 + 路径 + 主机带点，才敢当订阅地址；否则一段英文句子会被误判。
         if !token.contains("://") {
             if let Some((host, _)) = token.split_once('/') {
-                if host.contains('.') && !host.starts_with('.') && !host.ends_with('.') {
+                if host.contains('.') && !host.starts_with('.') && !host.ends_with('.') && !host.contains(',') {
                     return Some(format!("https://{token}"));
                 }
             }
@@ -130,22 +138,50 @@ pub fn recognize(text: &str) -> Option<Detected> {
     if trimmed.is_empty() {
         return None;
     }
-    if let Some(url) = first_url(trimmed) {
-        let (name, url) = if url.to_ascii_lowercase().contains("openrung") {
-            (
-                "OpenRung 专属节点服务".to_string(),
-                "https://broker.openrung.org/api/v1/relays".to_string(),
-            )
-        } else if url.to_ascii_lowercase().contains("warp-masque") {
-            (
-                "WARP-MASQUE 专属节点服务".to_string(),
-                "https://raw.githubusercontent.com/byJoey/warp-masque-actions/main/configs/opera-masque.yaml".to_string(),
-            )
-        } else {
-            (suggested_name(&url), url)
-        };
-        return Some(Detected::Subscription { name, url });
+    // 0) 若是 Clash 完整 YAML 配置（含 proxies 与/或 rules），优先识别为配置或规则
+    if crate::parser::looks_like_clash(trimmed) {
+        let rules = crate::parser::extract_clash_rules(trimmed);
+        let nodes = crate::parser::parse_clash_yaml(trimmed, None).unwrap_or_default();
+        if !nodes.is_empty() {
+            return Some(Detected::ClashConfig {
+                nodes: nodes.len(),
+                rules: rules.len(),
+            });
+        }
+        if !rules.is_empty() {
+            return Some(Detected::Rules {
+                count: rules.len(),
+            });
+        }
     }
+    // 1) 纯分流规则文本（如多行 DOMAIN-SUFFIX,google.com,PROXY）
+    let import = crate::proxy::rule_io::parse_rules_text(trimmed);
+    if !import.rules.is_empty() {
+        return Some(Detected::Rules {
+            count: import.rules.len(),
+        });
+    }
+    // 2) 订阅源地址（URL）：仅当不是包含大量规则/节点的纯文本时作为 URL 识别
+    if let Some(url) = first_url(trimmed) {
+        let nodes = node_link_count(trimmed);
+        if nodes <= 1 {
+            let (name, url) = if url.to_ascii_lowercase().contains("openrung") {
+                (
+                    "OpenRung 专属节点服务".to_string(),
+                    "https://broker.openrung.org/api/v1/relays".to_string(),
+                )
+            } else if url.to_ascii_lowercase().contains("warp-masque") {
+                (
+                    "WARP-MASQUE 专属节点服务".to_string(),
+                    "https://raw.githubusercontent.com/byJoey/warp-masque-actions/main/configs/opera-masque.yaml".to_string(),
+                )
+            } else {
+                (suggested_name(&url), url)
+            };
+            return Some(Detected::Subscription { name, url });
+        }
+    }
+    // 3) WARP-MASQUE JSON
     if trimmed.starts_with('{')
         && (trimmed.contains("endpoint_pub_key")
             || trimmed.contains("peerPublicKey")
@@ -153,6 +189,7 @@ pub fn recognize(text: &str) -> Option<Detected> {
     {
         return Some(Detected::NodeLinks { count: 57 });
     }
+    // 4) 节点链接（ss://, vmess:// 等）
     let nodes = node_link_count(trimmed);
     if nodes > 0 {
         return Some(Detected::NodeLinks { count: nodes });
@@ -206,6 +243,14 @@ pub fn intake(
                 }),
             }
         }
+        Detected::ClashConfig { nodes, rules } => Some(Intake {
+            create: None,
+            outcome: PasteOutcome::ClashConfig { nodes, rules },
+        }),
+        Detected::Rules { count } => Some(Intake {
+            create: None,
+            outcome: PasteOutcome::Rules { count },
+        }),
         Detected::NodeLinks { count } => Some(Intake {
             create: None,
             outcome: PasteOutcome::NodeLinks { count },
@@ -222,6 +267,8 @@ pub fn intake(
 pub enum DialogAction {
     Close,
     ImportNodes,
+    ImportClashConfig,
+    ImportRules,
 }
 
 /// 弹框内容（纯渲染，状态由调用方持有）—— 抽出来是为了能在离屏 `egui::Context` 里
@@ -255,6 +302,16 @@ pub fn dialog_body(ctx: &egui::Context, outcome: &PasteOutcome) -> Option<Dialog
             );
             ui.add_space(8.0);
             ui.horizontal(|ui| {
+                if matches!(outcome, PasteOutcome::ClashConfig { .. })
+                    && ui.button("导入节点并合并分流规则").clicked()
+                {
+                    action = Some(DialogAction::ImportClashConfig);
+                }
+                if matches!(outcome, PasteOutcome::Rules { .. })
+                    && ui.button("追加到分流规则列表").clicked()
+                {
+                    action = Some(DialogAction::ImportRules);
+                }
                 if matches!(outcome, PasteOutcome::NodeLinks { .. })
                     && ui.button("按节点导入这些链接").clicked()
                 {
@@ -293,6 +350,18 @@ pub fn describe(outcome: &PasteOutcome) -> (egui::Color32, egui::Color32, String
             theme::warning_bg(),
             "这个地址已经在订阅源里了".to_string(),
             format!("现有源：《{name}》 —— 没有重复添加。"),
+        ),
+        PasteOutcome::ClashConfig { nodes, rules } => (
+            theme::success(),
+            theme::success_bg(),
+            "剪贴板是一份 Clash 完整配置".to_string(),
+            format!("包含 {nodes} 个代理节点与 {rules} 条分流规则。可以一键导入节点并自动合并分流规则。"),
+        ),
+        PasteOutcome::Rules { count } => (
+            theme::accent(),
+            theme::accent_bg(),
+            format!("剪贴板里是 {count} 条分流规则"),
+            format!("识别到 {count} 条分流规则文本，可以一键追加合并到当前规则分流列表中。"),
         ),
         PasteOutcome::NodeLinks { count } => (
             theme::muted(),
@@ -352,6 +421,11 @@ mod tests {
                 tested: true,
             },
             PasteOutcome::Duplicate { name: "n".into() },
+            PasteOutcome::ClashConfig {
+                nodes: 5,
+                rules: 12,
+            },
+            PasteOutcome::Rules { count: 8 },
             PasteOutcome::NodeLinks { count: 2 },
             PasteOutcome::Unknown {
                 preview: "今天天气不错".into(),
@@ -524,4 +598,40 @@ mod tests {
         // token 少一个字符就是另一个源，不做归一化。
         assert_eq!(is_duplicate("https://a.b/c?token=2", existing), None);
     }
+
+    #[test]
+    fn clash_config_and_rules_text_are_recognized() {
+        let clash_yaml = r#"
+proxies:
+  - name: "HK 01"
+    type: ss
+    server: 1.1.1.1
+    port: 443
+    cipher: aes-256-gcm
+    password: pass
+rules:
+  - "DOMAIN-SUFFIX,google.com,PROXY"
+  - "DOMAIN-KEYWORD,openai,PROXY"
+  - "GEOIP,CN,DIRECT"
+"#;
+        assert_eq!(
+            recognize(clash_yaml),
+            Some(Detected::ClashConfig {
+                nodes: 1,
+                rules: 3,
+            })
+        );
+
+        let rules_only = r#"
+"DOMAIN-SUFFIX,google.com,PROXY",
+"DOMAIN-KEYWORD,openai,PROXY",
+"IP-CIDR,192.168.0.0/16,DIRECT",
+"GEOIP,CN,DIRECT"
+"#;
+        assert_eq!(
+            recognize(rules_only),
+            Some(Detected::Rules { count: 4 })
+        );
+    }
 }
+

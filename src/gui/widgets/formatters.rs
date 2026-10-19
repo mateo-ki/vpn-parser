@@ -261,6 +261,7 @@ pub fn rule_matcher_label(matcher: &RuleMatcher) -> String {
     match matcher {
         RuleMatcher::Domain(value) => format!("DOMAIN · {value}"),
         RuleMatcher::DomainSuffix(value) => format!("DOMAIN-SUFFIX · {value}"),
+        RuleMatcher::DomainKeyword(value) => format!("DOMAIN-KEYWORD · {value}"),
         RuleMatcher::GeoSite(value) => format!("GEOSITE · {value}"),
         RuleMatcher::GeoIp(value) => format!("GEOIP · {value}"),
         RuleMatcher::IpCidr(value) => format!("IP-CIDR · {value}"),

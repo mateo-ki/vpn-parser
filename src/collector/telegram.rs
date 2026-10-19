@@ -366,6 +366,7 @@ impl super::Collector {
                     success: true,
                     message: "not modified · 页面没变化，这一轮不重复解析".into(),
                     node_count: source.last_node_count.max(0) as usize,
+                    extracted_rules: Vec::new(),
                 };
             }
             Ok(Some(downloaded)) => downloaded,
@@ -394,6 +395,7 @@ impl super::Collector {
                     blocks.len()
                 ),
                 node_count: source.last_node_count.max(0) as usize,
+                extracted_rules: Vec::new(),
             };
         }
 
@@ -520,6 +522,7 @@ impl super::Collector {
             success: true,
             message,
             node_count: stored,
+            extracted_rules: Vec::new(),
         }
     }
 
@@ -566,6 +569,7 @@ impl super::Collector {
             success: false,
             message,
             node_count: 0,
+            extracted_rules: Vec::new(),
         }
     }
 }

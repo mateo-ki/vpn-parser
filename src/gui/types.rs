@@ -208,6 +208,7 @@ pub struct ProxyView {
 pub enum RuleDraftKind {
     Domain,
     DomainSuffix,
+    DomainKeyword,
     GeoSite,
     GeoIp,
     IpCidr,
@@ -220,9 +221,10 @@ pub enum RuleDraftKind {
 }
 
 impl RuleDraftKind {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Domain,
         Self::DomainSuffix,
+        Self::DomainKeyword,
         Self::GeoSite,
         Self::GeoIp,
         Self::IpCidr,
@@ -238,6 +240,7 @@ impl RuleDraftKind {
         match self {
             Self::Domain => "域名",
             Self::DomainSuffix => "域名后缀",
+            Self::DomainKeyword => "域名关键字",
             Self::GeoSite => "GeoSite",
             Self::GeoIp => "GeoIP",
             Self::IpCidr => "IP-CIDR",
@@ -258,6 +261,7 @@ impl RuleDraftKind {
         match self {
             Self::Domain => RuleMatcher::Domain(value.trim().into()),
             Self::DomainSuffix => RuleMatcher::DomainSuffix(value.trim().into()),
+            Self::DomainKeyword => RuleMatcher::DomainKeyword(value.trim().into()),
             Self::GeoSite => RuleMatcher::GeoSite(value.trim().into()),
             Self::GeoIp => RuleMatcher::GeoIp(value.trim().into()),
             Self::IpCidr => RuleMatcher::IpCidr(value.trim().into()),

@@ -1771,7 +1771,7 @@ impl VpnApp {
         self.rt.spawn(async move {
             // No source_id: clipboard nodes are not tied to a subscription.
             let nodes = crate::parser::parse_subscription(&text, None);
-            let parsed = nodes.len();
+                let parsed = nodes.len();
             let res = if parsed == 0 {
                 Err("未从剪贴板解析出任何节点".to_string())
             } else {
@@ -1787,6 +1787,104 @@ impl VpnApp {
         });
     }
 
+    pub(crate) fn import_clash_from_clipboard(&mut self) {
+        let text = match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
+            Ok(text) => text.trim().to_string(),
+            Err(error) => {
+                self.status = format!("读取剪贴板失败: {error}");
+                return;
+            }
+        };
+        if text.is_empty() {
+            self.status = "剪贴板为空".into();
+            return;
+        }
+
+        // 1) 提取并自动合并自带的分流规则
+        let rules = crate::parser::extract_subscription_rules(&text);
+        let rules_added = if !rules.is_empty() {
+            let before = self.proxy_config.rules.len();
+            let mut combined = self.proxy_config.rules.clone();
+            combined.extend(rules);
+            self.proxy_config.rules = optimize_traffic_rules(&combined);
+            let added = self.proxy_config.rules.len().saturating_sub(before);
+            if added > 0 {
+                self.save_proxy_config();
+            }
+            added
+        } else {
+            0
+        };
+
+        // 2) 解析并入库节点
+        let db = self.db.clone();
+        let tx = self.tx.clone();
+        self.busy = true;
+        self.status = "正在从剪贴板解析 Clash 配置并导入...".into();
+        self.rt.spawn(async move {
+            let nodes = crate::parser::parse_subscription(&text, None);
+            let parsed = nodes.len();
+            let res = if parsed == 0 {
+                if rules_added > 0 {
+                    Ok(format!("Clash 配置导入完成：未发现新代理节点，已合并 {rules_added} 条分流规则"))
+                } else {
+                    Err("未从剪贴板解析出任何节点或有效规则".to_string())
+                }
+            } else {
+                db.import_nodes(&nodes)
+                    .await
+                    .map(|stored| {
+                        if rules_added > 0 {
+                            format!("Clash 配置导入完成：解析 {parsed} 个节点，入库 {stored} 个，已自动合并 {rules_added} 条自带分流规则")
+                        } else {
+                            format!("Clash 配置导入完成：解析 {parsed} 个节点，入库 {stored} 个")
+                        }
+                    })
+                    .map_err(|e| e.to_string())
+            };
+            let _ = tx.send(BgMsg::OpDone {
+                result: res,
+                unlock: true,
+            });
+        });
+    }
+
+    pub(crate) fn import_rules_from_clipboard(&mut self) {
+        let text = match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
+            Ok(text) => text.trim().to_string(),
+            Err(error) => {
+                self.status = format!("读取剪贴板失败: {error}");
+                return;
+            }
+        };
+        if text.is_empty() {
+            self.status = "剪贴板为空".into();
+            return;
+        }
+
+        let mut parsed_rules = crate::proxy::rule_io::parse_rules_text(&text).rules;
+        if parsed_rules.is_empty() {
+            parsed_rules = crate::parser::extract_subscription_rules(&text);
+        }
+
+        if parsed_rules.is_empty() {
+            self.status = "未能从剪贴板识别出有效的分流规则".into();
+            return;
+        }
+
+        let before = self.proxy_config.rules.len();
+        let mut combined = self.proxy_config.rules.clone();
+        combined.extend(parsed_rules);
+        self.proxy_config.rules = optimize_traffic_rules(&combined);
+        let added = self.proxy_config.rules.len().saturating_sub(before);
+        if added > 0 {
+            self.save_proxy_config();
+            self.status = format!("分流规则导入完成：成功合并追加 {added} 条规则");
+        } else {
+            self.status = "剪贴板中的规则均已存在于列表中，无需重复添加".into();
+        }
+    }
+
     pub(crate) fn import_from_local_yaml_file(&mut self, path: String, as_source: bool, source_name: String) {
         let p = std::path::PathBuf::from(path.trim());
         if !p.exists() {
@@ -1800,6 +1898,23 @@ impl VpnApp {
                 return;
             }
         };
+
+        // 提取并自动合并自带的分流规则
+        let extracted_rules = crate::parser::extract_subscription_rules(&content);
+        let rules_added = if !extracted_rules.is_empty() {
+            let before = self.proxy_config.rules.len();
+            let mut combined = self.proxy_config.rules.clone();
+            combined.extend(extracted_rules);
+            self.proxy_config.rules = optimize_traffic_rules(&combined);
+            let added = self.proxy_config.rules.len().saturating_sub(before);
+            if added > 0 {
+                self.save_proxy_config();
+            }
+            added
+        } else {
+            0
+        };
+
         let db = self.db.clone();
         let tx = self.tx.clone();
         self.busy = true;
@@ -1834,11 +1949,21 @@ impl VpnApp {
             let nodes = crate::parser::parse_subscription(&content, source_id_opt.as_deref());
             let parsed = nodes.len();
             let res = if parsed == 0 {
-                Err("未从文件中解析出任何有效代理节点（请检查是否为 Clash YAML 格式）".to_string())
+                if rules_added > 0 {
+                    Ok(format!("本地文件导入完成：未发现新代理节点，已合并 {rules_added} 条分流规则"))
+                } else {
+                    Err("未从文件中解析出任何有效代理节点（请检查是否为 Clash YAML 格式）".to_string())
+                }
             } else {
                 db.import_nodes(&nodes)
                     .await
-                    .map(|stored| format!("本地文件导入完成：成功解析 {parsed} 个节点，入库 {stored} 个"))
+                    .map(|stored| {
+                        if rules_added > 0 {
+                            format!("本地文件导入完成：成功解析 {parsed} 个节点，入库 {stored} 个，已自动合并 {rules_added} 条自带分流规则")
+                        } else {
+                            format!("本地文件导入完成：成功解析 {parsed} 个节点，入库 {stored} 个")
+                        }
+                    })
                     .map_err(|e| e.to_string())
             };
             let _ = tx.send(BgMsg::OpDone {

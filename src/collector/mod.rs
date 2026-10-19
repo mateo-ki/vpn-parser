@@ -206,6 +206,7 @@ impl Collector {
                         success: false,
                         message,
                         node_count: 0,
+                        extracted_rules: Vec::new(),
                     };
                 }
                 Ok(None) => {
@@ -218,6 +219,7 @@ impl Collector {
                         success: true,
                         message: "not modified, skipped parse/write".into(),
                         node_count: source.last_node_count.max(0) as usize,
+                        extracted_rules: Vec::new(),
                     };
                 }
                 Ok(Some(downloaded)) => downloaded,
@@ -265,20 +267,23 @@ impl Collector {
                     success: true,
                     message: format!("content unchanged, skipped parse/write{via_note}"),
                     node_count: source.last_node_count.max(0) as usize,
+                    extracted_rules: Vec::new(),
                 };
             }
             self.tasks.phase(task_id, &source.id, TaskPhase::Parsing);
             let parse_started = Instant::now();
             let source_id = source.id.clone();
             let parse_permit = PARSE_LIMIT.clone().acquire_owned().await;
-            let nodes = match tokio::task::spawn_blocking(move || {
+            let (nodes, extracted_rules) = match tokio::task::spawn_blocking(move || {
                 let _permit = parse_permit;
                 let body = String::from_utf8_lossy(&body);
-                parse_subscription(&body, Some(&source_id))
+                let rules = crate::parser::extract_subscription_rules(&body);
+                let nodes = parse_subscription(&body, Some(&source_id));
+                (nodes, rules)
             })
             .await
             {
-                Ok(nodes) => nodes,
+                Ok(pair) => pair,
                 Err(error) => {
                     let message = format!("parse task failed: {error}");
                     self.mark_source_fetched(&source.id, &message, 0).await;
@@ -289,6 +294,7 @@ impl Collector {
                         success: false,
                         message,
                         node_count: 0,
+                        extracted_rules: Vec::new(),
                     };
                 }
             };
@@ -337,6 +343,7 @@ impl Collector {
                         success: true,
                         message: format!("ok, parsed={count}, stored={inserted}{via_note}"),
                         node_count: count,
+                        extracted_rules,
                     }
                 }
                 Err(error) => {
@@ -349,6 +356,7 @@ impl Collector {
                         success: false,
                         message,
                         node_count: count,
+                        extracted_rules: Vec::new(),
                     }
                 }
             }
@@ -965,6 +973,7 @@ impl Collector {
                         success: false,
                         message,
                         node_count: 0,
+                        extracted_rules: Vec::new(),
                     }
                 })
             })

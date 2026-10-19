@@ -4,7 +4,7 @@ mod config;
 pub mod ir;
 pub mod manager;
 pub mod mihomo;
-pub(crate) mod rule_io;
+pub mod rule_io;
 pub mod sing_box;
 pub mod types;
 pub mod validator;

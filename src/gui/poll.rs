@@ -32,6 +32,7 @@ impl VpnApp {
                                             success,
                                             message: status.clone(),
                                             node_count: source.last_node_count.max(0) as usize,
+                                            extracted_rules: Vec::new(),
                                         });
                                     }
                                 }
@@ -233,11 +234,9 @@ impl VpnApp {
                             self.switch_total = total;
                         }
                         BgMsg::SourceAdded(id, name) => {
-                            // 「加完就测这个源」：先把源拉下来，拉成功了再测它这一批。
-                            if self.settings.speedtest_added_source {
-                                self.pending_added_source = Some((id.clone(), name));
-                                self.fetch_one(id);
-                            }
+                            // 新增源：拉取节点，若自带分流规则自动添加，并按需执行测速
+                            self.pending_added_source = Some((id.clone(), name));
+                            self.fetch_one(id);
                         }
                         BgMsg::AddedSourceIds {
                             source_id,
@@ -328,14 +327,38 @@ impl VpnApp {
                                         success: false,
                                         message: error.clone(),
                                         node_count: 0,
+                                        extracted_rules: Vec::new(),
                                     });
                                 }
                             }
-                            if self
+                            let is_pending_added = self
                                 .pending_added_source
                                 .as_ref()
-                                .is_some_and(|(id, _)| id == &source_id)
-                            {
+                                .is_some_and(|(id, _)| id == &source_id);
+                            let mut auto_added_rules = 0;
+                            if is_pending_added {
+                                if let Ok(ref fetch) = result {
+                                    if !fetch.extracted_rules.is_empty() {
+                                        let before = self.proxy_config.rules.len();
+                                        let mut combined = self.proxy_config.rules.clone();
+                                        combined.extend(fetch.extracted_rules.clone());
+                                        self.proxy_config.rules =
+                                            crate::proxy::optimize_traffic_rules(&combined);
+                                        auto_added_rules = self
+                                            .proxy_config
+                                            .rules
+                                            .len()
+                                            .saturating_sub(before);
+                                        if auto_added_rules > 0 {
+                                            self.save_proxy_config();
+                                            tracing::info!(
+                                                source = %fetch.source_name,
+                                                rules_added = auto_added_rules,
+                                                "已自动将订阅源自带的规则添加至规则分流列表"
+                                            );
+                                        }
+                                    }
+                                }
                                 let (_, name) =
                                     self.pending_added_source.take().unwrap_or_default();
                                 let (ok, nodes) = match &result {
@@ -352,10 +375,19 @@ impl VpnApp {
                                 }
                             }
                             self.status = match result {
-                                Ok(result) if result.success => format!(
-                                    "订阅“{}”拉取完成：{} 个节点",
-                                    result.source_name, result.node_count
-                                ),
+                                Ok(result) if result.success => {
+                                    if auto_added_rules > 0 {
+                                        format!(
+                                            "订阅“{}”拉取完成：{} 个节点，已自动添加 {} 条自带分流规则",
+                                            result.source_name, result.node_count, auto_added_rules
+                                        )
+                                    } else {
+                                        format!(
+                                            "订阅“{}”拉取完成：{} 个节点",
+                                            result.source_name, result.node_count
+                                        )
+                                    }
+                                }
                                 Ok(result) => {
                                     let msg = &result.message;
                                     if msg.contains("request failed")

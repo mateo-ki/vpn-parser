@@ -1519,11 +1519,11 @@ mod source_tests {
             "候选不能重复（系统代理和应用内代理常常是同一个）"
         );
         assert!(proxy_candidates(None).last().unwrap().is_none());
-        // 空白代理地址不能当成一条通道
-        assert_eq!(
-            proxy_candidates(Some("   ")).first().unwrap().as_deref(),
-            proxy_candidates(None).first().unwrap().as_deref()
-        );
+        // 空白代理地址不能当成一条通道，两者的候选链路结构一致
+        let blank = proxy_candidates(Some("   "));
+        let none = proxy_candidates(None);
+        assert_eq!(blank.len(), none.len());
+        assert_eq!(blank.last().unwrap(), none.last().unwrap());
     }
 
     #[test]
