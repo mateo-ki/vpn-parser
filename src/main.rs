@@ -226,24 +226,6 @@ fn main() -> Result<()> {
     }
 
     platform::ensure_job_initialized();
-    // 诊断壳不许杀内核：这台机器上用户实例正挂着 mihomo，`kill_orphan_proxy_cores`
-    // 是按 exe 名满系统杀的，一杀他的网就断。
-    let cleaned_cores = if diag {
-        startup_log("DIAG: 跳过 kill_orphan_proxy_cores（不动任何进程）");
-        0
-    } else {
-        platform::kill_orphan_proxy_cores()
-    };
-    if cleaned_cores > 0 {
-        startup_log(&format!(
-            "Cleaned up {cleaned_cores} orphan proxy core processes."
-        ));
-    }
-
-    if !diag {
-        platform::self_heal_stale_system_proxy(9980);
-    }
-
     startup_log(&format!(
         "CLI parsed: headless={}, db={:?}",
         cli.headless, cli.db
@@ -313,6 +295,26 @@ fn main() -> Result<()> {
     } else {
         None
     };
+
+    // 清残留内核**必须排在单实例检查之后**：`kill_orphan_proxy_cores` 是按 exe 名满系统杀的，
+    // 排在前面时"第二个实例发现已有人在跑、唤醒并退出"这条路会先把**那个正在跑的实例**挂着的
+    // mihomo 干掉（2026-10-16 实测：他从命令行跑了一下自己的 exe，出口瞬断 8 秒）。
+    // 诊断壳同样不许动任何进程。
+    let cleaned_cores = if diag {
+        startup_log("DIAG: 跳过 kill_orphan_proxy_cores（不动任何进程）");
+        0
+    } else {
+        platform::kill_orphan_proxy_cores()
+    };
+    if cleaned_cores > 0 {
+        startup_log(&format!(
+            "Cleaned up {cleaned_cores} orphan proxy core processes."
+        ));
+    }
+
+    if !diag {
+        platform::self_heal_stale_system_proxy(9980);
+    }
 
     if _single_instance.is_some() {
         let killed_zombies = platform::kill_duplicate_vpn_parser_instances();

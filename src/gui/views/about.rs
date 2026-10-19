@@ -11,6 +11,9 @@ const RELEASES_URL: &str = "https://github.com/mateo-ki/vpn-parser/releases";
 /// 关于页顶部那句介绍。刻意写"这程序干四件事"而不是形容词：这一页是排障时才来的地方。
 const TAGLINE: &str = "采集订阅 · 解析节点 · 本地跑代理 · 把代理质量测出来给你看。";
 
+/// 后台自动检查在线更新的间隔：**3 小时**（2026-10-20 他定的）。第一次仍然在启动后 1 秒查。
+const APP_UPDATE_CHECK_INTERVAL_SECS: u64 = 3 * 60 * 60;
+
 impl VpnApp {
     pub(crate) fn ui_about(&mut self, ui: &mut Ui) {
         section_title(ui, self.tr("关于"), "本机版本 · 在线更新");
@@ -500,8 +503,9 @@ impl VpnApp {
         });
     }
 
-    /// 一次运行只自动查一次：GitHub 未认证限流 60 次/小时，而且这不是急事。
-    /// 用户已经在关于页手动查过（或正在查）就跳过。
+    /// 自动检查的节奏：**每 3 小时一次**（2026-10-20 他定的）。GitHub 匿名配额 60 次/小时，
+    /// 3 小时一次 = 8 次/小时，留足余量给手动检查和内核更新那几条路。
+    /// 用户已经在关于页手动查过（或正在查）就跳过这一次。
     pub(crate) fn maybe_check_app_update(&mut self) {
         let Some(due) = self.app_update_due else {
             return;
@@ -509,7 +513,10 @@ impl VpnApp {
         if std::time::Instant::now() < due {
             return;
         }
-        self.app_update_due = None;
+        self.app_update_due = Some(
+            std::time::Instant::now()
+                + std::time::Duration::from_secs(APP_UPDATE_CHECK_INTERVAL_SECS),
+        );
         if self.app_release.is_some() || self.app_update_busy || self.app_update_quiet {
             return;
         }

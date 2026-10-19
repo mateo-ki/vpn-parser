@@ -594,36 +594,91 @@ pub async fn check(
     };
     let mut failures = Vec::new();
     for transport in transports(app_proxy)? {
-        let result = transport
+        let mut request = transport
             .client
             .get(&url)
-            .timeout(std::time::Duration::from_secs(8))
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status);
-        let picked: Result<Option<ReleaseJson>> = match (channel, result) {
-            (UpdateChannel::Stable, Ok(response)) => response
+            .timeout(std::time::Duration::from_secs(8));
+        if let Some(token) = github_token() {
+            request = request.bearer_auth(&token);
+        }
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                failures.push(format!("{}: 连不上（{error}）", transport.label));
+                continue;
+            }
+        };
+        let status = response.status();
+        if !status.is_success() {
+            let rate_limited = response
+                .headers()
+                .get("x-ratelimit-remaining")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value == "0");
+            failures.push(format!(
+                "{}: {}",
+                transport.label,
+                describe_rejection(status, rate_limited)
+            ));
+            continue;
+        }
+        let picked: Result<Option<ReleaseJson>> = match channel {
+            UpdateChannel::Stable => response
                 .json::<ReleaseJson>()
                 .await
                 .map(Some)
                 .map_err(|error| anyhow::anyhow!(error)),
-            (UpdateChannel::Insider, Ok(response)) => response
+            UpdateChannel::Insider => response
                 .json::<Vec<ReleaseJson>>()
                 .await
                 .map(|list| list.into_iter().find(|release| !release.draft))
                 .map_err(|error| anyhow::anyhow!(error)),
-            (_, Err(error)) => Err(anyhow::anyhow!(error)),
         };
         match picked {
             Ok(Some(release)) => return Ok(summarize(release, current, channel)),
             Ok(None) => failures.push(format!("{}: 这个通道里还没有已发布的版本", transport.label)),
-            Err(error) => failures.push(format!("{}: {error}", transport.label)),
+            Err(error) => failures.push(format!("{}: 响应读不完（{error}）", transport.label)),
         }
     }
     bail!(
         "读取 {REPOSITORY} 最新 Release 失败：{}",
         failures.join("；")
     )
+}
+
+/// GitHub 的匿名 API 配额只有 60 次/小时，而且按**出口 IP** 算 —— 这台机器上还和别的工具共用。
+/// 环境里有 `GITHUB_TOKEN` / `GH_TOKEN` 就用（配额 5000 次/小时），没有就匿名查。
+fn github_token() -> Option<String> {
+    pick_github_token(
+        ["GITHUB_TOKEN", "GH_TOKEN"]
+            .iter()
+            .filter_map(|key| std::env::var(key).ok()),
+    )
+}
+
+/// 从按优先级排好的候选里挑第一个真令牌。全空/全空白 = 没有（宁可不认证，也别发一个空
+/// `Authorization` 头 —— GitHub 会把那当成坏凭据直接 401）。
+fn pick_github_token(candidates: impl IntoIterator<Item = impl AsRef<str>>) -> Option<String> {
+    candidates
+        .into_iter()
+        .map(|token| token.as_ref().trim().to_string())
+        .find(|token| !token.is_empty())
+}
+
+/// 把"网络不通"和"GitHub 拒绝了我们"分开说：混成一条 `error sending request` 会让人
+/// 以为是代理坏了，其实多半是匿名配额用尽，等一小时或给个 token 就好。
+fn describe_rejection(status: reqwest::StatusCode, rate_limited: bool) -> String {
+    let code = status.as_u16();
+    if code == 403 || code == 429 {
+        if rate_limited {
+            return format!(
+                "GitHub API 限流（HTTP {code}，匿名配额 60 次/小时）：不是网络故障，\
+                 设 GITHUB_TOKEN 可放宽到 5000 次/小时"
+            );
+        }
+        return format!("GitHub 拒绝了请求（HTTP {code}）");
+    }
+    format!("HTTP {code}")
 }
 
 /// 拉取 GitHub Releases 历史版本列表（过滤草稿，解析匹配本平台的安装包资产与发布信息）。
@@ -1547,4 +1602,28 @@ ID-LIKE=\"debian\"
             assert!(info.tag.starts_with('v'));
         }
     }
+
+    #[test]
+    fn the_github_token_prefers_the_first_real_one() {
+        assert_eq!(
+            pick_github_token(["", "   ", " ghpat_abc "]).as_deref(),
+            Some("ghpat_abc")
+        );
+        // 全空 = 宁可不认证，也不发一个空 Authorization 头（GitHub 会当坏凭据直接 401）。
+        assert!(pick_github_token(["", "  ", ""]).is_none());
+        assert!(pick_github_token([] as [&str; 0]).is_none());
+    }
+
+    #[test]
+    fn a_rate_limit_is_not_reported_as_a_network_failure() {
+        let limited = describe_rejection(reqwest::StatusCode::FORBIDDEN, true);
+        assert!(limited.contains("限流"), "{limited}");
+        assert!(limited.contains("GITHUB_TOKEN"), "{limited}");
+        // 反向对照：403 但没有 x-ratelimit-remaining=0 时不许赖限流。
+        let plain = describe_rejection(reqwest::StatusCode::FORBIDDEN, false);
+        assert!(!plain.contains("限流"), "{plain}");
+        assert!(plain.contains("403"), "{plain}");
+        assert_eq!(describe_rejection(reqwest::StatusCode::NOT_FOUND, false), "HTTP 404");
+    }
+
 }
