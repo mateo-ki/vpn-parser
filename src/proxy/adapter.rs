@@ -86,6 +86,16 @@ impl KernelAdapter for MihomoAdapter {
             .arg(work_dir.config_path());
     }
 
+    fn validation_args(&self, work_dir: &ProxyWorkDir) -> Option<Vec<std::ffi::OsString>> {
+        Some(vec![
+            "-t".into(),
+            "-d".into(),
+            work_dir.data_root().as_os_str().to_owned(),
+            "-f".into(),
+            work_dir.config_path().as_os_str().to_owned(),
+        ])
+    }
+
     fn readiness_port(&self, options: &MihomoConfigOptions) -> u16 {
         options.controller_port
     }
@@ -149,6 +159,16 @@ impl KernelAdapter for SingBoxAdapter {
             .arg(work_dir.config_path());
     }
 
+    fn validation_args(&self, work_dir: &ProxyWorkDir) -> Option<Vec<std::ffi::OsString>> {
+        Some(vec![
+            "check".into(),
+            "-D".into(),
+            work_dir.root().as_os_str().to_owned(),
+            "-c".into(),
+            work_dir.config_path().as_os_str().to_owned(),
+        ])
+    }
+
     fn readiness_port(&self, options: &MihomoConfigOptions) -> u16 {
         options.mixed_port
     }
@@ -203,9 +223,17 @@ impl KernelAdapter for XrayAdapter {
 
     fn configure_command(&self, command: &mut Command, work_dir: &ProxyWorkDir) {
         let asset_dir = managed_kernel_root().join(KernelKind::Xray.directory_name());
+        let geo_dir = crate::geo::mihomo_dir();
+        let effective_asset_dir = if asset_dir.join("geosite.dat").exists() {
+            asset_dir
+        } else if geo_dir.join("geosite.dat").exists() {
+            geo_dir
+        } else {
+            asset_dir
+        };
         command
-            .current_dir(&asset_dir)
-            .env("XRAY_LOCATION_ASSET", asset_dir)
+            .current_dir(&effective_asset_dir)
+            .env("XRAY_LOCATION_ASSET", effective_asset_dir)
             .arg("run")
             .arg("-c")
             .arg(work_dir.config_path());

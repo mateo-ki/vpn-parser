@@ -39,6 +39,11 @@ impl VpnApp {
                 action: PaletteAction::Goto(Tab::Sources),
             },
             PaletteItem {
+                title: "跳到 · 扩展功能".into(),
+                hint: "隐私安全与活动节点列表".into(),
+                action: PaletteAction::Goto(Tab::Extensions),
+            },
+            PaletteItem {
                 title: "跳到 · 系统设置".into(),
                 hint: "行为与自愈".into(),
                 action: PaletteAction::Goto(Tab::Settings),
@@ -176,6 +181,7 @@ impl VpnApp {
                     );
                 }
                 egui::ScrollArea::vertical()
+                    .id_salt("command_palette_scroll")
                     .max_height(300.0)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {

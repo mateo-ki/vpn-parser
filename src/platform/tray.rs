@@ -115,12 +115,76 @@ impl TrayHandle {
     }
 
     pub fn is_supported() -> bool {
-        cfg!(windows)
+        #[cfg(windows)]
+        {
+            true
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // Linux 下探测是否有活动的 StatusNotifierWatcher (SNI) 托盘宿主；
+            // 若为无宿主平铺环境（如 niri），返回 false 以便窗口关闭直接退出，避免主窗口隐藏后无托盘可唤醒成为孤儿进程
+            detect_linux_tray_backend() == LinuxTrayBackend::SniAvailable
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            false
+        }
     }
 
     pub fn supported(&self) -> bool {
         Self::is_supported()
     }
+}
+
+/// Linux 托盘适配后端模式与探测结果
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinuxTrayBackend {
+    /// 存在 StatusNotifierWatcher (D-Bus SNI)，托盘宿主就绪 (如 Waybar, GNOME AppIndicator, KDE)
+    SniAvailable,
+    /// 无托盘宿主 (如原生纯平铺 niri, 裸 Sway, 无 panel 环境)，安全回退至标准窗口管理
+    NoHostFallback,
+}
+
+#[allow(dead_code)]
+#[cfg(target_os = "linux")]
+pub fn detect_linux_tray_backend() -> LinuxTrayBackend {
+    // 快速非阻塞探测当前环境中是否运行着 StatusNotifierWatcher
+    // 1. 检查 DBUS_SESSION_BUS_ADDRESS 环境变量，没有 D-Bus 直接回退
+    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+        return LinuxTrayBackend::NoHostFallback;
+    }
+
+    // 2. 尝试通过 busctl 或 dbus-send 快速探测 StatusNotifierWatcher 是否已注册所有者
+    let sni_registered = std::process::Command::new("busctl")
+        .args(["--user", "status", "org.kde.StatusNotifierWatcher"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+        || std::process::Command::new("dbus-send")
+            .args([
+                "--session",
+                "--dest=org.freedesktop.DBus",
+                "--type=method_call",
+                "--print-reply",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus.GetNameOwner",
+                "string:org.kde.StatusNotifierWatcher",
+            ])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+    if sni_registered {
+        LinuxTrayBackend::SniAvailable
+    } else {
+        LinuxTrayBackend::NoHostFallback
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn detect_linux_tray_backend() -> LinuxTrayBackend {
+    LinuxTrayBackend::NoHostFallback
 }
 
 impl Default for TrayHandle {

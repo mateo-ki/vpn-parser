@@ -74,6 +74,28 @@ struct Cli {
 
     #[arg(long, hide = true)]
     start_proxy_node: Option<String>,
+
+    /// 无头高权限内核守护进程模式
+    #[arg(long, hide = true, default_value_t = false)]
+    run_elevated_kernel: bool,
+
+    #[arg(long, hide = true)]
+    parent_pid: Option<u32>,
+
+    #[arg(long, hide = true)]
+    kernel: Option<String>,
+
+    #[arg(long, hide = true)]
+    executable: Option<std::path::PathBuf>,
+
+    #[arg(long, hide = true)]
+    data_root: Option<std::path::PathBuf>,
+
+    #[arg(long, hide = true)]
+    config: Option<std::path::PathBuf>,
+
+    #[arg(long, hide = true)]
+    log_file: Option<std::path::PathBuf>,
 }
 
 /// 单份 startup.log 的上限。超过就整体挪到 `.1` 另开一份 —— 留一份历史，别让
@@ -116,8 +138,11 @@ pub(crate) fn startup_log(msg: &str) {
 }
 
 fn main() -> Result<()> {
+    platform::register_crash_rollback_hook();
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("PANIC: {info}");
+        #[cfg(windows)]
+        system_proxy::direct_disable_wininet_proxy_atomic();
         let _ = std::fs::write("panic.log", &msg);
         startup_log(&msg);
     }));
@@ -156,7 +181,12 @@ fn main() -> Result<()> {
             #[cfg(not(windows))]
             if let Some(exe_dir) = exe_path.parent() {
                 let dir_str = exe_dir.to_string_lossy();
-                if !dir_str.starts_with("/usr") && !dir_str.starts_with("/bin") && !dir_str.starts_with("/sbin") {
+                // Linux/macOS: 系统目录以及 macOS 的 .app Bundle 内部严禁切换 CWD（只读且会导致工作区混乱）
+                if !dir_str.starts_with("/usr")
+                    && !dir_str.starts_with("/bin")
+                    && !dir_str.starts_with("/sbin")
+                    && !dir_str.contains(".app/Contents/MacOS")
+                {
                     let _ = std::env::set_current_dir(exe_dir);
                     startup_log(&format!("set_current_dir: {}", exe_dir.display()));
                 }
@@ -169,6 +199,31 @@ fn main() -> Result<()> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+
+    let cli = Cli::parse();
+    if cli.run_elevated_kernel {
+        let parent_pid = cli.parent_pid.unwrap_or(0);
+        let kernel_str = cli.kernel.unwrap_or_else(|| "mihomo".to_string());
+        let kernel = match kernel_str.to_ascii_lowercase().as_str() {
+            "sing-box" | "singbox" => crate::kernel::KernelKind::SingBox,
+            "xray" => crate::kernel::KernelKind::Xray,
+            _ => crate::kernel::KernelKind::Mihomo,
+        };
+        let executable = cli.executable.unwrap_or_default();
+        let data_root = cli.data_root.unwrap_or_default();
+        let config = cli.config.unwrap_or_default();
+        let log_file = cli.log_file.unwrap_or_default();
+
+        let args = platform::ElevatedKernelArgs {
+            parent_pid,
+            kernel,
+            executable,
+            data_root,
+            config,
+            log_file,
+        };
+        return platform::run_elevated_kernel_supervisor(args);
+    }
 
     platform::ensure_job_initialized();
     // 诊断壳不许杀内核：这台机器上用户实例正挂着 mihomo，`kill_orphan_proxy_cores`
@@ -185,7 +240,10 @@ fn main() -> Result<()> {
         ));
     }
 
-    let cli = Cli::parse();
+    if !diag {
+        platform::self_heal_stale_system_proxy(9980);
+    }
+
     startup_log(&format!(
         "CLI parsed: headless={}, db={:?}",
         cli.headless, cli.db
@@ -210,15 +268,15 @@ fn main() -> Result<()> {
             // 轮询等待最多 3 秒，拿到互斥量并接管，确保系统中永远由唯一的活动实例持有互斥量。
             let mut guard = None;
             for attempt in 1..=30 {
-                match platform::acquire_single_instance()? {
-                    Some(g) => {
+                match platform::acquire_single_instance() {
+                    Ok(Some(g)) => {
                         startup_log(&format!(
                             "Acquired single instance mutex on attempt {attempt}."
                         ));
                         guard = Some(g);
                         break;
                     }
-                    None => {
+                    Ok(None) | Err(_) => {
                         std::thread::sleep(std::time::Duration::from_millis(100));
                     }
                 }
@@ -229,20 +287,26 @@ fn main() -> Result<()> {
                 startup_log(&format!(
                     "Killed {killed} duplicate instances; retrying mutex acquisition..."
                 ));
-                guard = platform::acquire_single_instance()?;
+                guard = platform::acquire_single_instance().ok().flatten();
             }
             guard
         } else {
-            match platform::acquire_single_instance()? {
-                Some(guard) => {
+            match platform::acquire_single_instance() {
+                Ok(Some(guard)) => {
                     startup_log("Acquired single instance mutex successfully.");
                     Some(guard)
                 }
-                None => {
+                Ok(None) => {
                     startup_log(
                         "Single instance mutex exists! Woke up existing instance and exiting.",
                     );
                     return Ok(());
+                }
+                Err(error) => {
+                    startup_log(&format!(
+                        "Warning: failed to acquire single instance lock: {error}. Proceeding anyway."
+                    ));
+                    None
                 }
             }
         }
@@ -479,6 +543,11 @@ fn main() -> Result<()> {
             api_controller,
             initial_proxy_node,
         ) = gui_handles.clone();
+        let (window_w, window_h) = match app_settings.window_size.as_str() {
+            "large" => (1440.0, 880.0),
+            "medium" => (1280.0, 800.0),
+            _ => (1024.0, 680.0),
+        };
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 // Linux / Wayland 下合成器按 app_id 关联 .desktop 与图标
@@ -486,8 +555,8 @@ fn main() -> Result<()> {
                 // 系统标题栏去掉，换成 gui::VpnApp::ui_title_bar 自绘的一条
                 // （最小化 / 最大化 / 关闭 + 拖动 + 8 向缩放手）。
                 .with_decorations(false)
-                // 1440 × 880：用户要求宽高增加，提供更充裕的操作栏、节点表格与设置纵向可视空间。
-                .with_inner_size([1440.0, 880.0])
+                // 窗口默认尺寸按数据库持久化设置：小屏 1024x680 / 中屏 1280x800 / 大屏 1440x880
+                .with_inner_size([window_w, window_h])
                 .with_min_inner_size([820.0, 520.0])
                 .with_title("VPN Parser")
                 .with_icon(app_icon.clone())
@@ -906,12 +975,14 @@ pub fn data_root() -> std::path::PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let xdg = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from);
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    data_root_from(
+    let root = data_root_from(
         crate::diag::enabled(),
         &cwd,
         xdg.as_deref(),
         home.as_deref(),
-    )
+    );
+    let _ = std::fs::create_dir_all(&root);
+    root
 }
 
 /// 纯函数版，判据在这里测得到（Windows 上也能测 Linux 那两行，否则只能等 Linux CI）。
@@ -931,11 +1002,20 @@ fn data_root_from(
     }
     #[cfg(not(windows))]
     {
-        if let Some(base) = xdg_data_home.filter(|p| p.is_absolute()) {
-            return base.join("vpn-parser");
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(base) = home {
+                return base.join("Library/Application Support/vpn-parser");
+            }
         }
-        if let Some(base) = home {
-            return base.join(".local/share/vpn-parser");
+        #[cfg(not(target_os = "macos"))]
+        {
+            if let Some(base) = xdg_data_home.filter(|p| p.is_absolute()) {
+                return base.join("vpn-parser");
+            }
+            if let Some(base) = home {
+                return base.join(".local/share/vpn-parser");
+            }
         }
         cwd.join("data")
     }

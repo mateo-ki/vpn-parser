@@ -1195,7 +1195,7 @@ mod tests {
                 }
             }),
         );
-        let listener = TcpListener::bind("[::1]:0").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
@@ -1262,7 +1262,7 @@ mod tests {
         }));
         // IPv6 loopback keeps this test on its own per-host semaphore, away from the
         // 127.0.0.1 tests that share the process-wide host limit.
-        let listener = TcpListener::bind("[::1]:0").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
@@ -1309,7 +1309,7 @@ mod tests {
 
     #[tokio::test]
     async fn network_failure_counts_one_streak_per_fetch() {
-        let listener = TcpListener::bind("[::1]:0").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         drop(listener);
         let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
@@ -1372,7 +1372,7 @@ mod tests {
                     .unwrap()
             }
         }));
-        let listener = TcpListener::bind("[::1]:0").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
@@ -1473,7 +1473,7 @@ mod tests {
         let fast = Router::new().fallback(get(|| async {
             "ss://YWVzLTEyOC1nY206cGFzcw==@1.2.3.4:443#node"
         }));
-        let fast_listener = TcpListener::bind("[::1]:0").await.unwrap();
+        let fast_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let fast_address = fast_listener.local_addr().unwrap();
         let fast_server =
             tokio::spawn(async move { axum::serve(fast_listener, fast).await.unwrap() });
@@ -1615,7 +1615,7 @@ mod tests {
                 }
             }
         });
-        let listener = TcpListener::bind("[::1]:0").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
@@ -1738,7 +1738,7 @@ mod tests {
                 }
             }
         }));
-        let listener = TcpListener::bind("[::1]:0").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
@@ -1809,7 +1809,7 @@ mod tests {
                 }
             }),
         );
-        let listener = TcpListener::bind("[::1]:0").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
@@ -1846,7 +1846,7 @@ mod tests {
             "/subscription",
             get(|| async { "ss://YWVzLTEyOC1nY206cGFzcw==@1.2.3.4:443#node" }),
         );
-        let listener = TcpListener::bind("[::1]:0").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));

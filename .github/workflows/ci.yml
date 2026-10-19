@@ -25,5 +25,51 @@ jobs:
       - name: 缓存 cargo 依赖和 target
         uses: Swatinem/rust-cache@v2
 
+      - name: 缓存代理内核与规则库
+        id: cache-kernels
+        uses: actions/cache@v4
+        with:
+          path: data/kernels
+          key: proxy-kernels-windows-v1
+
+      - name: 准备三内核自检环境 (Mihomo, Sing-box, Xray)
+        if: steps.cache-kernels.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path data/kernels/mihomo
+          New-Item -ItemType Directory -Force -Path data/kernels/sing-box
+          New-Item -ItemType Directory -Force -Path data/kernels/xray
+          try {
+            Write-Host "Downloading Geo databases..."
+            Invoke-WebRequest -Uri "https://fastly.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat" -OutFile "data/kernels/mihomo/geosite.dat" -TimeoutSec 15
+            Invoke-WebRequest -Uri "https://fastly.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat" -OutFile "data/kernels/mihomo/geoip.dat" -TimeoutSec 15
+          } catch {
+            Write-Warning "Geo databases download skipped or timed out: $_"
+          }
+          try {
+            Write-Host "Downloading Mihomo..."
+            Invoke-WebRequest -Uri "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.16/mihomo-windows-amd64-v1.19.16.zip" -OutFile "mihomo.zip" -TimeoutSec 30
+            Expand-Archive -Path "mihomo.zip" -DestinationPath "temp_mihomo" -Force
+            Get-ChildItem -Path "temp_mihomo" -Filter "*.exe" -Recurse | Select-Object -First 1 | Move-Item -Destination "data/kernels/mihomo/mihomo.exe" -Force
+          } catch {
+            Write-Warning "Mihomo download skipped: $_"
+          }
+          try {
+            Write-Host "Downloading Sing-box..."
+            Invoke-WebRequest -Uri "https://github.com/SagerNet/sing-box/releases/download/v1.11.4/sing-box-1.11.4-windows-amd64.zip" -OutFile "sing-box.zip" -TimeoutSec 30
+            Expand-Archive -Path "sing-box.zip" -DestinationPath "temp_sb" -Force
+            Get-ChildItem -Path "temp_sb" -Filter "*.exe" -Recurse | Select-Object -First 1 | Move-Item -Destination "data/kernels/sing-box/sing-box.exe" -Force
+          } catch {
+            Write-Warning "Sing-box download skipped: $_"
+          }
+          try {
+            Write-Host "Downloading Xray..."
+            Invoke-WebRequest -Uri "https://github.com/XTLS/Xray-core/releases/download/v24.12.31/Xray-windows-64.zip" -OutFile "xray.zip" -TimeoutSec 30
+            Expand-Archive -Path "xray.zip" -DestinationPath "temp_xray" -Force
+            Get-ChildItem -Path "temp_xray" -Filter "*.exe" -Recurse | Select-Object -First 1 | Move-Item -Destination "data/kernels/xray/xray.exe" -Force
+          } catch {
+            Write-Warning "Xray download skipped: $_"
+          }
+
       - name: 跑全量测试 (Debug 极速构建 + lld 并行链接)
         run: cargo test --bin vpn-parser

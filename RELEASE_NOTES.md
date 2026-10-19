@@ -1,58 +1,39 @@
-# 🚀 VPN Parser v1.8.5 发布说明 / Release Notes
+# 🚀 VPN Parser v1.8.6 发布说明 / Release Notes
 
-🎉 欢迎使用 **VPN Parser v1.8.5**！本次更新带来了**Fastly 全球极速 CDN 规则更新（无需代理 2 秒秒级同步）**、**分流数据库损坏自愈与 8MB 完整性强校验**、**控制台图表高度黄金比例优化**、**莫兰迪低饱和柔和护眼主题**、**纯字型双色节点国旗微徽章**，以及**全景温润木炭黑图标重构**！
+🎉 欢迎使用 **VPN Parser v1.8.6**！本次更新带来了**节点池极简双行工具栏整合**、**控制台仪表盘黄金比例对齐与防裁切圆角**、**出海健康与延迟频谱卡片等高重构**，以及 **Windows 原生网络崩溃自愈与 Job Object 僵尸进程防残留机制**！
 
 ---
 
 ## 🌟 新特性与核心更新
 
-### ⚡ 1. Fastly 全球极速 CDN 直连 + 未开启代理一键更新规则
-- **解除必须先开启代理的限制**：
-  - 「代理控制台 ➔ 分流规则」与「系统设置」中的「一键更新 Geo 规则」按钮现已随时可用；
-  - 无论代理是否运行，均可随时一键高速同步最新的 `GeoIP.dat`（中国大陆 IP 库）与 `GeoSite.dat`（域名分流库）；
-- **下载速度大幅提升 17 倍 (5~8 MB/s)**：
-  - 首选上游全面升级为 Fastly 全球极速 CDN 节点，实测国内直连耗时仅需 **约 2 秒** 即可完成全部 27MB 规则库的完整拉取与校验，彻底告别直连 GitHub 超时卡死的问题。
+### 🎯 1. 节点池（Nodes）工具栏极简双行重构
+- **搜索与核心操作合流同一行**：
+  - 将「搜索框」、「订阅源下拉筛选」与「⚡ 批量测速 ▼」、「🧹 维护清理 ▼」、「📥 导入/导出 ▼」整合至第一行，纵向占用空间大幅压缩，操作链路一气呵成；
+- **地区筛选与排序深度融合**：
+  - 将「排序」下拉框移至地区胶囊（全部、香港、日本、美国、新加坡、台湾、韩国、其它）末尾，信息流逻辑归一，视觉层级更清爽；
+- **界面极致降噪**：
+  - 移除冗余的独立「刷新」按钮，移除订阅源下拉框旁的独立 `✕` 清除按钮，还原极简、开阔的高效浏览视野。
 
 ---
 
-### 🛡️ 2. 分流数据库损坏自愈与 8MB 完整性强校验
-- **8MB 安全完整性水位线校验**：
-  - 杜绝以往网络波动导致 130KB 或 4MB 等截断半截库被误判为“已就绪”的问题，强制执行 8MB 完整性校验；
-- **异常自愈机制 (Auto Purge & Self-Healing)**：
-  - 若检测到分流文件损坏或 Protobuf 解码异常，内核监听器会自动清理残留损坏文件并提示重新拉取，根除 `Geosite.dat invalid` 导致代理无法启动的死锁异常。
+## 🎨 2. 控制台仪表盘黄金比例对齐与视觉优化
+- **全网延迟频谱与协议分布严丝合缝等高（90px 外高 / 74px 内高）**：
+  - 彻底解决原先因垂直居中对齐导致的协议卡片顶部大面积异常留白与左右卡片参差不齐的问题；
+  - 顶部基准线水平对齐，协议标签自适应两行约束，紧凑平整；
+- **双翼网络监视器高度严格对齐（138px）**：
+  - 「实时下行带宽」仪表盘与「24h 出海健康」卡片实现全响应式等高；
+- **滚动条视口外边距防裁切修复**：
+  - 修复 egui Frame 内边距向外扩展导致的右侧圆弧与描边被视口裁切的问题，所有卡片在各种窗口尺寸下均呈现圆润平滑的四角微弧。
 
 ---
 
-### 📊 3. 控制台图表高度优化与紧凑黄金比例排版
-- **卡片高度自适应压缩 50px**：
-  - 「全网延迟阶梯频谱分布」与「节点协议组成分布」容器高度从 164px 优化至 **114px**；
-  - 协议环形图直径等比微调至 80px，消除上下无效留白，两张卡片保持完美等高，首屏视野更宽广。
-
----
-
-### 🌿 4. 界面配色主题重构与莫兰迪低饱和护眼主题
-- **新增 3 款精心调配的视觉主题**：
-  - **莫兰迪低饱和 (柔和护眼 · 语义保留)** (`#52796F`)：低对比柔和灰绿，长时间注视不疲劳；
-  - **Surge 拓扑绿** (`#34C759`)：生动明快的经典网络拓扑活力绿；
-  - **Apple Store 晶紫** (`#A855F7`)：现代科技感十足的晶莹冷紫；
-- **全景图表与健康状态条联动**：
-  - 控制台延迟阶梯柱、节点健康条色彩体系全面呼应当前激活主题，整体视觉高度统一。
-
----
-
-### 🏷️ 5. 节点卡片国家代码国旗色方案 B (Pure Typography)
-- **极简双色无框字母**：
-  - 彻底根除 Windows 原生 Segoe UI Emoji 黑白线框降级的视觉缺陷；
-  - 采用国旗代表色与纯正大写字型排印，在各系统上均呈现像素级细腻的微徽章质感。
-
----
-
-### 🖋️ 6. 全局柔和微炭黑图标（Soft Charcoal Black）
-- **告别纯黑高硬度刺眼对比**：
-  - 图标主暗部全面升级为 Apple 级温润木炭黑 (`#4C4C52`) 与柔和次级黑 (`#707076`)；
-  - 笔触粗细自适应由 1.8px~2.2px 精准收细至 1.15px~1.40px，并在 Dashboard 与 Lightning 等图标上引入镂空双层透气结构，视效更加轻盈通透。
-- **纯正经典黑曜石 App Logo**：
-  - 主应用图标规范统一为深邃黑曜石微弧底衬配经典纯白 V 字型，并恢复极简 10MB 纯净安装包。
+## 🛡️ 3. Windows 原生崩溃网络自愈与防僵尸内核强绑定
+- **Windows SEH 崩溃原子回滚（In-Crash Guard）**：
+  - 进程发生未捕获异常或闪退时，底层通过 Win32 原生注册表原子函数瞬间复位系统代理并广播刷新，杜绝崩溃断网；
+- **启动自动探测与自愈（Startup Self-Healing）**：
+  - 应用启动时自动探测残留代理端口存活性，若上一次运行非正常中断且端口已死，秒级静默清理复位；
+- **Windows Job Object 强生命周期绑定**：
+  - 为代理内核配置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，保证无论主进程正常退出、异常闪退还是被任务管理器强杀，内核绝无可能在系统后台沦为僵尸进程。
 
 ---
 
@@ -66,7 +47,7 @@
 cd /tmp
 opkg update
 # 一键安装微服务守护进程与 LuCI 控制面板
-opkg install ./vpn-parser_1.8.5_*.ipk ./luci-app-vpn-parser_1.8.5_all.ipk
+opkg install ./vpn-parser_1.8.6_*.ipk ./luci-app-vpn-parser_1.8.6_all.ipk
 ```
 安装后刷新路由器 Web 管理后台，即可在 **「服务」➔「VPN Parser」** 中开始使用。
 
@@ -76,18 +57,18 @@ opkg install ./vpn-parser_1.8.5_*.ipk ./luci-app-vpn-parser_1.8.5_all.ipk
 
 | 平台 / 架构 | 文件名 | 说明 |
 | :--- | :--- | :--- |
-| **OpenWrt LuCI 控制面板** | `luci-app-vpn-parser_1.8.5_all.ipk` | 推荐，全架构通用 LuCI Web 图形界面 |
-| **OpenWrt 微服务 (x86_64)** | `vpn-parser_1.8.5_x86_64.ipk` | 推荐，X86 软路由、工控机、PVE/ESXi 一键安装 |
-| **OpenWrt 微服务 (aarch64)** | `vpn-parser_1.8.5_aarch64_generic.ipk` | 推荐，ARM64 路由（NanoPi R2S/R4S/R5S、友善等）一键安装 |
-| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.5_linux_x86_64_musl.tar.gz` | x86_64 纯静态 Musl 二进制包（含 init/config 脚本） |
-| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.5_linux_aarch64_generic_musl.tar.gz` | ARM64 纯静态 Musl 二进制包 |
-| **Windows 64位** | `vpn-parser-1.8.5-windows-x64-setup.exe` | 推荐，双击运行向导自动安装升级（桌面完整版） |
-| **macOS (Universal DMG)** | `vpn-parser-1.8.5-darwin-universal.dmg` | 推荐，兼容 Apple Silicon 与 Intel 架构 |
-| **Linux 桌面 (通用)** | `vpn-parser-1.8.5-x86_64.AppImage` | 推荐，开箱即用，赋予可执行权限后双击运行 |
-| **Linux (Fedora/RHEL)** | `vpn-parser-1.8.5-1.x86_64.rpm` | `sudo dnf install ./vpn-parser-1.8.5-1.x86_64.rpm` |
-| **Linux (Debian/Ubuntu)** | `vpn-parser_1.8.5-1_amd64.deb` | `sudo dpkg -i vpn-parser_1.8.5-1_amd64.deb` |
+| **OpenWrt LuCI 控制面板** | `luci-app-vpn-parser_1.8.6_all.ipk` | 推荐，全架构通用 LuCI Web 图形界面 |
+| **OpenWrt 微服务 (x86_64)** | `vpn-parser_1.8.6_x86_64.ipk` | 推荐，X86 软路由、工控机、PVE/ESXi 一键安装 |
+| **OpenWrt 微服务 (aarch64)** | `vpn-parser_1.8.6_aarch64_generic.ipk` | 推荐，ARM64 路由（NanoPi R2S/R4S/R5S、友善等）一键安装 |
+| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.6_linux_x86_64_musl.tar.gz` | x86_64 纯静态 Musl 二进制包（含 init/config 脚本） |
+| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.6_linux_aarch64_generic_musl.tar.gz` | ARM64 纯静态 Musl 二进制包 |
+| **Windows 64位** | `vpn-parser-1.8.6-windows-x64-setup.exe` | 推荐，双击运行向导自动安装升级（桌面完整版） |
+| **macOS (Universal DMG)** | `vpn-parser-1.8.6-darwin-universal.dmg` | 推荐，兼容 Apple Silicon 与 Intel 架构 |
+| **Linux 桌面 (通用)** | `vpn-parser-1.8.6-x86_64.AppImage` | 推荐，开箱即用，赋予可执行权限后双击运行 |
+| **Linux (Fedora/RHEL)** | `vpn-parser-1.8.6-1.x86_64.rpm` | `sudo dnf install ./vpn-parser-1.8.6-1.x86_64.rpm` |
+| **Linux (Debian/Ubuntu)** | `vpn-parser_1.8.6-1_amd64.deb` | `sudo dpkg -i vpn-parser_1.8.6-1_amd64.deb` |
 | **校验文件** | `sha256.txt` | 包含所有发布资产的官方 SHA-256 校验和 |
 
 ---
 
-**Full Changelog**: https://github.com/mateo-ki/vpn-parser/compare/v1.8.4...v1.8.5
+**Full Changelog**: https://github.com/mateo-ki/vpn-parser/compare/v1.8.5...v1.8.6

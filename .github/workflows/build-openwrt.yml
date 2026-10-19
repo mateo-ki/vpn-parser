@@ -1,6 +1,6 @@
 name: OpenWrt
 
-# OpenWrt .ipk 自动化编译与打包流水线
+# OpenWrt .ipk (OpenWrt <= 24.x) 与 .apk (OpenWrt 25.x+) 自动化编译与打包流水线
 # 覆盖架构：
 #   - x86_64: 通用 X86 软路由、PVE/ESXi 虚拟机、工控机等
 #   - aarch64_generic: ARM64 软硬路由（NanoPi R2S/R4S/R5S、友善、GL.iNet、香橙派等）
@@ -21,7 +21,7 @@ env:
 
 jobs:
   build-ipk:
-    name: 构建 OpenWrt .ipk (${{ matrix.arch }})
+    name: 构建 OpenWrt 核心微服务 (${{ matrix.arch }})
     runs-on: ubuntu-24.04
     strategy:
       matrix:
@@ -62,7 +62,13 @@ jobs:
         run: |
           cross build --release --no-default-features --target ${{ matrix.target }}
 
-      - name: 打包 OpenWrt .ipk 与独立压缩包
+      - name: 安装 apk-tools (OpenWrt 25.x apk 打包环境)
+        run: |
+          set -euo pipefail
+          chmod +x packaging/openwrt/install_apk_tools.sh
+          ./packaging/openwrt/install_apk_tools.sh
+
+      - name: 打包 OpenWrt 软件包 (.ipk / .apk) 与独立压缩包
         run: |
           set -euo pipefail
           version="${{ steps.get_version.outputs.version }}"
@@ -72,11 +78,15 @@ jobs:
 
           mkdir -p dist
 
-          # 1. 生成 OpenWrt .ipk 包
+          # 1. 生成传统 OpenWrt 24.x/23.x .ipk 包
           chmod +x packaging/openwrt/make_ipk.sh
           ./packaging/openwrt/make_ipk.sh "$binary" "$arch" dist "$version"
 
-          # 2. 生成纯静态 Linux 二进制归档 (.tar.gz)
+          # 2. 生成全新 OpenWrt 25.x+ .apk 包 (apk-tools v3 原生包)
+          chmod +x packaging/openwrt/make_apk.sh
+          ./packaging/openwrt/make_apk.sh "$binary" "$arch" dist "$version"
+
+          # 3. 生成纯静态 Linux 二进制归档 (.tar.gz)
           tar_name="vpn-parser_${version}_linux_${arch}_musl.tar.gz"
           mkdir -p "target/tar-staging"
           cp "$binary" "target/tar-staging/vpn-parser"
@@ -87,7 +97,7 @@ jobs:
           tar -czf "dist/${tar_name}" -C "target/tar-staging" .
           rm -rf "target/tar-staging"
 
-          # 3. 计算 SHA-256 校验和
+          # 4. 计算 SHA-256 校验和
           cd dist
           for f in *; do
             if [ -f "$f" ] && [[ "$f" != *.sha256 ]]; then
@@ -114,7 +124,7 @@ jobs:
           for i in $(seq 1 80); do
             if gh release view "$tag" >/dev/null 2>&1; then
               echo "release $tag 已存在（第 $i 次查到），上传 OpenWrt 资产"
-              for f in dist/*.ipk dist/*.tar.gz dist/*.sha256; do
+              for f in dist/*.ipk dist/*.apk dist/*.tar.gz dist/*.sha256; do
                 [ -f "$f" ] || continue
                 echo "Uploading $f to release $tag..."
                 gh release upload "$tag" "$f" --clobber
@@ -127,7 +137,7 @@ jobs:
           gh release create "$tag" dist/* --title "VPN Parser $tag" || true
 
   build-luci-ipk:
-    name: 构建 OpenWrt LuCI 控制面板 (luci-app-vpn-parser_all.ipk)
+    name: 构建 OpenWrt LuCI 控制面板 (.ipk / .apk)
     runs-on: ubuntu-24.04
     needs: [build-ipk]
     steps:
@@ -141,13 +151,26 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Detected version: $version"
 
-      - name: 打包 luci-app-vpn-parser 通用 .ipk
+      - name: 安装 apk-tools (OpenWrt 25.x apk 打包环境)
+        run: |
+          set -euo pipefail
+          chmod +x packaging/openwrt/install_apk_tools.sh
+          ./packaging/openwrt/install_apk_tools.sh
+
+      - name: 打包 luci-app-vpn-parser 通用 .ipk 与 .apk
         run: |
           set -euo pipefail
           version="${{ steps.get_version.outputs.version }}"
           mkdir -p dist
+
+          # 1. 生成传统 OpenWrt 24.x/23.x LuCI .ipk 包
           chmod +x packaging/openwrt-luci/make_luci_ipk.sh
           ./packaging/openwrt-luci/make_luci_ipk.sh dist "$version"
+
+          # 2. 生成全新 OpenWrt 25.x+ LuCI .apk 包
+          chmod +x packaging/openwrt-luci/make_luci_apk.sh
+          ./packaging/openwrt-luci/make_luci_apk.sh dist "$version"
+
           ls -la dist/
 
       - name: 上传 LuCI 构件
@@ -167,7 +190,7 @@ jobs:
           for i in $(seq 1 80); do
             if gh release view "$tag" >/dev/null 2>&1; then
               echo "release $tag 已存在（第 $i 次查到），上传 LuCI 资产"
-              for f in dist/*.ipk dist/*.sha256; do
+              for f in dist/*.ipk dist/*.apk dist/*.sha256; do
                 [ -f "$f" ] || continue
                 echo "Uploading $f to release $tag..."
                 gh release upload "$tag" "$f" --clobber

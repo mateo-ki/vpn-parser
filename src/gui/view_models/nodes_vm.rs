@@ -28,7 +28,8 @@ impl NodesViewModel {
     #[inline]
     pub fn grid_layout(available_width: f32, count: usize) -> (usize, usize) {
         let target_card_width = 270.0;
-        let columns = ((available_width / target_card_width).floor() as usize).clamp(2, 10);
+        let min_cols = if available_width < 500.0 { 1 } else { 2 };
+        let columns = ((available_width / target_card_width).floor() as usize).clamp(min_cols, 10);
         let rows = if count == 0 {
             0
         } else {
@@ -57,6 +58,8 @@ mod tests {
         assert_eq!(NodesViewModel::grid_layout(1500.0, 10).0, 5);
         assert_eq!(NodesViewModel::grid_layout(1200.0, 10).0, 4);
         assert_eq!(NodesViewModel::grid_layout(900.0, 10).0, 3);
+        assert_eq!(NodesViewModel::grid_layout(600.0, 10).0, 2);
+        assert_eq!(NodesViewModel::grid_layout(450.0, 10).0, 1);
         assert_eq!(NodesViewModel::grid_layout(600.0, 10).0, 2);
     }
 }

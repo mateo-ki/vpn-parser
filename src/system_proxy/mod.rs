@@ -594,6 +594,93 @@ fn notify_proxy_change() -> Result<()> {
     Ok(())
 }
 
+/// 纯 Win32 原生原子级注册表快速复位。
+///
+/// 绝对不依赖 `reg.exe` 子进程，不执行任何堆内存分配，完全满足 SEH 崩溃异常过滤器
+/// （SetUnhandledExceptionFilter）与 Panic Hook 等严苛上下文的安全调用要求。
+/// 直接将 HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings 的 ProxyEnable 置为 0，
+/// 并通过 WinINet API 广播刷新设置，确保异常退出时不会留下导致断网的死代理。
+#[cfg(windows)]
+pub fn direct_disable_wininet_proxy_atomic() -> bool {
+    use windows_sys::Win32::Networking::WinInet::{
+        InternetSetOptionW, INTERNET_OPTION_REFRESH, INTERNET_OPTION_SETTINGS_CHANGED,
+    };
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_DWORD,
+    };
+
+    const SUBKEY_W: &[u16] = &[
+        'S' as u16, 'o' as u16, 'f' as u16, 't' as u16, 'w' as u16, 'a' as u16, 'r' as u16, 'e' as u16,
+        '\\' as u16,
+        'M' as u16, 'i' as u16, 'c' as u16, 'r' as u16, 'o' as u16, 's' as u16, 'o' as u16, 'f' as u16, 't' as u16,
+        '\\' as u16,
+        'W' as u16, 'i' as u16, 'n' as u16, 'd' as u16, 'o' as u16, 'w' as u16, 's' as u16,
+        '\\' as u16,
+        'C' as u16, 'u' as u16, 'r' as u16, 'r' as u16, 'e' as u16, 'n' as u16, 't' as u16, 'V' as u16, 'e' as u16, 'r' as u16, 's' as u16, 'i' as u16, 'o' as u16, 'n' as u16,
+        '\\' as u16,
+        'I' as u16, 'n' as u16, 't' as u16, 'e' as u16, 'r' as u16, 'n' as u16, 'e' as u16, 't' as u16, ' ' as u16, 'S' as u16, 'e' as u16, 't' as u16, 't' as u16, 'i' as u16, 'n' as u16, 'g' as u16, 's' as u16,
+        0,
+    ];
+    const PROXY_ENABLE_W: &[u16] = &[
+        'P' as u16, 'r' as u16, 'o' as u16, 'x' as u16, 'y' as u16, 'E' as u16, 'n' as u16, 'a' as u16, 'b' as u16, 'l' as u16, 'e' as u16,
+        0,
+    ];
+
+    let mut hkey = std::ptr::null_mut();
+    let status = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            SUBKEY_W.as_ptr(),
+            0,
+            KEY_SET_VALUE,
+            &mut hkey,
+        )
+    };
+    if status != 0 || hkey.is_null() {
+        return false;
+    }
+
+    let zero: u32 = 0;
+    let set_status = unsafe {
+        RegSetValueExW(
+            hkey,
+            PROXY_ENABLE_W.as_ptr(),
+            0,
+            REG_DWORD,
+            &zero as *const u32 as *const u8,
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
+    unsafe {
+        RegCloseKey(hkey);
+    }
+
+    if set_status == 0 {
+        unsafe {
+            InternetSetOptionW(
+                std::ptr::null_mut(),
+                INTERNET_OPTION_SETTINGS_CHANGED,
+                std::ptr::null_mut(),
+                0,
+            );
+            InternetSetOptionW(
+                std::ptr::null_mut(),
+                INTERNET_OPTION_REFRESH,
+                std::ptr::null_mut(),
+                0,
+            );
+        }
+        true
+    } else {
+        false
+    }
+}
+
+#[cfg(not(windows))]
+pub fn direct_disable_wininet_proxy_atomic() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -725,5 +812,13 @@ mod tests {
             ("127.0.0.1".into(), 7890)
         );
         assert!(parse_host_port("invalid-no-port").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_direct_disable_wininet_proxy_atomic_executes_safely() {
+        let result = direct_disable_wininet_proxy_atomic();
+        // 在 Windows 具备 HKCU 访问权限的环境下正常返回 true
+        assert!(result);
     }
 }

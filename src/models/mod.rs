@@ -307,8 +307,22 @@ pub struct AppSettings {
     /// Gist 发现已勾选的协议查询词（逗号分隔），默认 "vless//"
     #[serde(default = "default_gist_queries")]
     pub gist_queries: String,
+    /// 窗口大小预设：small (1024x680) / medium (1280x800) / large (1440x880)
+    #[serde(default = "default_window_size")]
+    pub window_size: String,
+    /// 控制台 Tab 显示配置（逗号分隔的 panel id，"all" 为全显）
+    #[serde(default = "default_console_tabs")]
+    pub console_tabs: String,
     pub last_auto_fetch_at: Option<DateTime<Utc>>,
     pub last_auto_speedtest_at: Option<DateTime<Utc>>,
+}
+
+fn default_window_size() -> String {
+    "small".to_string()
+}
+
+fn default_console_tabs() -> String {
+    "all".to_string()
 }
 
 /// 两个"软件自己动"的开关用的默认值：默认开，但都能关。
@@ -444,6 +458,8 @@ impl Default for AppSettings {
             speedtest_added_source: true,
             gist_pages: default_gist_pages(),
             gist_queries: default_gist_queries(),
+            window_size: default_window_size(),
+            console_tabs: default_console_tabs(),
             last_auto_fetch_at: None,
             last_auto_speedtest_at: None,
         }
@@ -492,6 +508,8 @@ pub struct UpdateSettings {
     pub speedtest_added_source: Option<bool>,
     pub gist_pages: Option<u32>,
     pub gist_queries: Option<String>,
+    pub window_size: Option<String>,
+    pub console_tabs: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

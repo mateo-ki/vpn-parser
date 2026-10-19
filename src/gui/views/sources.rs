@@ -260,6 +260,7 @@ impl VpnApp {
                 return;
             }
             egui::ScrollArea::both()
+                .id_salt("sources_grid_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     egui::Grid::new("sources_grid")
@@ -267,12 +268,12 @@ impl VpnApp {
                         .num_columns(6)
                         .min_col_width(70.0)
                         .show(ui, |ui| {
-                            header_cell(ui, "名称");
+                            header_cell(ui, self.tr("名称"));
                             header_cell(ui, "URL 模板");
-                            header_cell(ui, "状态");
+                            header_cell(ui, self.tr("状态"));
                             header_cell(ui, "最近拉取");
                             header_cell(ui, "健康");
-                            header_cell(ui, "操作");
+                            header_cell(ui, self.tr("操作"));
                             ui.end_row();
 
                             for s in &visible_sources {
@@ -299,12 +300,12 @@ impl VpnApp {
                                     )
                                     .wrap(),
                                 );
-                                let badge = if s.enabled { "启用" } else { "停用" };
+                                let badge = if s.enabled { self.tr("启用") } else { self.tr("停用") };
                                 let color = if s.enabled { theme::accent_strong() } else { theme::muted() };
                                 ui.vertical(|ui| {
                                     ui.label(RichText::new(badge).color(color));
                                     if s.push_disabled {
-                                        ui.label(RichText::new("不推送").small().color(theme::warning()));
+                                        ui.label(RichText::new(self.tr("不推送")).small().color(theme::warning()));
                                     }
                                     ui.label(
                                         RichText::new(
@@ -406,7 +407,7 @@ impl VpnApp {
                                             fetch_operation_allowed
                                                 && !source_active
                                                 && self.subscription_proxy_url().is_some(),
-                                            egui::Button::new("代理拉取"),
+                                            egui::Button::new(self.tr("代理拉取")),
                                         )
                                         .on_hover_text("通过当前运行中的本地代理拉取此订阅源")
                                         .clicked()
@@ -414,11 +415,11 @@ impl VpnApp {
                                         self.fetch_one_via_proxy(s.id.clone());
                                     }
 
-                                    if ui.button("编辑").clicked() {
+                                    if ui.button(self.tr("编辑")).clicked() {
                                         self.open_edit_form(&s);
                                     }
                                     if ui
-                                        .button(if s.enabled { "禁用" } else { "启用" })
+                                        .button(if s.enabled { self.tr("禁用") } else { self.tr("启用") })
                                         .on_hover_text(if s.enabled {
                                             "禁用后不会参与批量拉取"
                                         } else {
@@ -431,9 +432,9 @@ impl VpnApp {
 
                                     if ui
                                         .button(if s.push_disabled {
-                                            "恢复推送"
+                                            self.tr("恢复推送")
                                         } else {
-                                            "不推送"
+                                            self.tr("不推送")
                                         })
                                         .on_hover_text(if s.push_disabled {
                                             "恢复后该源的节点会参与“推送可用节点”"
@@ -468,6 +469,7 @@ impl VpnApp {
                 return;
             }
             egui::ScrollArea::both()
+                .id_salt("sources_fetch_results_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     egui::Grid::new("fetch_results_grid")
@@ -622,6 +624,7 @@ impl VpnApp {
 
                 ui.add_space(8.0);
                 egui::ScrollArea::vertical()
+                    .id_salt("sources_homogeneity_scroll")
                     .max_height(320.0)
                     .show(ui, |ui| {
                         egui::Grid::new("homogeneity_grid")

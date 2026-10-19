@@ -63,6 +63,7 @@ impl Database {
                        auto_prepare_kernel, speedtest_added_source,
                        auto_rearm_system_proxy,
                        gist_pages, gist_queries,
+                       window_size, console_tabs,
                        last_auto_fetch_at, last_auto_speedtest_at
                 FROM settings WHERE id = 1"#,
         )
@@ -163,6 +164,10 @@ impl Database {
             gist_pages: sqlx::Row::try_get::<i64, _>(&row, "gist_pages").unwrap_or(100) as u32,
             gist_queries: sqlx::Row::try_get::<String, _>(&row, "gist_queries")
                 .unwrap_or_else(|_| "vless//".to_string()),
+            window_size: sqlx::Row::try_get::<String, _>(&row, "window_size")
+                .unwrap_or_else(|_| "large".to_string()),
+            console_tabs: sqlx::Row::try_get::<String, _>(&row, "console_tabs")
+                .unwrap_or_else(|_| "all".to_string()),
             last_auto_fetch_at: sqlx::Row::get::<Option<String>, _>(&row, "last_auto_fetch_at")
                 .map(|s| super::parse_dt(&s)),
             last_auto_speedtest_at: sqlx::Row::get::<Option<String>, _>(
@@ -307,6 +312,18 @@ impl Database {
                 s.gist_queries = v;
             }
         }
+        if let Some(v) = input.window_size {
+            let v = v.trim().to_string();
+            if !v.is_empty() {
+                s.window_size = v;
+            }
+        }
+        if let Some(v) = input.console_tabs {
+            let v = v.trim().to_string();
+            if !v.is_empty() {
+                s.console_tabs = v;
+            }
+        }
         sqlx::query(
             r#"UPDATE settings SET
                  auto_fetch_enabled=?,
@@ -347,7 +364,9 @@ impl Database {
                  auto_prepare_kernel=?,
                  speedtest_added_source=?,
                  gist_pages=?,
-                 gist_queries=?
+                 gist_queries=?,
+                 window_size=?,
+                 console_tabs=?
                WHERE id=1"#,
         )
         .bind(s.auto_fetch_enabled as i64)
@@ -389,6 +408,8 @@ impl Database {
         .bind(s.speedtest_added_source as i64)
         .bind(s.gist_pages as i64)
         .bind(&s.gist_queries)
+        .bind(&s.window_size)
+        .bind(&s.console_tabs)
         .execute(&self.pool)
         .await?;
         self.get_settings().await

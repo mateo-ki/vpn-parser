@@ -1,0 +1,6 @@
+#!/bin/sh
+[ -n "${IPKG_INSTROOT:-$APK_ROOT}" ] || {
+	/etc/init.d/vpn-parser stop
+	/etc/init.d/vpn-parser disable
+}
+exit 0

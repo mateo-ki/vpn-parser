@@ -16,6 +16,7 @@ impl VpnApp {
         section_title(ui, self.tr("关于"), "本机版本 · 在线更新");
 
         egui::ScrollArea::vertical()
+            .id_salt("about_scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 self.ui_about_identity(ui);
@@ -84,22 +85,22 @@ impl VpnApp {
         card_frame().show(ui, |ui| {
             let (title, title_color, tile_color) = match &self.app_release {
                 Some(info) if info.update_available => (
-                    format!("发现新版本 {}", info.tag),
+                    format!("{} {}", self.tr("发现新版本"), info.tag),
                     theme::accent_strong(),
                     theme::accent(),
                 ),
                 Some(info) => (
-                    format!("已是最新 · v{}", info.current_version),
+                    format!("{} · v{}", self.tr("已是最新"), info.current_version),
                     theme::accent_strong(),
                     theme::accent(),
                 ),
                 None if self.app_update_busy => (
-                    "正在检查更新…".to_string(),
+                    self.tr("正在检查更新…").to_string(),
                     theme::text_primary(),
                     theme::muted(),
                 ),
                 None => (
-                    "检查更新".to_string(),
+                    self.tr("检查更新").to_string(),
                     theme::text_primary(),
                     theme::accent(),
                 ),
@@ -123,14 +124,14 @@ impl VpnApp {
                         ui.label(RichText::new(title).strong().size(17.0).color(title_color));
                         if self.app_release.as_ref().is_some_and(|i| i.prerelease) {
                             ui.add_space(8.0);
-                            crate::gui::widgets::status_badge(ui, "预发版", theme::warning());
+                            crate::gui::widgets::status_badge(ui, self.tr("预发版"), theme::warning());
                         }
                     });
                     ui.label(RichText::new(subtitle).size(11.5).color(theme::muted()));
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .add_enabled(!self.app_update_busy, primary_btn("检查更新"))
+                        .add_enabled(!self.app_update_busy, primary_btn(self.tr("检查更新")))
                         .on_hover_text("只查版本号，不下载任何东西")
                         .clicked()
                     {
@@ -154,7 +155,7 @@ impl VpnApp {
                     if let Some(info) = &self.app_release {
                         let downloadable = info.downloadable();
                         if ui
-                            .add_enabled(!self.app_update_busy && downloadable, button("下载更新"))
+                            .add_enabled(!self.app_update_busy && downloadable, button(self.tr("下载更新")))
                             .on_hover_text(if downloadable {
                                 "下载安装包并校验，下载完再点「安装」"
                             } else {

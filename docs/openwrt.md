@@ -20,31 +20,45 @@ VPN Parser 在 OpenWrt 上以**纯无头（Headless）高性能守护进程**形
 
 在项目的 [GitHub Releases](https://github.com/mateo-ki/vpn-parser/releases) 页面中提供预编译安装包：
 
-| 架构名称 | 适用设备 | 安装包文件名 |
-| :--- | :--- | :--- |
-| **LuCI 管理面板 (通用)** | **所有 OpenWrt 路由器（全架构通用）** | `luci-app-vpn-parser_<版本>_all.ipk` |
-| **x86_64** | 通用 X86 软路由、工控机、PVE / ESXi 虚拟机等 | `vpn-parser_<版本>_x86_64.ipk` |
-| **aarch64_generic** | 主流 ARM64 软硬路由（NanoPi R2S/R4S/R5S、友善、GL.iNet 等） | `vpn-parser_<版本>_aarch64_generic.ipk` |
-| **静态压缩包** | 通用 Linux / OpenWrt（解压即用） | `vpn-parser_<版本>_linux_<架构>_musl.tar.gz` |
+| 架构名称 | 适用设备 | OpenWrt 25.x+ (.apk) | OpenWrt 24.x/23.x (.ipk) |
+| :--- | :--- | :--- | :--- |
+| **LuCI 管理面板 (通用)** | **所有 OpenWrt 路由器（全架构通用）** | `luci-app-vpn-parser_<版本>_all.apk` | `luci-app-vpn-parser_<版本>_all.ipk` |
+| **x86_64** | 通用 X86 软路由、工控机、PVE / ESXi 虚拟机等 | `vpn-parser_<版本>_x86_64.apk` | `vpn-parser_<版本>_x86_64.ipk` |
+| **aarch64_generic** | 主流 ARM64 软硬路由（NanoPi R2S/R4S/R5S、友善、GL.iNet 等） | `vpn-parser_<版本>_aarch64_generic.apk` | `vpn-parser_<版本>_aarch64_generic.ipk` |
+| **静态压缩包** | 通用 Linux / OpenWrt（解压即用） | `vpn-parser_<版本>_linux_<架构>_musl.tar.gz` | `vpn-parser_<版本>_linux_<架构>_musl.tar.gz` |
 
 ---
 
 ## 🚀 安装步骤
 
-### 1. 安装 `.ipk` 软件包（推荐）
+### 1. OpenWrt 25.x+ 安装 `.apk` 软件包（推荐）
 
-通过 SCP 或 SFTP 将下载好的核心服务 `.ipk` 与 LuCI 插件包上传到路由器的 `/tmp` 目录下，SSH 登录路由器执行：
+OpenWrt 25.x (例如 25.12 及新版本快照) 全面采用 **apk-tools v3** 代替传统的 opkg 包管理器。
+
+将下载好的 `.apk` 安装包上传到路由器的 `/tmp` 目录后，执行：
 
 ```bash
 cd /tmp
 # 更新源并安装微服务核心与 LuCI 控制面板
+apk update
+apk add --allow-untrusted ./vpn-parser_*.apk ./luci-app-vpn-parser_*.apk
+```
+
+> **提示**：若未导入自定义发布密钥，添加 `--allow-untrusted` 参数允许安装本地离线包。
+
+### 2. OpenWrt 24.x / 23.x / 21.x 安装 `.ipk` 软件包
+
+使用传统 opkg 包管理器的固件：
+
+```bash
+cd /tmp
 opkg update
 opkg install ./vpn-parser_*.ipk ./luci-app-vpn-parser_*.ipk
 ```
 
 安装完成后，微服务会自动注册开机自启并立即启动，刷新浏览器即可在 OpenWrt 管理后台看到图形化菜单。
 
-### 2. 手动解压安装（无 opkg 环境）
+### 3. 手动解压安装（无包管理器环境）
 
 若使用精简版固件，可直接使用纯静态归档：
 ```bash

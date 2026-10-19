@@ -55,8 +55,12 @@ pub fn acquire_single_instance() -> Result<Option<SingleInstanceGuard>> {
     let socket_path = if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
         std::path::PathBuf::from(runtime_dir).join("vpn-parser.sock")
     } else {
-        crate::data_root().join("vpn-parser.sock")
+        std::env::temp_dir().join("vpn-parser.sock")
     };
+
+    if let Some(parent) = socket_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
 
     // 1. 先尝试连接已存在的 socket
     if let Ok(mut stream) = UnixStream::connect(&socket_path) {
@@ -268,6 +272,65 @@ pub fn is_elevated() -> bool {
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
         .unwrap_or(false)
+}
+
+/// 检查指定内核可执行文件在当前系统上是否具备直接创建 TUN 虚拟网卡的权限。
+/// - 若运行在 Windows / macOS 上：由系统 API 或用户提权处理，返回 true。
+/// - 若运行在 Linux 上且当前进程是 root (eUID == 0)：返回 true。
+/// - 若运行在 Linux 上且为普通用户：通过 getcap 检查内核文件是否具有 cap_net_admin。
+pub fn kernel_has_tun_capability(kernel_path: &std::path::Path) -> bool {
+    if is_elevated() {
+        return true;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if !kernel_path.exists() {
+            return false;
+        }
+        if let Ok(output) = std::process::Command::new("getcap").arg(kernel_path).output() {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
+                if stdout.contains("cap_net_admin") {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = kernel_path;
+        true
+    }
+}
+
+/// 返回在 Linux 终端为指定内核赋予 TUN 权限的 shell 命令
+pub fn tun_capability_command(kernel_path: &std::path::Path) -> String {
+    format!("sudo setcap cap_net_admin,cap_net_raw+ep \"{}\"", kernel_path.display())
+}
+
+/// 在 Linux 上检查 TUN 虚拟网卡设备是否真实存在且已激活
+#[cfg(target_os = "linux")]
+pub fn check_linux_tun_interface_active() -> bool {
+    if let Ok(entries) = std::fs::read_dir("/sys/class/net") {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == "Meta" || name.starts_with("tun") || name.starts_with("utun") {
+                return true;
+            }
+        }
+    }
+    if let Ok(content) = std::fs::read_to_string("/proc/net/dev") {
+        for line in content.lines() {
+            if let Some(iface) = line.split(':').next() {
+                let trimmed = iface.trim();
+                if trimmed == "Meta" || trimmed.starts_with("tun") || trimmed.starts_with("utun") {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 #[cfg(windows)]
@@ -1058,6 +1121,40 @@ mod tests {
         assert!(first.is_some());
         assert!(second.is_none());
     }
+
+    #[test]
+    fn test_tun_capability_command_formatting() {
+        let p = std::path::Path::new("/usr/local/bin/mihomo");
+        let cmd = tun_capability_command(p);
+        assert!(cmd.starts_with("sudo setcap cap_net_admin,cap_net_raw+ep"));
+        assert!(cmd.contains("/usr/local/bin/mihomo"));
+    }
+
+    #[test]
+    fn test_crash_rollback_hook_registration() {
+        register_crash_rollback_hook();
+    }
+
+    #[test]
+    fn test_self_heal_stale_proxy_inactive_or_safe() {
+        // 当系统未启用死代理时，自愈函数安全返回并不会抛出任何异常
+        let _ = self_heal_stale_system_proxy(19980);
+    }
+
+    #[test]
+    fn test_elevated_kernel_args_structure() {
+        let args = ElevatedKernelArgs {
+            parent_pid: 12345,
+            kernel: KernelKind::Mihomo,
+            executable: std::path::PathBuf::from("C:\\bin\\mihomo.exe"),
+            data_root: std::path::PathBuf::from("C:\\data"),
+            config: std::path::PathBuf::from("C:\\data\\config.yaml"),
+            log_file: std::path::PathBuf::from("C:\\data\\kernel.log"),
+        };
+        assert_eq!(args.parent_pid, 12345);
+        assert_eq!(args.kernel, KernelKind::Mihomo);
+        assert_eq!(args.executable, std::path::PathBuf::from("C:\\bin\\mihomo.exe"));
+    }
 }
 
 #[cfg(windows)]
@@ -1117,4 +1214,418 @@ pub fn list_running_processes() -> Vec<String> {
         }
     }
     names.into_iter().collect()
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn seh_crash_unhandled_exception_filter(
+    _exception_info: *const windows_sys::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
+) -> i32 {
+    crate::system_proxy::direct_disable_wininet_proxy_atomic();
+    0 // EXCEPTION_CONTINUE_SEARCH
+}
+
+pub fn register_crash_rollback_hook() {
+    #[cfg(windows)]
+    unsafe {
+        windows_sys::Win32::System::Diagnostics::Debug::SetUnhandledExceptionFilter(
+            Some(seh_crash_unhandled_exception_filter),
+        );
+    }
+}
+
+pub fn self_heal_stale_system_proxy(mixed_port: u16) -> bool {
+    #[cfg(windows)]
+    {
+        let snapshot = match crate::system_proxy::platform_system_proxy().capture() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        if !snapshot.enabled {
+            return false;
+        }
+
+        let server = match snapshot.server.as_deref().map(str::trim) {
+            Some(s) if !s.is_empty() => s,
+            _ => return false,
+        };
+
+        let is_target_local_proxy = server.contains(&format!("127.0.0.1:{mixed_port}"))
+            || server.contains(&format!("localhost:{mixed_port}"));
+
+        if !is_target_local_proxy && !server.contains("127.0.0.1:") && !server.contains("localhost:") {
+            return false;
+        }
+
+        let probe_port = if let Some(pos) = server.rfind(':') {
+            server[pos + 1..]
+                .trim_end_matches(|c: char| !c.is_ascii_digit())
+                .parse::<u16>()
+                .unwrap_or(mixed_port)
+        } else {
+            mixed_port
+        };
+
+        let is_port_alive = std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], probe_port)),
+            std::time::Duration::from_millis(150),
+        )
+        .is_ok();
+
+        if !is_port_alive {
+            crate::startup_log(&format!(
+                "检测到 WinINet 残留死代理配置 (ProxyServer={server}, 本地端口 {probe_port} 无响应)，自动执行注册表自愈..."
+            ));
+            let healed = crate::system_proxy::direct_disable_wininet_proxy_atomic();
+            if healed {
+                crate::startup_log("注册表自愈完成，已强制重置 ProxyEnable=0 并广播刷新，网络已恢复直连。");
+            } else {
+                crate::startup_log("警告：注册表自愈未能成功更新注册表。");
+            }
+            return healed;
+        }
+        false
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = mixed_port;
+        false
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ElevatedKernelArgs {
+    pub parent_pid: u32,
+    pub kernel: KernelKind,
+    pub executable: std::path::PathBuf,
+    pub data_root: std::path::PathBuf,
+    pub config: std::path::PathBuf,
+    pub log_file: std::path::PathBuf,
+}
+
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct ElevatedChild {
+    pub pid: u32,
+    pub handle: windows_sys::Win32::Foundation::HANDLE,
+}
+
+#[cfg(windows)]
+unsafe impl Send for ElevatedChild {}
+#[cfg(windows)]
+unsafe impl Sync for ElevatedChild {}
+
+#[cfg(windows)]
+impl Drop for ElevatedChild {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(self.handle);
+            }
+            self.handle = std::ptr::null_mut();
+        }
+    }
+}
+
+#[cfg(windows)]
+impl ElevatedChild {
+    pub fn id(&self) -> Option<u32> {
+        Some(self.pid)
+    }
+
+    pub fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        use std::os::windows::process::ExitStatusExt;
+        use windows_sys::Win32::Foundation::STILL_ACTIVE;
+        use windows_sys::Win32::System::Threading::GetExitCodeProcess;
+
+        let mut exit_code: u32 = 0;
+        let res = unsafe { GetExitCodeProcess(self.handle, &mut exit_code) };
+        if res == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if exit_code == STILL_ACTIVE as u32 {
+            Ok(None)
+        } else {
+            Ok(Some(std::process::ExitStatus::from_raw(exit_code)))
+        }
+    }
+
+    pub async fn kill(&mut self) -> std::io::Result<()> {
+        use windows_sys::Win32::System::Threading::TerminateProcess;
+        let res = unsafe { TerminateProcess(self.handle, 1) };
+        if res == 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(5) {
+                return Ok(());
+            }
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    pub async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        use std::os::windows::process::ExitStatusExt;
+        use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject, INFINITE};
+
+        let handle = self.handle as usize;
+        tokio::task::spawn_blocking(move || {
+            let h = handle as windows_sys::Win32::Foundation::HANDLE;
+            unsafe {
+                WaitForSingleObject(h, INFINITE);
+                let mut exit_code = 0u32;
+                GetExitCodeProcess(h, &mut exit_code);
+                std::process::ExitStatus::from_raw(exit_code)
+            }
+        })
+        .await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    }
+}
+
+#[cfg(not(windows))]
+#[derive(Debug)]
+pub struct ElevatedChild;
+
+#[cfg(not(windows))]
+impl ElevatedChild {
+    pub fn id(&self) -> Option<u32> {
+        None
+    }
+    pub fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        Ok(None)
+    }
+    pub async fn kill(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+    pub async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Not supported on non-Windows",
+        ))
+    }
+}
+
+#[cfg(windows)]
+pub fn start_elevated_kernel_runner(
+    kernel: KernelKind,
+    executable: &std::path::Path,
+    data_root: &std::path::Path,
+    config_path: &std::path::Path,
+    log_path: &std::path::Path,
+) -> Result<ElevatedChild> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::System::Threading::GetProcessId;
+    use windows_sys::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+    let parent_pid = unsafe { windows_sys::Win32::System::Threading::GetCurrentProcessId() };
+    let self_exe = std::env::current_exe()?;
+
+    let args = vec![
+        "--run-elevated-kernel".to_string(),
+        "--parent-pid".to_string(),
+        parent_pid.to_string(),
+        "--kernel".to_string(),
+        kernel.directory_name().to_string(),
+        "--executable".to_string(),
+        executable.to_string_lossy().to_string(),
+        "--data-root".to_string(),
+        data_root.to_string_lossy().to_string(),
+        "--config".to_string(),
+        config_path.to_string_lossy().to_string(),
+        "--log-file".to_string(),
+        log_path.to_string_lossy().to_string(),
+    ];
+
+    let parameters = args
+        .iter()
+        .map(|arg| quote_windows_argument(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let verb = "runas\0".encode_utf16().collect::<Vec<_>>();
+    let executable_w = self_exe
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let parameters_w = parameters
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = executable_w.as_ptr();
+    info.lpParameters = parameters_w.as_ptr();
+    info.nShow = SW_HIDE;
+
+    let success = unsafe { ShellExecuteExW(&mut info) };
+    if success == 0 || info.hProcess.is_null() {
+        let err = unsafe { GetLastError() };
+        if err == 1223 {
+            return Err(anyhow!("用户在 UAC 授权弹窗中选择了「否」或取消了管理员提权"));
+        }
+        return Err(anyhow!("提权启动无头内核守护进程失败: Win32 错误码 {err}"));
+    }
+
+    let pid = unsafe { GetProcessId(info.hProcess) };
+    crate::startup_log(&format!(
+        "Launched headless elevated kernel runner successfully: pid={pid}"
+    ));
+    Ok(ElevatedChild {
+        pid,
+        handle: info.hProcess,
+    })
+}
+
+#[cfg(not(windows))]
+pub fn start_elevated_kernel_runner(
+    _kernel: KernelKind,
+    _executable: &std::path::Path,
+    _data_root: &std::path::Path,
+    _config_path: &std::path::Path,
+    _log_path: &std::path::Path,
+) -> Result<ElevatedChild> {
+    Err(anyhow!("无头提权仅在 Windows 平台上可用"))
+}
+
+#[cfg(windows)]
+pub fn run_elevated_kernel_supervisor(args: ElevatedKernelArgs) -> Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, FALSE, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForMultipleObjects, INFINITE, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    };
+
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+
+    crate::startup_log(&format!(
+        "Elevated supervisor starting for parent_pid={}, kernel={:?}",
+        args.parent_pid, args.kernel
+    ));
+
+    // 1. 打开父进程 SYNCHRONIZE 句柄。如果父进程已经死掉，直接退出。
+    let parent_handle = unsafe { OpenProcess(SYNCHRONIZE, FALSE, args.parent_pid) };
+    if parent_handle.is_null() {
+        crate::startup_log("Parent process already exited or cannot be opened. Supervisor exiting.");
+        return Ok(());
+    }
+
+    // 2. 创建专属 Job Object，设置 KILL_ON_JOB_CLOSE
+    let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if !job.is_null() {
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        unsafe {
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+        }
+    }
+
+    // 3. 准备日志文件与内核启动命令
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&args.log_file)?;
+    let stderr = log.try_clone()?;
+
+    let mut command = std::process::Command::new(&args.executable);
+    match args.kernel {
+        KernelKind::Mihomo => {
+            command.arg("-d").arg(&args.data_root).arg("-f").arg(&args.config);
+        }
+        KernelKind::SingBox => {
+            command.arg("run").arg("-D").arg(&args.data_root).arg("-c").arg(&args.config);
+        }
+        KernelKind::Xray => {
+            command.arg("run").arg("-c").arg(&args.config);
+        }
+    }
+    command
+        .stdout(log)
+        .stderr(stderr)
+        .stdin(std::process::Stdio::null())
+        .creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+
+    let mut child = match command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            crate::startup_log(&format!("Supervisor failed to spawn kernel: {e}"));
+            unsafe {
+                CloseHandle(parent_handle);
+                if !job.is_null() {
+                    CloseHandle(job);
+                }
+            }
+            return Err(e.into());
+        }
+    };
+
+    let child_pid = child.id();
+    crate::startup_log(&format!(
+        "Elevated supervisor spawned kernel child_pid={child_pid}"
+    ));
+
+    // 4. 将内核进程圈入专属 Job Object
+    if !job.is_null() {
+        unsafe {
+            let child_proc = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE, child_pid);
+            if !child_proc.is_null() {
+                AssignProcessToJobObject(job, child_proc);
+                CloseHandle(child_proc);
+            }
+        }
+    }
+
+    // 5. 监听父进程与子内核进程
+    let child_handle = child.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+    let handles = [parent_handle, child_handle];
+
+    let wait_result = unsafe {
+        WaitForMultipleObjects(2, handles.as_ptr(), FALSE, INFINITE)
+    };
+
+    if wait_result == WAIT_OBJECT_0 {
+        // 父进程退出了！主 GUI 崩溃或被强杀
+        crate::startup_log("Parent process exited or crashed! Supervisor killing child kernel...");
+        let _ = child.kill();
+    } else if wait_result == WAIT_OBJECT_0 + 1 {
+        // 内核子进程自己退出了
+        crate::startup_log("Kernel child process exited.");
+    } else {
+        crate::startup_log(&format!("WaitForMultipleObjects returned: {wait_result}"));
+        let _ = child.kill();
+    }
+
+    let _ = child.wait();
+
+    unsafe {
+        CloseHandle(parent_handle);
+        if !job.is_null() {
+            CloseHandle(job);
+        }
+    }
+
+    crate::startup_log("Elevated supervisor finished cleanly.");
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn run_elevated_kernel_supervisor(_args: ElevatedKernelArgs) -> Result<()> {
+    Err(anyhow!("无头提权仅在 Windows 平台上可用"))
 }

@@ -4,14 +4,14 @@ use crate::gui::types::Tab;
 use crate::gui::widgets::{format_duration_ms, header_cell, nav_item_icon_only, stat_chip};
 use crate::gui::VpnApp;
 use crate::proxy::ProxyState;
-use eframe::egui::{self, CornerRadius, RichText, Sense, Stroke, Ui, Vec2};
+use eframe::egui::{self, Color32, CornerRadius, RichText, Sense, Stroke, Ui, Vec2};
 
 impl VpnApp {
     pub(crate) fn ui_sidebar(&mut self, ui: &mut Ui, target_tab: &mut Tab) {
         ui.visuals_mut().override_text_color = Some(theme::sidebar_text());
         ui.add_space(8.0);
 
-        // App Logo 居中呈现
+        // App Logo 居中呈现 (去除旧版更新小字，保持顶部纯净)
         ui.vertical_centered(|ui| {
             let texture = self.ensure_logo_texture(ui.ctx());
             ui.add(
@@ -19,16 +19,6 @@ impl VpnApp {
                     .fit_to_exact_size(Vec2::splat(36.0))
                     .corner_radius(CornerRadius::same(8)),
             );
-            if let Some(tag) = self.pending_update_tag() {
-                ui.add_space(2.0);
-                if ui
-                    .link(RichText::new("↑ 更新").small().strong().color(theme::accent_strong()))
-                    .on_hover_text(format!("发现新版本 {tag}，点击去「关于」页下载更新"))
-                    .clicked()
-                {
-                    *target_tab = Tab::About;
-                }
-            }
         });
 
         ui.add_space(10.0);
@@ -57,10 +47,11 @@ impl VpnApp {
         nav_item_icon_only(ui, target_tab, Tab::Proxy, Icon::Dashboard, self.tr("控制台"), proxy_dot);
         nav_item_icon_only(ui, target_tab, Tab::Nodes, Icon::Lightning, &nodes_tip, None);
         nav_item_icon_only(ui, target_tab, Tab::Sources, Icon::Subscription, &sources_tip, None);
+        nav_item_icon_only(ui, target_tab, Tab::Extensions, Icon::Package, self.tr("扩展功能"), None);
         nav_item_icon_only(ui, target_tab, Tab::Settings, Icon::Gear, self.tr("系统设置"), None);
         nav_item_icon_only(ui, target_tab, Tab::About, Icon::Info, self.tr("关于"), None);
 
-        // 菜单栏最底部：日间 / 夜间主题切换
+        // 菜单栏最底部：日间 / 夜间主题切换与版本更新提醒
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
             ui.add_space(6.0);
             let is_dark = self.settings.ui_dark;
@@ -83,7 +74,8 @@ impl VpnApp {
                 );
             }
 
-            let icon_rect = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(18.0));
+            // 图标尺寸加大至 21.0px (更饱满协调)
+            let icon_rect = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(21.0));
             let icon_color = if resp.hovered() {
                 theme::accent()
             } else {
@@ -97,7 +89,59 @@ impl VpnApp {
                 self.save_settings();
             }
 
-            ui.add_space(4.0);
+            // 在日间/夜间模式按钮正上方：呈现高辨识度更新徽章（方案 C：科技翡翠绿就绪微标）
+            if let Some(tag) = self.pending_update_tag() {
+                ui.add_space(6.0);
+                let update_size = egui::vec2(ui.available_width(), 38.0);
+                let (rect, resp) = ui.allocate_exact_size(update_size, Sense::click());
+                let resp = resp
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(format!("发现新版本 {tag}，点击去「关于」页下载更新"));
+
+                let painter = ui.painter_at(rect);
+                let is_hovered = resp.hovered();
+
+                // 方案 C：科技翡翠绿就绪微光底框与轮廓
+                let bg_fill = if is_hovered {
+                    Color32::from_rgba_unmultiplied(16, 185, 129, 72)
+                } else {
+                    Color32::from_rgba_unmultiplied(16, 185, 129, 38)
+                };
+                let stroke_color = if is_hovered {
+                    Color32::from_rgb(16, 185, 129)
+                } else {
+                    Color32::from_rgba_unmultiplied(16, 185, 129, 115)
+                };
+
+                painter.rect_filled(rect, CornerRadius::same(theme::RADIUS_NAV), bg_fill);
+                painter.rect_stroke(
+                    rect,
+                    CornerRadius::same(theme::RADIUS_NAV),
+                    Stroke::new(1.0_f32, stroke_color),
+                    egui::StrokeKind::Inside,
+                );
+
+                // 居中绘制 20px 向上大箭头
+                let arrow_color = if is_hovered {
+                    Color32::from_rgb(110, 231, 183)
+                } else {
+                    Color32::from_rgb(52, 211, 153)
+                };
+                let arrow_rect = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(20.0));
+                crate::gui::icons::draw_icon(&painter, arrow_rect, Icon::ArrowUp, arrow_color);
+
+                // 右上角科技翡翠绿发光微标圆点
+                let dot_pos = egui::pos2(rect.right() - 8.0, rect.top() + 7.0);
+                let dot_color = Color32::from_rgb(16, 185, 129);
+                painter.circle_filled(dot_pos, 4.0, dot_color.gamma_multiply(0.35));
+                painter.circle_filled(dot_pos, 2.5, dot_color);
+
+                if resp.clicked() {
+                    *target_tab = Tab::About;
+                }
+            }
+
+            ui.add_space(6.0);
             let line_y = ui.cursor().top();
             ui.painter().hline(
                 ui.max_rect().x_range(),

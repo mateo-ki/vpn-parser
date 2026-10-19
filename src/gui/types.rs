@@ -11,9 +11,18 @@ pub enum Tab {
     Sources,
     Nodes,
     Proxy,
+    Extensions,
     Settings,
     Api,
     About,
+}
+
+/// 扩展功能页的分区标签：隐私安全、活动节点列表。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExtensionsTab {
+    #[default]
+    Security,
+    PortMappings,
 }
 
 /// 系统设置页的分区标签：通用设置、界面外观、订阅与测速、自愈网络、外部接口。
@@ -68,6 +77,66 @@ pub enum ProxyPanel {
     Network,
     Kernels,
     Logs,
+}
+
+impl ProxyPanel {
+    pub const ALL: [ProxyPanel; 8] = [
+        ProxyPanel::Charts,
+        ProxyPanel::Nodes,
+        ProxyPanel::Groups,
+        ProxyPanel::Connections,
+        ProxyPanel::Rules,
+        ProxyPanel::Network,
+        ProxyPanel::Kernels,
+        ProxyPanel::Logs,
+    ];
+
+    pub fn id(&self) -> &'static str {
+        match self {
+            ProxyPanel::Charts => "charts",
+            ProxyPanel::Nodes => "nodes",
+            ProxyPanel::Groups => "groups",
+            ProxyPanel::Connections => "connections",
+            ProxyPanel::Rules => "rules",
+            ProxyPanel::Network => "network",
+            ProxyPanel::PortMappings => "port_mappings",
+            ProxyPanel::Security => "security",
+            ProxyPanel::Kernels => "kernels",
+            ProxyPanel::Logs => "logs",
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "charts" => Some(ProxyPanel::Charts),
+            "nodes" => Some(ProxyPanel::Nodes),
+            "groups" => Some(ProxyPanel::Groups),
+            "connections" => Some(ProxyPanel::Connections),
+            "rules" => Some(ProxyPanel::Rules),
+            "network" => Some(ProxyPanel::Network),
+            "port_mappings" => Some(ProxyPanel::PortMappings),
+            "security" => Some(ProxyPanel::Security),
+            "kernels" => Some(ProxyPanel::Kernels),
+            "logs" => Some(ProxyPanel::Logs),
+            _ => None,
+        }
+    }
+
+    pub fn title(&self) -> &'static str {
+        match self {
+            ProxyPanel::Charts => "监控图表",
+            ProxyPanel::Nodes => "可用节点",
+            ProxyPanel::Groups => "分流策略组",
+            ProxyPanel::Connections => "活跃连接",
+            ProxyPanel::Rules => "分流规则",
+            ProxyPanel::Network => "DNS / TUN",
+            ProxyPanel::PortMappings => "活动节点列表",
+            ProxyPanel::Security => "安全隐私",
+            ProxyPanel::Kernels => "内核管理",
+            ProxyPanel::Logs => "运行日志",
+        }
+    }
 }
 
 /// 分流策略组面板里的两个分区：视图（策略组实时状态与成员拓扑）和配置（自定义配置覆写 YAML 片段）。
@@ -478,6 +547,8 @@ pub struct SettingsEditState {
     pub insider_channel: bool,
     pub kernel_source: String,
     pub firewall_auto_allow: bool,
+    pub window_size: String,
+    pub console_tabs: String,
 }
 
 impl SettingsEditState {
@@ -517,6 +588,8 @@ impl SettingsEditState {
             insider_channel: s.insider_channel,
             kernel_source: s.kernel_source.clone(),
             firewall_auto_allow: s.firewall_auto_allow,
+            window_size: s.window_size.clone(),
+            console_tabs: s.console_tabs.clone(),
         }
     }
 
@@ -557,5 +630,7 @@ impl SettingsEditState {
             || (self.ui_scale - s.ui_scale).abs() > 0.001
             || self.ui_dark != s.ui_dark
             || self.insider_channel != s.insider_channel
+            || self.window_size != s.window_size
+            || self.console_tabs != s.console_tabs
     }
 }
