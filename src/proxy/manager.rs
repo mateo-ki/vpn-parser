@@ -253,11 +253,12 @@ impl ProxyManager {
     pub async fn probe_health(&self, timeout: Duration) -> (bool, u64) {
         let port = self.runtime.lock().await.options.mixed_port;
         let started = tokio::time::Instant::now();
+        let connect_timeout = timeout.min(Duration::from_millis(3_500)).max(Duration::from_millis(1_500));
         let built = reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))
             .and_then(|proxy| {
                 reqwest::Client::builder()
                     .proxy(proxy)
-                    .connect_timeout(timeout.min(Duration::from_millis(1_500)))
+                    .connect_timeout(connect_timeout)
                     .timeout(timeout)
                     .build()
             })
@@ -1220,10 +1221,10 @@ pub async fn verify_local_proxy(port: u16, timeout: Duration) -> Result<()> {
         if remaining.is_zero() {
             break;
         }
-        let attempt_timeout = remaining.min(Duration::from_millis(900));
+        let attempt_timeout = remaining.min(Duration::from_millis(3500));
         let client = match reqwest::Client::builder()
             .proxy(proxy.clone())
-            .connect_timeout(Duration::from_millis(600))
+            .connect_timeout(attempt_timeout)
             .timeout(attempt_timeout)
             .build()
         {

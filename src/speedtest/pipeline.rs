@@ -306,15 +306,28 @@ pub async fn run_speedtest_pipeline(
     }
 
     // 3. 完整真实代理握手阶段
-    let proxy_candidates: Vec<Node> = results
-        .iter()
-        .filter(|result| result.ok)
-        .filter_map(|result| proxy_nodes.remove(&result.id))
-        .collect();
+    let proxy_candidates: Vec<Node> = if opts.intensity == SpeedtestIntensity::Fast {
+        results
+            .iter()
+            .filter(|result| result.ok)
+            .filter_map(|result| proxy_nodes.remove(&result.id))
+            .collect()
+    } else {
+        // 在标准和深度测速模式下，对于公网代理节点，不过早抛弃 TCP 预筛未通的节点。
+        // 因为在国内网络环境下，大量高可用节点（如经过 CDN 中转、TLS/Reality 保护或直连 DNS 污染的域名）
+        // 裸 TCP 探测必然超时或被 GFW RST 阻断，但通过内核专属协议握手完全正常（同 Clash Verge 表现）。
+        results
+            .iter()
+            .filter(|result| result.ok || crate::hostutil::is_public_proxy_host(&result.server))
+            .filter_map(|result| proxy_nodes.remove(&result.id))
+            .collect()
+    };
 
     let prefilter_failures: Vec<_> = results
         .iter()
-        .filter(|result| !result.ok)
+        .filter(|result| {
+            !result.ok && !proxy_candidates.iter().any(|c| c.id == result.id)
+        })
         .map(|result| {
             (
                 result.id.clone(),
