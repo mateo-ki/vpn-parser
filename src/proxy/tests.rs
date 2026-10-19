@@ -101,7 +101,7 @@ use std::time::Duration;
             server: "1.1.1.1".into(),
             port: 443,
             raw: "".into(),
-            config: r#"{"server":"1.1.1.1","server_port":443,"password":"pass","method":"aes-128-gcm"}"#.into(),
+            config: serde_json::from_str(r#"{"server":"1.1.1.1","server_port":443,"password":"pass","method":"aes-128-gcm"}"#).unwrap(),
             country: Some("HK".into()),
             latency_ms: Some(50),
             latency_ok: Some(true),
@@ -118,6 +118,24 @@ use std::time::Duration;
         let config_val = build_mihomo_config(&node, options).expect("build config");
         let yaml_str = serde_yaml::to_string(&config_val).expect("to yaml");
         std::fs::write("target/diagnose_mihomo.yaml", &yaml_str).expect("write yaml");
+
+        let exe = crate::kernel::find_kernel_executable(KernelKind::Mihomo);
+        if let Some(exe_path) = exe {
+            let output = std::process::Command::new(exe_path)
+                .arg("-t")
+                .arg("-d")
+                .arg(crate::kernel::managed_kernel_root().join("mihomo"))
+                .arg("-f")
+                .arg("target/diagnose_mihomo.yaml")
+                .output()
+                .expect("run mihomo -t");
+            assert!(
+                output.status.success(),
+                "mihomo validation failed: stdout: {}, stderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 
     #[derive(Default)]
@@ -185,7 +203,7 @@ use std::time::Duration;
 
     #[test]
     fn startup_proxy_verification_uses_five_second_total_budget() {
-        assert_eq!(STARTUP_PROXY_TOTAL_TIMEOUT, Duration::from_secs(10));
+        assert_eq!(STARTUP_PROXY_TOTAL_TIMEOUT, Duration::from_secs(15));
         assert_eq!(STARTUP_PROXY_VERIFY_TIMEOUT, Duration::from_millis(1_500));
         assert_eq!(STARTUP_SYSTEM_PROXY_RESERVE, Duration::from_millis(250));
         assert_eq!(STARTUP_PROXY_VERIFY_URLS, [PROXY_CONNECTIVITY_TEST_URL]);

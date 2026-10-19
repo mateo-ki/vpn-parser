@@ -115,11 +115,18 @@ pub struct KernelUpdater {
 /// 内核下载/查版本的代理候选：**应用内代理 → Windows 系统代理 → 直连**，和 Gist 发现同一套。
 /// 之前只认应用内代理，所以你用 v2rayN 之类外部代理时，内核下载是纯直连（实测 0.116 MB/s）。
 pub fn proxy_candidates(app_proxy: Option<&str>) -> Vec<Option<String>> {
+    proxy_candidates_with_system(app_proxy, crate::system_proxy::current_system_proxy_url())
+}
+
+pub fn proxy_candidates_with_system(
+    app_proxy: Option<&str>,
+    system_proxy: Option<String>,
+) -> Vec<Option<String>> {
     let mut chain: Vec<Option<String>> = Vec::new();
     if let Some(url) = app_proxy.map(str::trim).filter(|url| !url.is_empty()) {
         chain.push(Some(url.to_string()));
     }
-    if let Some(url) = crate::system_proxy::current_system_proxy_url() {
+    if let Some(url) = system_proxy {
         if !chain.contains(&Some(url.clone())) {
             chain.push(Some(url));
         }
@@ -1520,8 +1527,8 @@ mod source_tests {
         );
         assert!(proxy_candidates(None).last().unwrap().is_none());
         // 空白代理地址不能当成一条通道，两者的候选链路结构一致
-        let blank = proxy_candidates(Some("   "));
-        let none = proxy_candidates(None);
+        let blank = proxy_candidates_with_system(Some("   "), None);
+        let none = proxy_candidates_with_system(None, None);
         assert_eq!(blank.len(), none.len());
         assert_eq!(blank.last().unwrap(), none.last().unwrap());
     }

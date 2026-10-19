@@ -438,7 +438,6 @@ impl BackendCompiler for MihomoCompiler {
 
         // 编译 IR 规则
         let mut has_injected_poison_overrides = false;
-        let mut rule_sets = HashSet::new();
 
         for ir_rule in &plan.rules {
             if ir_rule.action == IRAction::HijackDns {
@@ -459,10 +458,6 @@ impl BackendCompiler for MihomoCompiler {
             };
 
             for matcher in &ir_rule.matchers {
-                if let IRMatcher::RuleSet(ref name) = matcher {
-                    rule_sets.insert(name.clone());
-                }
-
                 if let IRMatcher::GeoIp(ref c) = matcher {
                     if c.eq_ignore_ascii_case("CN") && !has_injected_poison_overrides {
                         has_injected_poison_overrides = true;
@@ -488,7 +483,35 @@ impl BackendCompiler for MihomoCompiler {
                         }
                     }
                     IRMatcher::ProcessName(p) => format!("PROCESS-NAME,{p},{target}"),
-                    IRMatcher::RuleSet(s) => format!("RULE-SET,{s},{target}"),
+                    IRMatcher::RuleSet(s) => {
+                        let lower = s.to_ascii_lowercase();
+                        match lower.as_str() {
+                            "reject" | "reject-list" | "ad" | "ads" | "advertising" => {
+                                format!("GEOSITE,category-ads-all,{target}")
+                            }
+                            "direct" | "direct-list" | "cn" | "china" => {
+                                format!("GEOSITE,cn,{target}")
+                            }
+                            "proxy" | "proxy-list" => {
+                                format!("GEOSITE,geolocation-!cn,{target}")
+                            }
+                            "gfw" | "gfwlist" => {
+                                format!("GEOSITE,gfw,{target}")
+                            }
+                            "cncidr" => {
+                                format!("GEOIP,CN,{target}")
+                            }
+                            "telegramcidr" => {
+                                format!("GEOIP,telegram,{target}")
+                            }
+                            "lancidr" | "private" => {
+                                format!("GEOSITE,private,{target}")
+                            }
+                            other => {
+                                format!("GEOSITE,{other},{target}")
+                            }
+                        }
+                    }
                     IRMatcher::Network(proto) => {
                         format!("NETWORK,{},{target}", match proto {
                             crate::proxy::NetworkProtocol::Tcp => "tcp",
@@ -636,45 +659,6 @@ impl BackendCompiler for MihomoCompiler {
             },
             "rules": final_rules
         });
-
-        if !rule_sets.is_empty() {
-            let mut providers = serde_json::Map::new();
-            for name in rule_sets {
-                let (url, behavior) = match name.as_str() {
-                    "reject" | "reject-list" => (
-                        "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/reject-list.txt",
-                        "domain",
-                    ),
-                    "direct" | "direct-list" => (
-                        "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt",
-                        "domain",
-                    ),
-                    "proxy" | "proxy-list" => (
-                        "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt",
-                        "domain",
-                    ),
-                    "gfw" => (
-                        "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt",
-                        "domain",
-                    ),
-                    _ => (
-                        "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt",
-                        "domain",
-                    ),
-                };
-                providers.insert(
-                    name.clone(),
-                    json!({
-                        "type": "http",
-                        "behavior": behavior,
-                        "url": url,
-                        "path": format!("./ruleset/{name}.yaml"),
-                        "interval": 86400
-                    }),
-                );
-            }
-            config["rule-providers"] = serde_json::Value::Object(providers);
-        }
 
         config["geodata-mode"] = json!(true);
         config["geo-auto-update"] = json!(false);

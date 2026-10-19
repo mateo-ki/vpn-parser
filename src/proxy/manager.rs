@@ -20,7 +20,7 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-pub const STARTUP_PROXY_TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
+pub const STARTUP_PROXY_TOTAL_TIMEOUT: Duration = Duration::from_secs(15);
 pub const STARTUP_PROXY_VERIFY_TIMEOUT: Duration = Duration::from_millis(1_500);
 #[allow(dead_code)]
 pub const STARTUP_SYSTEM_PROXY_RESERVE: Duration = Duration::from_millis(250);
@@ -504,8 +504,6 @@ impl ProxyManager {
         executable_path: &Path,
         mut preserved_system_proxy_snapshot: Option<SystemProxySnapshot>,
     ) -> Result<()> {
-        let startup_started = tokio::time::Instant::now();
-        let startup_deadline = startup_started + STARTUP_PROXY_TOTAL_TIMEOUT;
         let mut runtime = self.runtime.lock().await;
         if matches!(
             runtime.status.state,
@@ -539,6 +537,9 @@ impl ProxyManager {
                 }
             }
         }
+
+        let startup_started = tokio::time::Instant::now();
+        let startup_deadline = startup_started + STARTUP_PROXY_TOTAL_TIMEOUT;
 
         runtime.status.state = ProxyState::Starting;
         runtime.status.kernel = Some(kernel);
@@ -687,33 +688,71 @@ impl ProxyManager {
             let startup_timeout =
                 startup_deadline.saturating_duration_since(tokio::time::Instant::now());
             if !wait_for_port(&mut child, port, startup_timeout).await {
-                let _ = child.kill().await;
+                // 先探测内核进程在超时前是否已自行退出
+                let exit_status = child.try_wait().ok().flatten();
+                if exit_status.is_none() {
+                    let _ = child.kill().await;
+                }
                 let _ = child.wait().await;
+                // 留 50ms 缓冲让操作系统完成文件写入缓冲区刷盘
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
                 let detail = tokio::fs::read_to_string(work_dir.log_path())
                     .await
                     .unwrap_or_default();
                 let _ = work_dir.cleanup().await;
-                let fatal_line = detail
+                let detail_trimmed = detail.trim();
+
+                let fatal_line = detail_trimmed
                     .lines()
                     .rev()
-                    .find(|l| l.contains("level=fatal") || l.contains("level=error"));
+                    .find(|l| {
+                        let lower = l.to_lowercase();
+                        lower.contains("level=fatal")
+                            || lower.contains("level=error")
+                            || lower.contains("fatal:")
+                            || lower.contains("panic:")
+                            || lower.contains("error:")
+                            || lower.contains("bind:")
+                            || lower.contains("failed")
+                    });
+
                 let message = if detail.contains("failed to decode geodata file")
                     || detail.contains("Geosite.dat invalid")
                     || detail.contains("GeoIP.dat invalid")
-                    || detail.contains("cannot parse")
+                    || (detail.contains("cannot parse") && detail.contains("geo"))
                 {
                     crate::geo::purge_corrupt_geo_files(&crate::geo::mihomo_dir());
                     "Mihomo 分流规则文件 (GeoSite/GeoIP) 损坏，已自动清理损坏文件。请在「规则设置」点击「更新规则文件」重新同步完整库后再启动代理。".to_string()
                 } else if let Some(err) = fatal_line {
                     format!("{} 启动失败: {}", kernel.display_name(), err.trim())
-                } else if !detail.trim().is_empty() && child.try_wait().ok().flatten().is_some() {
+                } else if !detail_trimmed.is_empty() {
+                    if let Some(status) = exit_status {
+                        format!(
+                            "{} 启动失败 (退出码 {:?}): {}",
+                            kernel.display_name(),
+                            status.code(),
+                            last_nonempty_line(detail_trimmed)
+                        )
+                    } else {
+                        format!(
+                            "{} 启动失败: {}",
+                            kernel.display_name(),
+                            last_nonempty_line(detail_trimmed)
+                        )
+                    }
+                } else if let Some(status) = exit_status {
                     format!(
-                        "{} 启动失败: {}",
+                        "{} 启动失败：内核进程在就绪前异常退出 (退出码 {:?})",
                         kernel.display_name(),
-                        last_nonempty_line(&detail)
+                        status.code()
                     )
                 } else {
-                    format!("{} 启动后端口 {port} 未就绪（启动超时）", kernel.display_name())
+                    format!(
+                        "{} 启动后端口 {port} 未就绪（启动超时 {} 秒）",
+                        kernel.display_name(),
+                        STARTUP_PROXY_TOTAL_TIMEOUT.as_secs()
+                    )
                 };
                 runtime.status.state = ProxyState::Failed;
                 runtime.status.message = message.clone();
@@ -1206,7 +1245,7 @@ pub async fn wait_for_port(child: &mut ProxyChild, port: u16, timeout: Duration)
         {
             return true;
         }
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        tokio::time::sleep(Duration::from_millis(40)).await;
     }
     false
 }

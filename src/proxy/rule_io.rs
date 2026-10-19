@@ -395,7 +395,38 @@ fn parse_rule_line(line: &str) -> Parsed {
             RuleMatcher::DestinationPort(payload.to_string())
         }
         "PROCESS-NAME" if !payload.is_empty() => RuleMatcher::ProcessName(payload.to_string()),
-        "RULE-SET" if !payload.is_empty() => RuleMatcher::RuleSet(payload.to_string()),
+        "RULE-SET" if !payload.is_empty() => {
+            let lower = payload.to_ascii_lowercase();
+            match lower.as_str() {
+                "reject" | "reject-list" | "ad" | "ads" | "advertising" => {
+                    RuleMatcher::GeoSite("category-ads-all".into())
+                }
+                "direct" | "direct-list" | "cn" | "china" => {
+                    RuleMatcher::GeoSite("cn".into())
+                }
+                "proxy" | "proxy-list" => {
+                    RuleMatcher::GeoSite("geolocation-!cn".into())
+                }
+                "gfw" | "gfwlist" => {
+                    RuleMatcher::GeoSite("gfw".into())
+                }
+                "cncidr" => {
+                    RuleMatcher::GeoIp("CN".into())
+                }
+                "telegramcidr" => {
+                    RuleMatcher::GeoIp("telegram".into())
+                }
+                "lancidr" | "private" => {
+                    RuleMatcher::GeoSite("private".into())
+                }
+                "google" | "youtube" | "telegram" | "netflix" | "openai" | "chatgpt"
+                | "microsoft" | "github" | "twitter" | "facebook" | "apple"
+                | "speedtest" | "steam" => {
+                    RuleMatcher::GeoSite(lower)
+                }
+                _ => RuleMatcher::RuleSet(payload.to_string()),
+            }
+        }
         "NETWORK" => match payload.to_ascii_lowercase().as_str() {
             "tcp" => RuleMatcher::Network(NetworkProtocol::Tcp),
             "udp" => RuleMatcher::Network(NetworkProtocol::Udp),

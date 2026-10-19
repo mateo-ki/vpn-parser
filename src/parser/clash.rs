@@ -42,7 +42,42 @@ pub fn extract_clash_rules(content: &str) -> Vec<crate::proxy::TrafficRule> {
         let Some(line) = item.as_str() else {
             continue;
         };
-        if let Some(rule) = crate::proxy::rule_io::parse_single_rule(line) {
+        if let Some(mut rule) = crate::proxy::rule_io::parse_single_rule(line) {
+            if let crate::proxy::RuleMatcher::RuleSet(ref tag) = rule.matcher {
+                let lower = tag.to_ascii_lowercase();
+                match lower.as_str() {
+                    "reject" | "reject-list" | "ad" | "ads" | "advertising" => {
+                        rule.matcher = crate::proxy::RuleMatcher::GeoSite("category-ads-all".into());
+                    }
+                    "direct" | "direct-list" | "cn" | "china" => {
+                        rule.matcher = crate::proxy::RuleMatcher::GeoSite("cn".into());
+                    }
+                    "proxy" | "proxy-list" => {
+                        rule.matcher = crate::proxy::RuleMatcher::GeoSite("geolocation-!cn".into());
+                    }
+                    "gfw" | "gfwlist" => {
+                        rule.matcher = crate::proxy::RuleMatcher::GeoSite("gfw".into());
+                    }
+                    "cncidr" => {
+                        rule.matcher = crate::proxy::RuleMatcher::GeoIp("CN".into());
+                    }
+                    "telegramcidr" => {
+                        rule.matcher = crate::proxy::RuleMatcher::GeoIp("telegram".into());
+                    }
+                    "lancidr" | "private" => {
+                        rule.matcher = crate::proxy::RuleMatcher::GeoSite("private".into());
+                    }
+                    "google" | "youtube" | "telegram" | "netflix" | "openai" | "chatgpt"
+                    | "microsoft" | "github" | "twitter" | "facebook" | "apple"
+                    | "speedtest" | "steam" => {
+                        rule.matcher = crate::proxy::RuleMatcher::GeoSite(lower);
+                    }
+                    _ => {
+                        // 未知外部规则集（通常依赖外部独立 rule-provider），本地无对应数据库时跳过，避免内核崩溃
+                        continue;
+                    }
+                }
+            }
             rules.push(rule);
         }
     }
@@ -175,5 +210,30 @@ proxies:
 "#;
         let rules = extract_clash_rules(yaml);
         assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn extracts_clash_rules_normalizes_rule_sets() {
+        let yaml = r#"
+rules:
+  - "RULE-SET,reject,REJECT"
+  - "RULE-SET,cn,DIRECT"
+  - "RULE-SET,telegramcidr,PROXY"
+  - "RULE-SET,google,PROXY"
+  - "RULE-SET,unknown_custom_provider_xyz,DIRECT"
+"#;
+        let rules = extract_clash_rules(yaml);
+        assert_eq!(rules.len(), 4);
+        assert_eq!(
+            rules[0].matcher,
+            RuleMatcher::GeoSite("category-ads-all".into())
+        );
+        assert_eq!(rules[0].action, RuleAction::Reject);
+        assert_eq!(rules[1].matcher, RuleMatcher::GeoSite("cn".into()));
+        assert_eq!(rules[1].action, RuleAction::Direct);
+        assert_eq!(rules[2].matcher, RuleMatcher::GeoIp("telegram".into()));
+        assert_eq!(rules[2].action, RuleAction::Proxy);
+        assert_eq!(rules[3].matcher, RuleMatcher::GeoSite("google".into()));
+        assert_eq!(rules[3].action, RuleAction::Proxy);
     }
 }
