@@ -30,7 +30,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: data/kernels
-          key: proxy-kernels-windows-v1
+          key: proxy-kernels-windows-v2
 
       - name: 准备三内核自检环境 (Mihomo, Sing-box, Xray)
         if: steps.cache-kernels.outputs.cache-hit != 'true'
@@ -56,7 +56,7 @@ jobs:
           }
           try {
             Write-Host "Downloading Sing-box..."
-            Invoke-WebRequest -Uri "https://github.com/SagerNet/sing-box/releases/download/v1.11.4/sing-box-1.11.4-windows-amd64.zip" -OutFile "sing-box.zip" -TimeoutSec 30
+            Invoke-WebRequest -Uri "https://github.com/SagerNet/sing-box/releases/download/v1.13.14/sing-box-1.13.14-windows-amd64.zip" -OutFile "sing-box.zip" -TimeoutSec 30
             Expand-Archive -Path "sing-box.zip" -DestinationPath "temp_sb" -Force
             Get-ChildItem -Path "temp_sb" -Filter "*.exe" -Recurse | Select-Object -First 1 | Move-Item -Destination "data/kernels/sing-box/sing-box.exe" -Force
           } catch {

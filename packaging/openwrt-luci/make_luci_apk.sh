@@ -29,7 +29,7 @@ elif [ -x "$HOME/.local/bin/apk" ]; then
     APK_BIN="$HOME/.local/bin/apk"
 elif [ -f "$REPO_ROOT/packaging/openwrt/install_apk_tools.sh" ]; then
     echo "==> apk command with mkpkg not detected. Attempting to install via install_apk_tools.sh..."
-    bash "$REPO_ROOT/packaging/openwrt/install_apk_tools.sh"
+    bash "$REPO_ROOT/packaging/openwrt/install_apk_tools.sh" || true
     if command -v apk >/dev/null 2>&1; then
         APK_BIN="$(which apk)"
     elif [ -x "/usr/local/bin/apk" ]; then

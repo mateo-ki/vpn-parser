@@ -73,7 +73,7 @@ meson setup "$TMP_DIR/apk-tools/build" "$TMP_DIR/apk-tools" \
     -Dcrypto_backend=openssl
 
 echo "==> Compiling apk..."
-ninja -C "$TMP_DIR/apk-tools/build" apk
+ninja -C "$TMP_DIR/apk-tools/build" src/apk || ninja -C "$TMP_DIR/apk-tools/build"
 
 echo "==> Installing to $TARGET_BIN..."
 if [ -w "$(dirname "$TARGET_BIN")" ]; then

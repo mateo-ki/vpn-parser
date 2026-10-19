@@ -1055,7 +1055,7 @@ mod data_root_tests {
     }
 
     /// XDG 优先，其次 HOME 下的常见位置，两个都没有才退回工作目录（而不是猜一个绝对路径）。
-    #[cfg(not(windows))]
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     #[test]
     fn the_linux_data_root_follows_xdg_then_home() {
         let got = data_root_from(
@@ -1091,6 +1091,21 @@ mod data_root_tests {
 
         let got = data_root_from(false, Path::new("/usr/bin"), None, None);
         assert_eq!(got, Path::new("/usr/bin/data").to_path_buf());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_data_root_follows_application_support() {
+        let got = data_root_from(
+            false,
+            Path::new("/Applications"),
+            Some(Path::new("/data/x")),
+            Some(Path::new("/Users/me")),
+        );
+        assert_eq!(
+            got,
+            Path::new("/Users/me/Library/Application Support/vpn-parser").to_path_buf()
+        );
     }
 
     /// Windows 那份没变：工作目录下的 `data/`，和 1.0 以来的装机位置一致。
