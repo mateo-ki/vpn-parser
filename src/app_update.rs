@@ -6,7 +6,7 @@
 
 use anyhow::{bail, Context, Result};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -185,11 +185,88 @@ impl AppReleaseInfo {
     pub fn downloadable(&self) -> bool {
         self.update_available && self.asset.is_some()
     }
+
+    /// 无论是否为新版本，只要挂载了本平台安装包均可安装（用于历史版本回退或重装）。
+    pub fn can_install(&self) -> bool {
+        self.asset.is_some()
+    }
+}
+
+/// 历史版本条目（用于“关于”页面的版本切换与老版本回退安装）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseItem {
+    pub tag: String,
+    pub name: String,
+    pub published_at: Option<String>,
+    pub prerelease: bool,
+    pub html_url: String,
+    pub body: Option<String>,
+    pub asset_name: Option<String>,
+    pub asset_size: u64,
+    pub asset_url: Option<String>,
+    pub asset_sha256: Option<String>,
+    pub hash_index_url: Option<String>,
+    pub is_current: bool,
+}
+
+impl ReleaseItem {
+    pub fn to_release_info(&self, current: &str) -> AppReleaseInfo {
+        let asset = if let (Some(name), Some(url)) = (&self.asset_name, &self.asset_url) {
+            Some(AppAsset {
+                name: name.clone(),
+                url: url.clone(),
+                size: self.asset_size,
+                sha256: self.asset_sha256.clone(),
+            })
+        } else {
+            None
+        };
+        let update_available = asset.is_some() && version_is_newer(&self.tag, current);
+        let tag_clean = self.tag.trim_start_matches('v');
+        let current_clean = current.trim_start_matches('v');
+        let is_current = tag_clean == current_clean;
+        let message = if asset.is_none() {
+            format!("Release {} 没有适用于本平台的安装包", self.tag)
+        } else if update_available {
+            format!(
+                "v{} 可更新至 {}{}",
+                current,
+                self.tag,
+                if self.prerelease { "（预发）" } else { "" }
+            )
+        } else if is_current {
+            format!("当前运行版本（v{}）", current)
+        } else {
+            format!(
+                "v{} 回退/切换至 {}{}",
+                current,
+                self.tag,
+                if self.prerelease { "（预发）" } else { "" }
+            )
+        };
+        AppReleaseInfo {
+            tag: self.tag.clone(),
+            current_version: current.to_string(),
+            update_available,
+            asset,
+            hash_index_url: self.hash_index_url.clone(),
+            prerelease: self.prerelease,
+            message,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct ReleaseJson {
     tag_name: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    published_at: Option<String>,
+    #[serde(default)]
+    html_url: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
     #[serde(default)]
     assets: Vec<AssetJson>,
     /// GitHub 上勾了"这是一个预发布版本"。稳定通道永远拿不到它。
@@ -547,6 +624,84 @@ pub async fn check(
         "读取 {REPOSITORY} 最新 Release 失败：{}",
         failures.join("；")
     )
+}
+
+/// 拉取 GitHub Releases 历史版本列表（过滤草稿，解析匹配本平台的安装包资产与发布信息）。
+pub async fn list_releases(
+    app_proxy: Option<&str>,
+    current: &str,
+    per_page: usize,
+) -> Result<Vec<ReleaseItem>> {
+    let per_page = per_page.clamp(1, 100);
+    let url = format!("https://api.github.com/repos/{REPOSITORY}/releases?per_page={per_page}");
+    let mut failures = Vec::new();
+    for transport in transports(app_proxy)? {
+        let result = transport
+            .client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status);
+        match result {
+            Ok(response) => match response.json::<Vec<ReleaseJson>>().await {
+                Ok(list) => {
+                    let mut items = Vec::new();
+                    for release in list.into_iter().filter(|r| !r.draft) {
+                        let asset = pick_installer_asset(&release.assets, &release.tag_name);
+                        let hash_index_url = release
+                            .assets
+                            .iter()
+                            .find(|a| a.name == HASH_INDEX_NAME)
+                            .map(|a| a.browser_download_url.clone())
+                            .or_else(|| {
+                                let installer =
+                                    pick_installer_asset(&release.assets, &release.tag_name)?;
+                                Some(
+                                    installer
+                                        .url
+                                        .replace(installer.name.rsplit('/').next()?, HASH_INDEX_NAME),
+                                )
+                            });
+                        let tag_clean = release.tag_name.trim_start_matches('v');
+                        let current_clean = current.trim_start_matches('v');
+                        let is_current = tag_clean == current_clean;
+                        let (asset_name, asset_url, asset_size, asset_sha256) = match asset {
+                            Some(a) => (Some(a.name), Some(a.url), a.size, a.sha256),
+                            None => (None, None, 0, None),
+                        };
+                        items.push(ReleaseItem {
+                            tag: release.tag_name.clone(),
+                            name: release.name.unwrap_or_else(|| release.tag_name.clone()),
+                            published_at: release.published_at.map(|d| {
+                                d.split('T').next().unwrap_or(&d).to_string()
+                            }),
+                            prerelease: release.prerelease,
+                            html_url: release.html_url.unwrap_or_else(|| {
+                                format!(
+                                    "https://github.com/{REPOSITORY}/releases/tag/{}",
+                                    release.tag_name
+                                )
+                            }),
+                            body: release.body,
+                            asset_name,
+                            asset_size,
+                            asset_url,
+                            asset_sha256,
+                            hash_index_url,
+                            is_current,
+                        });
+                    }
+                    return Ok(items);
+                }
+                Err(error) => {
+                    failures.push(format!("{}: 解析 JSON 失败: {error}", transport.label))
+                }
+            },
+            Err(error) => failures.push(format!("{}: 请求失败: {error}", transport.label)),
+        }
+    }
+    bail!("获取 Releases 历史列表失败：{}", failures.join("；"))
 }
 
 fn summarize(release: ReleaseJson, current: &str, channel: UpdateChannel) -> AppReleaseInfo {
@@ -1096,6 +1251,10 @@ ID-LIKE=\"debian\"
     fn release(tag: &str, assets: Vec<AssetJson>) -> ReleaseJson {
         ReleaseJson {
             tag_name: tag.to_string(),
+            name: Some(tag.to_string()),
+            published_at: None,
+            html_url: None,
+            body: None,
             assets,
             prerelease: false,
             draft: false,
@@ -1215,6 +1374,66 @@ ID-LIKE=\"debian\"
         progress.total = 100;
         assert_eq!(progress.fraction(), 1.0, "多收了字节也不能画到 100% 之外");
         assert_eq!(AppUpdateStage::Verifying.label(), "校验");
+    }
+
+    #[test]
+    fn release_item_converts_to_info_for_upgrade_downgrade_and_reinstall() {
+        let upgrade_item = ReleaseItem {
+            tag: "v1.9.0".into(),
+            name: "VPN Parser v1.9.0".into(),
+            published_at: Some("2026-10-20".into()),
+            prerelease: false,
+            html_url: "https://github.com/mateo-ki/vpn-parser/releases/tag/v1.9.0".into(),
+            body: Some("更新说明".into()),
+            asset_name: Some("vpn-parser-1.9.0-windows-x64-setup.exe".into()),
+            asset_size: 15_000_000,
+            asset_url: Some("https://example.com/download".into()),
+            asset_sha256: Some("abcd".into()),
+            hash_index_url: None,
+            is_current: false,
+        };
+        let upgrade_info = upgrade_item.to_release_info("1.8.8");
+        assert!(upgrade_info.update_available);
+        assert!(upgrade_info.can_install());
+        assert!(upgrade_info.message.contains("可更新至 v1.9.0"));
+
+        let downgrade_item = ReleaseItem {
+            tag: "v1.8.6".into(),
+            name: "VPN Parser v1.8.6".into(),
+            published_at: Some("2026-10-16".into()),
+            prerelease: false,
+            html_url: "https://github.com/mateo-ki/vpn-parser/releases/tag/v1.8.6".into(),
+            body: None,
+            asset_name: Some("vpn-parser-1.8.6-windows-x64-setup.exe".into()),
+            asset_size: 14_000_000,
+            asset_url: Some("https://example.com/download_old".into()),
+            asset_sha256: None,
+            hash_index_url: None,
+            is_current: false,
+        };
+        let downgrade_info = downgrade_item.to_release_info("1.8.8");
+        assert!(!downgrade_info.update_available);
+        assert!(downgrade_info.can_install(), "历史老版本只要有安装包就允许安装");
+        assert!(downgrade_info.message.contains("回退/切换至 v1.8.6"));
+
+        let current_item = ReleaseItem {
+            tag: "v1.8.8".into(),
+            name: "VPN Parser v1.8.8".into(),
+            published_at: Some("2026-10-19".into()),
+            prerelease: false,
+            html_url: "https://github.com/mateo-ki/vpn-parser/releases/tag/v1.8.8".into(),
+            body: None,
+            asset_name: Some("vpn-parser-1.8.8-windows-x64-setup.exe".into()),
+            asset_size: 15_000_000,
+            asset_url: Some("https://example.com/download_curr".into()),
+            asset_sha256: None,
+            hash_index_url: None,
+            is_current: true,
+        };
+        let current_info = current_item.to_release_info("1.8.8");
+        assert!(!current_info.update_available);
+        assert!(current_info.can_install());
+        assert!(current_info.message.contains("当前运行版本"));
     }
 
     /// 侧栏的↑只在"确实有更新"时亮：查到的版本不比当前新、或者压根没查到，都不许亮。

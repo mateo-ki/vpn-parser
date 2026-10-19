@@ -84,9 +84,9 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           $exe = (Get-ChildItem dist -Filter *-setup.exe | Select-Object -First 1).FullName
-          # tag 里带 -alpha./-beta./-rc. 就发成预发布版：GitHub 的 /releases/latest 会跳过
-          # prerelease，稳定通道的用户收不到它，只有「关于」里勾了「参与预发」的人才拿得到。
-          $pre = $env:TAG -match '-(alpha|beta|rc)\.'
+          # tag 里带 -alpha./-beta./-rc./-dev./-preview. 就发成预发布版：GitHub 的 /releases/latest 会跳过
+          # prerelease，稳定通道的用户收不到它，只有「关于」里勾了「参与预发」或主动切换版本的人才拿得到。
+          $pre = $env:TAG -match '-(alpha|beta|rc|dev|preview)(\.|\b)' -or $env:TAG -match '-[0-9A-Za-z]+'
           $versionClean = $env:TAG.TrimStart('v')
           $notesValid = (Test-Path "RELEASE_NOTES.md") -and ((Get-Content "RELEASE_NOTES.md" -Raw) -match [regex]::Escape($versionClean))
           if (gh release view "$env:TAG" 2>$null) {

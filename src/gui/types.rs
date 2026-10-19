@@ -356,6 +356,7 @@ pub enum BgMsg {
     AppUpdateCheck(Result<crate::app_update::AppReleaseInfo, String>),
     AppUpdateProgress(crate::app_update::AppUpdateProgress),
     AppUpdateDownloaded(Result<std::path::PathBuf, String>),
+    AppReleasesListed(Result<Vec<crate::app_update::ReleaseItem>, String>),
     ProxyStatus(ProxyRuntimeStatus),
     ProxyConfig(Result<MihomoConfigOptions, String>),
     ProxyConfigSaved(Result<MihomoConfigOptions, String>),

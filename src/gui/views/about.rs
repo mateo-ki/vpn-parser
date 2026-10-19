@@ -153,14 +153,26 @@ impl VpnApp {
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     if let Some(info) = &self.app_release {
-                        let downloadable = info.downloadable();
+                        let can_install = info.can_install();
+                        let is_current = info.tag.trim_start_matches('v')
+                            == app_update::current_version().trim_start_matches('v');
+                        let btn_label = if info.update_available {
+                            self.tr("下载更新")
+                        } else if is_current {
+                            self.tr("重新下载本版")
+                        } else {
+                            self.tr("下载此版本")
+                        };
+                        let tooltip = if !can_install {
+                            "这个 Release 里没有适用于本平台的安装包"
+                        } else if info.update_available {
+                            "下载安装包并校验，下载完再点「安装」"
+                        } else {
+                            "下载选定的版本安装包并校验，下载完成后点击「安装」即可切换/回退"
+                        };
                         if ui
-                            .add_enabled(!self.app_update_busy && downloadable, button(self.tr("下载更新")))
-                            .on_hover_text(if downloadable {
-                                "下载安装包并校验，下载完再点「安装」"
-                            } else {
-                                "已经是最新版，或这个 Release 里没有安装包"
-                            })
+                            .add_enabled(!self.app_update_busy && can_install, button(btn_label))
+                            .on_hover_text(tooltip)
                             .clicked()
                         {
                             self.download_app_update();
@@ -246,6 +258,124 @@ impl VpnApp {
                         ui.ctx().open_url(egui::OpenUrl::new_tab(RELEASES_URL));
                     }
                 });
+
+            ui.add_space(6.0);
+            egui::CollapsingHeader::new(fold_title("版本切换（安装老版本 / 预发版本）"))
+                .id_salt("about:version-switcher")
+                .default_open(false)
+                .show_background(false)
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new("可从 GitHub Releases 获取历史发布版本，自主选择回退到老版本或体验预发版本。")
+                            .size(11.5)
+                            .color(theme::text_secondary()),
+                    );
+                    ui.add_space(6.0);
+
+                    if self.available_releases.is_empty() {
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(!self.fetching_releases, button("获取版本列表 🔄"))
+                                .on_hover_text("从 GitHub Releases 读取近期的发布版本")
+                                .clicked()
+                            {
+                                self.fetch_available_releases();
+                            }
+                            if self.fetching_releases {
+                                ui.spinner();
+                                ui.label(RichText::new("正在拉取版本列表...").size(11.5).color(theme::muted()));
+                            }
+                        });
+                    } else {
+                        let mut new_selection = None;
+                        ui.horizontal(|ui| {
+                            ui.label("选择版本：");
+                            let current_tag = self.selected_release_tag.clone().unwrap_or_else(|| {
+                                format!("v{}", app_update::current_version())
+                            });
+                            egui::ComboBox::from_id_salt("about_releases_combobox")
+                                .width(280.0)
+                                .selected_text(&current_tag)
+                                .show_ui(ui, |ui| {
+                                    for item in &self.available_releases {
+                                        let mut label = item.tag.clone();
+                                        if item.is_current {
+                                            label = format!("{label} (当前版本)");
+                                        }
+                                        if let Some(date) = &item.published_at {
+                                            label = format!("{label} · {date}");
+                                        }
+                                        if item.prerelease {
+                                            label = format!("{label} [预发]");
+                                        }
+                                        if ui.selectable_label(self.selected_release_tag.as_deref() == Some(&item.tag), label).clicked() {
+                                            new_selection = Some(item.tag.clone());
+                                        }
+                                    }
+                                });
+
+                            if ui
+                                .add_enabled(!self.fetching_releases, button("刷新 🔄"))
+                                .on_hover_text("重新从 GitHub 拉取最新版本列表")
+                                .clicked()
+                            {
+                                self.fetch_available_releases();
+                            }
+                            if self.fetching_releases {
+                                ui.spinner();
+                            }
+                        });
+
+                        if let Some(tag) = new_selection {
+                            self.select_release_version(tag);
+                        }
+
+                        if let Some(selected_tag) = &self.selected_release_tag {
+                            if let Some(item) = self.available_releases.iter().find(|r| &r.tag == selected_tag) {
+                                ui.add_space(6.0);
+                                egui::Frame::NONE
+                                    .fill(theme::panel_hover())
+                                    .corner_radius(CornerRadius::same(6))
+                                    .inner_margin(egui::Margin::same(8))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(RichText::new(&item.tag).strong().size(13.5).color(theme::accent_strong()));
+                                            if item.prerelease {
+                                                crate::gui::widgets::status_badge(ui, "预发版", theme::warning());
+                                            }
+                                            if item.is_current {
+                                                crate::gui::widgets::status_badge(ui, "本机当前版本", theme::accent());
+                                            } else if app_update::version_is_newer(&item.tag, app_update::current_version()) {
+                                                crate::gui::widgets::status_badge(ui, "高于当前版本（可升级）", theme::success());
+                                            } else {
+                                                crate::gui::widgets::status_badge(ui, "历史老版本（可回退）", theme::warning());
+                                            }
+                                            if let Some(date) = &item.published_at {
+                                                ui.label(RichText::new(format!("发布于 {date}")).size(11.0).color(theme::muted()));
+                                            }
+                                        });
+
+                                        ui.add_space(4.0);
+                                        if let Some(pkg) = &item.asset_name {
+                                            let size_mb = (item.asset_size as f64) / (1024.0 * 1024.0);
+                                            ui.label(RichText::new(format!("安装包：{pkg} ({size_mb:.1} MB)")).size(11.5).color(theme::text_secondary()));
+                                        } else {
+                                            ui.label(RichText::new("该版本未检测到适用于当前操作系统的安装包资产").size(11.5).color(theme::danger()));
+                                        }
+
+                                        if let Some(body) = &item.body {
+                                            let clean = body.lines().filter(|l| !l.trim().is_empty()).take(3).collect::<Vec<_>>().join(" · ");
+                                            if !clean.is_empty() {
+                                                ui.add_space(2.0);
+                                                ui.label(RichText::new(format!("更新说明：{clean}")).size(11.0).color(theme::muted()));
+                                            }
+                                        }
+                                    });
+                            }
+                        }
+                    }
+                });
+
             let dirs: [(&str, Option<std::path::PathBuf>); 4] = [
                 ("程序目录", current_exe_dir()),
                 ("数据目录", data_dir()),
@@ -479,6 +609,35 @@ impl VpnApp {
         self.proxy_status
             .local_proxy_active()
             .then(|| format!("http://127.0.0.1:{}", self.proxy_status.mixed_port))
+    }
+
+    pub(crate) fn fetch_available_releases(&mut self) {
+        let tx = self.tx.clone();
+        let proxy = self.app_update_proxy();
+        self.fetching_releases = true;
+        self.status = "正在拉取 GitHub Releases 版本列表...".into();
+        self.rt.spawn(async move {
+            let result = app_update::list_releases(
+                proxy.as_deref(),
+                app_update::current_version(),
+                30,
+            )
+            .await
+            .map_err(|error| error.to_string());
+            let _ = tx.send(BgMsg::AppReleasesListed(result));
+        });
+    }
+
+    pub(crate) fn select_release_version(&mut self, tag: String) {
+        if let Some(item) = self.available_releases.iter().find(|r| r.tag == tag).cloned() {
+            let current = app_update::current_version();
+            let info = item.to_release_info(current);
+            self.selected_release_tag = Some(tag.clone());
+            self.app_release = Some(info);
+            self.app_installer_path = None;
+            self.app_update_progress = None;
+            self.status = format!("已选中版本 {tag}，可点击上方「下载」进行安装/回退");
+        }
     }
 }
 

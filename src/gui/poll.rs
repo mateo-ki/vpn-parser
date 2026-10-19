@@ -584,6 +584,27 @@ impl VpnApp {
                                 Err(error) => self.status = format!("下载更新失败: {error}"),
                             }
                         }
+                        BgMsg::AppReleasesListed(result) => {
+                            self.fetching_releases = false;
+                            match result {
+                                Ok(list) => {
+                                    let count = list.len();
+                                    self.status = format!("已获取 {count} 个版本");
+                                    // 若当前选中的版本不存在于新列表中，重置选择
+                                    if self.selected_release_tag.as_ref().is_none_or(|tag| !list.iter().any(|r| &r.tag == tag)) {
+                                        if let Some(curr) = list.iter().find(|r| r.is_current) {
+                                            self.selected_release_tag = Some(curr.tag.clone());
+                                        } else if let Some(first) = list.first() {
+                                            self.selected_release_tag = Some(first.tag.clone());
+                                        }
+                                    }
+                                    self.available_releases = list;
+                                }
+                                Err(error) => {
+                                    self.status = format!("获取版本列表失败: {error}");
+                                }
+                            }
+                        }
                         BgMsg::ProxyStatus(status) => self.proxy_status = status,
                         BgMsg::ProxyConfig(Ok(config)) => self.set_proxy_config(config),
                         BgMsg::ProxyConfig(Err(error)) => {
