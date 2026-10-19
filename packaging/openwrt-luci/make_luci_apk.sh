@@ -20,21 +20,26 @@ fi
 echo "==> Packaging luci-app-vpn-parser v${VERSION} for OpenWrt 25.x (Architecture: noarch / all)..."
 
 # Ensure apk with mkpkg is available
+check_apk() {
+    local bin="$1"
+    [ -n "$bin" ] && [ -x "$bin" ] && "$bin" --version >/dev/null 2>&1 && ("$bin" mkpkg --help >/dev/null 2>&1 || "$bin" --help 2>&1 | grep -q "mkpkg")
+}
+
 APK_BIN=""
-if command -v apk >/dev/null 2>&1 && (apk mkpkg --help >/dev/null 2>&1 || apk --help 2>&1 | grep -q "mkpkg"); then
+if command -v apk >/dev/null 2>&1 && check_apk "$(which apk)"; then
     APK_BIN="$(which apk)"
-elif [ -x "/usr/local/bin/apk" ]; then
+elif check_apk "/usr/local/bin/apk"; then
     APK_BIN="/usr/local/bin/apk"
-elif [ -x "$HOME/.local/bin/apk" ]; then
+elif check_apk "$HOME/.local/bin/apk"; then
     APK_BIN="$HOME/.local/bin/apk"
 elif [ -f "$REPO_ROOT/packaging/openwrt/install_apk_tools.sh" ]; then
     echo "==> apk command with mkpkg not detected. Attempting to install via install_apk_tools.sh..."
     bash "$REPO_ROOT/packaging/openwrt/install_apk_tools.sh" || true
-    if command -v apk >/dev/null 2>&1; then
+    if command -v apk >/dev/null 2>&1 && check_apk "$(which apk)"; then
         APK_BIN="$(which apk)"
-    elif [ -x "/usr/local/bin/apk" ]; then
+    elif check_apk "/usr/local/bin/apk"; then
         APK_BIN="/usr/local/bin/apk"
-    elif [ -x "$HOME/.local/bin/apk" ]; then
+    elif check_apk "$HOME/.local/bin/apk"; then
         APK_BIN="$HOME/.local/bin/apk"
     fi
 fi

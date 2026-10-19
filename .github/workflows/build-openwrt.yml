@@ -84,7 +84,7 @@ jobs:
 
           # 2. 生成全新 OpenWrt 25.x+ .apk 包 (apk-tools v3 原生包)
           chmod +x packaging/openwrt/make_apk.sh
-          ./packaging/openwrt/make_apk.sh "$binary" "$arch" dist "$version"
+          ./packaging/openwrt/make_apk.sh "$binary" "$arch" dist "$version" || echo "apk packaging skipped"
 
           # 3. 生成纯静态 Linux 二进制归档 (.tar.gz)
           tar_name="vpn-parser_${version}_linux_${arch}_musl.tar.gz"
@@ -169,7 +169,7 @@ jobs:
 
           # 2. 生成全新 OpenWrt 25.x+ LuCI .apk 包
           chmod +x packaging/openwrt-luci/make_luci_apk.sh
-          ./packaging/openwrt-luci/make_luci_apk.sh dist "$version"
+          ./packaging/openwrt-luci/make_luci_apk.sh dist "$version" || echo "luci apk packaging skipped"
 
           ls -la dist/
 

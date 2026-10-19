@@ -67,6 +67,8 @@ fi
 
 echo "==> Configuring with meson..."
 meson setup "$TMP_DIR/apk-tools/build" "$TMP_DIR/apk-tools" \
+    --prefix=/usr/local \
+    -Ddefault_library=static \
     -Ddocs=disabled \
     -Dlua=disabled \
     -Dhelp=disabled \
@@ -76,12 +78,24 @@ echo "==> Compiling apk..."
 ninja -C "$TMP_DIR/apk-tools/build" src/apk || ninja -C "$TMP_DIR/apk-tools/build"
 
 echo "==> Installing to $TARGET_BIN..."
-if [ -w "$(dirname "$TARGET_BIN")" ]; then
-    cp "$TMP_DIR/apk-tools/build/src/apk" "$TARGET_BIN"
-    chmod 755 "$TARGET_BIN"
-elif command -v sudo >/dev/null 2>&1; then
-    sudo cp "$TMP_DIR/apk-tools/build/src/apk" "$TARGET_BIN"
-    sudo chmod 755 "$TARGET_BIN"
+if command -v sudo >/dev/null 2>&1; then
+    sudo ninja -C "$TMP_DIR/apk-tools/build" install 2>/dev/null || true
+    sudo find "$TMP_DIR/apk-tools/build" -name "libapk.so*" -exec cp {} /usr/local/lib/ \; 2>/dev/null || true
+    sudo find "$TMP_DIR/apk-tools/build" -name "libapk.so*" -exec cp {} /usr/lib/ \; 2>/dev/null || true
+    sudo ldconfig 2>/dev/null || true
+    if [ -f "$TMP_DIR/apk-tools/build/src/apk" ]; then
+        sudo cp "$TMP_DIR/apk-tools/build/src/apk" "$TARGET_BIN"
+        sudo chmod 755 "$TARGET_BIN"
+    fi
+elif [ "$(id -u)" -eq 0 ]; then
+    ninja -C "$TMP_DIR/apk-tools/build" install 2>/dev/null || true
+    find "$TMP_DIR/apk-tools/build" -name "libapk.so*" -exec cp {} /usr/local/lib/ \; 2>/dev/null || true
+    find "$TMP_DIR/apk-tools/build" -name "libapk.so*" -exec cp {} /usr/lib/ \; 2>/dev/null || true
+    ldconfig 2>/dev/null || true
+    if [ -f "$TMP_DIR/apk-tools/build/src/apk" ]; then
+        cp "$TMP_DIR/apk-tools/build/src/apk" "$TARGET_BIN"
+        chmod 755 "$TARGET_BIN"
+    fi
 else
     mkdir -p "$HOME/.local/bin"
     cp "$TMP_DIR/apk-tools/build/src/apk" "$HOME/.local/bin/apk"
