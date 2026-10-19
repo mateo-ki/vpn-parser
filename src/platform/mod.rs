@@ -1138,7 +1138,14 @@ mod tests {
     #[test]
     fn test_self_heal_stale_proxy_inactive_or_safe() {
         // 当系统未启用死代理时，自愈函数安全返回并不会抛出任何异常
+        // 保证单测绝不篡改宿主机正常工作的系统代理现场
+        let previous = crate::system_proxy::platform_system_proxy().capture().ok();
         let _ = self_heal_stale_system_proxy(19980);
+        if let Some(prev) = previous {
+            if prev.enabled {
+                let _ = crate::system_proxy::platform_system_proxy().restore(&prev);
+            }
+        }
     }
 
     #[test]

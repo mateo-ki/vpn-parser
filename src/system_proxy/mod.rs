@@ -72,6 +72,7 @@ impl SystemProxyControl for PlatformSystemProxy {
         let _ = delete_reg_value("AutoConfigURL");
         set_reg_string("ProxyServer", server)?;
         set_reg_dword("ProxyEnable", 1)?;
+        let _ = clean_connections_pac_in_registry(Some(server), true);
         notify_proxy_change()
     }
 
@@ -88,6 +89,7 @@ impl SystemProxyControl for PlatformSystemProxy {
             None => delete_reg_value("ProxyOverride")?,
         }
         set_reg_dword("ProxyEnable", u32::from(snapshot.enabled))?;
+        let _ = clean_connections_pac_in_registry(snapshot.server.as_deref(), snapshot.enabled);
         notify_proxy_change()
     }
 }
@@ -595,6 +597,97 @@ fn notify_proxy_change() -> Result<()> {
     Ok(())
 }
 
+/// 净化 Windows WinINet Connections 下的 DefaultConnectionSettings 与 SavedLegacySettings 二进制块。
+/// 彻底清除历史残留的死 PAC 脚本地址（如 v2rayN 历史遗留的 127.0.0.1:10811/pac），防止外部触发时自动将系统代理打回 0。
+#[cfg(windows)]
+fn clean_connections_pac_in_registry(server: Option<&str>, enabled: bool) -> Result<()> {
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_BINARY,
+    };
+
+    const CONNECTIONS_KEY_W: &[u16] = &[
+        'S' as u16, 'o' as u16, 'f' as u16, 't' as u16, 'w' as u16, 'a' as u16, 'r' as u16, 'e' as u16,
+        '\\' as u16,
+        'M' as u16, 'i' as u16, 'c' as u16, 'r' as u16, 'o' as u16, 's' as u16, 'o' as u16, 'f' as u16, 't' as u16,
+        '\\' as u16,
+        'W' as u16, 'i' as u16, 'n' as u16, 'd' as u16, 'o' as u16, 'w' as u16, 's' as u16,
+        '\\' as u16,
+        'C' as u16, 'u' as u16, 'r' as u16, 'r' as u16, 'e' as u16, 'n' as u16, 't' as u16, 'V' as u16, 'e' as u16, 'r' as u16, 's' as u16, 'i' as u16, 'o' as u16, 'n' as u16,
+        '\\' as u16,
+        'I' as u16, 'n' as u16, 't' as u16, 'e' as u16, 'r' as u16, 'n' as u16, 'e' as u16, 't' as u16, ' ' as u16, 'S' as u16, 'e' as u16, 't' as u16, 't' as u16, 'i' as u16, 'n' as u16, 'g' as u16, 's' as u16,
+        '\\' as u16,
+        'C' as u16, 'o' as u16, 'n' as u16, 'n' as u16, 'e' as u16, 'c' as u16, 't' as u16, 'i' as u16, 'o' as u16, 'n' as u16, 's' as u16,
+        0,
+    ];
+    const DEFAULT_SETTINGS_W: &[u16] = &[
+        'D' as u16, 'e' as u16, 'f' as u16, 'a' as u16, 'u' as u16, 'l' as u16, 't' as u16,
+        'C' as u16, 'o' as u16, 'n' as u16, 'n' as u16, 'e' as u16, 'c' as u16, 't' as u16, 'i' as u16, 'o' as u16, 'n' as u16,
+        'S' as u16, 'e' as u16, 't' as u16, 't' as u16, 'i' as u16, 'n' as u16, 'g' as u16, 's' as u16,
+        0,
+    ];
+    const SAVED_LEGACY_W: &[u16] = &[
+        'S' as u16, 'a' as u16, 'v' as u16, 'e' as u16, 'd' as u16,
+        'L' as u16, 'e' as u16, 'g' as u16, 'a' as u16, 'c' as u16, 'y' as u16,
+        'S' as u16, 'e' as u16, 't' as u16, 't' as u16, 'i' as u16, 'n' as u16, 'g' as u16, 's' as u16,
+        0,
+    ];
+
+    let mut hkey = std::ptr::null_mut();
+    let status = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            CONNECTIONS_KEY_W.as_ptr(),
+            0,
+            KEY_SET_VALUE,
+            &mut hkey,
+        )
+    };
+    if status != 0 || hkey.is_null() {
+        return Ok(());
+    }
+
+    let mut blob = Vec::with_capacity(128);
+    blob.extend_from_slice(&70u32.to_le_bytes()); // version / length
+    blob.extend_from_slice(&1u32.to_le_bytes());  // counter
+    let flags: u32 = if enabled { 0x03 } else { 0x01 };
+    blob.extend_from_slice(&flags.to_le_bytes());
+
+    let server_bytes = server.unwrap_or("").as_bytes();
+    blob.extend_from_slice(&(server_bytes.len() as u32).to_le_bytes());
+    blob.extend_from_slice(server_bytes);
+
+    // Bypass length 0
+    blob.extend_from_slice(&0u32.to_le_bytes());
+
+    // PAC URL length 0 (彻底清理死 PAC 脚本地址)
+    blob.extend_from_slice(&0u32.to_le_bytes());
+
+    // 32 字节保留零填充
+    blob.extend_from_slice(&[0u8; 32]);
+
+    unsafe {
+        let _ = RegSetValueExW(
+            hkey,
+            DEFAULT_SETTINGS_W.as_ptr(),
+            0,
+            REG_BINARY,
+            blob.as_ptr(),
+            blob.len() as u32,
+        );
+        let _ = RegSetValueExW(
+            hkey,
+            SAVED_LEGACY_W.as_ptr(),
+            0,
+            REG_BINARY,
+            blob.as_ptr(),
+            blob.len() as u32,
+        );
+        RegCloseKey(hkey);
+    }
+
+    Ok(())
+}
+
 /// 纯 Win32 原生原子级注册表快速复位。
 ///
 /// 绝对不依赖 `reg.exe` 子进程，不执行任何堆内存分配，完全满足 SEH 崩溃异常过滤器
@@ -818,8 +911,13 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn test_direct_disable_wininet_proxy_atomic_executes_safely() {
+        // 保存执行前的值，测完立刻还原现场，绝不污染宿主机的真实系统代理！
+        let previous = query_reg_value("ProxyEnable").and_then(|v| parse_dword(&v));
         let result = direct_disable_wininet_proxy_atomic();
-        // 在 Windows 具备 HKCU 访问权限的环境下正常返回 true
         assert!(result);
+        if let Some(prev) = previous {
+            let _ = set_reg_dword("ProxyEnable", u32::from(prev));
+            let _ = notify_proxy_change();
+        }
     }
 }
