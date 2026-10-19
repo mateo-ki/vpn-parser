@@ -1475,7 +1475,16 @@ mod tests {
         let elapsed = start.elapsed();
         println!("20,000 节点元数据过滤耗时: {:.2?}，命中: {} 条", elapsed, filtered.len());
         assert!(!filtered.is_empty());
-        assert!(elapsed.as_millis() < 50, "20000 节点零内存分配过滤应在 50ms 内");
+        // 这条是**回归绊线**，不是性能记分牌：它要挡的是"有人把过滤写成 O(n²) 或
+        // 每个节点回库一次"那种量级的退化，不是 8ms 变 12ms。
+        // 实测两个数：本机（20 核）连跑五轮 8.29–9.74ms；GitHub 的 macos-14 共享 runner
+        // 单次 53.24ms —— 原来钉 50ms 等于拿自己机器当闸，macOS 那条作业一忙就红
+        // （1e4fd62 上同一提交两次跑，一红一绿就是这个）。250ms 仍能在 25 倍退化上报红。
+        assert!(
+            elapsed.as_millis() < 250,
+            "20000 节点元数据过滤用了 {}ms，远超回归绊线 250ms",
+            elapsed.as_millis()
+        );
     }
 
     #[tokio::test]
