@@ -1,39 +1,42 @@
-# 🚀 VPN Parser v1.8.6 发布说明 / Release Notes
+# 🚀 VPN Parser v1.8.7 发布说明 / Release Notes
 
-🎉 欢迎使用 **VPN Parser v1.8.6**！本次更新带来了**节点池极简双行工具栏整合**、**控制台仪表盘黄金比例对齐与防裁切圆角**、**出海健康与延迟频谱卡片等高重构**，以及 **Windows 原生网络崩溃自愈与 Job Object 僵尸进程防残留机制**！
+🎉 欢迎使用 **VPN Parser v1.8.7**！本次更新重点带来了**长连接稳定性与防频繁断线深度调优**、**Windows 系统代理死 PAC 残留净化与多客户端共存保护**、**macOS 中文字体基线对齐校正**，以及 **OpenWrt apk-tools 静态编译与全平台 CI 强化**！
 
 ---
 
 ## 🌟 新特性与核心更新
 
-### 🎯 1. 节点池（Nodes）工具栏极简双行重构
-- **搜索与核心操作合流同一行**：
-  - 将「搜索框」、「订阅源下拉筛选」与「⚡ 批量测速 ▼」、「🧹 维护清理 ▼」、「📥 导入/导出 ▼」整合至第一行，纵向占用空间大幅压缩，操作链路一气呵成；
-- **地区筛选与排序深度融合**：
-  - 将「排序」下拉框移至地区胶囊（全部、香港、日本、美国、新加坡、台湾、韩国、其它）末尾，信息流逻辑归一，视觉层级更清爽；
-- **界面极致降噪**：
-  - 移除冗余的独立「刷新」按钮，移除订阅源下拉框旁的独立 `✕` 清除按钮，还原极简、开阔的高效浏览视野。
+### 🛡️ 1. 长连接稳定性与防频繁断线调优
+- **软化断路器熔断机制**：
+  - 将容错阈值（`breaker_failures`）提升至 4 次，适应跨国跨洋网络在高峰期的丢包抖动，避免 1~2 次偶发丢包直接触发断路器掐断活跃 TCP 连接；
+- **放宽探活握手超时上限**：
+  - 将端到端握手超时上限由 1500ms 调整至 3500ms，为真实海外网页与延迟较高的远程服务器提供充足缓冲；
+- **延长异常重试退避间隔**：
+  - 探活异常后的快速复检间隔从 5 秒放宽到 10 秒，消除频繁重试造成的网络拥塞与频繁跳变；
+- **修复真实节点伪 TCP 过滤误丢弃**：
+  - 标准与深度测速模式下，遇到国内直连阻断纯 TCP Ping 的有效节点不再过早丢弃，交由内核发起真实的 TLS 1.3 / 协议握手，大幅提高可用节点检出率。
 
 ---
 
-## 🎨 2. 控制台仪表盘黄金比例对齐与视觉优化
-- **全网延迟频谱与协议分布严丝合缝等高（90px 外高 / 74px 内高）**：
-  - 彻底解决原先因垂直居中对齐导致的协议卡片顶部大面积异常留白与左右卡片参差不齐的问题；
-  - 顶部基准线水平对齐，协议标签自适应两行约束，紧凑平整；
-- **双翼网络监视器高度严格对齐（138px）**：
-  - 「实时下行带宽」仪表盘与「24h 出海健康」卡片实现全响应式等高；
-- **滚动条视口外边距防裁切修复**：
-  - 修复 egui Frame 内边距向外扩展导致的右侧圆弧与描边被视口裁切的问题，所有卡片在各种窗口尺寸下均呈现圆润平滑的四角微弧。
+### 🌐 2. Windows 系统代理防冲突与死 PAC 残留清理
+- **自动清理残留 AutoConfigURL (PAC)**：
+  - 启动系统代理时自动清理注册表中的历史残留 PAC 脚本地址（如 v2rayN 历史遗留端口），彻底解决 Windows WinINet 因无法加载死 PAC 脚本将 `ProxyEnable` 自动复位为 0 导致浏览器断网的顽疾；
+- **优化系统代理看门狗核对机制**：
+  - 明确核对机制与自动写回逻辑，提供一键写回保护，避免多工具共存或系统休眠唤醒时的注册表篡改。
 
 ---
 
-## 🛡️ 3. Windows 原生崩溃网络自愈与防僵尸内核强绑定
-- **Windows SEH 崩溃原子回滚（In-Crash Guard）**：
-  - 进程发生未捕获异常或闪退时，底层通过 Win32 原生注册表原子函数瞬间复位系统代理并广播刷新，杜绝崩溃断网；
-- **启动自动探测与自愈（Startup Self-Healing）**：
-  - 应用启动时自动探测残留代理端口存活性，若上一次运行非正常中断且端口已死，秒级静默清理复位；
-- **Windows Job Object 强生命周期绑定**：
-  - 为代理内核配置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，保证无论主进程正常退出、异常闪退还是被任务管理器强杀，内核绝无可能在系统后台沦为僵尸进程。
+### 🔤 3. macOS 界面字体基线垂直对齐校正
+- **修复按钮文本偏下错位**：
+  - 优先选用 Hiragino Sans GB 字体，并针对 PingFang 字体基线高度差异应用 `FontTweak { y_offset_factor: -0.18 }` 补偿校正，彻底消除 macOS 下按钮文本垂直不居中的问题。
+
+---
+
+### 📦 4. OpenWrt 25.x 打包与全平台 CI 强化
+- **apk-tools v3 纯静态编译**：
+  - OpenWrt apk 打包工具链采用 `-Ddefault_library=static` 静态编译，消除动态链接 `libapk.so.3.0.0` 依赖问题；
+- **升级 Windows CI 测试内核**：
+  - 更新 Sing-box 至 v1.13.14，全面兼容最新规则配置语法规范。
 
 ---
 
@@ -47,7 +50,7 @@
 cd /tmp
 opkg update
 # 一键安装微服务守护进程与 LuCI 控制面板
-opkg install ./vpn-parser_1.8.6_*.ipk ./luci-app-vpn-parser_1.8.6_all.ipk
+opkg install ./vpn-parser_1.8.7_*.ipk ./luci-app-vpn-parser_1.8.7_all.ipk
 ```
 安装后刷新路由器 Web 管理后台，即可在 **「服务」➔「VPN Parser」** 中开始使用。
 
@@ -57,18 +60,18 @@ opkg install ./vpn-parser_1.8.6_*.ipk ./luci-app-vpn-parser_1.8.6_all.ipk
 
 | 平台 / 架构 | 文件名 | 说明 |
 | :--- | :--- | :--- |
-| **OpenWrt LuCI 控制面板** | `luci-app-vpn-parser_1.8.6_all.ipk` | 推荐，全架构通用 LuCI Web 图形界面 |
-| **OpenWrt 微服务 (x86_64)** | `vpn-parser_1.8.6_x86_64.ipk` | 推荐，X86 软路由、工控机、PVE/ESXi 一键安装 |
-| **OpenWrt 微服务 (aarch64)** | `vpn-parser_1.8.6_aarch64_generic.ipk` | 推荐，ARM64 路由（NanoPi R2S/R4S/R5S、友善等）一键安装 |
-| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.6_linux_x86_64_musl.tar.gz` | x86_64 纯静态 Musl 二进制包（含 init/config 脚本） |
-| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.6_linux_aarch64_generic_musl.tar.gz` | ARM64 纯静态 Musl 二进制包 |
-| **Windows 64位** | `vpn-parser-1.8.6-windows-x64-setup.exe` | 推荐，双击运行向导自动安装升级（桌面完整版） |
-| **macOS (Universal DMG)** | `vpn-parser-1.8.6-darwin-universal.dmg` | 推荐，兼容 Apple Silicon 与 Intel 架构 |
-| **Linux 桌面 (通用)** | `vpn-parser-1.8.6-x86_64.AppImage` | 推荐，开箱即用，赋予可执行权限后双击运行 |
-| **Linux (Fedora/RHEL)** | `vpn-parser-1.8.6-1.x86_64.rpm` | `sudo dnf install ./vpn-parser-1.8.6-1.x86_64.rpm` |
-| **Linux (Debian/Ubuntu)** | `vpn-parser_1.8.6-1_amd64.deb` | `sudo dpkg -i vpn-parser_1.8.6-1_amd64.deb` |
+| **OpenWrt LuCI 控制面板** | `luci-app-vpn-parser_1.8.7_all.ipk` | 推荐，全架构通用 LuCI Web 图形界面 |
+| **OpenWrt 微服务 (x86_64)** | `vpn-parser_1.8.7_x86_64.ipk` | 推荐，X86 软路由、工控机、PVE/ESXi 一键安装 |
+| **OpenWrt 微服务 (aarch64)** | `vpn-parser_1.8.7_aarch64_generic.ipk` | 推荐，ARM64 路由（NanoPi R2S/R4S/R5S、友善等）一键安装 |
+| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.7_linux_x86_64_musl.tar.gz` | x86_64 纯静态 Musl 二进制包（含 init/config 脚本） |
+| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.7_linux_aarch64_generic_musl.tar.gz` | ARM64 纯静态 Musl 二进制包 |
+| **Windows 64位** | `vpn-parser-1.8.7-windows-x64-setup.exe` | 推荐，双击运行向导自动安装升级（桌面完整版） |
+| **macOS (Universal DMG)** | `vpn-parser-1.8.7-darwin-universal.dmg` | 推荐，兼容 Apple Silicon 与 Intel 架构 |
+| **Linux 桌面 (通用)** | `vpn-parser-1.8.7-x86_64.AppImage` | 推荐，开箱即用，赋予可执行权限后双击运行 |
+| **Linux (Fedora/RHEL)** | `vpn-parser-1.8.7-1.x86_64.rpm` | `sudo dnf install ./vpn-parser-1.8.7-1.x86_64.rpm` |
+| **Linux (Debian/Ubuntu)** | `vpn-parser_1.8.7-1_amd64.deb` | `sudo dpkg -i vpn-parser_1.8.7-1_amd64.deb` |
 | **校验文件** | `sha256.txt` | 包含所有发布资产的官方 SHA-256 校验和 |
 
 ---
 
-**Full Changelog**: https://github.com/mateo-ki/vpn-parser/compare/v1.8.5...v1.8.6
+**Full Changelog**: https://github.com/mateo-ki/vpn-parser/compare/v1.8.6...v1.8.7

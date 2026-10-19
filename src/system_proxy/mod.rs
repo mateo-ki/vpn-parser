@@ -69,6 +69,7 @@ impl SystemProxyControl for PlatformSystemProxy {
         if crate::diag::enabled() {
             return Err(anyhow!(crate::diag::BLOCKED));
         }
+        let _ = delete_reg_value("AutoConfigURL");
         set_reg_string("ProxyServer", server)?;
         set_reg_dword("ProxyEnable", 1)?;
         notify_proxy_change()

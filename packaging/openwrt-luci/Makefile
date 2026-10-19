@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-vpn-parser
-PKG_VERSION:=1.8.6
+PKG_VERSION:=1.8.7
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=mateo-ki <https://github.com/mateo-ki/vpn-parser>
