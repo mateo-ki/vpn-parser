@@ -796,6 +796,69 @@ fn cjk_font_candidates() -> Vec<std::path::PathBuf> {
 }
 
 #[cfg(feature = "gui")]
+/// 启动时校准墨迹垂直位置用的参照串与字号（单位 point）。
+const INK_CALIBRATION_LABEL: &str = "启动代理";
+#[cfg(feature = "gui")]
+const INK_CALIBRATION_SIZE: f32 = 14.0;
+#[cfg(feature = "gui")]
+/// 偏不到这个数就不动它：实测 Windows 的雅黑 14pt 正好 0.00pt，不该被改。
+const INK_MIN_OFFSET: f32 = 1.0;
+#[cfg(feature = "gui")]
+/// 封顶，再偏也只补这么多（em 的比例），免得把字推出按钮框。
+const INK_MAX_OFFSET_FACTOR: f32 = 0.12;
+
+#[cfg(feature = "gui")]
+/// 由「实测偏移」算出该给这个字体补的 `y_offset_factor`（正 = 往下挪）。
+/// 拆成纯函数是为了让测试能拿同一份规则复算，而不是在产品路径旁边再抄一遍。
+fn ink_calibration_factor(raw_offset: f32) -> f32 {
+    if raw_offset.abs() < INK_MIN_OFFSET {
+        return 0.0;
+    }
+    (-raw_offset / INK_CALIBRATION_SIZE).clamp(-INK_MAX_OFFSET_FACTOR, INK_MAX_OFFSET_FACTOR)
+}
+
+#[cfg(feature = "gui")]
+/// 墨迹中心相对布局盒中心的偏移，单位 point；负 = 字偏上。
+///
+/// 按钮画的是「布局盒居中 + 上下等距 padding」，所以这个差就是他肉眼看到的偏差。
+/// 中日韩字体的 ascent/descent 普遍不对称（同一份 14pt 文本，行高盒比实际字形高出一截，
+/// 多出来的量几乎全落在基线以下），egui 按行高居中 → 字看着贴顶。
+/// 只在启动装载字体时跑一次，不进每帧。
+fn ink_offset(font_name: &str, data: &std::sync::Arc<egui::FontData>) -> f32 {
+    let ctx = egui::Context::default();
+    let mut definitions = egui::FontDefinitions::empty();
+    definitions
+        .font_data
+        .insert(font_name.to_owned(), data.clone());
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        definitions
+            .families
+            .entry(family)
+            .or_default()
+            .insert(0, font_name.to_owned());
+    }
+    ctx.set_fonts(definitions);
+    let mut input = egui::RawInput::default();
+    input.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(400.0, 200.0),
+    ));
+    let text = INK_CALIBRATION_LABEL.to_owned();
+    let mut offset = 0.0_f32;
+    let _ = ctx.run(input, |ctx| {
+        let galley = ctx.fonts(|fonts| {
+            fonts.layout_no_wrap(
+                text.clone(),
+                egui::FontId::proportional(INK_CALIBRATION_SIZE),
+                egui::Color32::WHITE,
+            )
+        });
+        offset = galley.mesh_bounds.center().y - galley.rect.center().y;
+    });
+    offset
+}
+
+#[cfg(feature = "gui")]
 /// 加载中文字体。没有它整屏中文都是方框 —— egui 自带字体不含 CJK 字形。
 fn setup_chinese_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -810,18 +873,27 @@ fn setup_chinese_fonts(ctx: &egui::Context) {
 
             info!(path = %path.display(), font = %font_name, "loaded CJK font for GUI");
 
-            let mut font_data = egui::FontData::from_owned(bytes);
-            if font_name.to_lowercase().contains("pingfang") {
-                font_data.tweak = egui::FontTweak {
-                    y_offset_factor: -0.18,
-                    ..Default::default()
-                };
-            }
-
-            fonts.font_data.insert(
-                font_name.clone(),
-                std::sync::Arc::new(font_data),
+            let data = std::sync::Arc::new(egui::FontData::from_owned(bytes));
+            // 以前这里按字体名钉死一个 `-0.18`，且只认 "pingfang" —— 而 mac 上第一个能读到的
+            // 通常是 Hiragino Sans GB，那段等于从来没跑过（用户 2026-10-20：mac 按钮的字偏上）。
+            // 改成装载时拿真正会用到的那份字体量一次再补，Windows 量到 0.00pt 就原样不动。
+            let raw_offset = ink_offset(&font_name, &data);
+            let factor = ink_calibration_factor(raw_offset);
+            let font_data = if factor == 0.0 {
+                data
+            } else {
+                let mut tweaked = std::sync::Arc::unwrap_or_clone(data);
+                tweaked.tweak.y_offset_factor = factor;
+                std::sync::Arc::new(tweaked)
+            };
+            info!(
+                font = %font_name,
+                ink_offset_pt = raw_offset,
+                y_offset_factor = factor,
+                "calibrated CJK font vertical centering"
             );
+
+            fonts.font_data.insert(font_name.clone(), font_data);
             loaded_names.push(font_name);
 
             // 仅加载 1 个最优先的可用 CJK 字体。常规中文字体（如微软雅黑、苹方、文泉驿、Noto）
@@ -1116,5 +1188,70 @@ mod data_root_tests {
     fn the_windows_data_root_stays_next_to_the_program() {
         let got = data_root_from(false, Path::new(r"C:\Apps\VPN Parser"), None, None);
         assert_eq!(got, Path::new(r"C:\Apps\VPN Parser\data").to_path_buf());
+    }
+}
+
+#[cfg(all(test, feature = "gui"))]
+mod font_center_probe {
+    use super::*;
+
+    /// 当前平台第一个能被读到的 CJK 字体（`setup_chinese_fonts` 只装这一个）。
+    fn active_font() -> String {
+        cjk_font_candidates()
+            .iter()
+            .find(|path| path.is_file())
+            .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
+            .unwrap_or_else(|| "<没有 CJK 字体>".to_string())
+    }
+
+    /// 逐台机器上真实存在的每个候选字体跑一遍「量 → 补 → 再量」。
+    /// 这条断言在 mac CI 上量的就是那台机器上的真字体，不是我抄的表。
+    #[test]
+    fn every_available_cjk_font_ends_up_vertically_centered() {
+        let mut report = Vec::new();
+        let mut checked = 0_usize;
+        for path in cjk_font_candidates() {
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
+                continue;
+            };
+            let data = std::sync::Arc::new(egui::FontData::from_owned(bytes));
+            let started = std::time::Instant::now();
+            let raw = ink_offset(&name, &data);
+            let factor = ink_calibration_factor(raw);
+            let mut tweaked = std::sync::Arc::unwrap_or_clone(data);
+            tweaked.tweak.y_offset_factor = factor;
+            let residual = ink_offset(&name, &std::sync::Arc::new(tweaked));
+            let cost_ms = started.elapsed().as_secs_f64() * 1000.0;
+            checked += 1;
+            report.push(format!(
+                "{name}: 原始{raw:+.2}pt 补{factor:+.3} 残差{residual:+.2}pt 量两次{cost_ms:.1}ms"
+            ));
+            assert!(
+                residual.abs() <= 0.75,
+                "{name} 校准后仍偏 {residual:+.2}pt（原始 {raw:+.2}pt，补 {factor:+.3}）\n全部：{report:#?}"
+            );
+        }
+        assert!(checked > 0, "这台机器上一个 CJK 字体都没读到，测不到东西");
+        println!(
+            "FONT_ACTIVE={} 校准了 {checked} 个字体：{:#?}",
+            active_font(),
+            report
+        );
+    }
+
+    /// 反向对照：门槛以下不许动它 —— Windows 的雅黑本来就正中，不能被"修"出新偏差。
+    #[test]
+    fn tiny_offsets_are_left_alone() {
+        assert_eq!(ink_calibration_factor(0.0), 0.0);
+        assert_eq!(ink_calibration_factor(-0.9), 0.0);
+        assert_eq!(ink_calibration_factor(0.9), 0.0);
+        // 负 = 偏上 ⇒ 要往下补（正数），别把符号搞反
+        assert!(ink_calibration_factor(-2.8) > 0.0);
+        assert!(ink_calibration_factor(2.8) < 0.0);
+        // 封顶
+        assert!(ink_calibration_factor(-90.0).abs() <= INK_MAX_OFFSET_FACTOR + f32::EPSILON);
     }
 }
