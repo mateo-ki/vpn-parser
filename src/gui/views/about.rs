@@ -11,6 +11,38 @@ const RELEASES_URL: &str = "https://github.com/mateo-ki/vpn-parser/releases";
 /// 关于页顶部那句介绍。刻意写"这程序干四件事"而不是形容词：这一页是排障时才来的地方。
 const TAGLINE: &str = "采集订阅 · 解析节点 · 本地跑代理 · 把代理质量测出来给你看。";
 
+/// 关于页底部的免责声明，一行一条（用户 2026-10-20 要求加）。
+/// 每条都对着代码核过：没有统计上报模块、IP 风险查询要用户点、发布节点要用户填后台地址、
+/// 内置源不再播种、data 目录不被卸载程序删除（installer/vpn-parser.iss 里没有 UninstallDelete）。
+const DISCLAIMER_LINES: [&str; 6] = [
+    "本软件是 MIT 开源的技术工具，只负责解析订阅、管理节点，并在本机调用第三方代理内核；它自身不提供任何节点、线路或加速服务，你能用到的节点全部来自你自己添加的订阅源。",
+    "请遵守你所在地区的法律法规，不要把本软件用于任何违法违规用途。使用它产生的后果由使用者自行承担，作者与分发者不承担任何责任。",
+    "本软件没有统计上报模块：订阅地址、节点库、分流规则、测速与切换记录都只存在本机的数据目录（展开上面「本机路径」可见），卸载也不会自动删掉它们。",
+    "默认路径上的联网只有「取回数据」这一类：拉取你添加的订阅源、检测出口 IP、检查与下载更新、下载内核和 GeoIP/GeoSite 规则库，以及给分流探测做解析的公共 DNS。",
+    "有两处会把信息送出去，而且都要你主动点或主动填才发生：把节点发布到你自建的 Web 后台（送出你测通的节点列表），查 IP 风险（把那个 IP 交给 ipinfo.io、ip-api.com、ipwho.is）。",
+    "mihomo / sing-box / xray 等内核与 Geo 规则库都是第三方项目，按各自许可证分发，功能与稳定性由上游负责；界面里的延迟和速率是本机当时的实测值，不代表节点之后的表现。",
+];
+
+/// 免责声明那张卡。文字与渲染分开：判据要能直接量这份清单，而不是量我另抄一遍的字符串。
+fn disclaimer_card(ui: &mut Ui) {
+    card_frame().show(ui, |ui| {
+        ui.label(
+            RichText::new("免责声明")
+                .strong()
+                .color(theme::text_primary()),
+        );
+        ui.add_space(6.0);
+        for line in DISCLAIMER_LINES {
+            ui.label(
+                RichText::new(line)
+                    .size(11.5)
+                    .color(theme::text_secondary()),
+            );
+            ui.add_space(3.0);
+        }
+    });
+}
+
 /// 后台自动检查在线更新的间隔：**3 小时**（2026-10-20 他定的）。第一次仍然在启动后 1 秒查。
 const APP_UPDATE_CHECK_INTERVAL_SECS: u64 = 3 * 60 * 60;
 
@@ -25,6 +57,8 @@ impl VpnApp {
                 self.ui_about_identity(ui);
                 ui.add_space(10.0);
                 self.ui_about_update(ui);
+                ui.add_space(10.0);
+                disclaimer_card(ui);
             });
     }
 
@@ -765,7 +799,7 @@ fn open_in_file_manager(path: &std::path::Path) {
 }
 #[cfg(test)]
 mod about_layout_probe_tests {
-    use super::{button, kv_row, TAGLINE};
+    use super::{button, disclaimer_card, kv_row, DISCLAIMER_LINES, TAGLINE};
     use crate::gui::icons::Icon;
     use crate::gui::theme;
     use crate::gui::widgets::{card_frame, icon_tile, pill};
@@ -1023,6 +1057,54 @@ mod about_layout_probe_tests {
             assert!(
                 button_right <= card_right + 0.1,
                 "{width} 宽时按钮右界 {button_right:.1} 出了卡片 {card_right:.1}"
+            );
+        }
+    }
+
+    /// 免责声明：跑产品那个 `disclaimer_card`，量它这一帧真画出来的东西。
+    /// 三条判据：每条都在（漏一条=清单与渲染脱节）、每条都在自己那格里折行（不许冲出卡片）、
+    /// 每条长度封顶（这页是排障时才来的地方，不该变成一堵法律墙）。
+    #[test]
+    fn the_disclaimer_paints_every_line_inside_the_card() {
+        const MAX_CHARS: usize = 150;
+        for width in [1330.0, 960.0, 420.0] {
+            let mut painted = Painted::new();
+            let mut card_right = 0.0_f32;
+            in_card(width, |ui, layer| {
+                disclaimer_card(ui);
+                painted = read_text(ui.ctx(), layer);
+                card_right = ui.max_rect().right();
+            });
+            let heads: Vec<String> = DISCLAIMER_LINES
+                .iter()
+                .map(|line| line.chars().take(6).collect::<String>())
+                .collect();
+            for (index, head) in heads.iter().enumerate() {
+                let entry = painted
+                    .iter()
+                    .find(|p| p.0.starts_with(head.as_str()))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{width:.0} 宽时免责第 {} 条（开头 {head}）没画出来；这一帧画的是 {:?}",
+                            index + 1,
+                            painted.iter().map(|p| p.0.clone()).collect::<Vec<_>>()
+                        )
+                    });
+                assert!(
+                    entry.2 <= entry.3 + 0.5 && entry.2 <= card_right + 0.5,
+                    "{width:.0} 宽时免责第 {} 条右界 {:.1} 出了裁剪框 {:.1} / 卡片 {card_right:.1}",
+                    index + 1,
+                    entry.2,
+                    entry.3
+                );
+            }
+        }
+        for (index, line) in DISCLAIMER_LINES.iter().enumerate() {
+            assert!(
+                line.chars().count() <= MAX_CHARS,
+                "免责第 {} 条有 {} 字，超过 {MAX_CHARS} 字这条线：这页不该变成一堵墙",
+                index + 1,
+                line.chars().count()
             );
         }
     }

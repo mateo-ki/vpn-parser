@@ -88,6 +88,15 @@ VPN Parser natively supports OpenWrt router environments (x86_64 soft routers an
 - **Router Plugins**: Point your OpenClash / PassWall subscription URL to `http://127.0.0.1:8080/api/export/clash?quality_only=true&limit=60` to enjoy continuous high-quality proxy node feeds;
 - **Complete Documentation**: See the detailed [OpenWrt Deployment Guide](docs/openwrt.md).
 
+## Disclaimer
+
+- This project is an MIT-licensed technical tool. It parses subscriptions, manages nodes and invokes third-party proxy kernels on your own machine; it does not provide any node, line or acceleration service — every node you use comes from a subscription you added yourself.
+- You must comply with the laws and regulations of your region and must not use this project for any unlawful purpose. You bear the consequences of your own use; the authors and distributors accept no liability.
+- There is no analytics or reporting module: subscription URLs, the node database, routing rules, speedtest and switch history live only in the local `data/` directory, and the uninstaller does not delete them.
+- Every network request on the default path only pulls data in: fetching your subscriptions, detecting the egress IP, checking and downloading updates, fetching kernels and the GeoIP/GeoSite rule databases, plus the public DNS used for routing probes.
+- Two features send information out, and both require an explicit user action: publishing nodes to your own web backend (uploads the nodes that passed your speedtests) and the IP-risk lookup (sends that IP to ipinfo.io, ip-api.com and ipwho.is).
+- Kernels such as mihomo / sing-box / xray and the Geo rule databases are third-party projects distributed under their own licenses; their behaviour and reliability are upstream's responsibility. Latency and throughput shown in the UI are local measurements of that moment and say nothing about future performance.
+
 ## License
 
 GPL-3.0 License
