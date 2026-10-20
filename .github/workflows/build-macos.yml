@@ -33,7 +33,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: 跑全量测试
-        run: cargo test --bin vpn-parser
+        # --nocapture：字体垂直居中那条断言会打印这台 mac 上每个候选字体的实测偏移，
+        # 用户在 mac 上看到的偏差只能在这类真机上量，本机（Windows）看不到。
+        run: cargo test --bin vpn-parser -- --nocapture
 
   package:
     name: 打包 macOS 发行版
