@@ -680,3 +680,48 @@ mod clean_kernel_version_tests {
         assert_eq!(clean_kernel_version(""), "");
     }
 }
+
+#[cfg(test)]
+mod collapsed_section_tests {
+    use eframe::egui::{self, RawInput, Rect, Vec2};
+
+    /// 「自定义规则」默认收起整件事压在一条 egui 契约上：不带 `default_open` 的
+    /// CollapsingHeader 首帧是收起的（里面的东西不布局），展开了才布局。
+    /// 谁哪天顺手加一个 `.default_open(true)`，这条就红。
+    #[test]
+    fn collapsing_header_defaults_to_closed() {
+        let body_laid_out = |default_open: Option<bool>| {
+            let ctx = egui::Context::default();
+            let mut seen = false;
+            for _ in 0..2 {
+                let mut input = RawInput::default();
+                input.screen_rect = Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(900.0, 600.0),
+                ));
+                seen = false;
+                let _ = ctx.run(input, |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let mut header = egui::CollapsingHeader::new("自定义规则");
+                        if let Some(open) = default_open {
+                            header = header.default_open(open);
+                        }
+                        header.id_salt("custom_rules_section").show(ui, |ui| {
+                            ui.label("规则行");
+                            seen = true;
+                        });
+                    });
+                });
+            }
+            seen
+        };
+        assert!(
+            !body_laid_out(None),
+            "不带 default_open 时首帧应该是收起的（这条就是这次改动要的默认值）"
+        );
+        assert!(
+            body_laid_out(Some(true)),
+            "对照组失效：default_open(true) 也没展开，那上面那条断言是在给自己鼓掌"
+        );
+    }
+}

@@ -313,6 +313,15 @@ pub fn macos_segmented_tabs<T: PartialEq + Copy>(
 }
 
 
+/// 默认收起那种小标题（关于页的「本机路径」、分流规则的「自定义规则」都用它）。
+/// 和 `section_title` 的区别：那是页面级大标题，这是"点开才看"的条目，得比正文轻一档。
+pub fn fold_title(text: &str) -> RichText {
+    RichText::new(text)
+        .strong()
+        .size(12.5)
+        .color(theme::text_secondary())
+}
+
 pub fn header_cell(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text)

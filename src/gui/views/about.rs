@@ -2,7 +2,7 @@ use crate::app_update::{self, AppUpdateProgress, AppUpdateStage};
 use crate::gui::icons::Icon;
 use crate::gui::theme;
 use crate::gui::types::BgMsg;
-use crate::gui::widgets::{card_frame, icon_tile, pill, primary_btn, section_title};
+use crate::gui::widgets::{card_frame, fold_title, icon_tile, pill, primary_btn, section_title};
 use crate::gui::VpnApp;
 use eframe::egui::{self, CornerRadius, ProgressBar, RichText, Stroke, Ui, Vec2};
 
@@ -689,13 +689,6 @@ fn button(text: &str) -> egui::Button<'_> {
         .fill(theme::panel())
         .stroke(Stroke::new(1.0_f32, theme::border()))
         .min_size(Vec2::new(72.0, 26.0))
-}
-
-fn fold_title(text: &str) -> RichText {
-    RichText::new(text)
-        .strong()
-        .size(12.5)
-        .color(theme::text_secondary())
 }
 
 /// 键值行：标签钉在固定宽的一列，值从同一根竖线开始 —— 之前用 `horizontal` + 默认间距，
