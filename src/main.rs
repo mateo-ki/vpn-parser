@@ -804,8 +804,10 @@ const INK_CALIBRATION_SIZE: f32 = 14.0;
 /// 偏不到这个数就不动它：实测 Windows 的雅黑 14pt 正好 0.00pt，不该被改。
 const INK_MIN_OFFSET: f32 = 1.0;
 #[cfg(feature = "gui")]
-/// 封顶，再偏也只补这么多（em 的比例），免得把字推出按钮框。
-const INK_MAX_OFFSET_FACTOR: f32 = 0.12;
+/// 封顶，再偏也只补这么多（em 的比例）。
+/// 依据：mac CI 那台机器实测冬青黑（Hiragino Sans GB）14pt 原始偏 -3.50pt ⇒ 需要 0.25，
+/// 这个帽留了一档余量，同时挡住"字体指标病态到把字挤出按钮框"的情况。
+const INK_MAX_OFFSET_FACTOR: f32 = 0.30;
 
 #[cfg(feature = "gui")]
 /// 由「实测偏移」算出该给这个字体补的 `y_offset_factor`（正 = 往下挪）。
@@ -1209,6 +1211,7 @@ mod font_center_probe {
     #[test]
     fn every_available_cjk_font_ends_up_vertically_centered() {
         let mut report = Vec::new();
+        let mut over = Vec::new();
         let mut checked = 0_usize;
         for path in cjk_font_candidates() {
             let Ok(bytes) = std::fs::read(&path) else {
@@ -1229,16 +1232,19 @@ mod font_center_probe {
             report.push(format!(
                 "{name}: 原始{raw:+.2}pt 补{factor:+.3} 残差{residual:+.2}pt 量两次{cost_ms:.1}ms"
             ));
-            assert!(
-                residual.abs() <= 0.75,
-                "{name} 校准后仍偏 {residual:+.2}pt（原始 {raw:+.2}pt，补 {factor:+.3}）\n全部：{report:#?}"
-            );
+            if residual.abs() > 0.75 {
+                over.push(format!("{name} 残差 {residual:+.2}pt"));
+            }
         }
         assert!(checked > 0, "这台机器上一个 CJK 字体都没读到，测不到东西");
         println!(
             "FONT_ACTIVE={} 校准了 {checked} 个字体：{:#?}",
             active_font(),
             report
+        );
+        assert!(
+            over.is_empty(),
+            "这些字体校准后仍然偏：{over:#?}\n全部：{report:#?}"
         );
     }
 
