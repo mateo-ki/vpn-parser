@@ -267,3 +267,74 @@ impl ProxyRuntimeStatus {
             ) || (self.state == ProxyState::Degraded && self.local_proxy_ready))
     }
 }
+
+/// 提权交接（TUN 模式）的配置载体：`--elevated-proxy-config` 的值就是它的 base64（URL-safe、无填充）。
+///
+/// 编解码放在同一处，是为了让"非提权实例发出去的那一份"和"提权实例读回来的那一份"共用一份实现。
+/// 之前只有读的那一侧（`main.rs` 里手写 decode），而生产端和调用端从来没有人写 —— 于是 TUN 模式
+/// 点「启动代理」只会走到内核那句"需要管理员权限"（2026-10-22 用户报）。
+pub fn encode_elevated_proxy_config(options: &MihomoConfigOptions) -> Result<String> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    Ok(URL_SAFE_NO_PAD.encode(serde_json::to_vec(options)?))
+}
+
+/// 解 `--elevated-proxy-config`。不做 `validate()`：那是调用方的决定（提权实例那边要校验后才落库）。
+pub fn decode_elevated_proxy_config(encoded: &str) -> Result<MihomoConfigOptions> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|error| anyhow!("读取提权代理配置失败: {error}"))?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+#[cfg(test)]
+mod elevated_handoff_tests {
+    use super::{
+        decode_elevated_proxy_config, encode_elevated_proxy_config, MihomoConfigOptions, ProxyMode,
+    };
+
+    /// 交接配置必须能原样读回来 —— 编解码是同一份实现，但这条钉的是"字段没漏、没被 serde 改名"。
+    #[test]
+    fn elevated_config_round_trips_through_the_command_line() {
+        let mut source = MihomoConfigOptions::default();
+        source.mode = ProxyMode::Tun;
+        source.url_test = true;
+        source.url_test_size = 7;
+        let encoded = encode_elevated_proxy_config(&source).expect("编码不该失败");
+        assert!(
+            !encoded.contains('='),
+            "base64 不该带填充，命令行里的 = 会被某些包装脚本吃掉：{encoded}"
+        );
+        let back = decode_elevated_proxy_config(&encoded).expect("解码不该失败");
+        assert_eq!(back, source, "绕了一圈命令行之后配置变了");
+    }
+
+    /// `controller_secret` 是 `serde(skip)` 的一次性密钥：交接不该把它带过去，提权实例自己生成一份。
+    #[test]
+    fn the_parent_controller_secret_does_not_cross_the_handoff() {
+        let mut source = MihomoConfigOptions::default();
+        source.controller_secret = "parent-one-time-secret".into();
+        let back = decode_elevated_proxy_config(&encode_elevated_proxy_config(&source).unwrap())
+            .expect("解码不该失败");
+        assert_eq!(back.controller_secret, "");
+    }
+
+    /// 反向对照：坏值必须报错，不能悄悄回落到默认配置 —— 那会让提权实例用一套没人写的选项起内核。
+    #[test]
+    fn garbage_payload_is_rejected_not_defaulted() {
+        let error = decode_elevated_proxy_config("not-base64-!!!")
+            .err()
+            .expect("这种输入必须失败");
+        assert!(
+            error.to_string().contains("提权代理配置"),
+            "报的是另一件事：{error}"
+        );
+        assert!(
+            decode_elevated_proxy_config("bm90LWEtY29uZmln")
+                .err()
+                .is_some(),
+            "能 base64 解码但不是 JSON 时也必须失败"
+        );
+    }
+}
+

@@ -31,12 +31,11 @@ use crate::db::Database;
 #[cfg(feature = "gui")]
 use crate::gui::VpnApp;
 use crate::kernel::KernelManager;
-use crate::proxy::{MihomoConfigOptions, ProxyManager};
+use crate::proxy::ProxyManager;
 use crate::scheduler::Scheduler;
 use crate::speedtest::SpeedTester;
 use crate::tasks::TaskTracker;
-use anyhow::{Context, Result};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -328,11 +327,7 @@ fn main() -> Result<()> {
     let _rt_guard = rt.enter();
     let handoff_proxy_options = match cli.elevated_proxy_config.as_deref() {
         Some(encoded) => {
-            let bytes = URL_SAFE_NO_PAD
-                .decode(encoded)
-                .context("读取提权代理配置失败")?;
-            let options: MihomoConfigOptions =
-                serde_json::from_slice(&bytes).context("解析提权代理配置失败")?;
+            let options = crate::proxy::decode_elevated_proxy_config(encoded)?;
             options.validate()?;
             Some(options)
         }

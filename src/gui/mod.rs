@@ -370,6 +370,8 @@ pub struct VpnApp {
     pub(crate) homogeneity_status: Option<String>,
     pub(crate) tray: crate::platform::TrayHandle,
     pub(crate) force_quit: bool,
+    /// TUN 提权交接已经成功把提权实例拉起来了，下一帧本实例要真退出（释放单实例互斥量）。
+    pending_exit_after_handoff: bool,
     /// 已经装到 egui 上的主题 id，用来只在变化时重建 Style。
     pub(crate) applied_theme_id: String,
     /// 已经装到屏幕上的夜间开关。和主题 id 一起决定要不要重建 Style。
@@ -660,6 +662,7 @@ impl VpnApp {
             homogeneity_status: None,
             tray: crate::platform::TrayHandle::new(),
             force_quit: false,
+            pending_exit_after_handoff: false,
             applied_theme_id: String::new(),
             applied_ui_dark: false,
             settings_seeded: false,
@@ -2593,18 +2596,21 @@ impl VpnApp {
                 return;
             }
         }
+        // Windows 的 TUN 要管理员权限：本进程（非提权）起不了内核，只能把配置交给一个
+        // runas 起来的提权实例，然后自己退掉释放单实例互斥量 —— 提权实例那边最多等 3 秒接管。
+        // 以前这里只把状态文案改成"正在请求管理员权限…"就照样往下调 manager.start()，
+        // 于是内核那句"TUN 模式需要管理员权限"每次都原样打回给他（2026-10-22 用户报）。
+        if requires_tun_elevation(self.proxy_config.mode, platform::is_elevated()) {
+            self.handoff_proxy_to_elevated_instance(&node_id);
+            return;
+        }
         let db = self.db.clone();
         let manager = self.proxy_manager.clone();
         let mode = self.proxy_config.mode;
         let options = self.proxy_config.clone();
         let candidate_blacklist = self.router.blacklisted(std::time::Instant::now());
         let tx = self.tx.clone();
-        let is_elevated_tun = cfg!(windows) && requires_tun_elevation(self.proxy_config.mode, platform::is_elevated());
-        let starting_msg = if is_elevated_tun {
-            "正在请求管理员权限以无头模式启动 TUN 内核...".to_string()
-        } else {
-            "正在启动代理...".to_string()
-        };
+        let starting_msg = "正在启动代理...".to_string();
         self.proxy_busy = true;
         self.proxy_status.state = ProxyState::Starting;
         self.proxy_status.message = starting_msg.clone();
@@ -2718,6 +2724,45 @@ impl VpnApp {
             .map_err(|error| error.to_string());
             let _ = tx.send(BgMsg::ProxyOp(result));
         });
+    }
+
+    /// 组装交给提权实例的命令行参数。单独抽出来是因为这条链拼错（flag 重复、配置编不出来）时，
+    /// 提权实例会在写下第一行日志之前就死掉 —— 只有纯函数能被测试钉住。
+    fn tun_handoff_arguments(
+        options: &crate::proxy::MihomoConfigOptions,
+        node_id: &str,
+    ) -> anyhow::Result<Vec<String>> {
+        Ok(vec![
+            "--elevated-proxy-config".to_string(),
+            crate::proxy::encode_elevated_proxy_config(options)?,
+            "--start-proxy-node".to_string(),
+            node_id.to_string(),
+        ])
+    }
+
+    /// TUN 模式在非提权实例里点「启动代理」：把当前配置与目标节点交给一个 runas 起来的提权实例，
+    /// 本实例随后真退出（释放单实例互斥量，提权实例那边最多等 3 秒接管）。
+    /// 他拒了 UAC、或配置编不出来，就留在原地不动，状态行说实话。
+    fn handoff_proxy_to_elevated_instance(&mut self, node_id: &str) {
+        let args = match Self::tun_handoff_arguments(&self.proxy_config, node_id) {
+            Ok(args) => args,
+            Err(error) => {
+                self.status = format!("TUN 交接失败：生成提权配置出错 —— {error}");
+                return;
+            }
+        };
+        match platform::request_elevation(&args) {
+            Ok(()) => {
+                crate::startup_log("TUN 交接：已请求管理员权限，本实例退出以释放单实例互斥量");
+                self.status =
+                    "已请求管理员权限：提权实例会带着 TUN 内核启动，这个窗口随后关闭".into();
+                self.pending_exit_after_handoff = true;
+            }
+            Err(error) => {
+                self.status =
+                    format!("TUN 模式需要管理员权限，提权没成功（被取消或被系统拒绝）：{error}");
+            }
+        }
     }
 
     pub(crate) fn stop_proxy(&mut self) {
@@ -3772,6 +3817,16 @@ impl eframe::App for VpnApp {
             return;
         }
 
+        // TUN 提权交接成功了就把窗口让给提权实例：必须走真退出这条路（force_quit 绕开
+        // "关到托盘"），否则互斥量还攥在这个进程手里，提权实例等 3 秒也接不上班。
+        if self.pending_exit_after_handoff {
+            self.pending_exit_after_handoff = false;
+            self.force_quit = true;
+            self.tray.shutdown();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+
         self.poll_bg(ctx);
         // 只在主题真的变了时才重建 Style：每帧 set_style 会让 egui 认为样式抖动，
         // 也会白白丢掉用户在运行时改过的字号。
@@ -4234,6 +4289,57 @@ mod tests {
         } else {
             assert!(!requires_tun_elevation(ProxyMode::Tun, false));
         }
+    }
+
+    /// TUN 交接的命令行：两个 flag 各一次、配置能原样读回来、节点 id 带的是要起的那个。
+    #[test]
+    fn tun_handoff_arguments_carry_config_and_node_once() {
+        let mut options = crate::proxy::MihomoConfigOptions::default();
+        options.mode = ProxyMode::Tun;
+        options.url_test_size = 9;
+        let args = VpnApp::tun_handoff_arguments(&options, "node-42").expect("编码不该失败");
+        assert_eq!(args[0], "--elevated-proxy-config");
+        assert_eq!(args[2], "--start-proxy-node");
+        assert_eq!(args[3], "node-42");
+        assert_eq!(
+            args.iter()
+                .filter(|token| token.starts_with("--"))
+                .count(),
+            2,
+            "只该有两个 flag：{args:?}"
+        );
+        let decoded = crate::proxy::decode_elevated_proxy_config(&args[1]).expect("解码不该失败");
+        assert_eq!(decoded, options, "提权实例读回来的配置和这里发出去的不是同一份");
+    }
+
+    /// 反向对照（#32 那个"一闪就没"）：本进程自己就是带着 `--start-proxy-node` 起来的
+    /// （安装器、开机自启、以及上一次交接都会这样），拼出来的参数过一遍 `elevated_arguments`
+    /// 之后必须只剩一个该 flag，而且值是新节点 —— 出现两次 clap 直接 ArgumentConflict，
+    /// 提权实例在写下第一行日志之前就 exit(2)。
+    #[test]
+    fn the_handoff_never_duplicates_the_node_flag() {
+        let current = vec!["--start-proxy-node".to_string(), "old-node".to_string()];
+        let options = crate::proxy::MihomoConfigOptions::default();
+        let extra = VpnApp::tun_handoff_arguments(&options, "new-node").expect("编码不该失败");
+        let assembled = crate::platform::elevated_arguments(&current, &extra);
+        let node_flags = assembled
+            .iter()
+            .filter(|token| token.as_str() == "--start-proxy-node")
+            .count();
+        let config_flags = assembled
+            .iter()
+            .filter(|token| token.as_str() == "--elevated-proxy-config")
+            .count();
+        assert_eq!(node_flags, 1, "节点 flag 重复了：{assembled:?}");
+        assert_eq!(config_flags, 1, "配置 flag 重复了：{assembled:?}");
+        let position = assembled
+            .iter()
+            .position(|token| token.as_str() == "--start-proxy-node")
+            .expect("节点 flag 得在");
+        assert_eq!(
+            assembled[position + 1], "new-node",
+            "去重时把要启动的新节点吃掉了：{assembled:?}"
+        );
     }
 
     #[test]
