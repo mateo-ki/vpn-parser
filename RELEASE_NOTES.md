@@ -1,41 +1,23 @@
-# 🚀 VPN Parser v1.8.9 发布说明 / Release Notes
+# 🚀 VPN Parser v1.8.10 发布说明 / Release Notes
 
-🎉 欢迎使用 **VPN Parser v1.8.9**！本次更新重点修复了 **macOS 桌面版按钮中文整体偏上**、**启动期误杀正在服役的代理内核导致出口瞬断**，并把 **在线更新检查改成 3 小时一轮、限流与断网分开报错**，同时新增关于页免责声明与分流规则页的默认收起布局！
+🎉 欢迎使用 **VPN Parser v1.8.10**！本次更新修好了 **Windows TUN 模式点了没反应、只回一句"需要管理员权限"** 的问题：提权交接这条链现在真的接通了 —— 程序会把当前配置交给一个以管理员身份启动的实例接管，本窗口随后自动退出。
 
 ---
 
 ## 🌟 新特性与核心更新
 
-### 🎯 1. macOS 中文字体垂直居中自校准（装载时实测，不再按字体名硬编码）
-- **修掉"按钮里的字贴顶"**：
-  - 中文字体的 ascent/descent 普遍不对称，egui 按"行高盒居中"排版时，字形墨迹会整体偏离盒子中心。此前只对文件名含 `pingfang` 的字体钉死一个 `y_offset_factor = -0.18`，而 macOS 上第一个能读到的通常是 `Hiragino Sans GB.ttc`，那段补偿在真机上从来没跑过。
-  - 现在改为**装载字体时用真正会被使用的那份字体实测一次**"墨迹中心 − 布局盒中心"（`galley.mesh_bounds` 对比 `galley.rect`），偏不到 1pt 就原样不动，偏了就按字号比例补回来（封顶 0.30em）。
-  - 实测数据：macOS CI runner 上冬青黑 14pt 原始偏移 **-3.50pt**（Retina 下约 7 物理像素），补 `+0.250` 后归位；Windows 微软雅黑 14pt 实测 `0.00pt`，落在门槛以下 ⇒ **Windows 渲染零变化**。启动代价为一次测量约 2–7ms。
+### 🔓 1. Windows TUN 模式提权交接接通
+- **修掉"TUN 模式启动不了"**：
+  - 这条链此前只有消费端：提权实例读 `--elevated-proxy-config`、轮询 3 秒接管单实例互斥量、命令行去重都在，但**没有任何地方调用 `request_elevation()`，也没有人生成那段提权配置**。于是在非提权实例里点「启动代理」，界面只把状态文案改成"正在请求管理员权限…"，随后照样调用内核启动，被内核原样打回 `TUN 模式需要管理员权限`。
+  - 现在：TUN + 未提权 → 生成 `--elevated-proxy-config`（当前分流配置的 base64，URL-safe 无填充）+ `--start-proxy-node`（要起的节点），交给 `runas` 起来的提权实例；本实例随即**真退出**（绕开"关到托盘"）释放互斥量，提权实例那边接管并把 TUN 内核起好。
+  - 状态文案跟着说实话：以前那句"以无头模式启动"是假话（提权实例是带窗口的），现在写的是"提权实例会带着 TUN 内核启动，这个窗口随后关闭"。
+  - 实测：非提权实例点启动后，父实例日志 `TUN 交接：已请求管理员权限，本实例退出以释放单实例互斥量`，提权实例 `Acquired single instance mutex on attempt 2.`（约 110ms 后接管）。
 
 ---
 
-### 🧭 2. 启动顺序与代理现场保护
-- **单实例检查排到孤儿内核清理之前**：
-  - 此前"清理遗留 mihomo/sing-box/xray 进程"跑在单实例互斥量之前，于是第二个实例（哪怕只是 `--version`）一启动就会把**正在服役的内核**杀掉，表现为出口瞬断几秒。现在顺序反过来：拿不到单实例锁就直接退出，绝不动别人的内核。
-  - 诊断壳（`VPN_PARSER_DIAG=1`）继续显式跳过该清理，便于自测复现新装机状态。
-- **Mixed 端口 9980 就绪判定收紧**：修复内核已监听但界面仍在等待超时的情况，并补齐启动期诊断日志，让"起不来"时能一眼看出卡在哪一步。
-
----
-
-### 🔄 3. 在线更新：节奏与报错都说实话
-- **自动检查改为 3 小时一次**（`APP_UPDATE_CHECK_INTERVAL_SECS`），首次仍在启动后 1 秒；检查到新版本才亮侧栏那个绿色 ↑。
-- **限流与断网彻底分开报**：识别 GitHub `x-ratelimit-remaining: 0` 与 403 响应，报"触发 API 限流"而不是"连不上"；带 `GITHUB_TOKEN`/`GH_TOKEN` 时自动附加鉴权，共享出口 IP 的匿名配额（60 次/小时）不再是哑巴失败。
-
----
-
-### 📄 4. 关于页新增免责声明
-- **六条，一行一条，每条都对着代码核过**：本工具不提供服务与节点、须遵守当地法规且后果自负、无统计上报模块（数据只在本机 `data/` 目录）、默认联网只取回数据、两处主动外发（发布节点到自建 Web 后台、查询 IP 风险时把该 IP 交给 ipinfo.io / ip-api.com / ipwho.is）、内核与 Geo 规则库归上游且实测数字只代表那一刻。
-- README 中英文同步新增 `免责声明` / `Disclaimer` 章节。
-
----
-
-### 🗂️ 5. 分流规则「自定义规则」默认收起
-- 规则一多，这一节展开着会把下面的命中记录与「保存规则」挤出可视区。现在改为可折叠区块，**默认收起**，标题直接显示条数（`自定义规则 · N 条`），"从上到下匹配，未命中流量默认走代理"这句挪进展开态内部。
+### 🧯 2. 交接参数的回归闸（防"一闪就没"）
+- **提权实例的命令行只能有一份自己的 flag**：`--start-proxy-node` 出现两次时 clap 直接 `ArgumentConflict` 并 `exit(2)`，提权实例在写下第一行日志之前就死掉（v1.8.6 那次现象：点 TUN 启动，窗口一闪就没）。本轮把生产端接上后，补了这条反向对照：本进程自己就是带着 `--start-proxy-node` 起来的（安装器、开机自启、以及上一次交接都会这样）时，拼完仍只剩一个该 flag，且值是新节点。
+- **配置编解码合并成一份实现**：`encode_elevated_proxy_config` / `decode_elevated_proxy_config` 放在同一处，读写两侧不再各写一份；坏 payload 必须报错，绝不静默回落成默认配置（那会让提权实例用一套没人写过的选项起内核）。`controller_secret` 是一次性密钥（`serde(skip)`），不跨进程带，提权实例自己生成一份。
 
 ---
 
@@ -49,7 +31,7 @@
 cd /tmp
 opkg update
 # 一键安装微服务守护进程与 LuCI 控制面板
-opkg install ./vpn-parser_1.8.9_*.ipk ./luci-app-vpn-parser_1.8.9_all.ipk
+opkg install ./vpn-parser_1.8.10_*.ipk ./luci-app-vpn-parser_1.8.10_all.ipk
 ```
 安装后刷新路由器 Web 管理后台，即可在 **「服务」➔「VPN Parser」** 中开始使用。
 
@@ -59,18 +41,18 @@ opkg install ./vpn-parser_1.8.9_*.ipk ./luci-app-vpn-parser_1.8.9_all.ipk
 
 | 平台 / 架构 | 文件名 | 说明 |
 | :--- | :--- | :--- |
-| **OpenWrt LuCI 控制面板** | `luci-app-vpn-parser_1.8.9_all.ipk` | 推荐，全架构通用 LuCI Web 图形界面 |
-| **OpenWrt 微服务 (x86_64)** | `vpn-parser_1.8.9_x86_64.ipk` | 推荐，X86 软路由、工控机、PVE/ESXi 一键安装 |
-| **OpenWrt 微服务 (aarch64)** | `vpn-parser_1.8.9_aarch64_generic.ipk` | 推荐，ARM64 路由（NanoPi R2S/R4S/R5S、友善等）一键安装 |
-| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.9_linux_x86_64_musl.tar.gz` | x86_64 纯静态 Musl 二进制包（含 init/config 脚本） |
-| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.9_linux_aarch64_generic_musl.tar.gz` | ARM64 纯静态 Musl 二进制包 |
-| **Windows 64位** | `vpn-parser-1.8.9-windows-x64-setup.exe` | 推荐，双击运行向导自动安装升级（桌面完整版） |
-| **macOS (Universal DMG)** | `vpn-parser-1.8.9-darwin-universal.dmg` | 推荐，兼容 Apple Silicon 与 Intel 架构 |
-| **Linux 桌面 (通用)** | `vpn-parser-1.8.9-x86_64.AppImage` | 推荐，开箱即用，赋予可执行权限后双击运行 |
-| **Linux (Fedora/RHEL)** | `vpn-parser-1.8.9-1.x86_64.rpm` | `sudo dnf install ./vpn-parser-1.8.9-1.x86_64.rpm` |
-| **Linux (Debian/Ubuntu)** | `vpn-parser_1.8.9-1_amd64.deb` | `sudo dpkg -i vpn-parser_1.8.9-1_amd64.deb` |
+| **OpenWrt LuCI 控制面板** | `luci-app-vpn-parser_1.8.10_all.ipk` | 推荐，全架构通用 LuCI Web 图形界面 |
+| **OpenWrt 微服务 (x86_64)** | `vpn-parser_1.8.10_x86_64.ipk` | 推荐，X86 软路由、工控机、PVE/ESXi 一键安装 |
+| **OpenWrt 微服务 (aarch64)** | `vpn-parser_1.8.10_aarch64_generic.ipk` | 推荐，ARM64 路由（NanoPi R2S/R4S/R5S、友善等）一键安装 |
+| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.10_linux_x86_64_musl.tar.gz` | x86_64 纯静态 Musl 二进制包（含 init/config 脚本） |
+| **OpenWrt/Linux 静态归档** | `vpn-parser_1.8.10_linux_aarch64_generic_musl.tar.gz` | ARM64 纯静态 Musl 二进制包 |
+| **Windows 64位** | `vpn-parser-1.8.10-windows-x64-setup.exe` | 推荐，双击运行向导自动安装升级（桌面完整版） |
+| **macOS (Universal DMG)** | `vpn-parser-1.8.10-darwin-universal.dmg` | 推荐，兼容 Apple Silicon 与 Intel 架构 |
+| **Linux 桌面 (通用)** | `vpn-parser-1.8.10-x86_64.AppImage` | 推荐，开箱即用，赋予可执行权限后双击运行 |
+| **Linux (Fedora/RHEL)** | `vpn-parser-1.8.10-1.x86_64.rpm` | `sudo dnf install ./vpn-parser-1.8.10-1.x86_64.rpm` |
+| **Linux (Debian/Ubuntu)** | `vpn-parser_1.8.10-1_amd64.deb` | `sudo dpkg -i vpn-parser_1.8.10-1_amd64.deb` |
 | **校验文件** | `sha256.txt` | 包含所有发布资产的官方 SHA-256 校验和 |
 
 ---
 
-**Full Changelog**: https://github.com/mateo-ki/vpn-parser/compare/v1.8.8...v1.8.9
+**Full Changelog**: https://github.com/mateo-ki/vpn-parser/compare/v1.8.9...v1.8.10
