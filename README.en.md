@@ -99,4 +99,4 @@ VPN Parser natively supports OpenWrt router environments (x86_64 soft routers an
 
 ## License
 
-GPL-3.0 License
+MIT License. See [LICENSE](LICENSE).

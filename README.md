@@ -121,3 +121,7 @@ VPN Parser 原生支持 OpenWrt 路由器环境（X86 软路由及 ARM64 路由�
 ## 社区
 
 本开源项目已链接并认可 [LINUX DO 社区](https://linux.do)。
+
+## 许可证
+
+MIT License，条款见 [LICENSE](LICENSE)。第三方内核（mihomo / sing-box / xray）与 Geo 规则库按各自的许可证分发，本仓库只调用其可执行文件、不重新授权它们。

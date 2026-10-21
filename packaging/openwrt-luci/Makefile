@@ -5,7 +5,7 @@ PKG_VERSION:=1.8.8
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=mateo-ki <https://github.com/mateo-ki/vpn-parser>
-PKG_LICENSE:=GPL-3.0-only
+PKG_LICENSE:=MIT
 
 LUCI_TITLE:=LuCI Web GUI for VPN Parser
 LUCI_DEPENDS:=+luci-base +vpn-parser +rpcd +rpcd-mod-luci +curl
