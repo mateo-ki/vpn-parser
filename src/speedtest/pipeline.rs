@@ -11,11 +11,35 @@ use crate::speedtest::{
 };
 use anyhow::Result;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::info;
+
+/// 二阶段淘汰里"谁有资格进真实握手"的判据。
+///
+/// 1. TCP 通了就进。
+/// 2. 私网 / 端口 0 / 非法主机名直接淘汰 —— 内核拿着它也一样连不上，没必要花一次握手。
+/// 3. 公网主机名：只有"我们这一侧压根没解出地址"才交给内核（内核有 DoH / 经代理那条解析路，
+///    不能替它判死）；解出了地址却连不上 ⇒ 淘汰，由调用方按 `tcp_prefilter` 落库标成不可用。
+pub fn reaches_proxy_stage(
+    result: &LatencyResult,
+    dns: Option<&Result<Vec<SocketAddr>, String>>,
+) -> bool {
+    if result.ok {
+        return true;
+    }
+    if result.port == 0 || !crate::hostutil::is_public_proxy_host(&result.server) {
+        return false;
+    }
+    match dns {
+        None => true,
+        Some(Err(_)) => true,
+        Some(Ok(addresses)) => addresses.is_empty(),
+    }
+}
 
 pub fn requires_proxy_without_tcp(protocol: &str) -> bool {
     matches!(
@@ -306,22 +330,24 @@ pub async fn run_speedtest_pipeline(
     }
 
     // 3. 完整真实代理握手阶段
-    let proxy_candidates: Vec<Node> = if opts.intensity == SpeedtestIntensity::Fast {
-        results
-            .iter()
-            .filter(|result| result.ok)
-            .filter_map(|result| proxy_nodes.remove(&result.id))
-            .collect()
-    } else {
-        // 在标准和深度测速模式下，对于公网代理节点，不过早抛弃 TCP 预筛未通的节点。
-        // 因为在国内网络环境下，大量高可用节点（如经过 CDN 中转、TLS/Reality 保护或直连 DNS 污染的域名）
-        // 裸 TCP 探测必然超时或被 GFW RST 阻断，但通过内核专属协议握手完全正常（同 Clash Verge 表现）。
-        results
-            .iter()
-            .filter(|result| result.ok || crate::hostutil::is_public_proxy_host(&result.server))
-            .filter_map(|result| proxy_nodes.remove(&result.id))
-            .collect()
-    };
+    //
+    // 二阶段淘汰（用户 2026-10-22 定）：**TCP 预筛没过的节点不再进真实握手**。
+    // 以前的条件是 `result.ok || is_public_proxy_host(server)`，而 `is_public_proxy_host`
+    // 只排除 localhost/私网/保留地址 ⇒ 所有公网域名一律进握手（他那一库 16,066 个节点里
+    // 15,329 个的 `latency_test_kind` 是 google_proxy，就是这句话的结果）：预筛白跑一轮，
+    // 还在进度条上报出一个"成功 10000"这种谁都不该当成"可用"的数字。
+    // 保留一个例外：DNS 在我们这一侧根本没解出来的 —— 内核有自己那条解析路（DoH / 经代理），
+    // 不该替内核判死。UDP/QUIC 协议在上面已按"能解析就放行"处理，不经过 TCP 判定。
+    let proxy_candidates: Vec<Node> = results
+        .iter()
+        .filter(|result| {
+            reaches_proxy_stage(
+                result,
+                resolved.get(&(result.server.clone(), result.port)),
+            )
+        })
+        .filter_map(|result| proxy_nodes.remove(&result.id))
+        .collect();
 
     let prefilter_failures: Vec<_> = results
         .iter()
@@ -724,5 +750,81 @@ where
             conditional_isolation,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod two_stage_tests {
+    use super::reaches_proxy_stage;
+    use crate::models::LatencyResult;
+    use std::net::SocketAddr;
+
+    fn result(ok: bool) -> LatencyResult {
+        LatencyResult {
+            id: "n".into(),
+            name: "n".into(),
+            server: "cdn.example.com".into(),
+            port: 443,
+            ok,
+            latency_ms: ok.then_some(30),
+            download_kbps: None,
+            latency_kernel: None,
+            latency_test_kind: (!ok).then(|| "tcp_prefilter".into()),
+            message: String::new(),
+        }
+    }
+
+    fn resolved_to(list: &str) -> Result<Vec<SocketAddr>, String> {
+        Ok(vec![list.parse::<SocketAddr>().expect("测试用的地址")])
+    }
+
+    /// 这条判据本身就是"二阶段淘汰"：TCP 没通 + 地址解得出来 ⇒ 不再进真实握手。
+    /// 旧规则在这里放行的理由是"它是个公网主机"，而那条件排除的只有 localhost/私网 —— 等于全放行。
+    #[test]
+    fn tcp_failure_with_a_resolved_address_is_eliminated() {
+        let dead = result(false);
+        assert!(
+            !reaches_proxy_stage(&dead, Some(&resolved_to("188.114.97.6:443"))),
+            "解出了地址却连不上，应该淘汰"
+        );
+        assert!(reaches_proxy_stage(
+            &result(true),
+            Some(&resolved_to("188.114.97.6:443"))
+        ));
+    }
+
+    /// 例外：DNS 在我们这一侧就没解出来 —— 内核有自己那条解析路（DoH / 经代理），不能替它判死。
+    #[test]
+    fn dns_side_failures_still_reach_the_kernel() {
+        let dead = result(false);
+        let no_record: Result<Vec<SocketAddr>, String> = Ok(vec![]);
+        assert!(reaches_proxy_stage(&dead, None), "DNS 没覆盖到的交给内核");
+        assert!(
+            reaches_proxy_stage(&dead, Some(&Err("no records".into()))),
+            "DNS 解析失败的交给内核"
+        );
+        assert!(
+            reaches_proxy_stage(&dead, Some(&no_record)),
+            "解出空列表（本地看不到记录）的交给内核"
+        );
+    }
+
+    /// 私网 / 端口 0 直接淘汰 —— 内核拿着它也一样连不上。
+    /// 这条是被 `persists_tcp_prefilter_failure_as_unavailable` 教出来的：那台 `127.0.0.1:80`
+    /// 压根没进 DNS 表，只看"DNS 没解出来"就会把它错交给内核（第一版判据就在这儿翻的车）。
+    #[test]
+    fn private_hosts_never_reach_the_kernel() {
+        let mut lan = result(false);
+        lan.server = "127.0.0.1".into();
+        assert!(
+            !reaches_proxy_stage(&lan, None),
+            "私网主机不该交给内核，该按 tcp_prefilter 落库"
+        );
+        let mut port_zero = result(false);
+        port_zero.port = 0;
+        assert!(
+            !reaches_proxy_stage(&port_zero, None),
+            "端口 0 不该交给内核"
+        );
     }
 }
