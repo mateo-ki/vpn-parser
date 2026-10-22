@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>方案 4 · 新拟态暗夜紫</title>
+<style>
+  :root{
+    --bg:#0F0F17; --card:#16161F; --card2:#1B1B26;
+    --stroke:#262633; --stroke2:#20202C;
+    --text:#F0EFF5; --text2:#A8A6B8; --muted:#6E6C7E;
+    --purple:#A78BFA; --purple2:#8B5CF6; --pink:#F472B6;
+    --green:#4ADE80; --amber:#FBBF24; --red:#F87171;
+    --radius:20px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    background:
+      radial-gradient(900px 500px at 85% -10%, rgba(139,92,246,.14), transparent 60%),
+      radial-gradient(700px 420px at -10% 100%, rgba(244,114,182,.08), transparent 60%),
+      var(--bg);
+    color:var(--text);font-size:14px;min-height:100vh;
+    font-family:"SF Pro Display","Segoe UI Variable","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .num{font-variant-numeric:tabular-nums}
+  .app{display:flex;min-height:100vh}
+
+  aside{width:72px;flex:none;display:flex;flex-direction:column;align-items:center;gap:10px;padding:20px 0}
+  .logo{width:40px;height:40px;border-radius:13px;display:grid;place-items:center;margin-bottom:10px;
+    background:linear-gradient(135deg,var(--purple2),var(--pink));box-shadow:0 8px 24px rgba(139,92,246,.4)}
+  .nav{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;color:var(--muted);cursor:pointer;transition:.18s}
+  .nav:hover{color:var(--text2);background:rgba(255,255,255,.05)}
+  .nav.active{color:#fff;background:linear-gradient(135deg,rgba(167,139,250,.28),rgba(244,114,182,.18));
+    box-shadow:inset 0 0 0 1px rgba(167,139,250,.4),0 6px 18px rgba(139,92,246,.22)}
+  .spacer{flex:1}
+
+  main{flex:1;padding:30px 38px 46px;max-width:1400px}
+  header{display:flex;align-items:center;gap:14px;margin-bottom:24px}
+  h1{font-size:23px;font-weight:750;letter-spacing:-.2px}
+  .hello{display:inline-flex;align-items:center;gap:9px;padding:6px 14px;border-radius:99px;font-size:12.5px;font-weight:600;
+    background:rgba(74,222,128,.1);color:var(--green);box-shadow:inset 0 0 0 1px rgba(74,222,128,.25)}
+  .hello i{width:7px;height:7px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(74,222,128,.45)}55%{box-shadow:0 0 0 6px rgba(74,222,128,0)}}
+  .scheme-badge{margin-left:auto;font-size:12px;color:var(--muted);border:1px solid var(--stroke);
+    padding:6px 14px;border-radius:99px;background:rgba(255,255,255,.02)}
+
+  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+  .s3{grid-column:span 3}.s4{grid-column:span 4}.s6{grid-column:span 6}.s8{grid-column:span 8}
+  .card{
+    background:linear-gradient(170deg,var(--card2),var(--card));
+    border:1px solid var(--stroke);border-radius:var(--radius);padding:20px 22px;
+    box-shadow:0 14px 34px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.045);
+    transition:transform .2s,border-color .2s;
+  }
+  .card:hover{transform:translateY(-2px);border-color:#34344a}
+  .c-label{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text2);font-weight:600;margin-bottom:12px}
+  .c-label .peak{margin-left:auto;color:var(--muted);font-weight:500;font-size:12px}
+
+  /* 状态主卡 */
+  .status{display:flex;justify-content:space-between;align-items:center;gap:22px}
+  .ip-row{display:flex;align-items:center;gap:13px;margin:8px 0 12px}
+  .flag{width:42px;height:42px;border-radius:12px;background:rgba(167,139,250,.12);
+    box-shadow:inset 0 0 0 1px rgba(167,139,250,.3);display:grid;place-items:center;font-size:13.5px;font-weight:800;color:var(--purple)}
+  .ip{font-size:32px;font-weight:780;letter-spacing:-.3px;
+    background:linear-gradient(90deg,#fff 30%,#C4B5FD);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .tags{display:flex;gap:8px;margin-bottom:18px}
+  .tag{font-size:11.5px;padding:4px 11px;border-radius:99px;color:var(--text2);box-shadow:inset 0 0 0 1px var(--stroke)}
+  .tag.good{background:rgba(74,222,128,.12);color:var(--green);box-shadow:inset 0 0 0 1px rgba(74,222,128,.3)}
+  .meta{display:flex;gap:40px}
+  .meta b{display:block;font-size:11.5px;color:var(--muted);font-weight:500;margin-bottom:4px}
+  .meta span{font-size:14.5px;font-weight:650}
+  .play{width:92px;height:92px;border-radius:50%;border:none;cursor:pointer;flex:none;display:grid;place-items:center;
+    background:linear-gradient(135deg,var(--purple2),var(--pink));
+    box-shadow:0 14px 40px rgba(139,92,246,.45),inset 0 1px 0 rgba(255,255,255,.35);transition:transform .18s}
+  .play:hover{transform:scale(1.05) rotate(2deg)}
+  .play:active{transform:scale(.96)}
+
+  /* 速率 */
+  .rate-num{font-size:27px;font-weight:780;margin:2px 0 4px}
+  .rate-num small{font-size:13px;color:var(--muted);font-weight:500;margin-left:3px}
+  .rate-sub{font-size:12px;color:var(--muted)}
+  .spark{display:block;margin-top:12px;width:100%}
+
+  /* 出站 */
+  .mode-card{display:flex;flex-direction:column}
+  .segment{display:flex;gap:5px;background:rgba(0,0,0,.32);padding:5px;border-radius:14px;box-shadow:inset 0 0 0 1px var(--stroke2)}
+  .seg{flex:1;padding:10px 0;border:none;border-radius:10px;background:transparent;color:var(--text2);
+    font-size:13.5px;font-weight:600;cursor:pointer;transition:.18s}
+  .seg:hover{color:var(--text)}
+  .seg.active{background:linear-gradient(135deg,rgba(167,139,250,.32),rgba(244,114,182,.22));color:#fff;
+    box-shadow:inset 0 0 0 1px rgba(167,139,250,.45),0 4px 16px rgba(139,92,246,.3)}
+
+  /* 开关 */
+  .t-card{display:flex;flex-direction:column;justify-content:space-between;gap:14px}
+  .t-row{display:flex;align-items:center;justify-content:space-between}
+  .t-state{font-size:12.5px;color:var(--muted)}
+  .t-state.on{color:var(--purple)}
+  .lan-value{font-size:22px;font-weight:750}
+  .switch{position:relative;width:46px;height:26px;flex:none;cursor:pointer}
+  .switch input{opacity:0;width:0;height:0}
+  .knob{position:absolute;inset:0;border-radius:99px;background:rgba(0,0,0,.4);box-shadow:inset 0 0 0 1px var(--stroke);transition:.2s}
+  .knob::after{content:"";position:absolute;width:20px;height:20px;border-radius:50%;background:#8D8B9E;top:3px;left:3px;transition:.2s}
+  .switch input:checked + .knob{background:linear-gradient(90deg,var(--purple2),var(--pink));box-shadow:0 4px 16px rgba(139,92,246,.4)}
+  .switch input:checked + .knob::after{left:23px;background:#fff}
+
+  /* 配置 */
+  .cfg-name{font-size:17px;font-weight:750;margin-bottom:4px}
+  .cfg-sub{font-size:12px;color:var(--muted);margin-bottom:14px}
+  .cfg-sub b{color:var(--text2)}
+  .cfg-stats{display:flex;text-align:center}
+  .cfg-stats>div{flex:1;background:rgba(0,0,0,.22);padding:12px 0;border-radius:13px}
+  .cfg-stats>div+div{margin-left:8px}
+  .cfg-stats b{display:block;font-size:19px;font-weight:780;color:var(--purple)}
+  .cfg-stats span{font-size:11px;color:var(--muted)}
+
+  /* 服务 */
+  .svc-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .svc{display:flex;align-items:center;gap:9px;background:rgba(0,0,0,.22);border-radius:13px;padding:11px 13px}
+  .svc-dot{width:8px;height:8px;border-radius:50%;flex:none}
+  .ok{background:var(--green);box-shadow:0 0 9px rgba(74,222,128,.75)}
+  .warn{background:var(--amber);box-shadow:0 0 9px rgba(251,191,36,.65)}
+  .bad{background:var(--red);box-shadow:0 0 9px rgba(248,113,113,.65)}
+  .svc-name{font-size:13px;font-weight:600}
+  .ms{margin-left:auto;font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:99px}
+  .ms.good{color:var(--green);background:rgba(74,222,128,.1)}
+  .ms.mid{color:var(--amber);background:rgba(251,191,36,.1)}
+  .ms.slow{color:var(--red);background:rgba(248,113,113,.1)}
+
+  /* 连接表 */
+  table{width:100%;border-collapse:collapse;font-size:12.8px}
+  th{color:var(--muted);font-weight:600;text-align:left;font-size:11px;letter-spacing:.6px;padding:0 10px 10px}
+  td{padding:10.5px;color:var(--text2);border-top:1px solid var(--stroke2)}
+  td:first-child{color:var(--text);font-weight:600}
+  .chip{font-size:10.5px;padding:2px 8px;border-radius:99px;background:rgba(167,139,250,.1);color:var(--purple);margin-left:6px}
+  .down{color:var(--green)}
+
+  /* 策略组 */
+  .group{background:rgba(0,0,0,.22);border-radius:14px;padding:13px 15px;margin-bottom:10px}
+  .group:last-child{margin-bottom:0}
+  .g-top{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+  .g-name{font-size:13.5px;font-weight:700}
+  .g-tag{font-size:10.5px;color:var(--muted);box-shadow:inset 0 0 0 1px var(--stroke);padding:2px 8px;border-radius:99px}
+  .g-ms{margin-left:auto;font-size:12.5px;font-weight:750;color:var(--green)}
+  .g-bar{height:6px;border-radius:99px;background:rgba(255,255,255,.06);overflow:hidden;margin-bottom:8px}
+  .g-bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--purple2),var(--pink))}
+  .g-sub{font-size:11.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="logo"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5"/></svg></div>
+    <div class="nav active"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7.5" height="7.5" rx="2.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2.5"/></svg></div>
+    <div class="nav"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg></div>
+    <div class="nav"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="2.4"/><circle cx="5" cy="19" r="2.4"/><circle cx="19" cy="19" r="2.4"/><path d="M12 7.5V12m0 0-5.5 4.8M12 12l5.5 4.8"/></svg></div>
+    <div class="nav"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 12h-4l-3 8-6-16-3 8H2"/></svg></div>
+    <div class="spacer"></div>
+    <div class="nav"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.35.4.64.74.83"/></svg></div>
+  </aside>
+
+  <main>
+    <header>
+      <h1>仪表盘</h1>
+      <span class="hello"><i></i>已连接 · 香港 HK-01</span>
+      <span class="scheme-badge">方案 4 · 暗夜紫 New-Morphism Violet</span>
+    </header>
+
+    <div class="grid">
+      <div class="card s6 status">
+        <div>
+          <div class="c-label">状态</div>
+          <div class="ip-row"><span class="flag">CN</span><span class="ip num">119.131.199.175</span></div>
+          <div class="tags"><span class="tag">商业</span><span class="tag good">质度优</span><span class="tag">IPv4</span></div>
+          <div class="meta">
+            <div><b>运行时长</b><span class="num">02:47:13</span></div>
+            <div><b>组织</b><span>Chinanet</span></div>
+            <div><b>协议</b><span>Hysteria2</span></div>
+          </div>
+        </div>
+        <button class="play"><svg width="30" height="30" viewBox="0 0 24 24" fill="#fff"><path d="M8 5.5v13l11-6.5z"/></svg></button>
+      </div>
+
+      <div class="card s3">
+        <div class="c-label">上传<span class="peak num">峰值 3.1 MB/s</span></div>
+        <div class="rate-num num">2.4<small>MB/s</small></div>
+        <div class="rate-sub num">累计 1.28 GB</div>
+        <svg class="spark" height="34" viewBox="0 0 200 34" preserveAspectRatio="none"><path d="M0 26 L18 22 L36 25 L54 16 L72 20 L90 10 L108 15 L126 7 L144 13 L162 5 L180 11 L200 6" fill="none" stroke="#F472B6" stroke-width="2.2" stroke-linecap="round"/></svg>
+      </div>
+
+      <div class="card s3">
+        <div class="c-label">下载<span class="peak num">峰值 18.6 MB/s</span></div>
+        <div class="rate-num num">12.8<small>MB/s</small></div>
+        <div class="rate-sub num">累计 6.42 GB</div>
+        <svg class="spark" height="34" viewBox="0 0 200 34" preserveAspectRatio="none"><path d="M0 28 L20 24 L40 27 L60 18 L80 22 L100 12 L120 17 L140 8 L160 14 L180 4 L200 9" fill="none" stroke="#A78BFA" stroke-width="2.2" stroke-linecap="round"/></svg>
+      </div>
+
+      <div class="card s6 mode-card">
+        <div class="c-label">出站模式</div>
+        <div class="segment">
+          <button class="seg active">规则</button>
+          <button class="seg">全局</button>
+          <button class="seg">直连</button>
+        </div>
+      </div>
+
+      <div class="card s3 t-card">
+        <div class="c-label" style="margin:0">系统代理</div>
+        <div class="t-row"><span class="t-state on">已开启</span><label class="switch"><input type="checkbox" checked><span class="knob"></span></label></div>
+      </div>
+
+      <div class="card s3 t-card">
+        <div class="c-label" style="margin:0">虚拟网卡</div>
+        <div class="t-row"><span class="t-state">已关闭</span><label class="switch"><input type="checkbox"><span class="knob"></span></label></div>
+      </div>
+
+      <div class="card s4 t-card">
+        <div class="c-label" style="margin:0">内网 IP</div>
+        <div class="lan-value num">192.168.56.1</div>
+        <div class="t-row"><span class="t-state">局域网代理 · 已关闭</span><label class="switch"><input type="checkbox"><span class="knob"></span></label></div>
+      </div>
+
+      <div class="card s4">
+        <div class="c-label">配置</div>
+        <div class="cfg-name">v2rayaggregator</div>
+        <div class="cfg-sub">更新于 <b>10 小时前</b> · 远程订阅</div>
+        <div class="cfg-stats">
+          <div><b class="num">3</b><span>策略组</span></div>
+          <div><b class="num">4,283</b><span>代理</span></div>
+          <div><b class="num">87</b><span>规则</span></div>
+        </div>
+      </div>
+
+      <div class="card s4">
+        <div class="c-label">服务状态</div>
+        <div class="svc-grid">
+          <div class="svc"><span class="svc-dot ok"></span><span class="svc-name">Google</span><span class="ms good num">48 ms</span></div>
+          <div class="svc"><span class="svc-dot ok"></span><span class="svc-name">GitHub</span><span class="ms good num">120 ms</span></div>
+          <div class="svc"><span class="svc-dot warn"></span><span class="svc-name">YouTube</span><span class="ms mid num">212 ms</span></div>
+          <div class="svc"><span class="svc-dot bad"></span><span class="svc-name">ChatGPT</span><span class="ms slow">超时</span></div>
+        </div>
+      </div>
+
+      <div class="card s8">
+        <div class="c-label">实时连接<span class="peak num">23 条活跃</span></div>
+        <table>
+          <tr><th>目标</th><th>协议</th><th>出口</th><th>下载</th><th>上传</th><th>时长</th></tr>
+          <tr><td>www.youtube.com<span class="chip">视频</span></td><td>QUIC</td><td>🇭🇰 HK-01</td><td class="num down">8.2 MB/s</td><td class="num">41 KB/s</td><td class="num">12:36</td></tr>
+          <tr><td>api.github.com<span class="chip">开发</span></td><td>TLS</td><td>🇯🇵 JP-03</td><td class="num down">316 KB/s</td><td class="num">12 KB/s</td><td class="num">05:41</td></tr>
+          <tr><td>cdn.jsdelivr.net<span class="chip">下载</span></td><td>TLS</td><td>🇸🇬 SG-02</td><td class="num down">2.9 MB/s</td><td class="num">88 KB/s</td><td class="num">01:08</td></tr>
+          <tr><td>dns.alidns.com</td><td>DoH</td><td>直连</td><td class="num down">2 KB/s</td><td class="num">1 KB/s</td><td class="num">00:03</td></tr>
+        </table>
+      </div>
+
+      <div class="card s4">
+        <div class="c-label">策略组</div>
+        <div class="group">
+          <div class="g-top"><span class="g-name">自动选择</span><span class="g-tag">url-test</span><span class="g-ms num">86 ms</span></div>
+          <div class="g-bar"><i style="width:78%"></i></div>
+          <div class="g-sub num">12 个节点 · 当前 🇭🇰 HK-01</div>
+        </div>
+        <div class="group">
+          <div class="g-top"><span class="g-name">流媒体</span><span class="g-tag">fallback</span><span class="g-ms num">154 ms</span></div>
+          <div class="g-bar"><i style="width:52%"></i></div>
+          <div class="g-sub num">6 个节点 · 当前 🇸🇬 SG-02</div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+</body>
+</html>
