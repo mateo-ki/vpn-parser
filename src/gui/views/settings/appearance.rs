@@ -206,22 +206,6 @@ impl VpnApp {
                 }
             });
 
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(self.tr("控制台当前/首选 Tab：")).size(12.5).color(theme::muted()));
-                for panel in crate::gui::types::ProxyPanel::ALL {
-                    if self.is_proxy_panel_visible(panel) {
-                        let is_active = self.proxy_panel == panel;
-                        if ui.selectable_label(is_active, self.tr(panel.title()))
-                            .on_hover_text(format!("点击将控制台直接切换并显示「{}」Tab", self.tr(panel.title())))
-                            .clicked()
-                        {
-                            self.proxy_panel = panel;
-                        }
-                    }
-                }
-            });
-
             ui.add_space(12.0);
             ui.separator();
             ui.add_space(8.0);

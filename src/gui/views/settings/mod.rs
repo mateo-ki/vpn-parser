@@ -10,7 +10,7 @@ mod tests;
 #[allow(unused_imports)]
 pub(crate) use appearance::{font_scale_ticks, handle_travel_range, FONT_SCALE_MAX, FONT_SCALE_MIN};
 
-use crate::gui::icons::Icon;
+use crate::gui::icons::{icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::types::SettingsTab;
 use crate::gui::widgets::{panel_tab, primary_btn, section_title};
@@ -97,13 +97,16 @@ impl VpnApp {
                     ui.spinner();
                     ui.label(RichText::new("正在保存...").color(theme::accent()).small());
                 } else if dirty {
+                    // 这一整块是 right_to_left：先加文字、后加图标，读出来才是「图标 文字」。
                     ui.label(
-                        RichText::new("⚠ 有未保存修改")
+                        RichText::new("有未保存修改")
                             .color(theme::warning())
                             .small(),
                     );
+                    icon_label(ui, Icon::Alert, 12.0, theme::warning());
                 } else {
-                    ui.label(RichText::new(format!("✓ {}", tr_synced)).color(theme::accent_strong()).small());
+                    ui.label(RichText::new(tr_synced).color(theme::accent_strong()).small());
+                    icon_label(ui, Icon::Check, 12.0, theme::accent_strong());
                 }
             },
         );

@@ -280,7 +280,9 @@ impl VpnApp {
 
         if retry {
             self.ip_risk = None;
-            self.check_ip_risk();
+            if let Some(target) = self.ip_risk_target.clone() {
+                self.check_ip_risk_for(&target);
+            }
         }
         if let Some(text) = copy_payload {
             ctx.copy_text(text);

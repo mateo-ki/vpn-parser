@@ -10,6 +10,9 @@ use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
 
 impl VpnApp {
     pub(crate) fn ui_nodes(&mut self, ui: &mut Ui) {
+        // 弹框必须先于本页任何提前 return 渲染：节点池为空时下面会有一句 return，
+        // 而「导入本地 YAML」正是空库机器上唯一还能往里灌东西的入口 —— 放在它后面就永远开不出门。
+        self.ui_import_yaml_modal(ui.ctx());
         section_title(ui, self.tr("节点池"), "多源汇聚 · 强度测速 · 智能筛选清理");
         let mut filter_changed = false;
         let mut delete_dead = false;
@@ -299,7 +302,6 @@ impl VpnApp {
             self.handle_node_card_action(action);
         }
 
-        self.ui_import_yaml_modal(ui.ctx());
     }
 
     pub(crate) fn render_nodes_toolbar_search_and_filters(
@@ -596,7 +598,14 @@ impl VpnApp {
                         .desired_width(ui.available_width() - 36.0)
                         .hint_text(&tr_path_hint),
                 );
-                if ui.button("✕").on_hover_text(&tr_clear_path).clicked() {
+                if ui
+                    .add(crate::gui::icons::icon_btn_square(
+                        crate::gui::icons::Icon::Trash,
+                        11.0,
+                    ))
+                    .on_hover_text(&tr_clear_path)
+                    .clicked()
+                {
                     self.import_yaml_path.clear();
                 }
             });
@@ -784,5 +793,162 @@ impl VpnApp {
         if !open {
             self.show_detail = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod empty_pool_modal_tests {
+    use super::*;
+    use crate::api::ApiServerController;
+    use crate::api::AppState;
+    use crate::collector::Collector;
+    use crate::db::Database;
+    use crate::kernel::KernelManager;
+    use crate::proxy::ProxyManager;
+    use crate::speedtest::SpeedTester;
+    use crate::tasks::TaskTracker;
+    use std::sync::Arc;
+
+    /// 一个空库的真 `VpnApp`。新装机器上节点池就是空的，而「导入本地 YAML」恰恰是那种
+    /// 机器上唯一还能往里灌东西的入口 —— 所以零节点时弹框必须开得出门。
+    fn app_with_an_empty_library() -> VpnApp {
+        let rt = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let dir = std::env::temp_dir().join(format!("vp-nodes-modal-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = rt
+            .block_on(Database::connect(&dir.join("vpn-parser.db").to_string_lossy()))
+            .unwrap();
+        let tasks = TaskTracker::default();
+        let collector = Collector::new(db.clone(), tasks.clone()).unwrap();
+        let speedtester = SpeedTester::new(db.clone(), tasks.clone());
+        let proxy_manager = ProxyManager::new(rt.block_on(db.get_proxy_config()).unwrap());
+        let kernel_manager = KernelManager;
+        let api_controller = ApiServerController::new(
+            AppState {
+                db: db.clone(),
+                collector: collector.clone(),
+                speedtester: speedtester.clone(),
+                tasks: tasks.clone(),
+                kernel_manager: KernelManager,
+                proxy_manager: proxy_manager.clone(),
+            },
+            "127.0.0.1:0".into(),
+            None,
+        );
+        VpnApp::new(
+            rt,
+            db,
+            collector,
+            speedtester,
+            tasks,
+            kernel_manager,
+            proxy_manager,
+            api_controller,
+            None,
+        )
+    }
+
+    /// 读某一图层在这一帧画出来的全部文字。
+    ///
+    /// 为什么按图层读而不是读 `FullOutput::shapes`：Area（弹框、窗口）写在自己的图层里，
+    /// 单帧的 `shapes` 收不到它 —— 实测一个直接开的 `Modal` 用那种读法读到的是空串。
+    /// 所以这条判据必须先过下面那个对照测试，否则"弹框没画出来"是探针自己的假信号。
+    fn layer_text(ctx: &egui::Context, layer: egui::LayerId) -> String {
+        ctx.graphics(|g| {
+            let mut text = String::new();
+            if let Some(list) = g.get(layer) {
+                for entry in list.all_entries() {
+                    if let egui::Shape::Text(t) = &entry.shape {
+                        text.push_str(&t.galley.text());
+                        text.push(' ');
+                    }
+                }
+            }
+            text
+        })
+    }
+
+    fn screen_input() -> egui::RawInput {
+        let mut input = egui::RawInput::default();
+        input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1280.0, 800.0),
+        ));
+        input
+    }
+
+    /// 弹框的图层就按它 Area 的 id 寻址（`Modal::default_area` 用的是 `Order::Foreground`）。
+    fn modal_layer() -> egui::LayerId {
+        egui::LayerId::new(egui::Order::Foreground, egui::Id::new("import_yaml_modal"))
+    }
+
+    /// 跑两帧真 `ui_nodes`，返回（节点池那一层的文字, 弹框那一层的文字）。
+    ///
+    /// 两帧不是冗余：egui 的 Area 第一帧只走 sizing pass（`AreaState::load` 取不到
+    /// 状态时 `sizing_pass = true`），内容不落地 —— 单帧探针读任何弹框都只会读到空串。
+    fn frame_texts(app: &mut VpnApp) -> (String, String) {
+        let ctx = egui::Context::default();
+        let mut panel = String::new();
+        let mut modal = String::new();
+        for _ in 0..2 {
+            let mut p = String::new();
+            let mut m = String::new();
+            let _ = ctx.run(screen_input(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let panel_layer = ui.layer_id();
+                    app.ui_nodes(ui);
+                    p = layer_text(ui.ctx(), panel_layer);
+                    m = layer_text(ui.ctx(), modal_layer());
+                });
+            });
+            panel = p;
+            modal = m;
+        }
+        (panel, modal)
+    }
+
+    /// 探针自检：同一个图层地址、同一个 id，直接开一个 Modal 必须读得到它的字。
+    /// 这条要红了，上面那条"弹框没画出来"就一律不算结论。
+    #[test]
+    fn the_probe_actually_sees_a_modal_on_that_layer() {
+        let ctx = egui::Context::default();
+        let mut seen = String::new();
+        for _ in 0..2 {
+            let mut out = String::new();
+            let _ = ctx.run(screen_input(), |ctx| {
+                egui::Modal::new(egui::Id::new("import_yaml_modal")).show(ctx, |ui| {
+                    ui.label("CONTROL_MARK");
+                });
+                out = layer_text(ctx, modal_layer());
+            });
+            seen = out;
+        }
+        assert!(
+            seen.contains("CONTROL_MARK"),
+            "连一个直接开的 Modal 都读不到，说明探针坏了，不是弹框坏了：{seen:?}"
+        );
+    }
+
+    #[test]
+    fn the_yaml_import_modal_opens_even_with_an_empty_node_pool() {
+        let mut app = app_with_an_empty_library();
+        assert!(
+            app.nodes.is_empty(),
+            "夹具不该有节点，否则测不到新装机那个形状"
+        );
+        app.show_import_yaml_modal = true;
+        let (panel, modal) = frame_texts(&mut app);
+        assert!(
+            panel.contains("当前筛选条件下没有节点"),
+            "夹具没跑到空列表那条分支上（面板文字：{panel}）"
+        );
+        assert!(
+            modal.contains("导入本地 YAML / 配置文件"),
+            "零节点时点「导入本地 YAML」弹框没画出来（弹框层文字：{modal:?}）"
+        );
+        assert!(
+            modal.contains("确认导入"),
+            "弹框画了但缺「确认导入」（弹框层文字：{modal}）"
+        );
     }
 }

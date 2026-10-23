@@ -276,6 +276,10 @@ pub struct AppSettings {
     /// "只留清爽浅白" —— 那次是删深色主题条目，这次是把夜间做成默认，按新的走。
     #[serde(default = "default_ui_dark")]
     pub ui_dark: bool,
+    /// 菜单栏展开态：true = 每项左图标右文字（面板加宽），false = 只有图标（现状）。
+    /// 默认关 —— 打开这条不改他现在的样子，他自己点一次之后按设置持久化。
+    #[serde(default = "default_sidebar_expanded")]
+    pub sidebar_expanded: bool,
     /// 内核下载走哪条路：race / official / proxy / local（见 `kernel::KernelSource`）。
     #[serde(default = "default_kernel_source")]
     pub kernel_source: String,
@@ -391,6 +395,10 @@ fn default_ui_dark() -> bool {
     true
 }
 
+fn default_sidebar_expanded() -> bool {
+    false
+}
+
 fn default_gist_pages() -> u32 {
     100
 }
@@ -450,6 +458,7 @@ impl Default for AppSettings {
             ui_language: default_ui_language(),
             ui_scale: default_ui_scale(),
             ui_dark: true,
+            sidebar_expanded: false,
             kernel_source: default_kernel_source(),
             firewall_auto_allow: false,
             auto_failover: false,
@@ -500,6 +509,7 @@ pub struct UpdateSettings {
     pub ui_language: Option<String>,
     pub ui_scale: Option<f32>,
     pub ui_dark: Option<bool>,
+    pub sidebar_expanded: Option<bool>,
     pub kernel_source: Option<String>,
     pub firewall_auto_allow: Option<bool>,
     pub auto_failover: Option<bool>,

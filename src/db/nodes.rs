@@ -1,13 +1,14 @@
 use super::Database;
 use super::UNGROUPED_SOURCE_ID;
 use crate::models::{Node, NodeSummary, Page};
-use crate::parser::node_fingerprint;
+use crate::parser::{fingerprint_from_parts, node_fingerprint, normalize_protocol};
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
     Row,
 };
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -845,9 +846,10 @@ impl Database {
         let scopes = self.node_scopes(source_filter).await?;
         if scopes.len() <= 1 {
             let scope = scopes.into_iter().next().flatten();
-            return self
+            let summaries = self
                 .load_available_scope_node_summaries(scope.as_deref())
-                .await;
+                .await?;
+            return self.collapse_duplicate_nodes(summaries).await;
         }
         let mut tasks = tokio::task::JoinSet::new();
         for scope in scopes {
@@ -862,7 +864,89 @@ impl Database {
             summaries.extend(joined.map_err(|error| anyhow!(error.to_string()))??);
         }
         summaries.sort_by_key(|node| (node.latency_ms.unwrap_or(i64::MAX), node.name.clone()));
-        Ok(summaries)
+        self.collapse_duplicate_nodes(summaries).await
+    }
+
+    /// 同一颗节点被几份订阅同时供着时，可用节点页会各出一行（名字各异，测速是同一次）。
+    /// 这里按节点指纹收敛成一行：入参已按「测通优先 + 延迟升序」排好，所以留下的是最优那颗。
+    /// 指纹要凭据，凭据在纵向分表的载荷里，因此只有真的出现端点撞车才补读载荷。
+    async fn collapse_duplicate_nodes(
+        &self,
+        summaries: Vec<NodeSummary>,
+    ) -> Result<Vec<NodeSummary>> {
+        let endpoint_key = |node: &NodeSummary| {
+            (
+                normalize_protocol(&node.protocol),
+                node.server.trim().to_ascii_lowercase(),
+                node.port,
+            )
+        };
+        let mut hits: HashMap<(String, String, u16), usize> = HashMap::new();
+        for node in &summaries {
+            *hits.entry(endpoint_key(node)).or_default() += 1;
+        }
+        if hits.values().all(|count| *count <= 1) {
+            return Ok(summaries);
+        }
+
+        let meta: HashMap<String, (String, String, u16)> = summaries
+            .iter()
+            .map(|node| {
+                (
+                    node.id.clone(),
+                    (
+                        node.protocol.clone(),
+                        node.server.clone(),
+                        node.port,
+                    ),
+                )
+            })
+            .collect();
+        let mut fingerprints: HashMap<String, String> = HashMap::new();
+        for scope in self.node_scopes(None).await? {
+            let path = self.node_db_path(scope.as_deref());
+            if !path.exists() {
+                continue;
+            }
+            let pool = self.open_node_pool(scope.as_deref()).await?;
+            let rows = sqlx::query(
+                r#"SELECT n.id, COALESCE(p.config, n.config) AS config
+                   FROM nodes n LEFT JOIN node_payloads p ON p.node_id = n.id
+                   WHERE n.latency_ok = 1"#,
+            )
+            .fetch_all(&pool)
+            .await?;
+            for row in rows {
+                let id: String = row.get("id");
+                let stored: String = row.get("config");
+                let Some((protocol, server, port)) = meta.get(&id) else {
+                    continue;
+                };
+                let config = serde_json::from_str::<serde_json::Value>(&stored)
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                // 载荷丢了就别拿空凭据去当指纹：那样同端点的两颗会被误判成一颗。
+                if config.as_object().map(|map| map.is_empty()).unwrap_or(true) {
+                    continue;
+                }
+                fingerprints.insert(
+                    id,
+                    fingerprint_from_parts(protocol, &server, *port, &config),
+                );
+            }
+        }
+
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut kept: Vec<NodeSummary> = Vec::with_capacity(summaries.len());
+        for node in summaries {
+            let key = fingerprints
+                .get(&node.id)
+                .cloned()
+                .unwrap_or_else(|| format!("node-id|{}", node.id));
+            if seen.insert(key) {
+                kept.push(node);
+            }
+        }
+        Ok(kept)
     }
 
     pub async fn delete_node(&self, id: &str) -> Result<bool> {

@@ -725,3 +725,95 @@ mod collapsed_section_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod egress_ip_badge_tests {
+    use super::charts::{
+        display_risk, front_risk_belongs_to, node_ip_kind, EgressRiskView, NodeIpKind,
+    };
+
+    fn risk(datacenter: bool, public_proxy: bool) -> crate::ip_risk::IpRisk {
+        crate::ip_risk::IpRisk {
+            ip: "203.0.113.9".into(),
+            hostname: "node.example.com".into(),
+            country: "JP".into(),
+            org: "AS401615 ACCK LLC".into(),
+            datacenter,
+            public_proxy,
+            verdict: String::new(),
+        }
+    }
+
+    fn view(risk: Option<&crate::ip_risk::IpRisk>, failed: bool, checking: bool) -> EgressRiskView {
+        EgressRiskView {
+            risk,
+            failed,
+            checking,
+        }
+    }
+
+    /// 徽章的六种长相：公开代理盖过机房标记，查失败优先于"正在查"，有结果就不退回中间态。
+    #[test]
+    fn the_badge_names_each_ip_verdict() {
+        assert_eq!(node_ip_kind(&view(None, false, false)), NodeIpKind::Unknown);
+        assert_eq!(node_ip_kind(&view(None, false, true)), NodeIpKind::Checking);
+        assert_eq!(node_ip_kind(&view(None, true, true)), NodeIpKind::Failed);
+        assert_eq!(
+            node_ip_kind(&view(Some(&risk(false, false)), false, false)),
+            NodeIpKind::Residential
+        );
+        assert_eq!(
+            node_ip_kind(&view(Some(&risk(true, false)), false, true)),
+            NodeIpKind::Datacenter
+        );
+        assert_eq!(
+            node_ip_kind(&view(Some(&risk(true, true)), false, false)),
+            NodeIpKind::PublicProxy
+        );
+        assert_eq!(NodeIpKind::Datacenter.label(), "机房");
+        assert_eq!(NodeIpKind::Residential.label(), "住宅");
+        assert_eq!(NodeIpKind::Failed.label(), "查失败");
+        // 屏幕上只有两档：公开代理也归进「机房」，差别只在 hover 里讲清楚。
+        assert_eq!(NodeIpKind::PublicProxy.label(), "机房");
+    }
+
+    /// 真 bug 回归：出口查询失败时 `egress_for` 也已经写上这颗节点，但出口结果是空的 ——
+    /// 这时必须退回已经查到的服务器归属，不许短路成「未检测」。
+    #[test]
+    fn a_failed_egress_falls_back_to_the_server_verdict() {
+        let egress = risk(false, false);
+        let front = risk(true, false);
+        let got = display_risk(Some("n1"), Some("n1"), None, Some("n1"), Some(&front));
+        assert_eq!(got.map(|risk| risk.datacenter), Some(true));
+        // 出口真的查到了，才轮到它优先。
+        let both = display_risk(Some("n1"), Some("n1"), Some(&egress), Some("n1"), Some(&front));
+        assert_eq!(both.map(|risk| risk.datacenter), Some(false));
+        // 归属是别的节点的，不许串过来。
+        let none = display_risk(Some("n1"), None, None, Some("n2"), Some(&front));
+        assert!(none.is_none());
+        assert!(display_risk(None, Some("n1"), Some(&egress), None, None).is_none());
+    }
+
+    /// 认领规则：结果要么是被自动跟随那颗节点查的，要么是用户手动点的那颗；别的节点的数不许串过来。
+    #[test]
+    fn a_stored_risk_is_claimed_only_by_its_own_node() {
+        assert!(front_risk_belongs_to("a", Some("a"), None));
+        assert!(front_risk_belongs_to("a", None, Some("a")));
+        assert!(!front_risk_belongs_to("a", Some("b"), Some("c")));
+        assert!(!front_risk_belongs_to("a", None, None));
+    }
+
+    /// 反向验证：撤掉状态栏那个手动按钮之后，弹框只能由节点卡片那条打开。
+    #[test]
+    fn the_auto_follow_never_opens_the_dialog() {
+        let text = include_str!("mod.rs");
+        assert!(
+            !text.contains("self.check_ip_risk();"),
+            "状态栏不该再留 IP 检测的按钮入口"
+        );
+        assert!(
+            text.contains("status_btn(mode_label)"),
+            "同一排的模式 chip 与测速按钮还在，别顺手删过头"
+        );
+    }
+}

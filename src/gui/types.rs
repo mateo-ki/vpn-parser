@@ -278,9 +278,11 @@ impl RuleDraftKind {
 pub enum BgMsg {
     Sources(Result<Vec<Source>, String>),
     /// 节点落地 IP 的机房/风控画像。
-    IpRisk(Result<crate::ip_risk::IpRisk, String>),
+    IpRisk(Result<crate::ip_risk::IpRisk, String>, bool),
     /// 出口 IP 画像，第一个字段是它属于哪个节点（自动查=当前运行节点，手动=被实测的节点）。
-    IpEgress(String, Result<crate::ip_risk::IpRisk, String>),
+    /// 尾巴那颗 bool = 这次是用户手动点的。汇总卡片那颗徽章会自己静默跟随当前出口，
+    /// 那种回信不许改状态栏文案，否则会把「代理已启动」这类要紧的话顶掉。
+    IpEgress(String, Result<crate::ip_risk::IpRisk, String>, bool),
     Nodes {
         req_id: u64,
         result: Result<(Vec<NodeSummary>, i64), String>,
@@ -548,6 +550,7 @@ pub struct SettingsEditState {
     pub ui_language: String,
     pub ui_scale: f32,
     pub ui_dark: bool,
+    pub sidebar_expanded: bool,
     /// 参与预发：检查更新时也看 GitHub 上标了 prerelease 的 beta（在「关于」页里勾）。
     pub insider_channel: bool,
     pub kernel_source: String,
@@ -590,6 +593,7 @@ impl SettingsEditState {
             ui_language: s.ui_language.clone(),
             ui_scale: s.ui_scale,
             ui_dark: s.ui_dark,
+            sidebar_expanded: s.sidebar_expanded,
             insider_channel: s.insider_channel,
             kernel_source: s.kernel_source.clone(),
             firewall_auto_allow: s.firewall_auto_allow,

@@ -124,13 +124,24 @@ pub fn looks_like_clash(content: &str) -> bool {
 /// Stable identity for a proxy endpoint (ignores display name / source).
 /// Same server:port + credentials => same node, even if name differs across free lists.
 pub fn node_fingerprint(node: &Node) -> String {
-    let protocol = normalize_protocol(&node.protocol);
-    let server = node.server.trim().to_ascii_lowercase();
-    let cred = credential_token(&protocol, &node.config);
-    format!("{protocol}|{server}|{}|{cred}", node.port)
+    fingerprint_from_parts(&node.protocol, &node.server, node.port, &node.config)
 }
 
-fn normalize_protocol(protocol: &str) -> String {
+/// Same identity as [`node_fingerprint`], for callers that only hold the endpoint fields
+/// (the node summary listing keeps credentials in a separate table).
+pub fn fingerprint_from_parts(
+    protocol: &str,
+    server: &str,
+    port: u16,
+    config: &serde_json::Value,
+) -> String {
+    let protocol = normalize_protocol(protocol);
+    let server = server.trim().to_ascii_lowercase();
+    let cred = credential_token(&protocol, config);
+    format!("{protocol}|{server}|{port}|{cred}")
+}
+
+pub fn normalize_protocol(protocol: &str) -> String {
     match protocol.to_ascii_lowercase().as_str() {
         "ss" | "shadowsocks" => "shadowsocks".into(),
         "ssr" | "shadowsocksr" => "shadowsocksr".into(),

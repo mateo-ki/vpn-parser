@@ -443,29 +443,52 @@ impl VpnApp {
                             self.status = format!("测速失败: {e}");
                         }
                         BgMsg::Kernels(kernels) => self.kernels = kernels,
-                        BgMsg::IpRisk(Ok(risk)) => {
+                        BgMsg::IpRisk(Ok(risk), manual) => {
                             self.ip_risk_busy = false;
                             self.ip_risk_error = None;
-                            self.status = format!("IP 检测：{}", risk.headline());
+                            self.ip_risk_failed_for = None;
+                            crate::startup_log(&format!(
+                                "[出口归属] 服务器归属查到：{}",
+                                risk.headline()
+                            ));
+                            if manual {
+                                self.status = format!("IP 检测：{}", risk.headline());
+                            }
                             self.ip_risk = Some(risk);
                         }
-                        BgMsg::IpRisk(Err(error)) => {
+                        BgMsg::IpRisk(Err(error), manual) => {
                             self.ip_risk_busy = false;
                             self.ip_risk = None;
+                            // 记下这颗查失败过：徽章要区分「没查过」和「查了没查到」。
+                            self.ip_risk_failed_for = if manual {
+                                self.ip_risk_target.clone()
+                            } else {
+                                self.ip_risk_auto_for.clone()
+                            };
+                            crate::startup_log(&format!("[出口归属] 服务器归属查询失败：{error}"));
                             self.ip_risk_error = Some(error);
-                            self.status = "IP 检测查询失败".into();
+                            if manual {
+                                self.status = "IP 检测查询失败".into();
+                            }
                         }
-                        BgMsg::IpEgress(node_id, Ok(egress)) => {
+                        BgMsg::IpEgress(node_id, Ok(egress), manual) => {
                             self.ip_risk_egress_pending = false;
                             self.ip_risk_egress_error = None;
-                            self.status = format!("出口 {}", egress.headline());
+                            crate::startup_log(&format!(
+                                "[出口归属] 出口查到：{}",
+                                egress.headline()
+                            ));
+                            if manual {
+                                self.status = format!("出口 {}", egress.headline());
+                            }
                             self.ip_risk_egress_for = Some(node_id);
                             self.ip_risk_egress = Some(egress);
                         }
-                        BgMsg::IpEgress(node_id, Err(error)) => {
+                        BgMsg::IpEgress(node_id, Err(error), _manual) => {
                             self.ip_risk_egress_pending = false;
                             self.ip_risk_egress = None;
                             self.ip_risk_egress_for = Some(node_id);
+                            crate::startup_log(&format!("[出口归属] 出口查询失败：{error}"));
                             self.ip_risk_egress_error = Some(error);
                         }
                         BgMsg::KernelReleases(Ok(releases)) => {

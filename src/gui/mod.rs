@@ -42,6 +42,11 @@ pub use widgets::*;
 /// Gist 发现里每个代理候选对第 1 页的原地重试次数（总尝试 = 1 + 该值）。
 const GIST_PAGE_RETRIES: usize = 2;
 
+/// 侧栏两种宽度：收起 = 只有图标（64，和以前一模一样），展开 = 图标 + 短名。
+/// 展开那档 = 图标区 44 + 文字位 86 + 右内边距 10；判据直接引这两个常量，不各写各的数。
+pub(crate) const SIDEBAR_COLLAPSED_WIDTH: f32 = 64.0;
+pub(crate) const SIDEBAR_EXPANDED_WIDTH: f32 = 110.0;
+
 pub struct VpnApp {
     pub(crate) rt: Arc<Runtime>,
     pub(crate) db: Database,
@@ -71,7 +76,10 @@ pub struct VpnApp {
     pub(crate) status_actions_width: f32,
     pub(crate) busy: bool,
     pub(crate) proxy_busy: bool,
-    pub(crate) gist_pages: usize,
+    /// 上一次写进 startup.log 的代理状态 + 它开始的时间 + 卡住告警是否已发过。
+    /// 启动按钮灰掉的三种原因里，只有「卡在 Starting/Stopping」是用户看不到解释的那种，
+    /// 所以状态每变一次记一行，卡满 30 秒再补一行。
+    pub(crate) last_proxy_state_log: Option<(ProxyState, std::time::Instant, bool)>,    pub(crate) gist_pages: usize,
     pub(crate) gist_query_flags: Vec<bool>,
     pub(crate) active_source_fetches: HashSet<String>,
     pub(crate) expanded_kernel_groups: HashSet<String>,
@@ -275,6 +283,10 @@ pub struct VpnApp {
     pub(crate) ip_risk_egress_for: Option<String>,
     pub(crate) ip_risk_egress_pending: bool,
     pub(crate) ip_risk_egress_error: Option<String>,
+    /// 汇总卡片那颗「出口类型」徽章：最近一次静默检测是为哪个节点跑的。
+    pub(crate) ip_risk_auto_for: Option<String>,
+    /// 归属查询失败时，那次查询是为哪颗节点跑的（徽章要能说「查失败」而不是装没查过）。
+    pub(crate) ip_risk_failed_for: Option<String>,
     pub(crate) reload_due: bool,
     pub(crate) last_full_reload: std::time::Instant,
     pub(crate) startup_trim_done: bool,
@@ -345,6 +357,7 @@ pub struct VpnApp {
     pub(crate) edit_ui_scale: f32,
     /// 夜间模式（编辑态）：和强调色正交的一个开关。
     pub(crate) edit_ui_dark: bool,
+    pub(crate) edit_sidebar_expanded: bool,
     /// 参与预发（「关于」页那个勾）：检查更新时也看 beta。
     pub(crate) edit_insider_channel: bool,
     pub(crate) edit_kernel_source: String,
@@ -432,6 +445,7 @@ impl VpnApp {
             status_actions_width: 0.0,
             busy: false,
             proxy_busy: false,
+            last_proxy_state_log: None,
             gist_pages: 100,
             gist_query_flags: crate::collector::GIST_DISCOVERY_QUERIES
                 .iter()
@@ -594,6 +608,8 @@ impl VpnApp {
             ip_risk_egress_for: None,
             ip_risk_egress_pending: false,
             ip_risk_egress_error: None,
+            ip_risk_auto_for: None,
+            ip_risk_failed_for: None,
             reload_due: false,
             last_full_reload: std::time::Instant::now(),
             startup_trim_done: false,
@@ -642,6 +658,7 @@ impl VpnApp {
             edit_ui_language: "zh-CN".to_string(),
             edit_ui_scale: 1.0,
             edit_ui_dark: false,
+            edit_sidebar_expanded: false,
             edit_insider_channel: false,
             edit_kernel_source: crate::kernel::KernelSource::GhFast.id().to_string(),
             edit_firewall_auto_allow: false,
@@ -2765,8 +2782,34 @@ impl VpnApp {
         }
     }
 
-    pub(crate) fn stop_proxy(&mut self) {
-        let manager = self.proxy_manager.clone();
+    /// 代理状态变化写进 startup.log；同一状态卡满 30 秒再补一行，点名“此时启动按钮是灰的”。
+    pub(crate) fn note_proxy_state_change(&mut self) {
+        let now = std::time::Instant::now();
+        let state = self.proxy_status.state;
+        if let Some((previous, since, stuck_logged)) = self.last_proxy_state_log {
+            if previous == state {
+                let stuck = matches!(state, ProxyState::Starting | ProxyState::Stopping);
+                let elapsed = now.duration_since(since).as_secs();
+                if stuck && !stuck_logged && elapsed >= 30 {
+                    crate::startup_log(&format!(
+                        "[代理状态] 在 {state:?} 卡了 {elapsed} 秒，启动按钮此时是灰的：{} busy={}",
+                        self.proxy_status.message,
+                        self.proxy_busy
+                    ));
+                    self.last_proxy_state_log = Some((state, since, true));
+                }
+                return;
+            }
+        }
+        crate::startup_log(&format!(
+            "[代理状态] {state:?}（{}）busy={}",
+            self.proxy_status.message,
+            self.proxy_busy
+        ));
+        self.last_proxy_state_log = Some((state, now, false));
+    }
+
+    pub(crate) fn stop_proxy(&mut self) {        let manager = self.proxy_manager.clone();
         let tx = self.tx.clone();
         self.proxy_busy = true;
         self.proxy_status.state = ProxyState::Stopping;
@@ -3075,36 +3118,115 @@ impl VpnApp {
         self.pending_open_url = Some(url);
     }
 
-    /// 查询当前选中代理节点的落地风险。
-    pub(crate) fn check_ip_risk(&mut self) {
-        let Some(id) = self.selected_proxy_node_id.clone() else {
-            self.show_ip_risk_dialog = true;
-            self.ip_risk_error = Some("请先选择代理节点".into());
-            self.status = "请先选择代理节点".into();
-            return;
-        };
-        self.check_ip_risk_for(&id);
-    }
 
     /// 查询指定节点的 IP 检测：入口 = 节点服务器（域名先解析）。出口只在该节点**正是
     /// 当前运行的节点**时才自动查 —— 本机只有一个 mixed 端口，拿它去查别的节点得到的是
     /// 当前节点的出口，属于假数据。
     pub(crate) fn check_ip_risk_for(&mut self, node_id: &str) {
-        self.show_ip_risk_dialog = true;
-        self.ip_risk_target = Some(node_id.to_owned());
+        self.request_ip_risk_for(node_id, true);
+    }
+
+    /// 代理在跑、当前出口换了节点，就静默查一次归属 —— 汇总卡片第一张那颗徽章读它。
+    /// 静默 = 不弹详情框、不抢状态栏文案（状态栏那个「IP 检测」按钮 2026-10-23 撤掉了，
+    /// 手动入口还剩节点卡片和右键，那条会照常弹框）。
+    pub(crate) fn auto_ip_risk_for_egress(&mut self) {
+        if !matches!(
+            self.proxy_status.state,
+            ProxyState::Running | ProxyState::Degraded
+        ) || self.ip_risk_busy
+        {
+            return;
+        }
+        let Some(node_id) = self.proxy_status.node_id.clone() else {
+            return;
+        };
+        if self.ip_risk_auto_for.as_deref() == Some(node_id.as_str()) {
+            return;
+        }
+        self.ip_risk_auto_for = Some(node_id.clone());
+        // 徽章"一直未检测"分两种：根本没查，和查了没查到。这一行只为前一种留证据。
+        crate::startup_log(&format!(
+            "[出口归属] 为 {node_id} 自动发起查询（状态 {:?}）",
+            self.proxy_status.state
+        ));
+        self.request_ip_risk_for(&node_id, false);
+    }
+
+    /// 卡片读的那一份。出口结果优先（那才是站点真正看到的 IP），其次是这颗节点服务器
+    /// 的归属。两边都按「这份结果属于哪颗节点」认领，不再拿 server 字符串去比对 ——
+    /// 正在跑的那颗常常不在面板列表里（测速没过就不算「可用」），比不中徽章就永远显示未检测。
+    pub(crate) fn egress_risk_view(&self) -> crate::gui::views::proxy::charts::EgressRiskView<'_> {
+        let node_id = self.proxy_status.node_id.as_deref();
+        let front_owner = node_id.filter(|id| {
+            crate::gui::views::proxy::charts::front_risk_belongs_to(
+                id,
+                self.ip_risk_auto_for.as_deref(),
+                self.ip_risk_target.as_deref(),
+            )
+        });
+        let risk = crate::gui::views::proxy::charts::display_risk(
+            node_id,
+            self.ip_risk_egress_for.as_deref(),
+            self.ip_risk_egress.as_ref(),
+            front_owner,
+            self.ip_risk.as_ref(),
+        );
+        let failed = node_id.is_some() && self.ip_risk_failed_for.as_deref() == node_id;
+        crate::gui::views::proxy::charts::EgressRiskView {
+            risk,
+            failed,
+            checking: self.ip_risk_busy && !failed,
+        }
+    }
+
+    /// 面板列表里没有这颗节点时的路：直接去库里取它自己的 server 再查归属。
+    fn lookup_ip_risk_from_db(&mut self, node_id: &str, manual: bool) {
+        self.ip_risk_busy = true;
+        self.ip_risk_error = None;
+        if manual {
+            self.status = "正在查这颗节点的服务器归属...".into();
+        }
+        let db = self.db.clone();
+        let tx = self.tx.clone();
+        let id = node_id.to_owned();
+        self.rt.spawn(async move {
+            let server = match db.get_node(&id).await {
+                Ok(Some(node)) if !node.server.is_empty() => node.server,
+                _ => String::new(),
+            };
+            let front = if server.is_empty() {
+                Err("库里也没有这颗节点的服务器地址".to_string())
+            } else {
+                let client = reqwest::Client::new();
+                crate::ip_risk::lookup(&client, &server)
+                    .await
+                    .map_err(|error| error.to_string())
+            };
+            let _ = tx.send(BgMsg::IpRisk(front, manual));
+        });
+        self.start_egress_lookup_if_current(node_id, manual);
+    }
+
+    /// `manual = false` 那条只更新数据：不弹框、不写状态栏。
+    fn request_ip_risk_for(&mut self, node_id: &str, manual: bool) {
+        if manual {
+            self.show_ip_risk_dialog = true;
+            self.ip_risk_target = Some(node_id.to_owned());
+        }
         self.ip_risk_egress = None;
         self.ip_risk_egress_for = None;
         self.ip_risk_egress_error = None;
         self.ip_risk_egress_pending = false;
-        let Some(server) = self
+        let server = self
             .proxy_nodes
             .iter()
             .chain(self.nodes.iter())
             .find(|node| node.id == node_id)
-            .map(|node| node.server.clone())
-        else {
-            self.ip_risk_error = Some("找不到该节点的服务器地址".into());
-            self.status = "找不到该节点的服务器地址".into();
+            .map(|node| node.server.clone());
+        let Some(server) = server else {
+            // 面板里没有它很常见：正在跑的那颗可能测速没过（latency_ok != 1），根本不在
+            // 「可用」那份列表里。以前这里当「找不到」直接返回，徽章就永远停在未检测。
+            self.lookup_ip_risk_from_db(node_id, manual);
             return;
         };
         if self.ip_risk_busy {
@@ -3115,26 +3237,30 @@ impl VpnApp {
             .as_ref()
             .is_some_and(|risk| risk.hostname == server || risk.ip == server)
         {
-            self.status = format!("IP 检测：{}", self.ip_risk.as_ref().unwrap().headline());
-            self.start_egress_lookup_if_current(node_id);
+            if manual {
+                self.status = format!("IP 检测：{}", self.ip_risk.as_ref().unwrap().headline());
+            }
+            self.start_egress_lookup_if_current(node_id, manual);
             return;
         }
         self.ip_risk_busy = true;
         self.ip_risk_error = None;
-        self.status = format!("正在查询 {server} 的归属...");
+        if manual {
+            self.status = format!("正在查询 {server} 的归属...");
+        }
         let tx = self.tx.clone();
         self.rt.spawn(async move {
             let client = reqwest::Client::new();
             let front = crate::ip_risk::lookup(&client, &server)
                 .await
                 .map_err(|error| error.to_string());
-            let _ = tx.send(BgMsg::IpRisk(front));
+            let _ = tx.send(BgMsg::IpRisk(front, manual));
         });
-        self.start_egress_lookup_if_current(node_id);
+        self.start_egress_lookup_if_current(node_id, manual);
     }
 
     /// 该节点正是当前在跑的节点时，才经本机 mixed 端口自动查一次出口。
-    fn start_egress_lookup_if_current(&mut self, node_id: &str) {
+    fn start_egress_lookup_if_current(&mut self, node_id: &str, manual: bool) {
         let running_on_it = matches!(
             self.proxy_status.state,
             ProxyState::Running | ProxyState::Degraded
@@ -3145,7 +3271,9 @@ impl VpnApp {
         }
         let url = format!("http://127.0.0.1:{}", self.proxy_status.mixed_port);
         self.ip_risk_egress_pending = true;
-        self.status = "正在经当前代理查出口 IP...".into();
+        if manual {
+            self.status = "正在经当前代理查出口 IP...".into();
+        }
         let tx = self.tx.clone();
         let id = node_id.to_owned();
         self.rt.spawn(async move {
@@ -3153,7 +3281,7 @@ impl VpnApp {
             let egress = crate::ip_risk::lookup_egress(&client, &url)
                 .await
                 .map_err(|error| error.to_string());
-            let _ = tx.send(BgMsg::IpEgress(id, egress));
+            let _ = tx.send(BgMsg::IpEgress(id, egress, manual));
         });
     }
 
@@ -3435,6 +3563,7 @@ impl VpnApp {
             ui_language: self.edit_ui_language.clone(),
             ui_scale: self.edit_ui_scale,
             ui_dark: self.edit_ui_dark,
+            sidebar_expanded: self.edit_sidebar_expanded,
             insider_channel: self.edit_insider_channel,
             kernel_source: self.edit_kernel_source.clone(),
             firewall_auto_allow: self.edit_firewall_auto_allow,
@@ -3514,6 +3643,7 @@ impl VpnApp {
         self.edit_ui_language = state.ui_language.clone();
         self.edit_ui_scale = state.ui_scale;
         self.edit_ui_dark = state.ui_dark;
+        self.edit_sidebar_expanded = state.sidebar_expanded;
         self.edit_insider_channel = state.insider_channel;
         self.edit_kernel_source = state.kernel_source.clone();
         self.edit_firewall_auto_allow = state.firewall_auto_allow;
@@ -3554,6 +3684,7 @@ impl VpnApp {
             ui_language: Some(self.edit_ui_language.clone()),
             ui_scale: Some(crate::models::clamp_ui_scale(self.edit_ui_scale)),
             ui_dark: Some(self.edit_ui_dark),
+            sidebar_expanded: Some(self.edit_sidebar_expanded),
             insider_channel: Some(self.edit_insider_channel),
             kernel_source: Some(self.edit_kernel_source.clone()),
             firewall_auto_allow: Some(self.edit_firewall_auto_allow),
@@ -3828,6 +3959,8 @@ impl eframe::App for VpnApp {
         }
 
         self.poll_bg(ctx);
+        self.note_proxy_state_change();
+        self.auto_ip_risk_for_egress();
         // 只在主题真的变了时才重建 Style：每帧 set_style 会让 egui 认为样式抖动，
         // 也会白白丢掉用户在运行时改过的字号。
         if self.settings.firewall_auto_allow && !self.firewall_seeded {
@@ -3943,8 +4076,13 @@ impl eframe::App for VpnApp {
 
         self.ui_title_bar(ctx);
 
+        let sidebar_width = if self.settings.sidebar_expanded {
+            SIDEBAR_EXPANDED_WIDTH
+        } else {
+            SIDEBAR_COLLAPSED_WIDTH
+        };
         egui::SidePanel::left("sidebar")
-            .exact_width(64.0)
+            .exact_width(sidebar_width)
             .resizable(false)
             .frame(
                 Frame::NONE
@@ -3963,7 +4101,7 @@ impl eframe::App for VpnApp {
                     .inner_margin(Margin::symmetric(14, 5)),
             )
             .show(ctx, |ui| {
-                // 这条里的按钮（启动/停止代理·IP 检测·模式 chip·测速全部）要矮一档：
+                // 这条里的按钮（启动/停止代理·模式 chip·测速全部）要矮一档：
                 // 纵向内边距 7 → 3，文字仍是 normal 字号，读得清但不再撑高度。
                 ui.spacing_mut().button_padding = egui::vec2(11.0, 3.0);
                 ui.horizontal(|ui| {
@@ -4750,7 +4888,7 @@ mod tests {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("状态").small());
                         ui.label(RichText::new("正在拉取订阅").small());
-                        for text in ["启动代理", "停止代理", "IP 检测", "测速全部"] {
+                        for text in ["启动代理", "停止代理", "测速全部"] {
                             heights.push(ui.button(text).rect.height());
                         }
                         heights.push(
@@ -4993,7 +5131,7 @@ mod status_bar_room_tests {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    for text in ["停止代理", "IP 检测", "测速全部"] {
+                                    for text in ["停止代理", "测速全部"] {
                                         let rect = ui.button(text).rect;
                                         group_left = group_left.min(rect.left());
                                         group_right = group_right.max(rect.right());

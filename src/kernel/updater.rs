@@ -598,7 +598,7 @@ impl KernelUpdater {
                 Ok(result) => return Ok(result),
                 Err(error) => {
                     crate::startup_log(&format!(
-                        "[内核] {} 资产 {} 落地验证失败: {error}，若有备选变体则尝试下一个...",
+                        "[内核] {} 资产 {} 落地验证失败: {error:#}，若有备选变体则尝试下一个...",
                         kind.display_name(),
                         asset.name
                     ));
@@ -610,7 +610,7 @@ impl KernelUpdater {
                         bytes_per_second: 0.0,
                         message: format!("{} 运行失败，正在尝试兼容版内核...", asset.name),
                     });
-                    install_failures.push(format!("{candidate_name}: {error}"));
+                    install_failures.push(format!("{candidate_name}: {error:#}"));
                 }
             }
         }
@@ -742,11 +742,47 @@ impl KernelUpdater {
         } else {
             None
         };
-        if let Err(error) = tokio::fs::rename(&staging, &target).await {
+        // Windows 上刚被 `output()` 跑过的那颗 exe，Defender 实时防护常常还要占着它几秒，这时改名
+        // 直接拿 ACCESS_DENIED（`src/kernel/mod.rs` 里那句 15s 超时就是为它放宽的；改名要源文件的
+        // DELETE 权限，复制只要读权限 —— 本机用 FileShare.ReadWrite 占住源文件验过：改名 IOException、复制成功）。
+        let mut last_failure_detail = String::from("未知替换失败");
+        let mut replaced = false;
+        let mut used_copy = false;
+        // 两条路交替试：改名要源文件的 DELETE 权限（杀软占着就是 ACCESS_DENIED），
+        // 复制只要读权限 + 目录能建新文件。总预算约 2.8 秒退避，够 Defender 扫完那颗 22MB 的 exe。
+        for round in 0..4 {
+            match tokio::fs::rename(&staging, &target).await {
+                Ok(()) => {
+                    replaced = true;
+                    break;
+                }
+                Err(error) => last_failure_detail = rename_failure_detail(&error),
+            }
+            match tokio::fs::copy(&staging, &target).await {
+                Ok(_) => {
+                    replaced = true;
+                    used_copy = true;
+                    break;
+                }
+                Err(error) => last_failure_detail = copy_failure_detail(&error),
+            }
+            if round < 3 {
+                ensure_not_cancelled(cancelled)?;
+                tokio::time::sleep(Duration::from_millis(400 * (1 << round))).await;
+            }
+        }
+        if replaced && used_copy {
+            crate::startup_log(&format!(
+                "[内核] {} 改名被拒（{last_failure_detail}），改用复制落地",
+                kind.display_name()
+            ));
+            let _ = tokio::fs::remove_file(&staging).await;
+        }
+        if !replaced {
             if backup.is_file() {
                 let _ = tokio::fs::rename(&backup, &target).await;
             }
-            return Err(error).context("替换内核失败，已尝试回滚");
+            bail!("替换内核失败：{last_failure_detail}（改名与复制都试过，已尝试回滚）");
         }
         if let Err(error) = read_kernel_version(kind, &target).await {
             crate::startup_log(&format!(
@@ -1080,6 +1116,24 @@ fn staging_name(kind: KernelKind) -> String {
     }
 }
 
+/// 改名被拒时日志里必须带上系统错误码：2026-10-23 那台装在 `C:\Apps\VPN Parser` 的机器三次自动
+/// 下载全卡在改名这一步，而 startup.log 只剩最外层那句 context，os code 整条丢了。
+fn rename_failure_detail(error: &std::io::Error) -> String {
+    match error.raw_os_error()
+    {
+        Some(code) => format!("{error}（os code {code}）"),
+        None => error.to_string(),
+    }
+}
+
+/// 复制也被拒时的详情：同样必须带上系统错误码（理由见 `rename_failure_detail`）。
+fn copy_failure_detail(error: &std::io::Error) -> String {
+    match error.raw_os_error() {
+        Some(code) => format!("复制兜底也失败: {error}（os code {code}）"),
+        None => format!("复制兜底也失败: {error}"),
+    }
+}
+
 fn ensure_not_cancelled(cancelled: &AtomicBool) -> Result<()> {
     if cancelled.load(Ordering::Relaxed) {
         bail!("内核下载已取消");
@@ -1225,6 +1279,13 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    #[test]
+    fn rename_failure_detail_keeps_the_os_error_code() {
+        let text = rename_failure_detail(&std::io::Error::from_raw_os_error(5));
+        assert!(text.contains("os code 5"), "{text}");
+        let other = rename_failure_detail(&std::io::Error::other("别的"));
+        assert!(!other.contains("os code"), "{other}");
+    }
     #[test]
     fn matches_release_tag_in_version_output() {
         assert!(version_matches(

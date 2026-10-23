@@ -39,6 +39,9 @@ pub enum Icon {
     Brand,
     Sun,
     Moon,
+    /// 侧栏「展开 / 收起菜单」那颗：圆角外框 + 竖栏 + 箭头。
+    SidebarExpand,
+    SidebarCollapse,
 }
 
 pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -892,6 +895,42 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
                 Stroke::NONE,
             ));
         }
+        Icon::SidebarExpand | Icon::SidebarCollapse => {
+            // 外框是一整块面板，左边一条竖栏表示侧栏本身；箭头只表方向：
+            // 现在是收起态就画朝右的箭头（点下去展开），展开态画朝左的（点下去收回）。
+            let half_w = s * 0.36;
+            let half_h = s * 0.30;
+            let frame = Rect::from_min_max(
+                Pos2::new(center.x - half_w, center.y - half_h),
+                Pos2::new(center.x + half_w, center.y + half_h),
+            );
+            painter.rect_stroke(
+                frame,
+                CornerRadius::same(((s * 0.10).max(1.0)) as u8),
+                stroke,
+                StrokeKind::Inside,
+            );
+            let split_x = frame.min.x + frame.width() * 0.34;
+            painter.line_segment(
+                [
+                    Pos2::new(split_x, frame.min.y),
+                    Pos2::new(split_x, frame.max.y),
+                ],
+                fine_stroke,
+            );
+            let dir = if matches!(icon, Icon::SidebarCollapse) {
+                -1.0_f32
+            } else {
+                1.0_f32
+            };
+            let anchor = split_x + (frame.max.x - split_x) * 0.5;
+            // 一个干净的 V 形箭头：两条边收在同一个尖上，高度给到 0.26s，才不会在 21px 下糊成一团。
+            let arm = s * 0.13;
+            let tip = Pos2::new(anchor + dir * s * 0.10, center.y);
+            let back_x = anchor - dir * s * 0.05;
+            painter.line_segment([Pos2::new(back_x, center.y - arm), tip], bold_stroke);
+            painter.line_segment([Pos2::new(back_x, center.y + arm), tip], bold_stroke);
+        }
         Icon::Sun => {
             // Central sun disk + 8 crisp radiating rays
             let r = s * 0.18;
@@ -1237,10 +1276,15 @@ mod tests {
                 Icon::Gear,
                 Icon::Plug,
                 Icon::Info,
+                Icon::Trash,
+                Icon::Check,
+                Icon::Alert,
                 Icon::Appearance,
                 Icon::Brand,
                 Icon::Sun,
                 Icon::Moon,
+                Icon::SidebarExpand,
+                Icon::SidebarCollapse,
             ] {
                 let before = ctx.graphics_mut(|g| g.entry(layer).all_entries().len());
                 draw_icon(

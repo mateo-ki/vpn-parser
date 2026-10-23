@@ -62,6 +62,7 @@
 
         let saved = db
             .update_settings(UpdateSettings {
+                sidebar_expanded: None,
                 auto_fetch_enabled: None,
                 auto_fetch_interval_min: None,
                 auto_speedtest_enabled: None,
@@ -536,6 +537,91 @@
         let _ = std::fs::remove_file(format!("{}-shm", path.display()));
     }
 
+    #[tokio::test]
+    async fn available_panel_collapses_the_same_node_from_two_sources() {
+        const SAME_UUID: &str = "11111111-1111-1111-1111-111111111111";
+        const OTHER_UUID: &str = "22222222-2222-2222-2222-222222222222";
+        const THIRD_UUID: &str = "33333333-3333-3333-3333-333333333333";
+        let path = std::env::temp_dir().join(format!("vpn-parser-dedup-{}.db", Uuid::new_v4()));
+        let db = Database::connect(path.to_str().unwrap()).await.unwrap();
+        let now = Utc::now().to_rfc3339();
+        for id in ["dedup-a", "dedup-b"] {
+            sqlx::query(
+                r#"INSERT INTO sources
+                   (id, name, url_template, enabled, created_at, updated_at)
+                   VALUES (?, ?, ?, 1, ?, ?)"#,
+            )
+            .bind(id)
+            .bind(format!("去重源 {id}"))
+            .bind(format!("https://example.com/{id}"))
+            .bind(&now)
+            .bind(&now)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+
+        // 同一颗节点被两份订阅同时供着（名字不同、uuid 相同），另有一颗同端点但不同 uuid 的真节点。
+        for (id, source_id, name, uuid, latency) in [
+            ("clone-a", "dedup-a", "HK-01", SAME_UUID, 120_i64),
+            ("clone-b", "dedup-b", "HK second", SAME_UUID, 120_i64),
+            ("other-b", "dedup-b", "HK-02", OTHER_UUID, 90_i64),
+        ] {
+            sqlx::query(
+                r#"INSERT INTO nodes
+                   (id, source_id, protocol, name, server, port, raw, config,
+                    latency_ms, latency_ok, latency_test_kind, created_at, updated_at)
+                   VALUES (?, ?, 'vless', ?, 'dedup.example.com', 443, ?, ?, ?, 1, 'google_proxy', ?, ?)"#,
+            )
+            .bind(id)
+            .bind(source_id)
+            .bind(name)
+            .bind(format!("vless://{uuid}@dedup.example.com:443#{name}"))
+            .bind(format!("{{\"uuid\":\"{uuid}\"}}"))
+            .bind(latency)
+            .bind(&now)
+            .bind(&now)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+        db.migrate().await.unwrap();
+
+        let ids: Vec<String> = db
+            .list_available_nodes_for_source("all")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|node| node.id)
+            .collect();
+        assert_eq!(ids.len(), 2, "跨源克隆收敛成一行: {ids:?}");
+        assert!(ids.contains(&"other-b".to_string()), "不同凭据的同端点节点不该被当成重复: {ids:?}");
+        assert_ne!(
+            ids.contains(&"clone-a".to_string()),
+            ids.contains(&"clone-b".to_string()),
+            "克隆行只该留一颗: {ids:?}"
+        );
+
+        // 反向对照：把另一颗的 uuid 改成第三个值，三行都该回来。
+        let pool_b = db.open_node_pool(Some("dedup-b")).await.unwrap();
+        sqlx::query("UPDATE node_payloads SET config = ? WHERE node_id = ?")
+            .bind(format!("{{\"uuid\":\"{THIRD_UUID}\"}}"))
+            .bind("clone-b")
+            .execute(&pool_b)
+            .await
+            .unwrap();
+        let after: Vec<String> = db
+            .list_available_nodes_for_source("all")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|node| node.id)
+            .collect();
+        assert_eq!(after.len(), 3, "凭据一改就不是同一颗节点: {after:?}");
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+    }
     #[tokio::test]
     async fn country_filtering_in_list_nodes() {
         let path = std::env::temp_dir().join(format!("vpn-parser-country-{}.db", Uuid::new_v4()));
@@ -1162,6 +1248,42 @@
     /// 夜间模式**默认开**（用户 2026-10-15 指定）：新库第一帧就是深色，老库补上这一列之后
     /// 存量行也跟着变夜间 —— 那是他要的效果。反过来也得成立：关掉之后必须把住别的设置保存
     /// 和重开，否则就是经典的"我明明关了它又黑回去"。
+    /// 菜单栏展开态：新库默认收起（和老那根 64 宽的图标条一模一样），打开之后重开还在。
+    #[tokio::test]
+    async fn sidebar_expanded_defaults_off_and_survives_reopen() {
+        let path = std::env::temp_dir().join(format!("vpn-parser-sidebar-{}.db", Uuid::new_v4()));
+        let db = Database::connect(path.to_str().unwrap()).await.unwrap();
+        assert!(
+            !db.get_settings().await.unwrap().sidebar_expanded,
+            "默认必须是收起"
+        );
+        db.update_settings(UpdateSettings {
+            sidebar_expanded: Some(true),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert!(db.get_settings().await.unwrap().sidebar_expanded);
+        drop(db);
+
+        let reopened = Database::connect(path.to_str().unwrap()).await.unwrap();
+        assert!(
+            reopened.get_settings().await.unwrap().sidebar_expanded,
+            "重开之后还得是展开态"
+        );
+        // 别的设置保存一次不许把它顶回默认。
+        reopened
+            .update_settings(UpdateSettings {
+                fetch_concurrency: Some(4),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(reopened.get_settings().await.unwrap().sidebar_expanded);
+        drop(reopened);
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[tokio::test]
     async fn night_mode_defaults_on_and_stays_off_when_turned_off() {
         let path = std::env::temp_dir().join(format!("vpn-parser-night-{}.db", Uuid::new_v4()));

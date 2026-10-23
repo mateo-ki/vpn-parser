@@ -43,13 +43,62 @@ impl VpnApp {
             .map(|s| format!("订阅源 ({} 个)", s.source_count))
             .unwrap_or_else(|| self.tr("订阅源").to_string());
 
-        // 仅保留语义图标，无多余文字和数字角标；鼠标悬停展示完整提示
-        nav_item_icon_only(ui, target_tab, Tab::Proxy, Icon::Dashboard, self.tr("控制台"), proxy_dot);
-        nav_item_icon_only(ui, target_tab, Tab::Nodes, Icon::Lightning, &nodes_tip, None);
-        nav_item_icon_only(ui, target_tab, Tab::Sources, Icon::Subscription, &sources_tip, None);
-        nav_item_icon_only(ui, target_tab, Tab::Extensions, Icon::Package, self.tr("扩展功能"), None);
-        nav_item_icon_only(ui, target_tab, Tab::Settings, Icon::Gear, self.tr("系统设置"), None);
-        nav_item_icon_only(ui, target_tab, Tab::About, Icon::Info, self.tr("关于"), None);
+        // 收起态只保留语义图标（悬停给完整提示）；展开态在图标右边补一项短名。
+        let expanded = self.settings.sidebar_expanded;
+        nav_item_icon_only(
+            ui,
+            target_tab,
+            Tab::Proxy,
+            Icon::Dashboard,
+            self.tr("控制台"),
+            proxy_dot,
+            if expanded { Some("控制台") } else { None },
+        );
+        nav_item_icon_only(
+            ui,
+            target_tab,
+            Tab::Nodes,
+            Icon::Lightning,
+            &nodes_tip,
+            None,
+            if expanded { Some("节点池") } else { None },
+        );
+        nav_item_icon_only(
+            ui,
+            target_tab,
+            Tab::Sources,
+            Icon::Subscription,
+            &sources_tip,
+            None,
+            if expanded { Some("订阅源") } else { None },
+        );
+        nav_item_icon_only(
+            ui,
+            target_tab,
+            Tab::Extensions,
+            Icon::Package,
+            self.tr("扩展功能"),
+            None,
+            if expanded { Some("扩展功能") } else { None },
+        );
+        nav_item_icon_only(
+            ui,
+            target_tab,
+            Tab::Settings,
+            Icon::Gear,
+            self.tr("系统设置"),
+            None,
+            if expanded { Some("系统设置") } else { None },
+        );
+        nav_item_icon_only(
+            ui,
+            target_tab,
+            Tab::About,
+            Icon::Info,
+            self.tr("关于"),
+            None,
+            if expanded { Some("关于") } else { None },
+        );
 
         // 菜单栏最底部：日间 / 夜间主题切换与版本更新提醒
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
@@ -139,6 +188,41 @@ impl VpnApp {
                 if resp.clicked() {
                     *target_tab = Tab::About;
                 }
+            }
+
+            // 更新徽章再往上一格：菜单栏展开/收起开关。状态写进 settings.sidebar_expanded，
+            // 下次启动还是他上回选的样子（和日间/夜间那颗一样走 save_settings）。
+            ui.add_space(6.0);
+            let (fold_icon, fold_tip) = if self.settings.sidebar_expanded {
+                (Icon::SidebarCollapse, self.tr("收起菜单（只留图标）"))
+            } else {
+                (Icon::SidebarExpand, self.tr("展开菜单（图标 + 文字）"))
+            };
+            let fold_size = egui::vec2(ui.available_width(), 38.0);
+            let (fold_rect, fold_resp) = ui.allocate_exact_size(fold_size, Sense::click());
+            let fold_resp = fold_resp.on_hover_text(fold_tip);
+            let fold_painter = ui.painter_at(fold_rect);
+            if fold_resp.hovered() {
+                fold_painter.rect_filled(
+                    fold_rect,
+                    CornerRadius::same(theme::RADIUS_NAV),
+                    theme::panel().gamma_multiply(0.7),
+                );
+            }
+            let fold_color = if self.settings.sidebar_expanded {
+                theme::accent()
+            } else if fold_resp.hovered() {
+                theme::icon_primary()
+            } else {
+                theme::icon_secondary()
+            };
+            let fold_icon_rect =
+                egui::Rect::from_center_size(fold_rect.center(), egui::Vec2::splat(21.0));
+            crate::gui::icons::draw_icon(&fold_painter, fold_icon_rect, fold_icon, fold_color);
+            if fold_resp.clicked() {
+                self.settings.sidebar_expanded = !self.settings.sidebar_expanded;
+                self.edit_sidebar_expanded = self.settings.sidebar_expanded;
+                self.save_settings();
             }
 
             ui.add_space(6.0);
@@ -314,6 +398,144 @@ mod update_marker_probe_tests {
                 });
         });
         (right, painted)
+    }
+
+    /// 导航项在两种宽度/两种状态下真画一遍。返回行矩形与文字墨迹都用**相对行左界**的量，
+    /// 因为离屏 Context 里面板内容原点未必是 (0,0) —— 绝对坐标会把布局判成跑偏。
+    #[derive(Debug)]
+    struct NavProbe {
+        row_left: f32,
+        row_right: f32,
+        text_left: f32,
+        text_right: f32,
+        painted: String,
+    }
+
+    fn nav_probe(width: f32, label: Option<&str>) -> NavProbe {
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(Rect::from_min_size(
+            egui::Pos2::ZERO,
+            Vec2::new(1330.0, 800.0),
+        ));
+        let mut probe = NavProbe {
+            row_left: 0.0,
+            row_right: 0.0,
+            text_left: f32::MAX,
+            text_right: 0.0,
+            painted: String::new(),
+        };
+        let _ = ctx.run(input, |ctx| {
+            egui::SidePanel::left("sidebar_nav_probe")
+                .exact_width(width)
+                .frame(
+                    Frame::NONE
+                        .fill(egui::Color32::WHITE)
+                        .inner_margin(Margin::symmetric(8, 10)),
+                )
+                .show(ctx, |ui| {
+                    let layer = ui.layer_id();
+                    let mut tab = crate::gui::types::Tab::Proxy;
+                    crate::gui::widgets::nav_item_icon_only(
+                        ui,
+                        &mut tab,
+                        crate::gui::types::Tab::Proxy,
+                        crate::gui::icons::Icon::Dashboard,
+                        "控制台",
+                        None,
+                        label,
+                    );
+                    let row = ui.min_rect();
+                    probe.row_left = row.min.x;
+                    probe.row_right = row.max.x;
+                    let (left, right, text) = ctx.graphics(|g| {
+                        let mut left = f32::MAX;
+                        let mut right = 0.0_f32;
+                        let mut text = String::new();
+                        if let Some(list) = g.get(layer) {
+                            for shape in list.all_entries() {
+                                if let egui::Shape::Text(t) = &shape.shape {
+                                    // TextShape 的 galley.rect 不带 pos 偏移（画的时候才平移），
+                                    // 量墨迹位置只能用 pos + galley 尺寸。
+                                    left = left.min(t.pos.x);
+                                    right = right.max(t.pos.x + t.galley.size().x);
+                                    text.push_str(&t.galley.text());
+                                    text.push(' ');
+                                }
+                            }
+                        }
+                        (left, right, text)
+                    });
+                    probe.text_left = left;
+                    probe.text_right = right;
+                    probe.painted = text;
+                });
+        });
+        probe
+    }
+
+    /// 展开 = 图标右边真的多出一段文字，而且文字落在图标留出的位置之后、不越过行右界；
+    /// 收起 = 一个字都不许多。
+    #[test]
+    fn the_nav_row_shows_labels_only_when_expanded() {
+        let open = nav_probe(crate::gui::SIDEBAR_EXPANDED_WIDTH, Some("控制台"));
+        assert!(
+            open.painted.contains("控制台"),
+            "展开态没画出短名：{open:?}"
+        );
+        let row_w = open.row_right - open.row_left;
+        assert!(
+            open.text_left - open.row_left >= 30.0,
+            "文字贴在行左界，没让开图标：{open:?}"
+        );
+        assert!(
+            open.text_right <= open.row_left + row_w - 10.0,
+            "文字越过行右界：{open:?}"
+        );
+
+        let wide = nav_probe(crate::gui::SIDEBAR_EXPANDED_WIDTH, None);
+        assert!(
+            !wide.painted.contains("控制台"),
+            "收起态不该有文字：{wide:?}"
+        );
+        let narrow = nav_probe(64.0, None);
+        assert!(
+            !narrow.painted.contains("控制台"),
+            "64 宽收起态不该有文字：{narrow:?}"
+        );
+    }
+
+    /// 真名最长的"扩展功能"（四个字）必须整个画得下 —— 展开宽度是按它算的，
+    /// 哪天把宽度调窄了这条会红，而不是悄悄把名字截成"扩展功…"。
+    #[test]
+    fn the_longest_real_label_still_fits_the_expanded_width() {
+        let probe = nav_probe(crate::gui::SIDEBAR_EXPANDED_WIDTH, Some("扩展功能"));
+        assert!(
+            probe.painted.contains("扩展功能"),
+            "展开宽度下「扩展功能」没整个画出来：{probe:?}"
+        );
+        let row_w = probe.row_right - probe.row_left;
+        assert!(
+            probe.text_right <= probe.row_left + row_w - 10.0,
+            "「扩展功能」越出行右界：{probe:?}"
+        );
+    }
+
+    /// 名字再长也必须在行内截断 —— 这类"东西被挤出界面"他报过好几轮。
+    #[test]
+    fn a_long_nav_label_is_cut_off_inside_the_row() {
+        let width = crate::gui::SIDEBAR_EXPANDED_WIDTH;
+        let long = nav_probe(width, Some("扩展功能 / 分流规则 / 端口映射"));
+        assert!(!long.painted.is_empty(), "长名字一个像素都没画出来：{long:?}");
+        let row_w = long.row_right - long.row_left;
+        assert!(
+            long.text_right <= long.row_left + row_w - 10.0,
+            "长名字越过行右界：{long:?}"
+        );
+        assert!(
+            long.text_left - long.row_left >= 30.0,
+            "长名字压到了图标上：{long:?}"
+        );
     }
 
     /// 这行标记必须真的画出来（箭头 + "vX.Y.Z 可更新"），并且不撑破 220 宽的侧栏。

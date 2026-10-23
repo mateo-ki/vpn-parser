@@ -11,6 +11,90 @@ use crate::gui::VpnApp;
 use crate::proxy::{AutoRoutingStrategy, ProxyMode, ProxyState};
 use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, Vec2};
 
+/// 徽章的输入：这一轮有没有查到结果、查失败过、还是正在查。
+#[derive(Debug, Default)]
+pub(crate) struct EgressRiskView<'a> {
+    pub(crate) risk: Option<&'a crate::ip_risk::IpRisk>,
+    pub(crate) failed: bool,
+    pub(crate) checking: bool,
+}
+
+/// 徽章该显示哪一份结果。规则：出口结果优先，但**只有它真的存在**才算它 ——
+/// 出口查询失败时 `egress_owner` 也会被写成这颗节点（错误也要归位），以前这里就
+/// 直接返回 None 并短路，把已经查到的服务器归属挡在后面，徽章永远显示未检测。
+pub(crate) fn display_risk<'a>(
+    node_id: Option<&str>,
+    egress_owner: Option<&str>,
+    egress: Option<&'a crate::ip_risk::IpRisk>,
+    front_owner: Option<&str>,
+    front: Option<&'a crate::ip_risk::IpRisk>,
+) -> Option<&'a crate::ip_risk::IpRisk> {
+    let Some(id) = node_id else {
+        return None;
+    };
+    let egress = if egress_owner == Some(id) { egress } else { None };
+    let front = if front_owner == Some(id) { front } else { None };
+    egress.or(front)
+}
+
+/// 那份「服务器归属」结果是不是属于这颗节点：自动跟随记在 `auto_for`，手动点的那次记在 `target`。
+pub(crate) fn front_risk_belongs_to(
+    node_id: &str,
+    auto_for: Option<&str>,
+    target: Option<&str>,
+) -> bool {
+    auto_for == Some(node_id) || target == Some(node_id)
+}
+
+/// 节点出口 IP 的归属，画在汇总卡片第一张的那颗徽章上。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NodeIpKind {
+    PublicProxy,
+    Datacenter,
+    Residential,
+    Checking,
+    Failed,
+    Unknown,
+}
+
+impl NodeIpKind {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            // 用户要的是一句话答案：屏幕上只有住宅/机房两档，公开代理算"不是住宅"⇒ 机房，
+            // 真判据留在 hover 那行里（node_ip_kind 仍分得出 PublicProxy）。
+            NodeIpKind::PublicProxy => "机房",
+            NodeIpKind::Datacenter => "机房",
+            NodeIpKind::Residential => "住宅",
+            NodeIpKind::Checking => "检测中",
+            NodeIpKind::Failed => "查失败",
+            NodeIpKind::Unknown => "未检测",
+        }
+    }
+}
+
+/// 判定顺序是有意的：公开代理（VPN Gate 这类）比“机房”更该警告，两个标记同时为真时
+/// 先报公开代理；已经查到结果就不因为“正在查别的”而退回检测中。
+pub(crate) fn node_ip_kind(view: &EgressRiskView) -> NodeIpKind {
+    match view.risk {
+        Some(risk) if risk.public_proxy => NodeIpKind::PublicProxy,
+        Some(risk) if risk.datacenter => NodeIpKind::Datacenter,
+        Some(_) => NodeIpKind::Residential,
+        None if view.failed => NodeIpKind::Failed,
+        None if view.checking => NodeIpKind::Checking,
+        None => NodeIpKind::Unknown,
+    }
+}
+
+fn node_ip_kind_color(kind: NodeIpKind) -> Color32 {
+    match kind {
+        NodeIpKind::PublicProxy | NodeIpKind::Datacenter => theme::warning(),
+        NodeIpKind::Residential => Color32::from_rgb(52, 199, 89),
+        NodeIpKind::Checking => theme::text_secondary(),
+        NodeIpKind::Failed => theme::danger(),
+        NodeIpKind::Unknown => theme::muted(),
+    }
+}
+
 impl VpnApp {
     pub(crate) fn ui_proxy_charts(&mut self, ui: &mut Ui) {
         let selected_node = self
@@ -170,6 +254,33 @@ impl VpnApp {
                                             );
                                             ui.add_space(2.0);
                                             render_signal_bars(ui, node.latency_ms);
+                                            if ui.available_width() > 170.0 {
+                                                let view = self.egress_risk_view();
+                                                let kind = node_ip_kind(&view);
+                                                let color = node_ip_kind_color(kind);
+                                                ui.separator();
+                                                icon_label(ui, Icon::Shield, 11.0, color);
+                                                ui.label(
+                                                    RichText::new(self.tr(kind.label()))
+                                                        .small()
+                                                        .strong()
+                                                        .color(color),
+                                                )
+                                                .on_hover_text(match (view.risk, kind) {
+                                                    (Some(risk), NodeIpKind::PublicProxy) => format!(
+                                                        "{}\n这颗 IP 被公开代理/VPN 出口库标记（不是住宅拨号），比普通机房更容易被站点风控",
+                                                        risk.headline()
+                                                    ),
+                                                    (Some(risk), _) => risk.headline(),
+                                                    (None, _) if view.failed => format!(
+                                                        "查这颗节点的归属失败了：{}",
+                                                        self.ip_risk_error
+                                                            .as_deref()
+                                                            .unwrap_or("不知道原因"),
+                                                    ),
+                                                    (None, _) => "还没查到这颗节点的 IP 归属：代理跑起来后会自动查一次，也可以从节点卡片右键立刻查".to_string(),
+                                                });
+                                            }
                                             ui.separator();
                                             let conns = self.active_connections.len();
                                             ui.label(

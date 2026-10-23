@@ -23,14 +23,22 @@ pub struct IpRisk {
 }
 
 impl IpRisk {
+    /// 三档短词：公开代理（VPN 出口池）> 机房 > 住宅。徽章上只露两档（代理算"不是住宅"，
+    /// 并进机房），真判据留在 hover 和弹框里说清楚。
+    pub fn kind_word(&self) -> &'static str {
+        if self.public_proxy {
+            "公开代理"
+        } else if self.datacenter {
+            "机房"
+        } else {
+            "住宅"
+        }
+    }
+
     /// `ip · 国家 · ASN/运营商 · 类型`，把归属原样带出来：关键字判定会漏，
     /// 用户能自己看出 "AS401615 ACCK LLC" 这种其实是 VPS 商家。
     pub fn headline(&self) -> String {
-        let kind = if self.datacenter {
-            "机房/云"
-        } else {
-            "住宅/ISP?"
-        };
+        let kind = self.kind_word();
         [
             if self.hostname == self.ip {
                 self.ip.clone()
@@ -353,6 +361,26 @@ mod tests {
             "{}",
             risk.headline()
         );
+    }
+
+    /// 三档短词是徽章与 hover 共同的判据来源：公开代理 > 机房 > 住宅。
+    #[test]
+    fn the_three_way_kind_word_prefers_the_strictest_flag() {
+        let mut risk = parse(
+            "1.2.3.4",
+            "1.2.3.4",
+            r#"{"country":"JP","org":"AS212259 Astrix Co., Ltd."}"#,
+            None,
+        )
+        .unwrap();
+        risk.datacenter = false;
+        risk.public_proxy = false;
+        assert_eq!(risk.kind_word(), "住宅");
+        risk.datacenter = true;
+        assert_eq!(risk.kind_word(), "机房");
+        risk.public_proxy = true;
+        assert_eq!(risk.kind_word(), "公开代理");
+        assert!(risk.headline().ends_with("公开代理"), "{}", risk.headline());
     }
 
     /// 关键字表补不完（实测订阅里 132/358 被漏判成住宅），所以 ip-api 那一路

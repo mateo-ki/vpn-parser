@@ -66,6 +66,8 @@ pub fn nav_item_icon_only(
     icon: Icon,
     tooltip: &str,
     dot_color: Option<Color32>,
+    // 展开态传 `Some(短名)`：图标靠左、文字靠右；收起态传 `None` = 只有居中的图标。
+    label: Option<&str>,
 ) {
     let selected = *current == tab;
     let (fill, stroke, icon_color) = if selected {
@@ -116,15 +118,35 @@ pub fn nav_item_icon_only(
         painter.rect_filled(bar, CornerRadius::same(2), theme::accent());
     }
 
-    // 居中绘制矢量图标 (加大至 22px，更加饱满清晰)
+    // 居中绘制矢量图标 (加大至 22px，更加饱满清晰)；展开态改画在左侧，右边留给文字
     let icon_size = 22.0;
-    let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(icon_size));
+    let icon_rect = match label {
+        Some(_) => egui::Rect::from_center_size(
+            egui::Pos2::new(rect.min.x + 22.0, rect.center().y),
+            Vec2::splat(icon_size),
+        ),
+        None => egui::Rect::from_center_size(rect.center(), Vec2::splat(icon_size)),
+    };
     let active_icon_color = if is_hovered && !selected {
         theme::icon_primary()
     } else {
         icon_color
     };
     crate::gui::icons::draw_icon(&painter, icon_rect, icon, active_icon_color);
+
+    if let Some(text) = label {
+        let font = egui::TextStyle::Small.resolve(ui.style());
+        let left = rect.min.x + 44.0;
+        let room = (rect.max.x - 10.0 - left).max(24.0);
+        let shown = crate::gui::widgets::ellipsize(ui, text, room, font.clone());
+        painter.text(
+            egui::Pos2::new(left, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            &shown,
+            font,
+            theme::sidebar_text(),
+        );
+    }
 
     // 右上角状态微标发光圆点 (如代理运行状态)
     if let Some(color) = dot_color {

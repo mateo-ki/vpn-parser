@@ -197,6 +197,13 @@ impl Database {
         // 所以老库补这一列时存量行也会一起变成夜间 —— 这是他要的效果，不是漏掉的条件。
         self.ensure_column("settings", "ui_dark", "INTEGER NOT NULL DEFAULT 1")
             .await?;
+        // 菜单栏展开态（默认收起 = 和老版本的图标条一模一样）。
+        self.ensure_column(
+            "settings",
+            "sidebar_expanded",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
         self.ensure_column(
             "settings",
             "kernel_source",

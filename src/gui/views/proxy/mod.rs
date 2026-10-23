@@ -275,15 +275,6 @@ impl VpnApp {
             {
                 self.stop_proxy();
             }
-            if ui
-                .add_enabled(!self.ip_risk_busy, status_btn(self.tr("IP 检测")))
-                .on_hover_text(
-                    "查这个节点服务器 IP 的归属（机房/住宅）；当前在跑的节点还会经代理查一次真实出口",
-                )
-                .clicked()
-            {
-                self.check_ip_risk();
-            }
         } else {
             let has_executable_node = self.selected_proxy_node_id.is_some()
                 || self.focused_node_id.is_some()
@@ -293,6 +284,16 @@ impl VpnApp {
             let start = ui.add_enabled(can_start, primary_btn(self.tr("启动代理")));
             let start = if !has_executable_node {
                 start.on_hover_text("节点列表为空，请先在订阅源拉取节点")
+            } else if self.proxy_busy {
+                start.on_hover_text(format!(
+                    "上一个代理操作还没回信，按钮先灰着：{}",
+                    self.status
+                ))
+            } else if transitioning {
+                start.on_hover_text(format!(
+                    "状态还停在「{}」，等它跑完或者失败才能按",
+                    self.proxy_status.message
+                ))
             } else if self.selected_proxy_node_id.is_none() && self.focused_node_id.is_none() && self.proxy_config.url_test {
                 start.on_hover_text("点击以当前策略组自动选优启动")
             } else {
@@ -300,13 +301,6 @@ impl VpnApp {
             };
             if start.clicked() {
                 self.start_proxy();
-            }
-            if ui
-                .add_enabled(!self.ip_risk_busy, status_btn(self.tr("IP 检测")))
-                .on_hover_text("查该节点服务器 IP 是机房还是住宅出口")
-                .clicked()
-            {
-                self.check_ip_risk();
             }
         }
 
