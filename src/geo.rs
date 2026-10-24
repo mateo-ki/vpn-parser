@@ -138,7 +138,9 @@ pub async fn ensure_meow_home_geo(home: &Path, proxy_url: Option<&str>) -> Resul
         }
     }
 
-    // 3. Country.mmdb
+    // 3. Country.mmdb —— 25 秒硬上限：meow 启动时若发现缺库会自己拉取并阻塞
+    // 监听端口，而它默认走节点（节点劣化 = 无限卡死"正在启动"）。这里限时
+    // 抢先备好；失败也放行（meow 会用配置里的镜像 URL 自愈，失败则快速报错）。
     let mmdb = home.join("Country.mmdb");
     let mmdb_ok = std::fs::metadata(&mmdb)
         .map(|m| m.len() >= MIN_MMDB_BYTES)
@@ -150,32 +152,35 @@ pub async fn ensure_meow_home_geo(home: &Path, proxy_url: Option<&str>) -> Resul
             "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/",
             "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/",
         ];
-        let mut builder = Client::builder()
-            .user_agent("vpn-parser geo-updater")
-            .connect_timeout(Duration::from_secs(6))
-            .timeout(Duration::from_secs(180));
-        if let Some(proxy_url) = proxy_url {
-            builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
-        }
-        let client = builder.build()?;
-        let mut failures = Vec::new();
-        let mut done = false;
-        for upstream in MMDB_UPSTREAMS {
-            let url = format!("{upstream}Country.mmdb");
-            match download_into(&client, &url, &mmdb, "Country.mmdb").await {
-                Ok(bytes) => {
-                    report.push(format!("Country.mmdb 就绪 {}", human_mb(bytes)));
-                    done = true;
-                    break;
-                }
-                Err(error) => failures.push(format!("{}: {error}", host_of(&url))),
+        let mmdb_task = async {
+            let mut builder = Client::builder()
+                .user_agent("vpn-parser geo-updater")
+                .connect_timeout(Duration::from_secs(6))
+                .timeout(Duration::from_secs(20));
+            if let Some(proxy_url) = proxy_url {
+                builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
             }
-        }
-        if !done {
-            return Err(anyhow!(
-                "Meow 的 Country.mmdb 各源都失败（{}），GEOIP 规则将不匹配",
-                failures.join("；")
-            ));
+            let client = builder.build()?;
+            let mut failures = Vec::new();
+            for upstream in MMDB_UPSTREAMS {
+                let url = format!("{upstream}Country.mmdb");
+                match download_into(&client, &url, &mmdb, "Country.mmdb").await {
+                    Ok(bytes) => return Ok(bytes),
+                    Err(error) => failures.push(format!("{}: {error}", host_of(&url))),
+                }
+            }
+            Err(anyhow!("{}", failures.join("；")))
+        };
+        match tokio::time::timeout(Duration::from_secs(25), mmdb_task).await {
+            Ok(Ok(bytes)) => {
+                report.push(format!("Country.mmdb 就绪 {}", human_mb(bytes)));
+            }
+            Ok(Err(error)) => {
+                return Err(anyhow!("Meow 的 Country.mmdb 下载失败：{error}"));
+            }
+            Err(_) => {
+                return Err(anyhow!("Meow 的 Country.mmdb 下载超时（25s）"));
+            }
         }
     } else {
         report.push("Country.mmdb 已就绪".into());

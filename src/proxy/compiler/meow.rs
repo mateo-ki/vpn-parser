@@ -61,6 +61,19 @@ impl BackendCompiler for MeowCompiler {
             ] {
                 obj.remove(key);
             }
+            // meow 的 GEOIP 用 MaxMind mmdb、GEOSITE 用 mrs/dat：缺库时它会按需下载，
+            // 默认经"最后一个 MATCH 目标"（= 节点）走 —— 节点劣化时无限卡死"正在启动"。
+            // 这里钉死镜像 URL（实测 url 覆盖生效），让自愈下载不依赖节点可用性。
+            obj.insert(
+                "geodata".into(),
+                serde_json::json!({
+                    "auto-update": false,
+                    "url": {
+                        "mmdb": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb",
+                        "geosite": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.mrs"
+                    }
+                }),
+            );
         }
         Ok(CompiledArtifact::Json(config))
     }
