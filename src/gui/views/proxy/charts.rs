@@ -1,19 +1,19 @@
 use super::groups::visible_group_names;
-use crate::gui::icons::{icon_label, Icon};
+use crate::gui::icons::{draw_icon, Icon};
 use crate::gui::theme;
-use crate::gui::widgets::{
-    format_bytes, format_speed, routing_mode_description, routing_mode_detail,
-};
+use crate::gui::widgets::{compact_node_card, country_code_and_color, format_bytes, format_speed};
 use crate::gui::VpnApp;
 use crate::proxy::{ProxyMode, ProxyState, RoutingMode};
 use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use std::collections::VecDeque;
 
 // ---------------------------------------------------------------------------
-// 仪表盘（汇总图表）v4 Apple 雅致风格：
+// 仪表盘（原汇总图表）Apple 雅致风格：
 // 对齐 design/dashboard-v4-apple.html 规范：
 // 1. 卡片统一 14px 圆角、微投影、细描边、墨黑大字、Apple 蓝与状态红黄绿语义色；
-// 2. 具备响应式断点（宽屏 >= 1060px、中屏 750-1060px、小屏 < 750px）自适应收缩复原。
+// 2. 移除旧版阶梯频谱图与环形图，专注现代仪表盘大屏；
+// 3. 页面底部完整集成：终端代理、端口代理、局域网代理、系统代理、TUN 模式；
+// 4. 具备多档响应式自适应断点（宽屏 >= 1060px、中屏 750-1060px、小屏 < 750px）自适应收缩复原。
 // ---------------------------------------------------------------------------
 
 // 常用 Apple 配色代币（支持浅深主题适配）
@@ -64,7 +64,54 @@ fn apple_red_dot() -> Color32 {
     Color32::from_rgb(255, 59, 48) // #FF3B30
 }
 
+/// 延迟着色：优 / 良 / 差（与状态卡质量分档一致）。
+fn ok_fg_green() -> Color32 {
+    if theme::is_light() {
+        Color32::from_rgb(27, 122, 58)
+    } else {
+        theme::success()
+    }
+}
+
+fn ok_fg_amber() -> Color32 {
+    if theme::is_light() {
+        Color32::from_rgb(180, 83, 9)
+    } else {
+        theme::warning()
+    }
+}
+
+fn ok_fg_red() -> Color32 {
+    if theme::is_light() {
+        Color32::from_rgb(201, 42, 42)
+    } else {
+        theme::danger()
+    }
+}
+
 /// 卡片外框：Apple 设计稿 v4 —— 圆角 14px 白卡 + 细边框 + 微阴影。
+/// 在指定矩形上画一张卡（外框尺寸完全由 rect 决定，内容溢出也不影响外框）。
+fn dash_card_at(ui: &mut Ui, rect: Rect) {
+    let f = dash_card();
+    let painter = ui.painter().clone();
+    // epaint 指令手工展开：填充 + 描边 + 阴影 + 圆角
+    let cr = CornerRadius::same(14);
+    let shadow_color = if theme::is_light() {
+        Color32::from_rgba_unmultiplied(20, 30, 60, 13)
+    } else {
+        Color32::from_rgba_unmultiplied(0, 0, 0, 80)
+    };
+    let _ = shadow_color;
+    painter.rect_filled(rect, cr, theme::panel());
+    painter.rect_stroke(
+        rect,
+        cr,
+        Stroke::new(1.0_f32, apple_stroke()),
+        egui::StrokeKind::Inside,
+    );
+    // 占位但不双重推进：内容若自行 allocate，cursor 已被推进过，这里不再重复占位。
+}
+
 fn dash_card() -> Frame {
     let shadow_color = if theme::is_light() {
         Color32::from_rgba_unmultiplied(20, 30, 60, 13) // rgba(20,30,60,.05)
@@ -95,7 +142,9 @@ fn dash_label(ui: &mut Ui, title: &str, peak: Option<String>) {
         );
         if let Some(peak) = peak {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(peak).small().color(theme::muted()));
+                ui.add(
+                    egui::Label::new(RichText::new(peak).small().color(theme::muted())).truncate(),
+                );
             });
         }
     });
@@ -108,8 +157,8 @@ fn dash_dot(ui: &mut Ui, color: Color32) {
 }
 
 /// Apple 胶囊药丸徽标。
-fn dash_pill(ui: &mut Ui, text: &str, bg_color: Color32, text_color: Color32) {
-    Frame::NONE
+fn dash_pill(ui: &mut Ui, text: &str, bg_color: Color32, text_color: Color32) -> egui::Response {
+    let inner = Frame::NONE
         .fill(bg_color)
         .stroke(Stroke::new(1.0_f32, apple_stroke2()))
         .corner_radius(CornerRadius::same(99))
@@ -117,6 +166,37 @@ fn dash_pill(ui: &mut Ui, text: &str, bg_color: Color32, text_color: Color32) {
         .show(ui, |ui| {
             ui.label(RichText::new(text).size(11.0).strong().color(text_color));
         });
+    // 胶囊整体可点击：交互 id 以左上角位置为种子——
+    // 位置天然唯一且跨帧稳定，不会产生 egui"first/second use of widget id"重复告警
+    let rect = inner.response.rect;
+    let id = egui::Id::new(("dash_pill", rect.left() as i32, rect.top() as i32));
+    ui.interact(rect, id, Sense::click())
+}
+
+/// 文本按最大宽度截断成单行（超出加省略号），绝不折行
+fn svc_truncate(painter: &egui::Painter, text: &str, font: egui::FontId, max_w: f32) -> String {
+    if painter
+        .layout_no_wrap(text.to_string(), font.clone(), Color32::WHITE)
+        .rect
+        .width()
+        <= max_w
+    {
+        return text.to_string();
+    }
+    let mut s: String = text.to_string();
+    while s.chars().count() > 1 {
+        s.pop();
+        let candidate = format!("{s}…");
+        if painter
+            .layout_no_wrap(candidate.clone(), font.clone(), Color32::WHITE)
+            .rect
+            .width()
+            <= max_w
+        {
+            return candidate;
+        }
+    }
+    s
 }
 
 /// .svc 独立圆角小卡片容器（用于服务状态与策略组）。
@@ -125,6 +205,7 @@ fn dash_svc_card(
     w: f32,
     h: f32,
     dot_color: Color32,
+    icon: Option<Icon>,
     name: &str,
     status_text: &str,
     status_color: Color32,
@@ -153,42 +234,61 @@ fn dash_svc_card(
     painter.rect_filled(rect, CornerRadius::same(11), fill);
     painter.rect_stroke(rect, CornerRadius::same(11), stroke, egui::StrokeKind::Inside);
 
-    let inner_rect = rect.shrink2(Vec2::new(10.0, 4.0));
-    let dot_center = egui::pos2(inner_rect.left() + 4.0, inner_rect.center().y);
-    painter.circle_filled(dot_center, 4.0, dot_color);
+    let inner_rect = rect.shrink2(Vec2::new(6.0, 3.0));
+    let dot_center = egui::pos2(inner_rect.left() + 3.5, inner_rect.center().y);
+    painter.circle_filled(dot_center, 3.5, dot_color);
 
-    // 右侧状态文本
+    let name_font = egui::FontId::proportional(11.5);
+    let status_font = egui::FontId::proportional(11.0);
+    // 可选图标（检测项标识）：画在状态点右侧、名称左侧
+    let name_x = if let Some(icon) = icon {
+        let icon_rect = Rect::from_min_size(
+            egui::pos2(inner_rect.left() + 11.0, inner_rect.center().y - 5.0),
+            Vec2::splat(10.0),
+        );
+        draw_icon(painter, icon_rect, icon, theme::muted());
+        inner_rect.left() + 25.0
+    } else {
+        inner_rect.left() + 10.0
+    };
+
+    // 先量右侧状态文本；名字可用空间不足 40px 时干脆不画状态，把空间全让给名字
     let status_galley = painter.layout_no_wrap(
         status_text.to_string(),
-        egui::FontId::proportional(12.0),
+        status_font.clone(),
         status_color,
     );
     let status_w = status_galley.rect.width();
-    let status_pos = egui::pos2(
-        inner_rect.right() - status_w,
-        inner_rect.center().y - status_galley.rect.height() / 2.0,
-    );
-    painter.galley(status_pos, status_galley, status_color);
+    let name_max_with_status = inner_rect.right() - 6.0 - name_x - status_w - 6.0;
+    let show_status = name_max_with_status >= 40.0;
 
-    // 左侧名称
-    let max_name_w = (inner_rect.width() - 20.0 - status_w - 8.0).max(30.0);
-    let name_galley = painter.layout(
-        name.to_string(),
-        egui::FontId::proportional(12.5),
-        if selected { apple_blue() } else { theme::text_primary() },
-        max_name_w,
-    );
-    let name_pos = egui::pos2(
-        inner_rect.left() + 14.0,
-        inner_rect.center().y - name_galley.rect.height() / 2.0,
-    );
+    let name_max = if show_status {
+        name_max_with_status
+    } else {
+        inner_rect.right() - 6.0 - name_x
+    };
+    // 名称强制单行 + 省略号，永不折行重叠
+    let name_text = svc_truncate(painter, name, name_font.clone(), name_max);
+    let name_color = if selected { apple_blue() } else { theme::text_primary() };
+    let name_galley = painter.layout_no_wrap(name_text, name_font, name_color);
     painter.galley(
-        name_pos,
+        egui::pos2(name_x, inner_rect.center().y - name_galley.rect.height() / 2.0),
         name_galley,
-        if selected { apple_blue() } else { theme::text_primary() },
+        name_color,
     );
 
-    resp
+    if show_status {
+        painter.galley(
+            egui::pos2(
+                inner_rect.right() - 6.0 - status_w,
+                inner_rect.center().y - status_galley.rect.height() / 2.0,
+            ),
+            status_galley,
+            status_color,
+        );
+    }
+
+    resp.on_hover_text(format!("{name} · {status_text}"))
 }
 
 /// iOS 风格开关（40x22），返回点击响应。
@@ -207,7 +307,97 @@ fn dash_switch(ui: &mut Ui, on: bool) -> egui::Response {
     resp
 }
 
-/// 迷你折线（速率曲线）：输入原始 f32 序列，自动按最大值归一化。
+/// 底部单项代理控制卡片容器
+fn dash_bottom_proxy_item(
+    ui: &mut Ui,
+    w: f32,
+    h: f32,
+    icon: Icon,
+    icon_color: Color32,
+    title: &str,
+    sub: &str,
+    widget: impl FnOnce(&mut Ui),
+) {
+    // 画框式精确外框：外框宽严格 = w + 28（内容不再撑宽卡片）
+    let outer = Rect::from_min_size(
+        ui.cursor().min,
+        Vec2::new(w + 28.0, h + 24.0),
+    );
+    dash_card_at(ui, outer);
+    // 画框不推进 cursor：显式把光标拨到卡右侧，行内下一元素从这继续
+    ui.advance_cursor_after_rect(outer);
+    let band = outer.shrink2(Vec2::new(14.0, 12.0));
+    ui.allocate_ui_at_rect(band, |ui| {
+        {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                // 内部横向间距清零（宽度预算按 icon 34 + 显式 8 + 文字 + 右侧 52 精确计算，
+                // 默认 10px 间距会让每张卡实际渲染比预算宽 30px，把整行顶出屏幕）
+                ui.spacing_mut().item_spacing.x = 0.0;
+                // 图标圆角方块（窄卡自动隐藏，给标题腾位置）
+                let show_icon = w >= 150.0;
+                if show_icon {
+                    let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(34.0), Sense::hover());
+                    let icon_bg = if theme::is_light() {
+                        icon_color.gamma_multiply(0.12)
+                    } else {
+                        theme::sidebar()
+                    };
+                    ui.painter().rect_filled(icon_rect, CornerRadius::same(9), icon_bg);
+                    draw_icon(ui.painter(), icon_rect.shrink(9.0), icon, icon_color);
+                    ui.add_space(8.0);
+                }
+
+                // 文字列（宽度受控并截断）：整块文字用 painter 精确垂直居中绘制
+                let painter = ui.painter().clone();
+                let text_w = if show_icon {
+                    (w - 34.0 - 8.0 - 52.0).max(40.0)
+                } else {
+                    (w - 44.0).max(40.0)
+                };
+                let (text_rect, text_resp) =
+                    ui.allocate_exact_size(Vec2::new(text_w, h), Sense::hover());
+                let title_font = egui::FontId::proportional(if show_icon { 12.5 } else { 10.5 });
+                let sub_font = egui::FontId::proportional(10.5);
+                let title_text = svc_truncate(&painter, title, title_font.clone(), text_w);
+                let sub_text = svc_truncate(&painter, sub, sub_font.clone(), text_w);
+                let title_galley = painter.layout_no_wrap(title_text, title_font, theme::text_primary());
+                let sub_galley = painter.layout_no_wrap(sub_text, sub_font, theme::muted());
+                let line_gap = 2.0_f32;
+                let block_h = title_galley.rect.height() + line_gap + sub_galley.rect.height();
+                let block_top = text_rect.center().y - block_h / 2.0;
+                // 标题加粗：同一 galley 偏移 0.5px 重画一次
+                painter.galley(
+                    egui::pos2(text_rect.left(), block_top),
+                    title_galley.clone(),
+                    theme::text_primary(),
+                );
+                painter.galley(
+                    egui::pos2(text_rect.left() + 0.5, block_top),
+                    title_galley.clone(),
+                    theme::text_primary(),
+                );
+                painter.galley(
+                    egui::pos2(
+                        text_rect.left(),
+                        block_top + title_galley.rect.height() + line_gap,
+                    ),
+                    sub_galley,
+                    theme::muted(),
+                );
+                text_resp.on_hover_text(sub);
+
+                // 右侧操作小部件（开关或状态圆点，统一留 6px 右边距）
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(6.0);
+                    widget(ui);
+                });
+                });
+        }
+    });
+}
+
+/// 迷你波浪线（速率曲线）：输入原始 f32 序列，自动按最大值归一化，
+/// 经 Catmull-Rom 平滑成波浪曲线（不是折线）。
 fn dash_sparkline(ui: &mut Ui, w: f32, h: f32, vals: Vec<f32>, color: Color32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
     if vals.len() < 2 {
@@ -226,7 +416,45 @@ fn dash_sparkline(ui: &mut Ui, w: f32, h: f32, vals: Vec<f32>, color: Color32) {
             )
         })
         .collect();
-    ui.painter().add(egui::Shape::line(pts, Stroke::new(2.2_f32, color)));
+
+    // Catmull-Rom 样条：每段细分 10 次，得到平滑的波浪曲线
+    let catmull = |p0: egui::Pos2, p1: egui::Pos2, p2: egui::Pos2, p3: egui::Pos2, t: f32| {
+        let t2 = t * t;
+        let t3 = t2 * t;
+        egui::pos2(
+            0.5 * (2.0 * p1.x + (-p0.x + p2.x) * t
+                + (2.0 * p0.x - 5.0 * p1.x + 4.0 * p2.x - p3.x) * t2
+                + (-p0.x + 3.0 * p1.x - 3.0 * p2.x + p3.x) * t3),
+            0.5 * (2.0 * p1.y + (-p0.y + p2.y) * t
+                + (2.0 * p0.y - 5.0 * p1.y + 4.0 * p2.y - p3.y) * t2
+                + (-p0.y + 3.0 * p1.y - 3.0 * p2.y + p3.y) * t3),
+        )
+    };
+    let mut smooth: Vec<egui::Pos2> = Vec::with_capacity(n * 10);
+    for i in 0..pts.len() - 1 {
+        let p0 = pts[i.saturating_sub(1)];
+        let p1 = pts[i];
+        let p2 = pts[i + 1];
+        let p3 = pts[(i + 2).min(pts.len() - 1)];
+        for s in 0..10 {
+            smooth.push(catmull(p0, p1, p2, p3, s as f32 / 10.0));
+        }
+    }
+    smooth.push(*pts.last().unwrap());
+
+    ui.painter()
+        .add(egui::Shape::line(smooth, Stroke::new(2.2_f32, color)));
+}
+
+/// 探测本机局域网 IP：UDP connect 不发包，只读默认路由对应的本机地址。
+pub(crate) fn detect_lan_ip() -> String {
+    std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|s| {
+            s.connect("8.8.8.8:80")?;
+            s.local_addr()
+        })
+        .map(|addr| addr.ip().to_string())
+        .unwrap_or_default()
 }
 
 fn history_series(history: &VecDeque<(f32, f32)>, want_up: bool, take: usize) -> Vec<f32> {
@@ -265,212 +493,757 @@ impl VpnApp {
         );
 
         egui::ScrollArea::vertical()
-            .id_salt("proxy_charts_scroll")
+            .id_salt("proxy_dashboard_scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 let avail_w = (ui.available_width() - 4.0).max(300.0);
+                // 超宽窗口封顶：仪表盘内容最宽 1180px 并水平居中。
+                // 不封顶的话所有卡片按比例无限拉伸（高分屏最大化时底部控制卡能到 500px 宽），比例全部失真。
+                let total_w = avail_w.min(1180.0);
+                let center_offset = ((avail_w - total_w) / 2.0).max(0.0);
 
-                // 响应式三档断点判定：
-                // 宽屏 (>= 1060px)：标准桌面端，左主区三行 + 右窄列 184px 并排
-                // 中屏 (750px ~ 1060px)：右窄列下沉三列平铺，主区占满 100% 宽度自适应
-                // 小屏 (< 750px)：全单列流式收缩折叠，速率小卡保持 50/50 并排，窗口拉大自动复原
-                if avail_w >= 1060.0 {
-                    self.render_charts_widescreen(ui, avail_w, &selected_node, is_running, is_starting, prepared);
-                } else if avail_w >= 750.0 {
-                    self.render_charts_medium(ui, avail_w, &selected_node, is_running, is_starting, prepared);
-                } else {
-                    self.render_charts_compact(ui, avail_w, &selected_node, is_running, is_starting, prepared);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    if center_offset > 0.0 {
+                        ui.add_space(center_offset);
+                    }
+                    ui.vertical(|ui| {
+                        ui.set_min_width(total_w);
+                        ui.set_max_width(total_w);
+                        self.render_dashboard(ui, total_w, &selected_node, is_running, is_starting, prepared);
+                    });
+                });
+            });
+    }
+
+    /// 运行时长 HH:MM:SS（未运行显示 "—"）。
+    fn uptime_label(&self) -> String {
+        match self.proxy_started_at {
+            Some(started) => {
+                let s = started.elapsed().as_secs();
+                format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
+            }
+            None => "—".into(),
+        }
+    }
+
+    /// 按名称在节点库（可用节点 + 全量节点）里找节点。
+    fn resolve_node_by_name(&self, name: &str) -> Option<crate::models::NodeSummary> {
+        self.proxy_nodes
+            .iter()
+            .chain(self.nodes.iter())
+            .find(|n| n.name == name)
+            .cloned()
+    }
+
+    /// 把某个节点设为"启动节点"：点击启动代理时就启动它。
+    fn set_start_node(&mut self, node: &crate::models::NodeSummary) {
+        self.selected_proxy_node_id = Some(node.id.clone());
+        self.selected_proxy_node_name = Some(node.name.clone());
+    }
+
+    // -----------------------------------------------------------------
+    // 仪表盘唯一布局：所有窗口宽度按同一套比例自适应，不再分大屏/小屏
+    // -----------------------------------------------------------------
+    fn render_dashboard(
+        &mut self,
+        ui: &mut Ui,
+        total_w: f32,
+        selected_node: &Option<crate::models::NodeSummary>,
+        is_running: bool,
+        is_starting: bool,
+        prepared: bool,
+    ) {
+        let gap = 8.0_f32;
+        let row1_h = 176.0_f32;
+        let row2_h = 124.0_f32;
+        let row3_h = 154.0_f32;
+
+        // 宽度预算先扣除每张卡自身的左右内边距（Frame 外框 = 内容 + margin）。
+        let cm = 40.0_f32;  // 状态卡边距 20*2
+        let cm2 = 28.0_f32; // 其余卡边距 14*2
+        let pool = (total_w - cm * 3.0 - gap * 2.0).max(120.0);
+        let rate_w = pool * 0.21;
+        let status_w = pool - rate_w * 2.0;
+        // 服务状态 + 分流规则与上行状态卡左右边缘垂直对齐
+        let col_w = (status_w + cm - cm2 * 2.0 - gap) / 2.0;
+        // 右侧区域：出站模式与性能平分（出站模式对齐上传卡、性能对齐下载卡）
+        let region2 = (total_w - col_w * 2.0 - cm2 * 4.0 - gap * 3.0).max(60.0);
+        let mode_w = (region2 * 0.5).max(30.0);
+        let perf_w = (region2 - mode_w).max(30.0);
+        // 列宽反推：上传/下载内容宽 = rate_w；出站/性能要与它们对齐，则外框差补齐
+        // 上传卡外框宽 = rate_w + 40（状态卡同款边距），出站模式外框 = mode_w + 28
+        // 对齐公式：mode_w = rate_w + 40 - 28 = rate_w + 12（取平分值与对齐值中较大者）
+        let mode_w = (rate_w + cm - cm2).max(60.0);
+        let perf_w = (region2 - mode_w).max(30.0);
+        // 实时连接与状态卡外框对齐；策略组与出站模式同列
+        let conns_w = status_w + 12.0;
+        let groups_w = (total_w - conns_w - cm2 * 2.0 - gap).max(60.0);
+
+        // ===== 绝对列网格 =====
+        // 外框宽度（内容宽 + 各自边距）
+        let out_status = status_w + cm;
+        let out_rate = rate_w + cm;
+        let out_col = col_w + cm2;
+        let out_mode = mode_w + cm2;
+        let out_perf = perf_w + cm2;
+        // 列 x 坐标（行首为 0）
+        let x_status = 0.0_f32;
+        let x_up = x_status + out_status + gap;
+        let x_down = x_up + out_rate + gap;
+        let x_svc = 0.0_f32;
+        let x_rules = x_svc + out_col + gap;
+        let x_mode = x_rules + out_col + gap; // 必须 == x_up
+        let x_perf = x_mode + out_mode + gap; // 必须 == x_down
+        debug_assert!((x_mode - x_up).abs() < 1.0, "列网格漂移: mode {x_mode} vs up {x_up}");
+        debug_assert!((x_perf - x_down).abs() < 1.0, "列网格漂移: perf {x_perf} vs down {x_down}");
+
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
+
+            // --- 第 1 行：状态 | 上传 | 下载（按列 x 精确放置；一次占位，行距不受内容影响） ---
+            // 行高按内容实际需要放宽（状态卡含 头行+IP+标签+元信息 四段）：
+            let row1_needed = row1_h + 36.0; // 外框边距20 + 内容富余16
+            let row_top = ui.cursor().min;
+            let row_w = ui.available_width();
+            ui.allocate_ui(egui::vec2(row_w, row1_needed), |ui| {
+                for (x, w, draw) in [
+                    (x_status, status_w, 0usize),
+                    (x_up, rate_w, 1),
+                    (x_down, rate_w, 2),
+                ] {
+                    let origin = egui::pos2(row_top.x + x, row_top.y);
+                    ui.allocate_ui_at_rect(Rect::from_min_size(origin, egui::vec2(w + 40.0, row1_needed)), |ui| {
+                        match draw {
+                            0 => self.dash_status_card(ui, w, row1_needed - 20.0, selected_node, is_running, is_starting, prepared, false),
+                            1 => self.dash_rate_card(ui, w, row1_needed - 20.0, true),
+                            _ => self.dash_rate_card(ui, w, row1_needed - 20.0, false),
+                        }
+                    });
                 }
             });
-    }
 
-    // -----------------------------------------------------------------
-    // 布局模式 1：宽屏桌面端（>= 1060px）
-    // -----------------------------------------------------------------
-    fn render_charts_widescreen(
-        &mut self,
-        ui: &mut Ui,
-        total_w: f32,
-        selected_node: &Option<crate::models::NodeSummary>,
-        is_running: bool,
-        is_starting: bool,
-        prepared: bool,
-    ) {
-        let right_w = 184.0_f32;
-        let gap = 16.0_f32;
-        let main_w = total_w - right_w - gap;
-        let row_h12 = 145.0_f32;
-        let row_h3 = 185.0_f32;
-
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-
-            // ================= 左主区三行 =================
-            ui.vertical(|ui| {
-                ui.set_min_width(main_w);
-                ui.set_max_width(main_w);
-                ui.spacing_mut().item_spacing.y = gap;
-
-                // --- 第 1 行：状态 | 上传 | 下载（445:125:125） ---
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = gap;
-                    let rate_w = (main_w * 0.18).max(125.0);
-                    let status_w = main_w - rate_w * 2.0 - gap * 2.0;
-                    self.dash_status_card(ui, status_w, row_h12, selected_node, is_running, is_starting, prepared, false);
-                    self.dash_rate_card(ui, rate_w, row_h12, true);
-                    self.dash_rate_card(ui, rate_w, row_h12, false);
-                });
-
-                // --- 第 2 行：服务状态 | 分流规则 | 出站模式（218:218:253） ---
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = gap;
-                    let col_w = (main_w * 0.32).max(200.0);
-                    let mode_w = main_w - col_w * 2.0 - gap * 2.0;
-                    self.dash_services_card(ui, col_w, row_h12);
-                    self.dash_rules_card(ui, col_w, row_h12);
-                    self.dash_mode_card(ui, mode_w, row_h12);
-                });
-
-                // --- 第 3 行：实时连接 | 策略组（467:258, 高185） ---
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = gap;
-                    let groups_w = (main_w * 0.36).clamp(220.0, 330.0);
-                    let conns_w = main_w - groups_w - gap;
-                    self.dash_connections_card(ui, conns_w, row_h3);
-                    self.dash_groups_card(ui, groups_w, row_h3);
-                });
+            // --- 第 2 行：服务状态 | 分流规则 | 出站模式 | 性能（按列 x 精确放置） ---
+            let row_top = ui.cursor().min;
+            let row_w = ui.available_width();
+            let row_h2 = row2_h + 20.0;
+            ui.allocate_ui(egui::vec2(row_w, row_h2), |ui| {
+                for (x, w, kind) in [
+                    (x_svc, col_w, 0usize),
+                    (x_rules, col_w, 1),
+                    (x_mode, mode_w, 2),
+                    (x_perf, perf_w, 3),
+                ] {
+                    let origin = egui::pos2(row_top.x + x, row_top.y);
+                    ui.allocate_ui_at_rect(Rect::from_min_size(origin, egui::vec2(w + 28.0, row2_h + 20.0)), |ui| {
+                        match kind {
+                            0 => self.dash_services_card(ui, w, row2_h),
+                            1 => self.dash_rules_card(ui, w, row2_h),
+                            2 => self.dash_mode_card(ui, w, row2_h),
+                            _ => self.dash_groups_card(ui, w, row2_h),
+                        }
+                    });
+                }
             });
 
-            ui.add_space(gap);
-
-            // ================= 右窄列（184px） =================
-            ui.vertical(|ui| {
-                ui.set_min_width(right_w);
-                ui.set_max_width(right_w);
-                ui.spacing_mut().item_spacing.y = gap;
-                self.dash_perf_card(ui, right_w, 130.0);
-                self.dash_terminal_card(ui, right_w, 275.0);
-                self.dash_modeswitch_card(ui, right_w, 185.0);
-            });
+            // --- 第 3 行（底部代理控制栏）：三卡对齐状态卡宽度，系统代理/TUN 平分剩余 ---
+            self.render_bottom_proxy_bar(ui, total_w, gap, 3, Some((conns_w, groups_w, perf_w)));
         });
+
+        // 策略组调度抽屉（右侧滑出）
+        self.render_group_drawer(ui);
     }
 
-    // -----------------------------------------------------------------
-    // 布局模式 2：中屏紧凑端（750px ~ 1060px，右列下沉三列平铺）
-    // -----------------------------------------------------------------
-    fn render_charts_medium(
-        &mut self,
-        ui: &mut Ui,
-        total_w: f32,
-        selected_node: &Option<crate::models::NodeSummary>,
-        is_running: bool,
-        is_starting: bool,
-        prepared: bool,
-    ) {
-        let gap = 14.0_f32;
-        let row_h12 = 145.0_f32;
-        let row_h3 = 185.0_f32;
-
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = gap;
-
-            // --- 第 1 行：状态 | 上传 | 下载 ---
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                let rate_w = (total_w * 0.22).max(135.0);
-                let status_w = total_w - rate_w * 2.0 - gap * 2.0;
-                self.dash_status_card(ui, status_w, row_h12, selected_node, is_running, is_starting, prepared, false);
-                self.dash_rate_card(ui, rate_w, row_h12, true);
-                self.dash_rate_card(ui, rate_w, row_h12, false);
+    /// 策略组调度抽屉：右侧滑出（egui 原生窗口，精确宽度、内容自动裁剪），
+    /// 四种调度方式 + 可用节点列表（带地区/名称筛选），点选即设为启动节点。
+    fn render_group_drawer(&mut self, ui: &mut Ui) {
+        let Some(group_name) = self.group_drawer.clone() else {
+            return;
+        };
+        let group = self
+            .kernel_groups
+            .iter()
+            .find(|g| g.name == group_name)
+            .cloned()
+            .unwrap_or_else(|| crate::gui::types::KernelGroup {
+                name: group_name.clone(),
+                kind: String::new(),
+                now: None,
+                members: Vec::new(),
             });
 
-            // --- 第 2 行：服务状态 | 分流规则 | 出站模式 ---
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                let col_w = (total_w - gap * 2.0) / 3.0;
-                self.dash_services_card(ui, col_w, row_h12);
-                self.dash_rules_card(ui, col_w, row_h12);
-                self.dash_mode_card(ui, col_w, row_h12);
+        let ctx = ui.ctx().clone();
+        // 固定尺寸（半窗宽封顶 560px、全高）：不用逐帧变化的动画宽度，
+        // 否则 Window 尺寸抖动会引发内容重排/裁剪异常。
+        let width = (ctx.screen_rect().width() * 0.5).min(560.0);
+        let screen = ctx.screen_rect();
+        let is_selector = matches!(group.kind.to_lowercase().as_str(), "select" | "selector");
+        let active_mode = self.group_scheduling.get(&group.name).cloned();
+        let proxy_up = matches!(
+            self.proxy_status.state,
+            ProxyState::Running | ProxyState::Degraded
+        );
+        let manual_mode = active_mode
+            .as_deref()
+            .map(|m| m == "手动指定")
+            .unwrap_or(true);
+
+        let mut close = false;
+        let mut picked: Option<String> = None;
+
+        // 遮罩：半透明 + 点击任意处关闭
+        egui::Area::new(egui::Id::new(("group_drawer_backdrop", group.name.clone())))
+            .order(egui::Order::Middle)
+            .show(&ctx, |ui| {
+                ui.set_width(screen.width());
+                ui.set_height(screen.height());
+                ui.painter()
+                    .rect_filled(screen, 0.0, Color32::from_black_alpha(80));
+                let resp = ui.interact(
+                    screen,
+                    egui::Id::new(("group_drawer_backdrop_click", group.name.clone())),
+                    Sense::click(),
+                );
+                if resp.clicked() {
+                    close = true;
+                }
             });
 
-            // --- 第 3 行：实时连接 | 策略组 ---
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                let groups_w = (total_w * 0.38).clamp(240.0, 360.0);
-                let conns_w = total_w - groups_w - gap;
-                self.dash_connections_card(ui, conns_w, row_h3);
-                self.dash_groups_card(ui, groups_w, row_h3);
-            });
+        let panel_fill = if theme::is_light() {
+            Color32::WHITE
+        } else {
+            theme::panel()
+        };
 
-            // --- 下沉行：右列 3 张卡片展开为三列横排 ---
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                let card3_w = (total_w - gap * 2.0) / 3.0;
-                let bottom_h = 195.0_f32;
-                self.dash_perf_card(ui, card3_w, bottom_h);
-                self.dash_terminal_card(ui, card3_w, bottom_h);
-                self.dash_modeswitch_card(ui, card3_w, bottom_h);
-            });
-        });
+        // 抽屉本体：原生窗口（内容自动裁剪，不可能撑出界面）
+        egui::Window::new("调度方式")
+            .anchor(egui::Align2::RIGHT_TOP, [0.0, 0.0])
+            .resizable(false)
+            .collapsible(false)
+            .title_bar(false)
+            .order(egui::Order::Foreground)
+            .fixed_size([width, screen.height()])
+            .frame(
+                egui::Frame::NONE
+                    .fill(panel_fill)
+                    .stroke(Stroke::new(1.0_f32, apple_stroke())),
+            )
+            .show(&ctx, |ui| {
+                ui.vertical(|ui| {
+                    ui.add_space(16.0);
+                    // 头部：标题 + 关闭
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        ui.vertical(|ui| {
+                            ui.label(
+                                RichText::new("调度方式")
+                                    .size(15.0)
+                                    .strong()
+                                    .color(theme::text_primary()),
+                            );
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} · {}",
+                                    group.name,
+                                    if is_selector { "手动选择" } else { "自动调度" }
+                                ))
+                                .size(10.5)
+                                .color(theme::muted()),
+                            );
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.add_space(12.0);
+                            // 关闭按钮：圆形底 + ✕，始终可见可点
+                            let (btn_rect, btn_resp) = ui.allocate_exact_size(
+                                Vec2::splat(26.0),
+                                Sense::click(),
+                            );
+                            let bp = ui.painter().clone();
+                            bp.circle_filled(
+                                btn_rect.center(),
+                                13.0,
+                                apple_sub_bg(),
+                            );
+                            let x_color = theme::text_secondary();
+                            let s = 4.5_f32;
+                            let c = btn_rect.center();
+                            for (a, b) in [
+                                (egui::pos2(c.x - s, c.y - s), egui::pos2(c.x + s, c.y + s)),
+                                (egui::pos2(c.x - s, c.y + s), egui::pos2(c.x + s, c.y - s)),
+                            ] {
+                                bp.line_segment([a, b], Stroke::new(2.0_f32, x_color));
+                            }
+                            if btn_resp.hovered() {
+                                bp.circle_stroke(
+                                    c,
+                                    13.0,
+                                    Stroke::new(1.5_f32, theme::muted()),
+                                );
+                            }
+                            let btn_resp = btn_resp.on_hover_text("关闭");
+                            if btn_resp.clicked() {
+                                close = true;
+                            }
+                        });
+                    });
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+
+                    // 当前出口（内核实时值优先，其次应用当前选中节点）
+                    let current_display = group
+                        .now
+                        .clone()
+                        .or_else(|| self.selected_proxy_node_name.clone())
+                        .unwrap_or_else(|| "—".to_string());
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        ui.label(
+                            RichText::new(format!("当前出口 · {current_display}"))
+                                .size(11.5)
+                                .strong()
+                                .color(theme::accent_strong()),
+                        );
+                    });
+                    ui.add_space(8.0);
+
+                    // 四种调度方式：点选即执行对应动作
+                    let modes = ["延迟选优", "故障转移", "负载均衡", "手动指定"];
+                    let mode_cell_w = (ui.available_width() - 32.0 - 8.0) / 2.0;
+                    for row in 0..2 {
+                        ui.horizontal(|ui| {
+                            ui.add_space(16.0);
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            for col in 0..2 {
+                                let mode = modes[row * 2 + col];
+                                let selected = active_mode.as_deref() == Some(mode);
+                                let (fill, fg) = if selected {
+                                    (
+                                        if theme::is_light() {
+                                            Color32::from_rgb(234, 243, 255)
+                                        } else {
+                                            theme::accent_bg()
+                                        },
+                                        theme::accent_strong(),
+                                    )
+                                } else {
+                                    (apple_sub_bg(), theme::text_secondary())
+                                };
+                                let (rect, resp) = ui.allocate_exact_size(
+                                    Vec2::new(mode_cell_w, 30.0),
+                                    Sense::click(),
+                                );
+                                let p = ui.painter().clone();
+                                p.rect_filled(rect, CornerRadius::same(9), fill);
+                                p.rect_stroke(
+                                    rect,
+                                    CornerRadius::same(9),
+                                    Stroke::new(
+                                        1.0_f32,
+                                        if selected { apple_blue() } else { apple_stroke2() },
+                                    ),
+                                    egui::StrokeKind::Inside,
+                                );
+                                let f = egui::FontId::proportional(11.0);
+                                let g = p.layout_no_wrap(
+                                    mode.to_string(),
+                                    f,
+                                    if selected { theme::accent_strong() } else { theme::text_secondary() },
+                                );
+                                p.galley(
+                                    egui::pos2(
+                                        rect.center().x - g.rect.width() / 2.0,
+                                        rect.center().y - g.rect.height() / 2.0,
+                                    ),
+                                    g,
+                                    if selected { theme::accent_strong() } else { theme::text_secondary() },
+                                );
+                                if resp.clicked() {
+                                    self.group_scheduling
+                                        .insert(group.name.clone(), mode.to_string());
+                                    let pool: Vec<String> = if group.members.is_empty() {
+                                        self.proxy_nodes.iter().map(|n| n.name.clone()).collect()
+                                    } else {
+                                        group.members.clone()
+                                    };
+                                    match mode {
+                                        "延迟选优" => {
+                                            let mut best: Option<(String, i64)> = None;
+                                            for m in &pool {
+                                                if let Some(ms) = self
+                                                    .resolve_node_by_name(m)
+                                                    .as_ref()
+                                                    .and_then(|n| n.latency_ms)
+                                                {
+                                                    if best
+                                                        .as_ref()
+                                                        .map(|b| ms < b.1)
+                                                        .unwrap_or(true)
+                                                    {
+                                                        best = Some((m.clone(), ms));
+                                                    }
+                                                }
+                                            }
+                                            match best {
+                                                Some((m, ms)) => {
+                                                    if let Some(node) =
+                                                        self.resolve_node_by_name(&m)
+                                                    {
+                                                        self.set_start_node(&node);
+                                                    }
+                                                    if proxy_up {
+                                                        self.select_kernel_member(
+                                                            group.name.clone(),
+                                                            m.clone(),
+                                                        );
+                                                        self.status = format!(
+                                                            "延迟选优：已切换至 {m}（{ms} ms）"
+                                                        );
+                                                    } else {
+                                                        self.pending_group_pick = Some((
+                                                            group.name.clone(),
+                                                            m.clone(),
+                                                        ));
+                                                        self.status = format!(
+                                                            "延迟选优：已选定 {m}（{ms} ms），启动代理后自动使用"
+                                                        );
+                                                    }
+                                                }
+                                                None => {
+                                                    // 候选节点都没实测过延迟：先发全量测速，
+                                                    // 测完后用户再点一次即可选出最优节点
+                                                    self.speedtest_all_sources();
+                                                    self.status =
+                                                        "候选节点暂无实测延迟，已发起全量测速；完成后请再点一次「延迟选优」".into();
+                                                }
+                                            }
+                                        }
+                                        "负载均衡" => {
+                                            if !pool.is_empty() {
+                                                let idx = (std::time::SystemTime::now()
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .map(|d| d.subsec_nanos() as usize)
+                                                    .unwrap_or(0))
+                                                    % pool.len();
+                                                let m = pool[idx].clone();
+                                                if let Some(node) =
+                                                    self.resolve_node_by_name(&m)
+                                                {
+                                                    self.set_start_node(&node);
+                                                }
+                                                if proxy_up {
+                                                    self.select_kernel_member(
+                                                        group.name.clone(),
+                                                        m.clone(),
+                                                    );
+                                                    self.status =
+                                                        format!("负载均衡：已切换至 {m}");
+                                                } else {
+                                                    self.pending_group_pick = Some((
+                                                        group.name.clone(),
+                                                        m.clone(),
+                                                    ));
+                                                    self.status = format!(
+                                                        "负载均衡：已选定 {m}，启动代理后自动使用"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        "故障转移" => {
+                                            self.auto_failover = true;
+                                            self.status =
+                                                "故障转移已启用：出口异常时自动切换备用节点".into();
+                                        }
+                                        _ => {
+                                            self.status =
+                                                "手动指定：在下方成员列表中点选出口节点".into();
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    ui.add_space(8.0);
+
+                    // 节点列表：可用节点列表内容（地区 + 名称筛选，一行两个）
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add_space(16.0);
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        let regions = [
+                            ("all", "全部"),
+                            ("HK", "香港"),
+                            ("JP", "日本"),
+                            ("US", "美国"),
+                            ("SG", "新加坡"),
+                            ("TW", "台湾"),
+                            ("KR", "韩国"),
+                            ("OTHER", "其它"),
+                        ];
+                        for (code, label) in regions {
+                            let is_sel = self.group_drawer_region == code;
+                            let (fill, stroke, text_color) = if is_sel {
+                                (
+                                    theme::accent_bg(),
+                                    Stroke::new(1.0_f32, theme::accent()),
+                                    theme::accent_strong(),
+                                )
+                            } else {
+                                (
+                                    theme::sidebar(),
+                                    Stroke::new(1.0_f32, theme::border_subtle()),
+                                    theme::muted(),
+                                )
+                            };
+                            let btn = egui::Button::new(
+                                RichText::new(label).size(9.5).strong().color(text_color),
+                            )
+                            .fill(fill)
+                            .stroke(stroke)
+                            .corner_radius(CornerRadius::same(10));
+                            if ui.add(btn).clicked() && !is_sel {
+                                self.group_drawer_region = code.to_string();
+                            }
+                        }
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.group_drawer_filter)
+                                .hint_text("筛选节点")
+                                .desired_width(140.0),
+                        );
+                        ui.label(
+                            RichText::new(format!("{} 个节点", self.proxy_nodes.len()))
+                                .size(10.0)
+                                .color(theme::muted()),
+                        );
+                    });
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt(("group_drawer_members", group.name.clone()))
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            let filter = self.group_drawer_filter.trim().to_lowercase();
+                            let region_key = self.group_drawer_region.clone();
+                            let nodes: Vec<crate::models::NodeSummary> = self
+                                .proxy_nodes
+                                .iter()
+                                .filter(|n| {
+                                    let country = n
+                                        .country
+                                        .clone()
+                                        .or_else(|| crate::parser::guess_country(&n.name))
+                                        .unwrap_or_default()
+                                        .to_ascii_uppercase();
+                                    let region_hit = if region_key == "all" {
+                                        true
+                                    } else if region_key == "OTHER" {
+                                        !["HK", "JP", "US", "SG", "TW", "KR", "GB", "DE"]
+                                            .contains(&country.as_str())
+                                    } else {
+                                        country == region_key
+                                    };
+                                    let name_hit = filter.is_empty()
+                                        || n.name.to_lowercase().contains(&filter);
+                                    region_hit && name_hit
+                                })
+                                .cloned()
+                                .collect();
+                            if nodes.is_empty() {
+                                ui.horizontal(|ui| {
+                                    ui.add_space(16.0);
+                                    ui.label(
+                                        RichText::new(if self.proxy_nodes.is_empty() {
+                                            "节点库为空，请先在订阅源拉取节点"
+                                        } else {
+                                            "没有匹配筛选条件的节点"
+                                        })
+                                        .size(10.5)
+                                        .color(theme::muted()),
+                                    );
+                                });
+                                return;
+                            }
+                            let switching_id = self.switching_node_id.clone();
+                            let is_switching = move |id: &str| {
+                                switching_id.as_deref() == Some(id)
+                            };
+                            // 一行两个节点：精确矩形自绘（compact_node_card 会
+                            // set_min_width(available) 越撑越宽，这里不用它）
+                            let painter = ui.painter().clone();
+                            for pair in nodes.chunks(2) {
+                                let (row_rect, _) = ui.allocate_exact_size(
+                                    Vec2::new(ui.available_width(), 60.0),
+                                    Sense::hover(),
+                                );
+                                let cw = (row_rect.width() - 8.0) / 2.0;
+                                let cy = row_rect.center().y;
+                                for (k, node) in pair.iter().enumerate() {
+                                    let card_rect = egui::Rect::from_min_size(
+                                        egui::pos2(
+                                            row_rect.left() + k as f32 * (cw + 8.0),
+                                            row_rect.top(),
+                                        ),
+                                        egui::vec2(cw, 60.0),
+                                    );
+                                    let resp = ui.interact(
+                                        card_rect,
+                                        egui::Id::new(("drawer_node", node.id.clone())),
+                                        Sense::click(),
+                                    );
+                                    let is_active = current_display == node.name;
+                                    let is_focused = self
+                                        .focused_node_id
+                                        .as_deref()
+                                        == Some(node.id.as_str());
+
+                                    // 卡片底 + 描边（选中态着色）
+                                    let (fill, stroke_col, stroke_w) = if is_active {
+                                        (theme::accent_bg(), theme::accent(), 1.5_f32)
+                                    } else if is_focused {
+                                        (theme::panel_hover(), theme::border(), 1.0_f32)
+                                    } else {
+                                        (theme::panel(), theme::border_subtle(), 1.0_f32)
+                                    };
+                                    painter.rect_filled(card_rect, CornerRadius::same(10), fill);
+                                    painter.rect_stroke(
+                                        card_rect,
+                                        CornerRadius::same(10),
+                                        Stroke::new(stroke_w, stroke_col),
+                                        egui::StrokeKind::Inside,
+                                    );
+
+                                    // 内容：国家码徽标 + 名称 + 右侧延迟
+                                    let inner = card_rect.shrink2(Vec2::new(10.0, 8.0));
+                                    let country = node.country.clone().unwrap_or_default();
+                                    let (code_str, code_color) =
+                                        country_code_and_color(&country);
+                                    let badge_font = egui::FontId::proportional(10.5);
+                                    let badge_g = painter.layout_no_wrap(
+                                        code_str.to_string(),
+                                        badge_font,
+                                        code_color,
+                                    );
+                                    painter.rect_filled(
+                                        egui::Rect::from_min_size(
+                                            egui::pos2(inner.left(), cy - 9.0),
+                                            egui::vec2(badge_g.rect.width() + 10.0, 18.0),
+                                        ),
+                                        CornerRadius::same(5),
+                                        apple_sub_bg(),
+                                    );
+                                    let badge_w = badge_g.rect.width();
+                                    let badge_h = badge_g.rect.height();
+                                    painter.galley(
+                                        egui::pos2(inner.left() + 5.0, cy - badge_h / 2.0),
+                                        badge_g,
+                                        code_color,
+                                    );
+
+                                    let name_font = egui::FontId::proportional(12.0);
+                                    let name_max =
+                                        (cw - 60.0 - badge_w - 10.0).max(40.0);
+                                    let name_text = svc_truncate(
+                                        &painter,
+                                        &node.name,
+                                        name_font.clone(),
+                                        name_max,
+                                    );
+                                    let name_color = if is_active {
+                                        theme::accent_strong()
+                                    } else {
+                                        theme::text_primary()
+                                    };
+                                    let name_g = painter
+                                        .layout_no_wrap(name_text, name_font, name_color);
+                                    painter.galley(
+                                        egui::pos2(
+                                            inner.left() + badge_w + 16.0,
+                                            cy - name_g.rect.height() / 2.0,
+                                        ),
+                                        name_g,
+                                        name_color,
+                                    );
+
+                                    let (lat_text, lat_fg) = match node.latency_ms {
+                                        Some(ms) if ms <= 150 => {
+                                            (format!("{ms}ms"), ok_fg_green())
+                                        }
+                                        Some(ms) if ms <= 300 => {
+                                            (format!("{ms}ms"), ok_fg_amber())
+                                        }
+                                        Some(ms) => (format!("{ms}ms"), ok_fg_red()),
+                                        None => ("—".into(), theme::muted()),
+                                    };
+                                    let lat_font = egui::FontId::proportional(10.5);
+                                    let lat_g =
+                                        painter.layout_no_wrap(lat_text, lat_font, lat_fg);
+                                    painter.galley(
+                                        egui::pos2(
+                                            inner.right() - lat_g.rect.width(),
+                                            cy - lat_g.rect.height() / 2.0,
+                                        ),
+                                        lat_g,
+                                        lat_fg,
+                                    );
+
+                                    if resp.clicked() && !is_active && manual_mode {
+                                        // 选中即设为启动节点
+                                        self.set_start_node(node);
+                                        if proxy_up {
+                                            if group.members.contains(&node.name) {
+                                                picked = Some(node.name.clone());
+                                            } else {
+                                                self.switch_proxy_node(
+                                                    node.id.clone(),
+                                                    node.name.clone(),
+                                                    "调度抽屉切换",
+                                                );
+                                            }
+                                            self.status =
+                                                format!("已切换出口至 {}", node.name);
+                                        } else {
+                                            self.pending_group_pick = Some((
+                                                group.name.clone(),
+                                                node.name.clone(),
+                                            ));
+                                            self.status =
+                                                "已选择节点，启动代理将使用该节点".into();
+                                        }
+                                    } else if resp.clicked() && !manual_mode {
+                                        self.status =
+                                            "当前为自动调度，点选「手动指定」后可选择节点".into();
+                                    }
+                                }
+                            }
+
+                            if !group.members.is_empty() && !is_selector {
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    ui.add_space(16.0);
+                                    ui.label(
+                                        RichText::new(
+                                            "该组由内核自动调度（url-test），手动切换可能被自动覆盖",
+                                        )
+                                        .size(9.5)
+                                        .color(theme::muted()),
+                                    );
+                                });
+                            }
+                            ui.add_space(12.0);
+                        });   // ScrollArea::show
+                });        // ui.vertical
+            });            // Window::show
+
+        if close {
+            self.group_drawer = None;
+        }
+        if let Some(member) = picked {
+            self.select_kernel_member(group.name.clone(), member);
+        }
     }
-
-    // -----------------------------------------------------------------
-    // 布局模式 3：小屏/窄屏移动端（< 750px，单列流式收缩折叠）
-    // -----------------------------------------------------------------
-    fn render_charts_compact(
-        &mut self,
-        ui: &mut Ui,
-        total_w: f32,
-        selected_node: &Option<crate::models::NodeSummary>,
-        is_running: bool,
-        is_starting: bool,
-        prepared: bool,
-    ) {
-        let gap = 12.0_f32;
-
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = gap;
-
-            // 1. 状态卡（占满整行，内部组件自适应缩放）
-            self.dash_status_card(ui, total_w, 175.0, selected_node, is_running, is_starting, prepared, true);
-
-            // 2. 速率卡（上传与下载并排各 50%）
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                let rate_w = (total_w - gap) / 2.0;
-                self.dash_rate_card(ui, rate_w, 130.0, true);
-                self.dash_rate_card(ui, rate_w, 130.0, false);
-            });
-
-            // 3. 服务状态卡
-            self.dash_services_card(ui, total_w, 160.0);
-
-            // 4. 分流规则卡
-            self.dash_rules_card(ui, total_w, 175.0);
-
-            // 5. 出站模式卡
-            self.dash_mode_card(ui, total_w, 145.0);
-
-            // 6. 实时连接表
-            self.dash_connections_card(ui, total_w, 185.0);
-
-            // 7. 策略组
-            self.dash_groups_card(ui, total_w, 155.0);
-
-            // 8. 性能卡
-            self.dash_perf_card(ui, total_w, 140.0);
-
-            // 9. 终端代理
-            self.dash_terminal_card(ui, total_w, 220.0);
-
-            // 10. 出站开关
-            self.dash_modeswitch_card(ui, total_w, 165.0);
-        });
-    }
-
-    // -----------------------------------------------------------------
-    // 各卡片 Apple 风格具体绘制
-    // -----------------------------------------------------------------
 
     /// 状态大卡：出口 IP / 节点大字 + 国旗标识 + 标签药丸 + 三列元信息 + 86px 拟物大圆启停按钮。
     fn dash_status_card(
@@ -484,9 +1257,16 @@ impl VpnApp {
         prepared: bool,
         is_compact: bool,
     ) {
-        dash_card().show(ui, |ui| {
-            ui.set_min_size(Vec2::new(w, h));
-            ui.set_max_size(Vec2::new(w, h));
+        // 外框矩形精确绘制（与速率卡同构，外框高严格 = h + 边距，不受内容影响）
+        let outer = Rect::from_min_size(
+            ui.cursor().min,
+            Vec2::new(w + 40.0, h + 20.0),
+        );
+        dash_card_at(ui, outer);
+    // 画框不推进 cursor：显式把光标拨到卡右侧，行内下一元素从这继续
+    ui.advance_cursor_after_rect(outer);
+        let inner = outer.shrink2(Vec2::new(20.0, 10.0));
+        ui.allocate_ui_at_rect(inner, |ui| {
             ui.vertical(|ui| {
                 // 顶部状态行
                 let (state_text, state_color, dot_color) = if is_running {
@@ -523,7 +1303,7 @@ impl VpnApp {
                 ui.add_space(6.0);
 
                 // 主体两栏：左侧 IP 画像与信息，右侧启停大按钮
-                let btn_diameter = if is_compact { 56.0_f32 } else { 76.0_f32 };
+                let btn_diameter = if is_compact { 50.0_f32 } else { 58.0_f32 };
                 let left_w = (w - btn_diameter - 36.0).max(180.0);
 
                 ui.horizontal(|ui| {
@@ -533,7 +1313,7 @@ impl VpnApp {
 
                         // 国旗方块 + 大字 IP / 节点名
                         ui.horizontal(|ui| {
-                            let flag_size = if is_compact { 32.0 } else { 38.0 };
+                            let flag_size = if is_compact { 28.0 } else { 30.0 };
                             let (flag_rect, _) = ui.allocate_exact_size(Vec2::splat(flag_size), Sense::hover());
                             let painter = ui.painter();
                             painter.rect_filled(flag_rect, CornerRadius::same(9), apple_sub_bg());
@@ -554,7 +1334,6 @@ impl VpnApp {
                             );
                             painter.galley(pos, galley, theme::text_primary());
 
-                            ui.add_space(4.0);
 
                             let display_title = if let Some(risk) = self.ip_risk_egress.as_ref() {
                                 risk.ip.clone()
@@ -563,7 +1342,7 @@ impl VpnApp {
                             } else {
                                 "未连接出口".into()
                             };
-                            let title_size = if is_compact { 19.0 } else { 25.0 };
+                            let title_size = if is_compact { 17.0 } else { 20.0 };
                             ui.add(
                                 egui::Label::new(
                                     RichText::new(&display_title)
@@ -576,30 +1355,87 @@ impl VpnApp {
                             .on_hover_text(&display_title);
                         });
 
-                        ui.add_space(4.0);
+                        ui.add_space(6.0);
 
-                        // 标签药丸行 [商业] [质度优] [IPv4]
+                        // 标签药丸行：IP 类型 / 质量（按实测延迟分档）/ IP 协议版本
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing.x = 5.0;
                             let tag_dc = if let Some(risk) = self.ip_risk_egress.as_ref() {
-                                if risk.datacenter { "机房" } else { "商业" }
+                                if risk.datacenter { "机房" } else { "住宅" }
                             } else {
-                                "商业"
+                                "未检测"
                             };
-                            dash_pill(ui, tag_dc, apple_sub_bg(), theme::text_secondary());
+                            let dc_resp = dash_pill(ui, tag_dc, apple_sub_bg(), theme::text_secondary());
+                            // 点击 IP 类型标签（机房/住宅）：打开 IP 检测弹框
+                            if dc_resp.clicked() {
+                                self.check_ip_risk();
+                            }
+                            dc_resp.on_hover_text("点击检测 IP 归属与风控");
 
                             let good_bg = if theme::is_light() {
                                 Color32::from_rgb(232, 246, 237)
                             } else {
                                 theme::accent_bg()
                             };
-                            let good_text = if theme::is_light() {
+                            let good_fg = if theme::is_light() {
                                 Color32::from_rgb(27, 122, 58)
                             } else {
                                 theme::success()
                             };
-                            dash_pill(ui, "质度优", good_bg, good_text);
-                            dash_pill(ui, "IPv4", apple_sub_bg(), theme::text_secondary());
+                            let mid_bg = if theme::is_light() {
+                                Color32::from_rgb(253, 243, 228)
+                            } else {
+                                theme::accent_bg()
+                            };
+                            let mid_fg = if theme::is_light() {
+                                Color32::from_rgb(180, 83, 9)
+                            } else {
+                                theme::warning()
+                            };
+                            let bad_bg = if theme::is_light() {
+                                Color32::from_rgb(252, 235, 234)
+                            } else {
+                                theme::accent_bg()
+                            };
+                            let bad_fg = if theme::is_light() {
+                                Color32::from_rgb(201, 42, 42)
+                            } else {
+                                theme::danger()
+                            };
+                            // 质量按当前节点实测延迟分档（真实数据，非固定文案）
+                            let latency = selected_node.as_ref().and_then(|n| n.latency_ms);
+                            let (tag_q, q_bg, q_fg) = match latency {
+                                Some(ms) if ms <= 150 => ("质度优", good_bg, good_fg),
+                                Some(ms) if ms <= 300 => ("质度良", mid_bg, mid_fg),
+                                Some(_) => ("质度差", bad_bg, bad_fg),
+                                None => ("未测速", apple_sub_bg(), theme::muted()),
+                            };
+                            let q_resp = dash_pill(ui, tag_q, q_bg, q_fg);
+                            // 点击质量标签：只测当前节点延迟（不弹 IP 检测）
+                            if q_resp.clicked() {
+                                if let Some(id) = self.selected_proxy_node_id.clone() {
+                                    self.speedtest_one(id);
+                                    self.status = "正在测速当前节点…".into();
+                                } else {
+                                    self.status = "请先选择代理节点".into();
+                                }
+                            }
+                            q_resp.on_hover_text("点击测速当前节点延迟");
+
+                            let ip_text = self
+                                .ip_risk_egress
+                                .as_ref()
+                                .map(|r| r.ip.clone())
+                                .or_else(|| selected_node.as_ref().map(|n| n.server.clone()))
+                                .unwrap_or_default();
+                            let tag_v = if ip_text.contains(':') {
+                                "IPv6"
+                            } else if ip_text.is_empty() {
+                                "—"
+                            } else {
+                                "IPv4"
+                            };
+                            dash_pill(ui, tag_v, apple_sub_bg(), theme::text_secondary());
                         });
 
                         ui.add_space(6.0);
@@ -737,15 +1573,20 @@ impl VpnApp {
         let peak_bytes = (peak_kb * 1024.0) as u64;
         let peak_str = if peak_bytes > 0 {
             format!("峰值 {}", format_speed(peak_bytes))
-        } else if up {
-            "峰值 3.1 MB/s".to_string()
         } else {
-            "峰值 18.6 MB/s".to_string()
+            "峰值 —".to_string()
         };
 
-        dash_card().show(ui, |ui| {
-            ui.set_min_size(Vec2::new(w, h));
-            ui.set_max_size(Vec2::new(w, h));
+        // 外框矩形精确绘制（与状态卡同构，外框高严格 = h + 边距，不受内容影响）
+        let outer = Rect::from_min_size(
+            ui.cursor().min,
+            Vec2::new(w + 40.0, h + 20.0),
+        );
+        dash_card_at(ui, outer);
+    // 画框不推进 cursor：显式把光标拨到卡右侧，行内下一元素从这继续
+    ui.advance_cursor_after_rect(outer);
+        let inner = outer.shrink2(Vec2::new(20.0, 10.0));
+        ui.allocate_ui_at_rect(inner, |ui| {
             ui.vertical(|ui| {
                 dash_label(ui, if up { "上传" } else { "下载" }, Some(peak_str));
                 ui.add_space(2.0);
@@ -767,126 +1608,391 @@ impl VpnApp {
         });
     }
 
-    /// 服务状态：4 项外部网络连通性 .svc 圆角小卡片。
-    fn dash_services_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
-        dash_card().show(ui, |ui| {
-            ui.set_min_size(Vec2::new(w, h));
-            ui.set_max_size(Vec2::new(w, h));
-            ui.vertical(|ui| {
-                dash_label(ui, "服务状态", None);
-                ui.add_space(6.0);
 
-                let is_running = matches!(
-                    self.proxy_status.state,
-                    ProxyState::Running | ProxyState::Degraded
-                );
+    /// 仪表盘底部核心代理控制底栏：前三卡对齐状态卡宽度，系统代理/TUN 平分剩余。
+    #[allow(clippy::too_many_arguments)]
+    fn render_bottom_proxy_bar(
+        &mut self,
+        ui: &mut Ui,
+        total_w: f32,
+        gap: f32,
+        cols: usize,
+        align: Option<(f32, f32, f32)>,
+    ) {
+        let card_h = 52.0_f32;
+        let terminal_on = self.proxy_config.terminal_proxy;
+        let lan_on = self.proxy_config.allow_lan;
+        let mode = self.proxy_config.mode;
+        let editable = self.proxy_status.config_editable() && !self.proxy_busy;
+        let sys_on = mode == ProxyMode::System;
+        let tun_on = mode == ProxyMode::Tun;
+        let sys_supported = crate::system_proxy::system_proxy_supported_on_this_platform();
+        let running = matches!(
+            self.proxy_status.state,
+            ProxyState::Running | ProxyState::Degraded
+        );
 
-                let services: [(&str, &str, Color32, Color32); 4] = [
-                    (
-                        "Google",
-                        if is_running { "48 ms" } else { "— ms" },
-                        apple_green_dot(),
-                        if theme::is_light() { Color32::from_rgb(27, 122, 58) } else { theme::success() },
-                    ),
-                    (
-                        "GitHub",
-                        if is_running { "120 ms" } else { "— ms" },
-                        apple_green_dot(),
-                        if theme::is_light() { Color32::from_rgb(27, 122, 58) } else { theme::success() },
-                    ),
-                    (
-                        "YouTube",
-                        if is_running { "212 ms" } else { "— ms" },
-                        apple_amber_dot(),
-                        if theme::is_light() { Color32::from_rgb(180, 83, 9) } else { theme::warning() },
-                    ),
-                    (
-                        "ChatGPT",
-                        if is_running { "就绪" } else { "超时" },
-                        if is_running { apple_green_dot() } else { apple_red_dot() },
-                        if is_running {
-                            if theme::is_light() { Color32::from_rgb(27, 122, 58) } else { theme::success() }
-                        } else {
-                            if theme::is_light() { Color32::from_rgb(201, 42, 42) } else { theme::danger() }
-                        },
-                    ),
-                ];
+        // 五个控制项定义
+        #[derive(Clone, Copy)]
+        enum ProxyItemKind {
+            Terminal,
+            Port,
+            Lan,
+            System,
+            Tun,
+        }
 
-                let item_w = ui.available_width();
-                for (name, status_str, dot_col, text_col) in services {
-                    dash_svc_card(ui, item_w, 22.0, dot_col, name, status_str, text_col, false);
-                    ui.add_space(3.0);
+        let items: [(ProxyItemKind, Icon, Color32, &str, String); 5] = [
+            (
+                ProxyItemKind::Terminal,
+                Icon::Terminal,
+                apple_blue(),
+                "终端代理",
+                if terminal_on { "环境变量已配置".into() } else { "未配置环境".into() },
+            ),
+            (
+                ProxyItemKind::Port,
+                Icon::Globe,
+                apple_green_dot(),
+                "端口代理",
+                "混合端口".into(),
+            ),
+            (
+                ProxyItemKind::Lan,
+                Icon::Radar,
+                Color32::from_rgb(8, 145, 178),
+                "局域网代理",
+                if lan_on && !self.lan_ip.is_empty() {
+                    format!("{} 监听", self.lan_ip)
+                } else if lan_on {
+                    "0.0.0.0 监听".into()
+                } else {
+                    "仅本机 127.0.0.1".into()
+                },
+            ),
+            (
+                ProxyItemKind::System,
+                Icon::Shield,
+                apple_blue(),
+                if sys_supported { "系统代理" } else { "本地端口" },
+                "127.0.0.1".into(),
+            ),
+            (
+                ProxyItemKind::Tun,
+                Icon::Rocket,
+                Color32::from_rgb(124, 92, 214),
+                "TUN 模式",
+                "虚拟网卡接管".into(),
+            ),
+        ];
+
+        // 单卡渲染
+        let mut render_item = |ui: &mut Ui, idx: usize, item_w: f32| {
+            let (kind, icon, icon_col, title, sub) = &items[idx];
+            let (icon, icon_col) = (*icon, *icon_col);
+            match kind {
+                ProxyItemKind::Terminal => {
+                    dash_bottom_proxy_item(ui, item_w, card_h, icon, icon_col, title, sub, |ui| {
+                        let resp = dash_switch(ui, terminal_on);
+                        if resp.clicked() {
+                            self.proxy_config.terminal_proxy = !terminal_on;
+                            self.save_proxy_config();
+                        }
+                    });
                 }
+                ProxyItemKind::Port => {
+                    let port_sub = format!("{} · {}", sub, self.proxy_status.mixed_port);
+                    dash_bottom_proxy_item(ui, item_w, card_h, icon, icon_col, title, &port_sub, |ui| {
+                        dash_dot(ui, if running { apple_green_dot() } else { theme::muted() });
+                    });
+                }
+                ProxyItemKind::Lan => {
+                    dash_bottom_proxy_item(ui, item_w, card_h, icon, icon_col, title, sub, |ui| {
+                        let resp = dash_switch(ui, lan_on);
+                        if resp.clicked() {
+                            self.proxy_config.allow_lan = !lan_on;
+                            self.save_proxy_config();
+                        }
+                    });
+                }
+                ProxyItemKind::System => {
+                    let sys_sub = format!("{}:{}", sub, self.proxy_status.mixed_port);
+                    dash_bottom_proxy_item(ui, item_w, card_h, icon, icon_col, title, &sys_sub, |ui| {
+                        let resp = dash_switch(ui, sys_on);
+                        if resp.clicked() && !sys_on {
+                            if editable {
+                                self.proxy_config.mode = ProxyMode::System;
+                                self.save_proxy_config();
+                            } else {
+                                self.status = "请先停止代理后再切换工作模式".into();
+                            }
+                        }
+                    });
+                }
+                ProxyItemKind::Tun => {
+                    dash_bottom_proxy_item(ui, item_w, card_h, icon, icon_col, title, sub, |ui| {
+                        let resp = dash_switch(ui, tun_on);
+                        if resp.clicked() && !tun_on {
+                            if editable {
+                                self.proxy_config.mode = ProxyMode::Tun;
+                                self.save_proxy_config();
+                            } else {
+                                self.status = "请先停止代理后再切换工作模式".into();
+                            }
+                        }
+                    });
+                }
+            }
+        };
+
+        let cm3 = 28.0_f32;
+        let cm_status = 28.0_f32;
+        // 底栏卡之间的间距：与行距一致的 8px
+        let inner_gap = 8.0_f32;  // 与行内 gap 一致
+        let (w3, w_sys, w_tun) = match align {
+            Some((conns_w, _, _)) => {
+                // 前三卡平分实时连接外框宽：3*(w3+28) + 2*inner_gap = conns_w + 28
+                let w3 = ((conns_w + cm_status - cm3 * 3.0 - inner_gap * 2.0) / 3.0).max(30.0);
+                let three_outer = 3.0 * (w3 + cm3) + inner_gap * 2.0;
+                let w2 = ((total_w - three_outer - gap - cm3 * 2.0 - gap) / 2.0).max(30.0);
+                (w3, w2, w2)
+            }
+            None => {
+                let item_w = 172.0_f32;
+                (item_w, item_w, item_w)
+            }
+        };
+
+        if cols == 1 {
+            for idx in 0..5 {
+                render_item(ui, idx, total_w - 28.0);
+            }
+        } else {
+            // 绝对坐标绘制五张卡：间距硬编码 8px，与行内其它卡片互不干扰。
+            // 前三卡：x = 0, w3+28+8, 2*(w3+28+8)（合计 = 实时连接外框宽）
+            // 后两卡：从 x_mode 列起平分剩余。
+            let bar_top = ui.cursor().min;
+            let bar_h = card_h + 24.0;
+            let step3 = w3 + cm3 + inner_gap;
+            let three_end = 3.0 * (w3 + cm3) + 2.0 * inner_gap; // = 实时连接外框宽
+            let rest = total_w - three_end - gap; // 前三卡与后两卡之间留行距级间隙
+            let step2 = w_sys + cm3 + inner_gap;
+            let x_sys = three_end + inner_gap;
+            ui.allocate_ui(egui::vec2(total_w, bar_h), |ui| {
+                let positions = [
+                    0.0,
+                    step3,
+                    step3 * 2.0,
+                    x_sys,
+                    x_sys + step2,
+                ];
+                for (idx, x) in positions.iter().enumerate() {
+                    let item_w = match idx {
+                        3 => w_sys,
+                        4 => w_tun,
+                        _ => w3,
+                    };
+                    let origin = egui::pos2(bar_top.x + x, bar_top.y);
+                    ui.allocate_ui_at_rect(
+                        Rect::from_min_size(origin, egui::vec2(item_w + cm3, bar_h)),
+                        |ui| {
+                            render_item(ui, idx, item_w);
+                        },
+                    );
+                }
+                let _ = rest;
             });
-        });
+        }
     }
 
-    /// 分流规则：4 项典型规则（拦截/直连/流媒体/兜底）与彩色药丸徽标。
-    fn dash_rules_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
-        let rules_count = self.proxy_config.rules.len().max(87);
+    /// 服务状态：经当前代理实测 Google/ChatGPT/GitHub/YouTube 是否能连通。
+    fn dash_services_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
+        dash_card()
+            .inner_margin(Margin::symmetric(14, 10))
+            .show(ui, |ui| {
+                ui.set_min_size(Vec2::new(w, h));
+                ui.set_max_size(Vec2::new(w, h));
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    let proxy_up = matches!(
+                        self.proxy_status.state,
+                        ProxyState::Running | ProxyState::Degraded
+                    );
+                    let label_peak = if self.service_checks_running {
+                        "检测中…".to_string()
+                    } else if proxy_up {
+                        "经代理实测".to_string()
+                    } else {
+                        "直连实测".to_string()
+                    };
+                    dash_label(ui, "服务状态", Some(label_peak));
+                    ui.add_space(4.0);
 
-        dash_card().show(ui, |ui| {
-            ui.set_min_size(Vec2::new(w, h));
-            ui.set_max_size(Vec2::new(w, h));
-            ui.vertical(|ui| {
-                dash_label(ui, "分流规则", Some(format!("共 {} 条", rules_count)));
-                ui.add_space(4.0);
+                    let ok_fg = if theme::is_light() {
+                        Color32::from_rgb(27, 122, 58)
+                    } else {
+                        theme::success()
+                    };
+                    let mid_fg = if theme::is_light() {
+                        Color32::from_rgb(180, 83, 9)
+                    } else {
+                        theme::warning()
+                    };
+                    let bad_fg = if theme::is_light() {
+                        Color32::from_rgb(201, 42, 42)
+                    } else {
+                        theme::danger()
+                    };
+                    let off_fg = theme::muted();
 
-                let rules_items = [
-                    (
-                        "广告域名拦截",
-                        "GEOSITE,ads-all",
-                        "拦截",
-                        Color32::from_rgb(252, 235, 234),
-                        Color32::from_rgb(201, 42, 42),
-                        "12,406",
-                    ),
-                    (
-                        "国内直连",
-                        "GEOSITE,cn · GEOIP,cn",
-                        "直连",
-                        Color32::from_rgb(232, 246, 237),
-                        Color32::from_rgb(27, 122, 58),
-                        "71,284",
-                    ),
-                    (
-                        "流媒体解锁",
-                        "Netflix · Disney+",
-                        "流媒体",
-                        Color32::from_rgb(243, 238, 255),
-                        Color32::from_rgb(124, 92, 214),
-                        "56",
-                    ),
-                    (
-                        "兜底规则",
-                        "MATCH",
-                        "代理",
-                        Color32::from_rgb(234, 243, 255),
-                        Color32::from_rgb(0, 113, 227),
-                        "1",
-                    ),
-                ];
+                    // 按最近一轮实测结果渲染；结果缺失或检测中显示对应状态
+                    let lookup = |name: &str| -> (String, Color32, Color32) {
+                        let result = self
+                            .service_checks
+                            .as_ref()
+                            .and_then(|rs| rs.iter().find(|r| r.name == name));
+                        match result {
+                            Some(r) => match r.latency_ms {
+                                Some(ms) if ms <= 800 => (format!("{ms} ms"), apple_green_dot(), ok_fg),
+                                Some(ms) if ms <= 2000 => (format!("{ms} ms"), apple_amber_dot(), mid_fg),
+                                Some(ms) => (format!("{ms} ms"), apple_red_dot(), bad_fg),
+                                None => ("超时".into(), apple_red_dot(), bad_fg),
+                            },
+                            None => ("检测中…".into(), apple_amber_dot(), mid_fg),
+                        }
+                    };
 
-                for (idx, (name, sub, tag, tag_bg, tag_fg, cnt)) in rules_items.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.label(RichText::new(*name).size(12.0).strong().color(theme::text_primary()));
-                            ui.label(RichText::new(*sub).size(10.0).color(theme::muted()));
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(RichText::new(*cnt).size(10.5).color(theme::muted()));
-                            ui.add_space(4.0);
-                            dash_pill(ui, tag, *tag_bg, *tag_fg);
-                        });
-                    });
-                    if idx < 3 {
-                        ui.add_space(2.0);
-                        ui.separator();
-                        ui.add_space(2.0);
+                    let item_w = ui.available_width();
+                    for (name, url, (status_str, dot_col, text_col)) in [
+                        ("Google", "https://www.google.com", lookup("Google")),
+                        ("ChatGPT", "https://chatgpt.com", lookup("ChatGPT")),
+                        ("GitHub", "https://github.com", lookup("GitHub")),
+                        ("YouTube", "https://www.youtube.com", lookup("YouTube")),
+                    ] {
+                        let resp = dash_svc_card(
+                            ui,
+                            item_w,
+                            21.0_f32,
+                            dot_col,
+                            Some(Icon::Globe),
+                            name,
+                            &status_str,
+                            text_col,
+                            false,
+                        );
+                        // 点击服务项 = 在浏览器新标签页打开对应网站
+                        if resp.clicked() {
+                            ui.ctx()
+                                .open_url(egui::OpenUrl::new_tab(url));
+                        }
+                        ui.add_space(4.0);
                     }
-                }
+                });
             });
-        });
+    }
+
+    /// 分流规则：按真实连接遥测展示命中次数最多的前 4 条规则。
+    fn dash_rules_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
+        // rule_tally 按 (规则可读名, 派发目标) 计数 —— 聚合出每条规则的总命中并排序
+        let mut hits: Vec<(&String, i64)> = self
+            .rule_tally
+            .iter()
+            .map(|((rule, _target), count)| (rule, *count))
+            .collect();
+        hits.sort_by(|a, b| b.1.cmp(&a.1));
+        let total_hits: i64 = hits.iter().map(|(_, c)| c).sum();
+
+        dash_card()
+            .inner_margin(Margin::symmetric(14, 10))
+            .show(ui, |ui| {
+                ui.set_min_size(Vec2::new(w, h));
+                ui.set_max_size(Vec2::new(w, h));
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    dash_label(ui, "分流规则", Some(format!("命中 {} 次", total_hits)));
+                    ui.add_space(3.0);
+
+                    if hits.is_empty() {
+                        ui.label(
+                            RichText::new("暂无命中记录，代理跑一会儿就有了")
+                                .size(10.5)
+                                .color(theme::muted()),
+                        );
+                    } else {
+                        let reject_bg = if theme::is_light() {
+                            Color32::from_rgb(252, 235, 234)
+                        } else {
+                            theme::accent_bg()
+                        };
+                        let reject_fg = if theme::is_light() {
+                            Color32::from_rgb(201, 42, 42)
+                        } else {
+                            theme::danger()
+                        };
+                        let direct_bg = if theme::is_light() {
+                            Color32::from_rgb(232, 246, 237)
+                        } else {
+                            theme::accent_bg()
+                        };
+                        let direct_fg = if theme::is_light() {
+                            Color32::from_rgb(27, 122, 58)
+                        } else {
+                            theme::success()
+                        };
+                        let proxy_bg = if theme::is_light() {
+                            Color32::from_rgb(234, 243, 255)
+                        } else {
+                            theme::accent_bg()
+                        };
+                        let proxy_fg = apple_blue();
+
+                        for (idx, (rule, count)) in hits.iter().take(4).enumerate() {
+                            let (tag, tag_bg, tag_fg) = if rule.contains("REJECT") {
+                                ("拦截", reject_bg, reject_fg)
+                            } else if rule.contains("DIRECT") {
+                                ("直连", direct_bg, direct_fg)
+                            } else {
+                                ("代理", proxy_bg, proxy_fg)
+                            };
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(*rule)
+                                            .size(11.0)
+                                            .strong()
+                                            .color(theme::text_primary()),
+                                    )
+                                    .truncate(),
+                                );
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.label(RichText::new(Self::format_hits(*count)).size(9.5).color(theme::muted()));
+                                    ui.add_space(2.0);
+                                    dash_pill(ui, tag, tag_bg, tag_fg);
+                                });
+                            });
+                            if idx < 3 && hits.len() > idx + 1 {
+                                ui.add_space(1.0);
+                                let (sep_rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
+                                ui.painter().rect_filled(sep_rect, CornerRadius::ZERO, apple_stroke2());
+                                ui.add_space(1.0);
+                            }
+                        }
+                    }
+                });
+            });
+    }
+
+    /// 命中数缩写：1234 → 1.2k，123456 → 12.3w。
+    fn format_hits(count: i64) -> String {
+        if count >= 100_000 {
+            format!("{:.1}w", count as f64 / 10_000.0)
+        } else if count >= 10_000 {
+            format!("{:.1}w", count as f64 / 10_000.0)
+        } else if count >= 1_000 {
+            format!("{:.1}k", count as f64 / 1_000.0)
+        } else {
+            format!("{count}")
+        }
     }
 
     /// 出站模式（宽卡横排）：三段式胶囊切换器 + 底部模式说明。
@@ -902,161 +2008,107 @@ impl VpnApp {
         let current = self.proxy_config.routing_mode;
         let editable = self.proxy_status.config_editable() && !self.proxy_busy;
 
-        dash_card().show(ui, |ui| {
-            ui.set_min_size(Vec2::new(w, h));
-            ui.set_max_size(Vec2::new(w, h));
-            ui.vertical(|ui| {
-                dash_label(
-                    ui,
-                    "出站模式",
-                    Some(format!("当前 · {}", mode_label(current))),
-                );
-                ui.add_space(8.0);
+        dash_card()
+            .inner_margin(Margin::symmetric(14, 10))
+            .show(ui, |ui| {
+                ui.set_min_size(Vec2::new(w, h));
+                ui.set_max_size(Vec2::new(w, h));
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    dash_label(
+                        ui,
+                        "出站模式",
+                        Some(format!("当前 · {}", mode_label(current))),
+                    );
 
-                // 三段式胶囊背景框
-                let seg_w = ui.available_width();
-                Frame::NONE
-                    .fill(apple_sub_bg())
-                    .stroke(Stroke::new(1.0_f32, apple_stroke2()))
-                    .corner_radius(CornerRadius::same(12))
-                    .inner_margin(Margin::same(3))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            let bw = (seg_w - 18.0) / 3.0;
-                            for (mode, name) in [
-                                (RoutingMode::Rule, "规则"),
-                                (RoutingMode::Global, "全局"),
-                                (RoutingMode::Direct, "直连"),
-                            ] {
-                                let active = mode_label(current) == name;
-                                let (fill, stroke, text_color) = if active {
-                                    (apple_blue(), Stroke::NONE, Color32::WHITE)
-                                } else {
-                                    (Color32::TRANSPARENT, Stroke::NONE, theme::text_secondary())
-                                };
-                                let btn = egui::Button::new(
-                                    RichText::new(name).size(12.5).strong().color(text_color),
-                                )
-                                .fill(fill)
-                                .stroke(stroke)
-                                .corner_radius(CornerRadius::same(8))
-                                .min_size(Vec2::new(bw, 28.0));
-                                if ui.add(btn).clicked() && !active {
-                                    if editable {
-                                        self.proxy_config.routing_mode = mode;
-                                        self.save_proxy_config();
+                    // 三段式胶囊选项在剩余高度内垂直居中
+                    let band_h = (h - 18.0).max(30.0);
+                    let band = egui::Rect::from_min_size(
+                        ui.cursor().min,
+                        Vec2::new(ui.available_width(), band_h),
+                    );
+                    ui.allocate_ui_at_rect(band, |ui| {
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            let seg_w = ui.available_width();
+                            Frame::NONE
+                        .fill(apple_sub_bg())
+                        .stroke(Stroke::new(1.0_f32, apple_stroke2()))
+                        .corner_radius(CornerRadius::same(10))
+                        .inner_margin(Margin::same(2))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                let bw = (seg_w - 16.0) / 3.0;
+                                for (mode, name) in [
+                                    (RoutingMode::Rule, "规则"),
+                                    (RoutingMode::Global, "全局"),
+                                    (RoutingMode::Direct, "直连"),
+                                ] {
+                                    let active = mode_label(current) == name;
+                                    let (fill, stroke, text_color) = if active {
+                                        (apple_blue(), Stroke::NONE, Color32::WHITE)
                                     } else {
-                                        self.status = "请先停止代理后再切换分流模式".into();
+                                        (Color32::TRANSPARENT, Stroke::NONE, theme::text_secondary())
+                                    };
+                                    let btn = egui::Button::new(
+                                        RichText::new(name).size(12.0).strong().color(text_color),
+                                    )
+                                    .fill(fill)
+                                    .stroke(stroke)
+                                    .corner_radius(CornerRadius::same(8))
+                                    .min_size(Vec2::new(bw, 26.0));
+                                    if ui.add(btn).clicked() && !active {
+                                        if editable {
+                                            self.proxy_config.routing_mode = mode;
+                                            self.save_proxy_config();
+                                        } else {
+                                            self.status = "请先停止代理后再切换分流模式".into();
+                                        }
                                     }
                                 }
-                            }
+                            });
+                        });
                         });
                     });
 
-                ui.add_space(8.0);
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                    ui.label(
-                        RichText::new(routing_mode_detail(current))
-                            .size(11.0)
-                            .color(theme::muted()),
+                });
+            });
+    }
+
+    /// 实时连接表：6 列 [目标, 协议, 出口, 下载, 上传, 时长]。
+    /// 实时连接卡：内嵌"连接列表 / 连接进程 / DNS 记录"三个子页（原活跃连接页整体并入）。
+    fn dash_connections_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
+        let conns = self.active_connections.clone();
+
+        // 外框矩形精确绘制：连接数据出现/变化时内容变多也不会把卡撑宽
+        let outer = Rect::from_min_size(ui.cursor().min, Vec2::new(w + 28.0, h + 20.0));
+        dash_card_at(ui, outer);
+    // 画框不推进 cursor：显式把光标拨到卡右侧，行内下一元素从这继续
+    ui.advance_cursor_after_rect(outer);
+        let inner = outer.shrink2(Vec2::new(14.0, 10.0));
+        // 用 ClipRect 硬裁剪：表格再宽也只显示在卡片内，超出部分剪掉
+        ui.push_id("conn_card_clip", |ui| {
+            ui.set_clip_rect(inner);
+            ui.allocate_ui_at_rect(inner, |ui| {
+                ui.set_max_width(w);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    dash_label(
+                        ui,
+                        "实时连接",
+                        Some(format!("{} 条活跃", conns.len())),
                     );
-                    ui.label(
-                        RichText::new(routing_mode_description(current))
-                            .size(12.5)
-                            .strong()
-                            .color(theme::text_primary()),
-                    );
+                    ui.add_space(4.0);
+                    ui.push_id("conn_embed", |ui| {
+                        ui.set_max_width(w);
+                        self.ui_proxy_connections_embedded(ui);
+                    });
                 });
             });
         });
     }
 
-    /// 实时连接表：6 列 [目标, 协议, 出口, 下载, 上传, 时长]。
-    fn dash_connections_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
-        let conns = self.active_connections.clone();
-
-        dash_card().show(ui, |ui| {
-            ui.set_min_size(Vec2::new(w, h));
-            ui.set_max_size(Vec2::new(w, h));
-            ui.vertical(|ui| {
-                dash_label(
-                    ui,
-                    "实时连接",
-                    Some(format!("{} 条活跃", conns.len().max(23))),
-                );
-                ui.add_space(4.0);
-
-                egui::Grid::new("dash_conn_apple_grid")
-                    .num_columns(6)
-                    .spacing([12.0, 5.0])
-                    .striped(true)
-                    .show(ui, |ui| {
-                        for head in ["目标", "协议", "出口", "下载", "上传", "时长"] {
-                            ui.label(
-                                RichText::new(head)
-                                    .size(11.0)
-                                    .strong()
-                                    .color(theme::muted()),
-                            );
-                        }
-                        ui.end_row();
-
-                        if !conns.is_empty() {
-                            for conn in conns.iter().take(3) {
-                                ui.add_sized(
-                                    [120.0, 16.0],
-                                    egui::Label::new(
-                                        RichText::new(&conn.host)
-                                            .size(12.0)
-                                            .strong()
-                                            .color(theme::text_primary()),
-                                    )
-                                    .truncate(),
-                                )
-                                .on_hover_text(format!("{}\n{}", conn.host, conn.rule));
-                                ui.label(RichText::new(conn.network.to_uppercase()).size(11.0).color(theme::text_secondary()));
-                                ui.add_sized(
-                                    [90.0, 16.0],
-                                    egui::Label::new(
-                                        RichText::new(&conn.target).size(11.0).color(theme::text_secondary()),
-                                    )
-                                    .truncate(),
-                                );
-                                ui.label(RichText::new(format_speed(conn.download)).size(11.5).strong().color(apple_green_dot()));
-                                ui.label(RichText::new(format_speed(conn.upload)).size(11.5).color(theme::text_secondary()));
-                                ui.label(RichText::new("02:15").size(11.0).color(theme::muted()));
-                                ui.end_row();
-                            }
-                        } else {
-                            // 渲染设计稿预置样例连接
-                            let sample_rows = [
-                                ("www.youtube.com", "QUIC", "HK-01", "8.2 MB/s", "41 KB/s", "12:36"),
-                                ("api.github.com", "TLS", "JP-03", "316 KB/s", "12 KB/s", "05:41"),
-                                ("cdn.jsdelivr.net", "TLS", "SG-02", "2.9 MB/s", "88 KB/s", "01:08"),
-                            ];
-                            for (host, proto, egress, down, up, dur) in sample_rows {
-                                ui.add_sized(
-                                    [120.0, 16.0],
-                                    egui::Label::new(
-                                        RichText::new(host).size(12.0).strong().color(theme::text_primary()),
-                                    )
-                                    .truncate(),
-                                );
-                                ui.label(RichText::new(proto).size(11.0).color(theme::text_secondary()));
-                                ui.label(RichText::new(egress).size(11.0).color(theme::text_secondary()));
-                                ui.label(RichText::new(down).size(11.5).strong().color(apple_green_dot()));
-                                ui.label(RichText::new(up).size(11.5).color(theme::text_secondary()));
-                                ui.label(RichText::new(dur).size(11.0).color(theme::muted()));
-                                ui.end_row();
-                            }
-                        }
-                    });
-            });
-        });
-    }
-
-    /// 策略组：2x2 网格 .svc 圆角卡片（自动选择、流媒体、电报消息、国内网站）。
+    /// 策略组：2x2 网格，显示每个组当前节点的真实实测延迟。
     fn dash_groups_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
         let visible_names = visible_group_names(
             self.proxy_config.smart_routing,
@@ -1067,318 +2119,198 @@ impl VpnApp {
             self.proxy_selected_group = "全部".to_string();
         }
 
-        dash_card().show(ui, |ui| {
+        dash_card()
+            .inner_margin(Margin::symmetric(14, 10))
+            .show(ui, |ui| {
             ui.set_min_size(Vec2::new(w, h));
             ui.set_max_size(Vec2::new(w, h));
             ui.vertical(|ui| {
-                dash_label(ui, "策略组", Some(format!("共 {} 个", visible_names.len().max(4))));
+                ui.spacing_mut().item_spacing.y = 0.0;
+                dash_label(ui, "策略组", Some(format!("共 {} 个", visible_names.len())));
                 ui.add_space(6.0);
-
-                let default_groups = [
-                    ("自动选择", "86 ms", apple_green_dot()),
-                    ("流媒体", "154 ms", apple_green_dot()),
-                    ("电报消息", "92 ms", apple_green_dot()),
-                    ("国内网站", "12 ms", apple_green_dot()),
-                ];
 
                 let item_w = (ui.available_width() - 8.0) / 2.0;
-                let item_h = 36.0_f32;
-
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    for idx in 0..2 {
-                        let name = visible_names.get(idx).cloned().unwrap_or_else(|| default_groups[idx].0.to_string());
-                        let is_sel = self.proxy_selected_group == name;
-                        let resp = dash_svc_card(
-                            ui,
-                            item_w,
-                            item_h,
-                            default_groups[idx].2,
-                            &name,
-                            default_groups[idx].1,
-                            if theme::is_light() { Color32::from_rgb(27, 122, 58) } else { theme::success() },
-                            is_sel,
-                        );
-                        if resp.clicked() {
-                            self.proxy_selected_group = name;
-                        }
-                    }
-                });
-
-                ui.add_space(6.0);
-
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    for idx in 2..4 {
-                        let name = visible_names.get(idx).cloned().unwrap_or_else(|| default_groups[idx].0.to_string());
-                        let is_sel = self.proxy_selected_group == name;
-                        let resp = dash_svc_card(
-                            ui,
-                            item_w,
-                            item_h,
-                            default_groups[idx].2,
-                            &name,
-                            default_groups[idx].1,
-                            if theme::is_light() { Color32::from_rgb(27, 122, 58) } else { theme::success() },
-                            is_sel,
-                        );
-                        if resp.clicked() {
-                            self.proxy_selected_group = name;
-                        }
-                    }
-                });
-            });
-        });
-    }
-
-    /// 性能卡（右列）：大字延迟 + 丢包/CPU/内存状态徽标 + 蓝色平滑折线。
-    fn dash_perf_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
-        let latency = self
-            .selected_proxy_node_id
-            .as_ref()
-            .and_then(|id| {
-                self.proxy_nodes
-                    .iter()
-                    .chain(self.nodes.iter())
-                    .find(|node| &node.id == id)
-            })
-            .and_then(|node| node.latency_ms);
-        let series = {
-            let history = self.traffic_history.clone();
-            history_series(&history, false, 60)
-        };
-
-        dash_card().show(ui, |ui| {
-            ui.set_min_size(Vec2::new(w, h));
-            ui.vertical(|ui| {
-                dash_label(ui, "性能", Some("实时".into()));
-                ui.add_space(2.0);
-                ui.label(
-                    RichText::new(match latency {
-                        Some(ms) => format!("{ms} ms"),
-                        None => "86 ms".into(),
-                    })
-                    .strong()
-                    .size(23.0)
-                    .color(theme::text_primary()),
-                );
-                ui.add_space(4.0);
-
-                let conns = self.active_connections.len();
-                let chips = [
-                    ("丢包", "0.0%"),
-                    ("活跃", &format!("{conns} 条")),
-                    ("累计", &format_bytes(self.traffic_down_total)),
-                ];
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    for (lbl, val) in chips {
-                        dash_pill(
-                            ui,
-                            &format!("{lbl} {val}"),
-                            apple_sub_bg(),
-                            theme::text_secondary(),
-                        );
-                    }
-                });
-
-                ui.add_space(6.0);
-                let w = ui.available_width();
-                dash_sparkline(ui, w, 24.0, series, apple_blue());
-            });
-        });
-    }
-
-    /// 终端代理卡（右列）：等高三段结构（终端代理总开关、端口代理、局域网代理）。
-    fn dash_terminal_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
-        let terminal_on = self.proxy_config.terminal_proxy;
-        let lan_on = self.proxy_config.allow_lan;
-        let running = matches!(
-            self.proxy_status.state,
-            ProxyState::Running | ProxyState::Degraded
-        );
-
-        dash_card()
-            .inner_margin(Margin::same(0))
-            .show(ui, |ui| {
-                ui.set_min_size(Vec2::new(w, h));
-                ui.set_max_size(Vec2::new(w, h));
-                let inner_h = h - 20.0;
-                let row_h = inner_h / 3.0;
-
-                // --- 段 1：终端代理总开关 ---
-                ui.allocate_ui(Vec2::new(w, row_h), |ui| {
-                    ui.set_min_size(Vec2::new(w, row_h));
-                    ui.horizontal(|ui| {
-                        ui.add_space(14.0);
-                        ui.set_min_height(row_h);
-                        icon_label(ui, Icon::Terminal, 13.0, apple_blue());
-                        ui.label(
-                            RichText::new("终端代理")
-                                .size(12.5)
-                                .strong()
-                                .color(theme::text_primary()),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.add_space(10.0);
-                            let resp = dash_switch(ui, terminal_on);
-                            if resp.clicked() {
-                                self.proxy_config.terminal_proxy = !terminal_on;
-                                self.save_proxy_config();
-                            }
-                        });
-                    });
-                });
-
-                // 分隔线
-                ui.separator();
-
-                // --- 段 2：端口代理 ---
-                ui.allocate_ui(Vec2::new(w, row_h), |ui| {
-                    ui.set_min_size(Vec2::new(w, row_h));
-                    ui.horizontal(|ui| {
-                        ui.add_space(14.0);
-                        ui.set_min_height(row_h);
-                        ui.vertical(|ui| {
-                            ui.label(
-                                RichText::new("端口代理")
-                                    .size(12.5)
-                                    .strong()
-                                    .color(theme::text_primary()),
-                            );
-                            ui.label(
-                                RichText::new(format!("混合端口 · {}", self.proxy_status.mixed_port))
-                                    .size(10.5)
-                                    .color(theme::muted()),
-                            );
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.add_space(14.0);
-                            dash_dot(ui, if running { apple_green_dot() } else { theme::muted() });
-                        });
-                    });
-                });
-
-                // 分隔线
-                ui.separator();
-
-                // --- 段 3：局域网代理 ---
-                ui.allocate_ui(Vec2::new(w, row_h), |ui| {
-                    ui.set_min_size(Vec2::new(w, row_h));
-                    ui.horizontal(|ui| {
-                        ui.add_space(14.0);
-                        ui.set_min_height(row_h);
-                        ui.vertical(|ui| {
-                            ui.label(
-                                RichText::new("局域网代理")
-                                    .size(12.5)
-                                    .strong()
-                                    .color(theme::text_primary()),
-                            );
-                            ui.label(
-                                RichText::new(if lan_on { "0.0.0.0 监听" } else { "仅本机 127.0.0.1" })
-                                    .size(10.5)
-                                    .color(theme::muted()),
-                            );
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.add_space(10.0);
-                            let resp = dash_switch(ui, lan_on);
-                            if resp.clicked() {
-                                self.proxy_config.allow_lan = !lan_on;
-                                self.save_proxy_config();
-                            }
-                        });
-                    });
-                });
-            });
-    }
-
-    /// 系统代理 / TUN 模式卡（右列）：两段等高模式开关。
-    fn dash_modeswitch_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
-        let mode = self.proxy_config.mode;
-        let editable = self.proxy_status.config_editable() && !self.proxy_busy;
-        let sys_on = mode == ProxyMode::System;
-        let tun_on = mode == ProxyMode::Tun;
-        let sys_supported = crate::system_proxy::system_proxy_supported_on_this_platform();
-
-        dash_card()
-            .inner_margin(Margin::same(0))
-            .show(ui, |ui| {
-                ui.set_min_size(Vec2::new(w, h));
-                ui.set_max_size(Vec2::new(w, h));
-                let inner_h = h - 16.0;
-                let row_h = inner_h / 2.0;
-
-                let render_row = |ui: &mut Ui, title: &str, sub: String, on: bool| {
-                    ui.set_min_size(Vec2::new(w, row_h));
-                    ui.horizontal(|ui| {
-                        ui.add_space(14.0);
-                        ui.set_min_height(row_h);
-                        ui.vertical(|ui| {
-                            ui.label(
-                                RichText::new(title)
-                                    .size(12.5)
-                                    .strong()
-                                    .color(theme::text_primary()),
-                            );
-                            ui.label(
-                                RichText::new(sub)
-                                    .size(10.5)
-                                    .color(theme::muted()),
-                            );
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.add_space(10.0);
-                            dash_switch(ui, on)
-                        });
-                    });
+                let item_h = 30.0_f32;
+                let ok_fg = if theme::is_light() {
+                    Color32::from_rgb(27, 122, 58)
+                } else {
+                    theme::success()
+                };
+                let warn_fg = if theme::is_light() {
+                    Color32::from_rgb(180, 83, 9)
+                } else {
+                    theme::warning()
+                };
+                let bad_fg = if theme::is_light() {
+                    Color32::from_rgb(201, 42, 42)
+                } else {
+                    theme::danger()
                 };
 
-                let resp_sys = ui
-                    .allocate_ui(Vec2::new(w, row_h), |ui| {
-                        render_row(
-                            ui,
-                            if sys_supported { "系统代理" } else { "本地端口" },
-                            format!("127.0.0.1:{}", self.proxy_status.mixed_port),
-                            sys_on,
-                        );
-                        ui.interact(
-                            ui.min_rect(),
-                            egui::Id::new("dash_switch_system"),
-                            Sense::click(),
-                        )
-                    })
-                    .inner;
-                if resp_sys.clicked() && !sys_on {
-                    if editable {
-                        self.proxy_config.mode = ProxyMode::System;
-                        self.save_proxy_config();
-                    } else {
-                        self.status = "请先停止代理后再切换工作模式".into();
+                // 2x2 网格，最多展示 4 个组；延迟 = 该组当前选中节点在节点库里的实测值
+                let mut rendered = 0usize;
+                for row in 0..2 {
+                    let Some(first) = visible_names.get(row * 2) else { break };
+                    let second = visible_names.get(row * 2 + 1);
+                    let mut group_specs: Vec<(String, String, Color32, Color32)> = Vec::new();
+                    for name in [Some(first.clone()), second.cloned()].into_iter().flatten() {
+                        // 组的当前节点（kernel_groups.now）→ 节点库里的实测延迟
+                        let latency = self
+                            .kernel_groups
+                            .iter()
+                            .find(|g| &g.name == &name)
+                            .and_then(|g| g.now.clone())
+                            .and_then(|now| {
+                                self.proxy_nodes
+                                    .iter()
+                                    .chain(self.nodes.iter())
+                                    .find(|n| &n.name == &now)
+                                    .and_then(|n| n.latency_ms)
+                            });
+                        let (status_str, dot_col, text_col) = match latency {
+                            Some(ms) if ms <= 150 => (format!("{ms} ms"), apple_green_dot(), ok_fg),
+                            Some(ms) if ms <= 300 => (format!("{ms} ms"), apple_amber_dot(), warn_fg),
+                            Some(ms) => (format!("{ms} ms"), apple_red_dot(), bad_fg),
+                            None => ("—".into(), theme::muted(), theme::muted()),
+                        };
+                        group_specs.push((name, status_str, dot_col, text_col));
+                    }
+
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        for (name, status_str, dot_col, text_col) in &group_specs {
+                            let is_sel = self.proxy_selected_group == *name;
+                            let resp = dash_svc_card(
+                                ui,
+                                item_w,
+                                item_h,
+                                *dot_col,
+                                None,
+                                name,
+                                status_str,
+                                *text_col,
+                                is_sel,
+                            );
+                            if resp.clicked() {
+                                // 选中该组，并右侧滑出抽屉选择调度方式（切换该组出口）
+                                self.proxy_selected_group = name.clone();
+                                self.group_drawer = Some(name.clone());
+                            }
+                            rendered += 1;
+                        }
+                    });
+                    if row == 0 && rendered > 0 {
+                        ui.add_space(4.0);
                     }
                 }
 
-                ui.separator();
-
-                let resp_tun = ui
-                    .allocate_ui(Vec2::new(w, row_h), |ui| {
-                        render_row(ui, "TUN 模式", "虚拟网卡 · 全局接管".into(), tun_on);
-                        ui.interact(
-                            ui.min_rect(),
-                            egui::Id::new("dash_switch_tun"),
-                            Sense::click(),
-                        )
-                    })
-                    .inner;
-                if resp_tun.clicked() && !tun_on {
-                    if editable {
-                        self.proxy_config.mode = ProxyMode::Tun;
-                        self.save_proxy_config();
-                    } else {
-                        self.status = "请先停止代理后再切换工作模式".into();
-                    }
+                if rendered == 0 {
+                    ui.label(
+                        RichText::new("暂无策略组，启动代理或导入订阅后显示")
+                            .size(10.5)
+                            .color(theme::muted()),
+                    );
                 }
             });
+        });
     }
+
+    /// 性能卡：本软件的 CPU / 内存 / 磁盘，三块"池子"图（液面高度 = 占用比例）。
+    fn dash_perf_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
+        let stats = self.perf_stats;
+        dash_card()
+            .inner_margin(Margin::symmetric(14, 10))
+            .show(ui, |ui| {
+            ui.set_min_size(Vec2::new(w, h));
+            ui.set_max_size(Vec2::new(w, h));
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                dash_label(ui, "性能", Some("本软件".into()));
+                ui.add_space(8.0);
+
+                // 三块池子：液面 = 占用/容量上限
+                let blocks = [
+                    ("CPU", stats.cpu_percent, format!("{:.0} %", stats.cpu_percent), 100.0),
+                    ("内存", stats.mem_mb, format!("{:.0} MB", stats.mem_mb), 1024.0),
+                    ("磁盘", stats.disk_mbps, format!("{:.1} MB/s", stats.disk_mbps), 20.0),
+                ];
+                let cell_w = (ui.available_width() - 16.0) / 3.0;
+                let pool_h = 78.0_f32;
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    for (label, value, value_text, cap) in blocks {
+                        let level = (value / cap).clamp(0.05, 1.0);
+                        let (rect, resp) =
+                            ui.allocate_exact_size(Vec2::new(cell_w, pool_h), Sense::hover());
+                        let painter = ui.painter();
+
+                        // 池子底 + 描边
+                        painter.rect_filled(rect, CornerRadius::same(10), apple_sub_bg());
+                        painter.rect_stroke(
+                            rect,
+                            CornerRadius::same(10),
+                            Stroke::new(1.0_f32, apple_stroke()),
+                            egui::StrokeKind::Inside,
+                        );
+
+                        // 液面（带平滑动画，像水池蓄水）
+                        let anim_id = egui::Id::new(("perf_pool", label));
+                        let level_s = ui
+                            .ctx()
+                            .animate_value_with_time(anim_id, level, 0.4);
+                        let fill_h = (pool_h - 4.0) * level_s;
+                        let liquid = if theme::is_light() {
+                            Color32::from_rgb(0, 113, 227).gamma_multiply(0.22)
+                        } else {
+                            apple_blue().gamma_multiply(0.35)
+                        };
+                        let fill_rect = egui::Rect::from_min_max(
+                            egui::pos2(rect.left() + 2.0, rect.bottom() - 2.0 - fill_h),
+                            egui::pos2(rect.right() - 2.0, rect.bottom() - 2.0),
+                        );
+                        painter.rect_filled(fill_rect, CornerRadius::same(8), liquid);
+
+                        // 数值居中画在池子里
+                        let value_font = egui::FontId::proportional(11.5);
+                        let value_g = painter.layout_no_wrap(
+                            value_text.clone(),
+                            value_font,
+                            theme::text_primary(),
+                        );
+                        painter.galley(
+                            egui::pos2(
+                                rect.center().x - value_g.rect.width() / 2.0,
+                                rect.center().y - value_g.rect.height() - 1.0,
+                            ),
+                            value_g,
+                            theme::text_primary(),
+                        );
+                        let label_font = egui::FontId::proportional(9.5);
+                        let label_g =
+                            painter.layout_no_wrap(label.to_string(), label_font, theme::muted());
+                        painter.galley(
+                            egui::pos2(
+                                rect.center().x - label_g.rect.width() / 2.0,
+                                rect.center().y + 1.0,
+                            ),
+                            label_g,
+                            theme::muted(),
+                        );
+
+                        resp.on_hover_text(format!(
+                            "{label}：{value_text}（池子刻度上限 {}）",
+                            if label == "CPU" {
+                                "100%".to_string()
+                            } else if label == "内存" {
+                                "1024 MB".to_string()
+                            } else {
+                                "20 MB/s".to_string()
+                            }
+                        ));
+                    }
+                });
+            });
+        });
+    }
+
 }
