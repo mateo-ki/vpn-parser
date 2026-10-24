@@ -106,7 +106,7 @@ impl BackendCompiler for ShoesCompiler {
         let mut outbound_group = Mapping::new();
         outbound_group.insert(
             Value::String("client_group".into()),
-            Value::String("outbound".into()),
+            Value::String("PROXY".into()),
         );
         outbound_group.insert(
             Value::String("strategy".into()),
@@ -153,7 +153,7 @@ impl BackendCompiler for ShoesCompiler {
 
         let mut rules = Vec::new();
 
-        // 局域网与回环直连规则
+        // 局域网与回环直连规则（必须设置 no_resolve 防止本地 DNS 污染抢先将境外域名解析为保留/伪造 IP）
         let mut local_rule = Mapping::new();
         local_rule.insert(
             Value::String("masks".into()),
@@ -166,6 +166,10 @@ impl BackendCompiler for ShoesCompiler {
                 Value::String("fc00::/7".into()),
                 Value::String("fe80::/10".into()),
             ]),
+        );
+        local_rule.insert(
+            Value::String("no_resolve".into()),
+            Value::Bool(true),
         );
         local_rule.insert(
             Value::String("action".into()),
@@ -185,10 +189,9 @@ impl BackendCompiler for ShoesCompiler {
         rules.push(Value::Mapping(local_rule));
 
         // 将统一 IR 规则转换为 Shoes 规则
+        // （translate_ir_rule 会把多谓词规则拆成多条同动作规则，等价 OR 语义）
         for ir_rule in &plan.rules {
-            if let Some(shoes_rule) = translate_ir_rule(ir_rule) {
-                rules.push(shoes_rule);
-            }
+            rules.extend(translate_ir_rule(ir_rule));
         }
 
         // 默认兜底动作
@@ -240,7 +243,7 @@ impl BackendCompiler for ShoesCompiler {
                 );
                 rule.insert(
                     Value::String("client_chain".into()),
-                    Value::String("outbound".into()),
+                    Value::String("PROXY".into()),
                 );
                 Value::Mapping(rule)
             }
@@ -289,7 +292,7 @@ impl BackendCompiler for ShoesCompiler {
             );
             port_rule.insert(
                 Value::String("client_chain".into()),
-                Value::String("outbound".into()),
+                Value::String("PROXY".into()),
             );
             port_server.insert(
                 Value::String("rules".into()),
@@ -303,10 +306,44 @@ impl BackendCompiler for ShoesCompiler {
     }
 }
 
-/// 将统一 IR 规则转为 Shoes 规则映射
-fn translate_ir_rule(rule: &crate::proxy::ir::IRRule) -> Option<Value> {
+fn find_geo_file(name: &str) -> Option<std::path::PathBuf> {
+    let candidate_dirs = [
+        crate::geo::mihomo_dir(),
+        crate::kernel::managed_kernel_root().join("xray"),
+        crate::kernel::managed_kernel_root().join("shoes"),
+        std::path::PathBuf::from("data/kernels/mihomo"),
+        std::path::PathBuf::from("data/kernels/xray"),
+    ];
+    for dir in candidate_dirs {
+        let p = dir.join(name);
+        if p.exists() {
+            return Some(p);
+        }
+        let cap_name = if name == "geosite.dat" {
+            "GeoSite.dat"
+        } else if name == "geoip.dat" {
+            "GeoIP.dat"
+        } else {
+            name
+        };
+        let p_cap = dir.join(cap_name);
+        if p_cap.exists() {
+            return Some(p_cap);
+        }
+    }
+    None
+}
+
+/// 将统一 IR 规则转为 Shoes 规则映射列表。
+///
+/// 多谓词（例如 STUN 端口列表 + 端口段）必须拆成多条同动作规则：
+/// Shoes 0.3.4 的 `masks: {any: [...]}` 组合 `no_resolve: true` 时存在匹配管线
+/// 缺陷——其后所有未被更早规则按域名命中的目标都会被静默 Block（连接被直接关闭，
+/// 浏览器表现为 ERR_EMPTY_RESPONSE）。拆分后逐条 first-match，等价保留 OR 语义。
+fn translate_ir_rule(rule: &crate::proxy::ir::IRRule) -> Vec<Value> {
     let mut masks_map = Mapping::new();
     let mut legacy_masks: Vec<Value> = Vec::new();
+    let mut geo_predicates: Vec<Value> = Vec::new();
 
     for matcher in &rule.matchers {
         match matcher {
@@ -361,11 +398,48 @@ fn translate_ir_rule(rule: &crate::proxy::ir::IRRule) -> Option<Value> {
                     seq.push(Value::String(format!("{start}:{end}")));
                 }
             }
+            // QUIC 拦截的语义是"仅拦 UDP 443"（mihomo 侧译成
+            // AND,((NETWORK,udp),(DST-PORT,443))）。Shoes 的 masks 没有
+            // TCP/UDP 协议维度，裸写 destination_port: 443 会把所有未命中
+            // 前置域名规则的 TCP 443（即普通 HTTPS）一起静默拦截，
+            // 浏览器表现为 ERR_EMPTY_RESPONSE —— 只能整体跳过这条规则。
+            IRMatcher::Quic => {}
+            IRMatcher::GeoSite(site) => {
+                if let Some(p) = find_geo_file("geosite.dat") {
+                    let mut m = Mapping::new();
+                    m.insert(
+                        Value::String("path".into()),
+                        Value::String(p.to_string_lossy().replace('\\', "/")),
+                    );
+                    m.insert(
+                        Value::String("format".into()),
+                        Value::String("geosite_dat".into()),
+                    );
+                    m.insert(Value::String("code".into()), Value::String(site.clone()));
+                    geo_predicates.push(Value::Mapping(m));
+                }
+            }
+            IRMatcher::GeoIp(country) => {
+                if let Some(p) = find_geo_file("geoip.dat") {
+                    let mut m = Mapping::new();
+                    m.insert(
+                        Value::String("path".into()),
+                        Value::String(p.to_string_lossy().replace('\\', "/")),
+                    );
+                    m.insert(
+                        Value::String("format".into()),
+                        Value::String("geoip_dat".into()),
+                    );
+                    m.insert(Value::String("code".into()), Value::String(country.clone()));
+                    geo_predicates.push(Value::Mapping(m));
+                }
+            }
             _ => {}
         }
     }
 
     let mut predicates = Vec::new();
+    predicates.extend(geo_predicates);
     if !legacy_masks.is_empty() {
         if legacy_masks.len() == 1 && masks_map.is_empty() {
             // 单一 IP-CIDR 可以直接作为字面量 mask
@@ -385,59 +459,62 @@ fn translate_ir_rule(rule: &crate::proxy::ir::IRRule) -> Option<Value> {
         predicates.push(Value::Mapping(m));
     }
 
-    let masks_val = if predicates.is_empty() {
-        return None;
-    } else if predicates.len() == 1 {
-        predicates.pop().unwrap()
+    let masks_values: Vec<Value> = if predicates.is_empty() {
+        Vec::new()
     } else {
-        let mut any_map = Mapping::new();
-        any_map.insert(Value::String("any".into()), Value::Sequence(predicates));
-        Value::Mapping(any_map)
+        predicates
     };
 
-    let mut shoes_rule = Mapping::new();
-    shoes_rule.insert(Value::String("masks".into()), masks_val);
-    if rule.no_resolve {
-        shoes_rule.insert(Value::String("no_resolve".into()), Value::Bool(true));
+    if masks_values.is_empty() {
+        return Vec::new();
     }
 
-    match &rule.action {
-        IRAction::Reject => {
-            shoes_rule.insert(
-                Value::String("action".into()),
-                Value::String("block".into()),
-            );
+    let build_rule = |masks_val: Value| {
+        let mut shoes_rule = Mapping::new();
+        shoes_rule.insert(Value::String("masks".into()), masks_val);
+        if rule.no_resolve {
+            shoes_rule.insert(Value::String("no_resolve".into()), Value::Bool(true));
         }
-        IRAction::Direct => {
-            shoes_rule.insert(
-                Value::String("action".into()),
-                Value::String("allow".into()),
-            );
-            let mut direct_chain = Mapping::new();
-            let mut chain_proto = Mapping::new();
-            chain_proto.insert(
-                Value::String("type".into()),
-                Value::String("direct".into()),
-            );
-            direct_chain.insert(Value::String("protocol".into()), Value::Mapping(chain_proto));
-            shoes_rule.insert(
-                Value::String("client_chain".into()),
-                Value::Mapping(direct_chain),
-            );
-        }
-        _ => {
-            shoes_rule.insert(
-                Value::String("action".into()),
-                Value::String("allow".into()),
-            );
-            shoes_rule.insert(
-                Value::String("client_chain".into()),
-                Value::String("outbound".into()),
-            );
-        }
-    }
 
-    Some(Value::Mapping(shoes_rule))
+        match &rule.action {
+            IRAction::Reject => {
+                shoes_rule.insert(
+                    Value::String("action".into()),
+                    Value::String("block".into()),
+                );
+            }
+            IRAction::Direct => {
+                shoes_rule.insert(
+                    Value::String("action".into()),
+                    Value::String("allow".into()),
+                );
+                let mut direct_chain = Mapping::new();
+                let mut chain_proto = Mapping::new();
+                chain_proto.insert(
+                    Value::String("type".into()),
+                    Value::String("direct".into()),
+                );
+                direct_chain.insert(Value::String("protocol".into()), Value::Mapping(chain_proto));
+                shoes_rule.insert(
+                    Value::String("client_chain".into()),
+                    Value::Mapping(direct_chain),
+                );
+            }
+            _ => {
+                shoes_rule.insert(
+                    Value::String("action".into()),
+                    Value::String("allow".into()),
+                );
+                shoes_rule.insert(
+                    Value::String("client_chain".into()),
+                    Value::String("PROXY".into()),
+                );
+            }
+        }
+        Value::Mapping(shoes_rule)
+    };
+
+    masks_values.into_iter().map(build_rule).collect()
 }
 
 /// 将 Node 构造为 Shoes client_proxy 配置
@@ -648,16 +725,116 @@ fn wrap_transport(
     _client_fingerprint: Option<&str>,
 ) -> Result<Value> {
     let network = string_from_cfg(cfg, &["network", "type"]).unwrap_or_else(|| "tcp".into());
-    let security = string_from_cfg(cfg, &["security"]).unwrap_or_else(|| "none".into());
+
+    let reality_opts_pbk = cfg
+        .get("reality-opts")
+        .or_else(|| cfg.get("reality_opts"))
+        .and_then(|opts| {
+            opts.get("public-key")
+                .or_else(|| opts.get("publicKey"))
+                .or_else(|| opts.get("pbk"))
+        })
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let direct_pbk = string_from_cfg(cfg, &["pbk", "public-key", "publicKey"]);
+
+    let has_reality = string_from_cfg(cfg, &["security"]).as_deref() == Some("reality")
+        || reality_opts_pbk.is_some()
+        || direct_pbk.is_some();
+
+    let security = if has_reality {
+        "reality".to_string()
+    } else if cfg.get("tls").and_then(|v| v.as_bool()).unwrap_or(false)
+        || string_from_cfg(cfg, &["security"]).as_deref() == Some("tls")
+    {
+        "tls".to_string()
+    } else {
+        "none".to_string()
+    };
     let sni = string_from_cfg(cfg, &["sni", "servername", "server-name"])
+        .or_else(|| {
+            cfg.get("reality-opts")
+                .or_else(|| cfg.get("reality_opts"))
+                .and_then(|opts| opts.get("sni").or_else(|| opts.get("servername")))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
         .unwrap_or_else(|| server.to_string());
 
     let mut current_proto = Value::Mapping(inner);
 
+    // 1. 内层流传输协议 (如 WebSocket)
+    if network == "ws" {
+        let (ws_opts_path, ws_opts_headers) = if let Some(serde_json::Value::Object(opts)) =
+            cfg.get("ws-opts").or_else(|| cfg.get("ws_opts"))
+        {
+            let p = opts
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let h = opts.get("headers").and_then(|v| v.as_object()).cloned();
+            (p, h)
+        } else {
+            (None, None)
+        };
+
+        let path = string_from_cfg(cfg, &["path", "ws-path"])
+            .or(ws_opts_path)
+            .unwrap_or_else(|| "/".into());
+
+        let host = string_from_cfg(cfg, &["host", "sni", "servername", "server-name"])
+            .unwrap_or_else(|| server.to_string());
+
+        let mut ws_map = Mapping::new();
+        ws_map.insert(Value::String("type".into()), Value::String("ws".into()));
+        ws_map.insert(
+            Value::String("matching_path".into()),
+            Value::String(path),
+        );
+
+        let mut headers = Mapping::new();
+        headers.insert(Value::String("Host".into()), Value::String(host));
+        if let Some(h_obj) = ws_opts_headers.or_else(|| {
+            cfg.get("headers")
+                .or_else(|| cfg.get("ws-headers"))
+                .and_then(|v| v.as_object().cloned())
+        }) {
+            for (k, v) in h_obj {
+                if let Some(s) = v.as_str() {
+                    headers.insert(Value::String(k.clone()), Value::String(s.to_string()));
+                }
+            }
+        }
+        ws_map.insert(
+            Value::String("matching_headers".into()),
+            Value::Mapping(headers),
+        );
+        ws_map.insert(Value::String("protocol".into()), current_proto);
+        current_proto = Value::Mapping(ws_map);
+    }
+
+    // 2. 外层加密协议 (TLS / REALITY)
     if security == "reality" {
-        let pbk = string_from_cfg(cfg, &["pbk", "public-key", "publicKey"])
+        let pbk = direct_pbk
+            .or(reality_opts_pbk)
             .ok_or_else(|| anyhow!("Reality 缺少 public-key / pbk"))?;
-        let sid = string_from_cfg(cfg, &["sid", "short-id", "shortId"]).unwrap_or_default();
+
+        let sid = string_from_cfg(cfg, &["sid", "short-id", "shortId"])
+            .or_else(|| {
+                cfg.get("reality-opts")
+                    .or_else(|| cfg.get("reality_opts"))
+                    .and_then(|opts| {
+                        opts.get("short-id")
+                            .or_else(|| opts.get("shortId"))
+                            .or_else(|| opts.get("sid"))
+                    })
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_default();
+
         let vision = string_from_cfg(cfg, &["flow"])
             .map(|f| f.contains("vision"))
             .unwrap_or(false);
@@ -685,23 +862,43 @@ fn wrap_transport(
         );
         tls_map.insert(Value::String("sni_hostname".into()), Value::String(sni));
         tls_map.insert(Value::String("vision".into()), Value::Bool(vision));
+        if let Some(val) = cfg.get("skip-cert-verify").or_else(|| cfg.get("allowInsecure")) {
+            if let Some(b) = val.as_bool() {
+                if b {
+                    tls_map.insert(Value::String("verify".into()), Value::Bool(false));
+                }
+            }
+        }
+
+        let mut alpn_list = Vec::new();
+        if let Some(serde_json::Value::Array(arr)) = cfg.get("alpn") {
+            for v in arr {
+                if let Some(s) = v.as_str() {
+                    if !s.is_empty() {
+                        alpn_list.push(Value::String(s.to_string()));
+                    }
+                }
+            }
+        } else if let Some(serde_json::Value::String(s)) = cfg.get("alpn") {
+            for part in s.split(',') {
+                let trimmed = part.trim();
+                if !trimmed.is_empty() {
+                    alpn_list.push(Value::String(trimmed.to_string()));
+                }
+            }
+        }
+        if alpn_list.is_empty() && network == "ws" {
+            alpn_list.push(Value::String("http/1.1".into()));
+        }
+        if !alpn_list.is_empty() {
+            tls_map.insert(
+                Value::String("alpn_protocols".into()),
+                Value::Sequence(alpn_list),
+            );
+        }
+
         tls_map.insert(Value::String("protocol".into()), current_proto);
         current_proto = Value::Mapping(tls_map);
-    }
-
-    if network == "ws" {
-        let path = string_from_cfg(cfg, &["path"]).unwrap_or_else(|| "/".into());
-        let mut ws_map = Mapping::new();
-        ws_map.insert(
-            Value::String("type".into()),
-            Value::String("ws".into()),
-        );
-        ws_map.insert(
-            Value::String("matching_path".into()),
-            Value::String(path),
-        );
-        ws_map.insert(Value::String("protocol".into()), current_proto);
-        current_proto = Value::Mapping(ws_map);
     }
 
     Ok(current_proto)

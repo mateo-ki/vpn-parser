@@ -310,7 +310,8 @@ async fn probe_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proxy::ProxyMode;
+    use crate::proxy::config::TrafficRule;
+    use crate::proxy::{ProxyMode, RoutingMode, RuleAction, RuleMatcher};
     use chrono::Utc;
     use serde_json::json;
 
@@ -387,6 +388,32 @@ mod tests {
         assert!(build_shoes_config(&n, options).is_err());
     }
 
+    /// 多谓词规则（WebRTC 防泄露的端口列表 + 端口段）必须拆成多条平铺规则，
+    /// 禁止生成 `masks: {any: [...]}` —— Shoes 0.3.4 的 any + no_resolve 组合
+    /// 会毒化匹配管线：其后所有未命中域名规则的域名被静默 Block，
+    /// 浏览器表现为 ERR_EMPTY_RESPONSE（pool.983698.xyz 复现过的那个 bug）。
+    #[test]
+    fn multi_predicate_rules_are_split_not_any_wrapped() {
+        let n = node("ss", json!({"cipher":"aes-128-gcm","password":"p"}));
+        let mut options = MihomoConfigOptions::default();
+        options.block_webrtc = true;
+        let val = build_shoes_config(&n, options).expect("valid config");
+        let yaml_str = serde_yaml::to_string(&val).expect("serializable to yaml");
+
+        assert!(
+            !yaml_str.contains("any:"),
+            "生成配置里不允许出现 any: 组合:\n{yaml_str}"
+        );
+        // 端口列表与端口段各自成为一条 block 规则，动作语义不变
+        assert!(yaml_str.contains("destination_port:"));
+        assert!(yaml_str.contains("destination_port_range:"));
+        assert_eq!(
+            yaml_str.matches("action: block").count(),
+            3,
+            "STUN/TURN 拦截应拆成 keyword + 端口列表 + 端口段三条 block 规则:\n{yaml_str}"
+        );
+    }
+
     #[test]
     fn generated_shoes_config_validates_structure() {
         let n = node(
@@ -405,9 +432,102 @@ mod tests {
         assert!(yaml_str.contains("clash_api_address"));
         assert!(yaml_str.contains("127.0.0.1:9090"));
         assert!(yaml_str.contains("secret: secret123"));
-        assert!(yaml_str.contains("client_group: outbound"));
+        assert!(yaml_str.contains("client_group: PROXY"));
         assert!(yaml_str.contains("strategy: selector"));
         assert!(yaml_str.contains("type: snell"));
         assert!(yaml_str.contains("127.0.0.1:9980"));
+    }
+
+    /// QUIC 拦截的语义是"仅拦 UDP 443"。Shoes 的 masks 没有 TCP/UDP 维度，
+    /// 若误译成裸 `destination_port: 443`，所有未命中前置域名规则的普通 HTTPS
+    /// 都会被静默 Block（pool.983698.xyz 报 ERR_EMPTY_RESPONSE 的根因）。
+    #[test]
+    fn quic_rule_is_skipped_not_translated_to_tcp_port_block() {
+        let n = node("ss", json!({"cipher":"aes-128-gcm","password":"p"}));
+        let mut options = MihomoConfigOptions::default();
+        options.rules = vec![TrafficRule {
+            matcher: RuleMatcher::Quic,
+            action: RuleAction::Reject,
+        }];
+        let val = build_shoes_config(&n, options).expect("valid config");
+        let yaml_str = serde_yaml::to_string(&val).expect("serializable to yaml");
+        assert!(
+            !yaml_str.contains("destination_port"),
+            "QUIC 规则不得译成端口拦截:\n{yaml_str}"
+        );
+        assert_eq!(
+            yaml_str.matches("action: block").count(),
+            0,
+            "QUIC 规则跳过后不应产生任何 block 规则:\n{yaml_str}"
+        );
+    }
+
+    #[test]
+    fn test_shoes_vless_reality_node() {
+        let n = node(
+            "vless",
+            json!({
+                "client-fingerprint": "chrome",
+                "flow": "xtls-rprx-vision",
+                "name": "🇺🇸US²_3",
+                "network": "tcp",
+                "port": 8443,
+                "reality-opts": {
+                    "public-key": "Ha1kOu8LGfb6tK9wwrB_5UYrvjHFT_QwjvIuqM-q2go",
+                    "short-id": "40555f988c33e341"
+                },
+                "server": "143.246.60.129",
+                "servername": "gateway.icloud.com",
+                "skip-cert-verify": true,
+                "tfo": true,
+                "tls": true,
+                "type": "vless",
+                "uuid": "25284f5f-1dc4-42b8-bee1-f4a5144ee064"
+            }),
+        );
+        let options = MihomoConfigOptions {
+            mixed_port: 19985,
+            controller_port: 19095,
+            routing_mode: RoutingMode::Rule,
+            ..Default::default()
+        };
+        let val = build_shoes_config(&n, options).expect("valid config");
+        let yaml_str = serde_yaml::to_string(&val).expect("serializable to yaml");
+        println!("=== GENERATED SHOES REALITY YAML ===\n{yaml_str}\n============================");
+        assert!(yaml_str.contains("type: reality"));
+        assert!(yaml_str.contains("public_key: Ha1kOu8LGfb6tK9wwrB_5UYrvjHFT_QwjvIuqM-q2go"));
+        assert!(yaml_str.contains("short_id: 40555f988c33e341"));
+        assert!(yaml_str.contains("sni_hostname: gateway.icloud.com"));
+        assert!(yaml_str.contains("vision: true"));
+    }
+
+    #[test]
+    fn test_shoes_vless_tls_with_empty_pbk() {
+        let n = node(
+            "vless",
+            json!({
+                "allowInsecure": false,
+                "encryption": "none",
+                "flow": "",
+                "network": "ws",
+                "path": "/sub",
+                "pbk": "",
+                "port": 443,
+                "security": "tls",
+                "server": "95.182.101.185",
+                "sid": "",
+                "sni": "example.com",
+                "type": "vless",
+                "uuid": "2561db48-c4d2-4b36-808a-db5093797aeb"
+            }),
+        );
+        let options = MihomoConfigOptions::default();
+        let val = build_shoes_config(&n, options).expect("valid config with empty pbk should not fail as reality");
+        let yaml_str = serde_yaml::to_string(&val).unwrap();
+        assert!(yaml_str.contains("type: tls"));
+        assert!(!yaml_str.contains("type: reality"));
+        assert!(yaml_str.contains("alpn_protocols"));
+        assert!(yaml_str.contains("http/1.1"));
+        assert!(yaml_str.contains("no_resolve: true"));
     }
 }
