@@ -165,6 +165,14 @@ pub enum ConnectionsTab {
     Dns,
 }
 
+/// 服务连通性检测结果：经当前代理实测常用站点的延迟。
+#[derive(Debug, Clone)]
+pub struct ServiceCheck {
+    pub name: &'static str,
+    /// 实测延迟（毫秒）；None = 超时/连接失败。
+    pub latency_ms: Option<u128>,
+}
+
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
 pub struct DnsRecord {
@@ -314,6 +322,8 @@ pub enum BgMsg {
     },
     /// 落库后的出口健康：最近 24 小时的实测 + 当前连续失败次数。
     EgressHealth(Vec<crate::db::telemetry::HealthRow>, i64),
+    /// 服务连通性检测结果（Google/YouTube/GitHub/ChatGPT 经当前代理实测）。
+    ServiceChecks(Vec<ServiceCheck>),
     /// 出口切换历史：最近的若干条 + 今天换了几次 + 库里还留着多少条。
     EgressSwitches(Vec<crate::db::telemetry::SwitchRow>, i64, i64),
     /// 只要两个计数（今日几次 / 库里共几条）：控制台那行话得在没打开窗口时也是真的。

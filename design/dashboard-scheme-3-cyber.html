@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>方案 3 · 赛博终端霓虹</title>
+<style>
+  :root{
+    --bg:#060A0C; --panel:#0B1216; --panel2:#0E171C;
+    --line:#13222A; --line2:#1B2E38;
+    --text:#DCEBE6; --text2:#8FA8A4; --muted:#5A7370;
+    --neon:#00E5A0; --cyan:#3AE7FF; --mag:#FF5C8A; --amber:#FFC24D;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,"Courier New",monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    background:var(--bg);color:var(--text);font-size:14px;font-family:var(--mono);
+    -webkit-font-smoothing:antialiased;overflow-x:hidden;
+  }
+  body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+    background-image:linear-gradient(rgba(0,229,160,.035) 1px,transparent 1px),
+                     linear-gradient(90deg,rgba(0,229,160,.035) 1px,transparent 1px);
+    background-size:36px 36px;
+    mask-image:radial-gradient(ellipse 90% 70% at 50% 0%,#000 30%,transparent 100%);}
+  .num{font-variant-numeric:tabular-nums}
+  .app{position:relative;z-index:1;display:flex;min-height:100vh}
+
+  aside{width:60px;flex:none;border-right:1px solid var(--line);background:rgba(8,13,16,.8);
+    display:flex;flex-direction:column;align-items:center;gap:6px;padding:16px 0}
+  .logo{width:34px;height:34px;border:1px solid var(--neon);color:var(--neon);display:grid;place-items:center;
+    margin-bottom:12px;box-shadow:0 0 14px rgba(0,229,160,.25),inset 0 0 10px rgba(0,229,160,.12);
+    clip-path:polygon(0 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%)}
+  .nav{width:38px;height:38px;display:grid;place-items:center;color:var(--muted);cursor:pointer;transition:.15s;
+    clip-path:polygon(0 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%)}
+  .nav:hover{color:var(--cyan)}
+  .nav.active{color:#031512;background:var(--neon);box-shadow:0 0 18px rgba(0,229,160,.5)}
+  .spacer{flex:1}
+
+  main{flex:1;padding:24px 30px 40px;max-width:1420px}
+  header{display:flex;align-items:center;gap:14px;margin-bottom:18px}
+  h1{font-size:19px;font-weight:700;letter-spacing:2px;text-transform:uppercase}
+  h1::before{content:"// ";color:var(--neon)}
+  .conn{display:inline-flex;align-items:center;gap:8px;font-size:11.5px;color:var(--neon);
+    border:1px solid rgba(0,229,160,.35);padding:5px 12px;background:rgba(0,229,160,.07)}
+  .conn i{width:7px;height:7px;background:var(--neon);animation:blink 1.2s steps(2) infinite}
+  @keyframes blink{50%{opacity:.25}}
+  .scheme-badge{margin-left:auto;font-size:11px;color:var(--muted);border:1px dashed var(--line2);padding:6px 12px}
+
+  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}
+  .s3{grid-column:span 3}.s4{grid-column:span 4}.s6{grid-column:span 6}.s8{grid-column:span 8}
+  .card{position:relative;background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);
+    padding:16px 18px;transition:border-color .15s;
+    clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,0 100%)}
+  .card::before{content:"";position:absolute;top:0;left:0;width:100%;height:2px;
+    background:linear-gradient(90deg,var(--neon),transparent 55%);opacity:.55}
+  .card:hover{border-color:var(--line2)}
+  .c-label{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);
+    letter-spacing:1.5px;text-transform:uppercase;margin-bottom:12px}
+  .c-label::before{content:">";color:var(--neon)}
+  .c-label .peak{margin-left:auto;letter-spacing:0;text-transform:none;color:var(--text2)}
+
+  /* 状态主卡 */
+  .status{display:flex;justify-content:space-between;align-items:center;gap:20px}
+  .ip{font-size:30px;font-weight:700;letter-spacing:1px;color:var(--text);margin:6px 0 10px;
+    text-shadow:0 0 22px rgba(0,229,160,.25)}
+  .ip .cursor{display:inline-block;width:12px;height:26px;background:var(--neon);vertical-align:-3px;
+    margin-left:6px;animation:blink 1s steps(2) infinite}
+  .tags{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .tag{font-size:10.5px;padding:3px 9px;border:1px solid var(--line2);color:var(--text2);letter-spacing:1px}
+  .tag.good{color:var(--neon);border-color:rgba(0,229,160,.45);background:rgba(0,229,160,.08)}
+  .meta{display:flex;gap:32px}
+  .meta b{display:block;font-size:10px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px}
+  .meta span{font-size:13.5px;color:var(--cyan)}
+  .play{width:86px;height:86px;border-radius:50%;background:transparent;border:2px solid var(--neon);cursor:pointer;
+    display:grid;place-items:center;flex:none;position:relative;transition:.18s;
+    box-shadow:0 0 0 5px rgba(0,229,160,.08),0 0 34px rgba(0,229,160,.28)}
+  .play::after{content:"";position:absolute;inset:-11px;border:1px dashed rgba(0,229,160,.35);border-radius:50%;
+    animation:spin 14s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .play:hover{background:rgba(0,229,160,.1);box-shadow:0 0 0 5px rgba(0,229,160,.12),0 0 54px rgba(0,229,160,.45)}
+  .play svg{fill:var(--neon);margin-left:4px}
+
+  /* 速率 */
+  .rate-num{font-size:26px;font-weight:700;margin:2px 0 4px}
+  .rate-num small{font-size:12px;color:var(--muted);margin-left:3px}
+  .rate-sub{font-size:11px;color:var(--muted)}
+  .spark{display:block;margin-top:10px;width:100%}
+
+  /* 出站模式 */
+  .mode-card{display:flex;align-items:center;gap:16px}
+  .segment{flex:1;display:flex;gap:6px}
+  .seg{flex:1;padding:10px 0;background:rgba(0,229,160,.04);border:1px solid var(--line2);color:var(--text2);
+    font-family:var(--mono);font-size:12.5px;letter-spacing:2px;cursor:pointer;transition:.15s;
+    clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%)}
+  .seg:hover{color:var(--cyan);border-color:var(--cyan)}
+  .seg.active{background:rgba(0,229,160,.14);border-color:var(--neon);color:var(--neon);
+    box-shadow:inset 0 0 18px rgba(0,229,160,.12),0 0 12px rgba(0,229,160,.2)}
+
+  /* 开关 */
+  .t-card{display:flex;flex-direction:column;gap:12px}
+  .t-row{display:flex;align-items:center;justify-content:space-between}
+  .t-state{font-size:11px;color:var(--muted);letter-spacing:1px}
+  .t-state.on{color:var(--neon)}
+  .lan-value{font-size:20px;color:var(--cyan)}
+  .switch{position:relative;width:44px;height:22px;flex:none;cursor:pointer}
+  .switch input{opacity:0;width:0;height:0}
+  .knob{position:absolute;inset:0;border:1px solid var(--line2);background:#0A1216;transition:.18s}
+  .knob::after{content:"";position:absolute;width:14px;height:14px;background:var(--muted);top:3px;left:3px;transition:.18s}
+  .switch input:checked + .knob{border-color:var(--neon);box-shadow:0 0 12px rgba(0,229,160,.3)}
+  .switch input:checked + .knob::after{left:25px;background:var(--neon);box-shadow:0 0 8px rgba(0,229,160,.8)}
+
+  /* 配置 */
+  .cfg-name{font-size:16px;color:var(--cyan);margin-bottom:5px}
+  .cfg-sub{font-size:11px;color:var(--muted);margin-bottom:12px}
+  .cfg-sub b{color:var(--text2)}
+  .cfg-stats{display:flex;border:1px solid var(--line)}
+  .cfg-stats>div{flex:1;padding:10px 0;text-align:center;background:rgba(0,229,160,.02)}
+  .cfg-stats>div+div{border-left:1px solid var(--line)}
+  .cfg-stats b{display:block;font-size:18px;color:var(--neon)}
+  .cfg-stats span{font-size:10px;color:var(--muted);letter-spacing:1px}
+
+  /* 服务 */
+  .svc-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .svc{display:flex;align-items:center;gap:8px;border:1px solid var(--line);padding:9px 11px;background:rgba(255,255,255,.012)}
+  .svc-dot{width:7px;height:7px;flex:none}
+  .ok{background:var(--neon);box-shadow:0 0 8px rgba(0,229,160,.8)}
+  .warn{background:var(--amber);box-shadow:0 0 8px rgba(255,194,77,.7)}
+  .bad{background:var(--mag);box-shadow:0 0 8px rgba(255,92,138,.7);animation:blink 1s steps(2) infinite}
+  .svc-name{font-size:12.5px}
+  .ms{margin-left:auto;font-size:11px;font-weight:700}
+  .ms.good{color:var(--neon)}.ms.mid{color:var(--amber)}.ms.slow{color:var(--mag)}
+
+  /* 连接表 */
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{color:var(--muted);text-align:left;font-weight:400;font-size:10px;letter-spacing:1.5px;
+    text-transform:uppercase;padding:0 9px 9px;border-bottom:1px solid var(--line2)}
+  td{padding:9px;color:var(--text2);border-bottom:1px solid var(--line)}
+  tr:hover td{background:rgba(0,229,160,.03)}
+  td:first-child{color:var(--cyan)}
+  .chip{font-size:9.5px;padding:1px 6px;border:1px solid var(--line2);margin-left:6px;color:var(--muted)}
+  .down{color:var(--neon)}
+
+  /* 策略组 */
+  .group{border:1px solid var(--line);border-left:2px solid var(--neon);padding:11px 13px;margin-bottom:9px;
+    background:rgba(0,229,160,.025)}
+  .group:last-child{margin-bottom:0}
+  .g-top{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .g-name{font-size:13px;font-weight:700}
+  .g-tag{font-size:9.5px;color:var(--muted);border:1px solid var(--line2);padding:1px 7px;letter-spacing:1px}
+  .g-ms{margin-left:auto;font-size:12px;color:var(--neon)}
+  .g-bar{height:4px;background:var(--line);margin-bottom:7px;position:relative;overflow:hidden}
+  .g-bar i{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,var(--neon),var(--cyan));
+    box-shadow:0 0 10px rgba(0,229,160,.5)}
+  .g-sub{font-size:10.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="logo"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5"/></svg></div>
+    <div class="nav active"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7.5" height="7.5" rx="1"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1"/></svg></div>
+    <div class="nav"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg></div>
+    <div class="nav"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="2.4"/><circle cx="5" cy="19" r="2.4"/><circle cx="19" cy="19" r="2.4"/><path d="M12 7.5V12m0 0-5.5 4.8M12 12l5.5 4.8"/></svg></div>
+    <div class="nav"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 17l6-6 4 4 8-8"/></svg></div>
+    <div class="spacer"></div>
+    <div class="nav"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/><path d="M9 4v3m6 5v3m-4 5v3"/></svg></div>
+  </aside>
+
+  <main>
+    <header>
+      <h1>仪表盘</h1>
+      <span class="conn"><i></i>LINK UP · HK-01</span>
+      <span class="scheme-badge">方案 3 · 赛博终端霓虹 Cyber Terminal</span>
+    </header>
+
+    <div class="grid">
+      <div class="card s6 status">
+        <div>
+          <div class="c-label">状态 status</div>
+          <div class="ip num">119.131.199.175<span class="cursor"></span></div>
+          <div class="tags"><span class="tag">商业</span><span class="tag good">质度优</span><span class="tag">HY2</span></div>
+          <div class="meta">
+            <div><b>uptime</b><span class="num">02:47:13</span></div>
+            <div><b>org</b><span>Chinanet</span></div>
+            <div><b>proto</b><span>Hysteria2</span></div>
+          </div>
+        </div>
+        <button class="play"><svg width="28" height="28" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg></button>
+      </div>
+
+      <div class="card s3">
+        <div class="c-label">上传<span class="peak num">峰值 3.1 MB/s</span></div>
+        <div class="rate-num num" style="color:var(--cyan)">2.4<small>MB/s</small></div>
+        <div class="rate-sub num">累计 1.28 GB</div>
+        <svg class="spark" height="32" viewBox="0 0 200 32" preserveAspectRatio="none"><path d="M0 26 L18 22 L36 25 L54 16 L72 20 L90 10 L108 15 L126 7 L144 13 L162 5 L180 11 L200 6" fill="none" stroke="#3AE7FF" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </div>
+
+      <div class="card s3">
+        <div class="c-label">下载<span class="peak num">峰值 18.6 MB/s</span></div>
+        <div class="rate-num num" style="color:var(--neon)">12.8<small>MB/s</small></div>
+        <div class="rate-sub num">累计 6.42 GB</div>
+        <svg class="spark" height="32" viewBox="0 0 200 32" preserveAspectRatio="none"><path d="M0 28 L20 24 L40 27 L60 18 L80 22 L100 12 L120 17 L140 8 L160 14 L180 4 L200 9" fill="none" stroke="#00E5A0" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </div>
+
+      <div class="card s6 mode-card">
+        <div class="c-label" style="margin:0">出站模式</div>
+        <div class="segment">
+          <button class="seg active">规则</button>
+          <button class="seg">全局</button>
+          <button class="seg">直连</button>
+        </div>
+      </div>
+
+      <div class="card s3 t-card">
+        <div class="c-label" style="margin:0">系统代理</div>
+        <div class="t-row"><span class="t-state on">[ ON ]</span><label class="switch"><input type="checkbox" checked><span class="knob"></span></label></div>
+      </div>
+
+      <div class="card s3 t-card">
+        <div class="c-label" style="margin:0">虚拟网卡</div>
+        <div class="t-row"><span class="t-state">[ OFF ]</span><label class="switch"><input type="checkbox"><span class="knob"></span></label></div>
+      </div>
+
+      <div class="card s4 t-card">
+        <div class="c-label" style="margin:0">内网 IP</div>
+        <div class="lan-value num">192.168.56.1</div>
+        <div class="t-row"><span class="t-state">局域网代理 [ OFF ]</span><label class="switch"><input type="checkbox"><span class="knob"></span></label></div>
+      </div>
+
+      <div class="card s4">
+        <div class="c-label">配置 config</div>
+        <div class="cfg-name">v2rayaggregator</div>
+        <div class="cfg-sub">更新于 <b>10 小时前</b> · 远程订阅</div>
+        <div class="cfg-stats">
+          <div><b class="num">3</b><span>策略组</span></div>
+          <div><b class="num">4283</b><span>代理</span></div>
+          <div><b class="num">87</b><span>规则</span></div>
+        </div>
+      </div>
+
+      <div class="card s4">
+        <div class="c-label">服务状态 probe</div>
+        <div class="svc-grid">
+          <div class="svc"><span class="svc-dot ok"></span><span class="svc-name">Google</span><span class="ms good num">48ms</span></div>
+          <div class="svc"><span class="svc-dot ok"></span><span class="svc-name">GitHub</span><span class="ms good num">120ms</span></div>
+          <div class="svc"><span class="svc-dot warn"></span><span class="svc-name">YouTube</span><span class="ms mid num">212ms</span></div>
+          <div class="svc"><span class="svc-dot bad"></span><span class="svc-name">ChatGPT</span><span class="ms slow">TIMEOUT</span></div>
+        </div>
+      </div>
+
+      <div class="card s8">
+        <div class="c-label">实时连接<span class="peak num">23 条活跃</span></div>
+        <table>
+          <tr><th>目标</th><th>协议</th><th>出口</th><th>下载</th><th>上传</th><th>时长</th></tr>
+          <tr><td>www.youtube.com<span class="chip">视频</span></td><td>QUIC</td><td>HK-01</td><td class="num down">8.2 MB/s</td><td class="num">41 KB/s</td><td class="num">12:36</td></tr>
+          <tr><td>api.github.com<span class="chip">开发</span></td><td>TLS</td><td>JP-03</td><td class="num down">316 KB/s</td><td class="num">12 KB/s</td><td class="num">05:41</td></tr>
+          <tr><td>cdn.jsdelivr.net<span class="chip">下载</span></td><td>TLS</td><td>SG-02</td><td class="num down">2.9 MB/s</td><td class="num">88 KB/s</td><td class="num">01:08</td></tr>
+          <tr><td>dns.alidns.com</td><td>DoH</td><td>直连</td><td class="num down">2 KB/s</td><td class="num">1 KB/s</td><td class="num">00:03</td></tr>
+        </table>
+      </div>
+
+      <div class="card s4">
+        <div class="c-label">策略组 groups</div>
+        <div class="group">
+          <div class="g-top"><span class="g-name">自动选择</span><span class="g-tag">url-test</span><span class="g-ms num">86 ms</span></div>
+          <div class="g-bar"><i style="width:78%"></i></div>
+          <div class="g-sub num">12 个节点 · 当前 HK-01</div>
+        </div>
+        <div class="group">
+          <div class="g-top"><span class="g-name">流媒体</span><span class="g-tag">fallback</span><span class="g-ms num">154 ms</span></div>
+          <div class="g-bar"><i style="width:52%"></i></div>
+          <div class="g-sub num">6 个节点 · 当前 SG-02</div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

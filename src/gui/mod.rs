@@ -29,6 +29,7 @@ pub mod paste;
 pub mod poll;
 pub mod prepare;
 pub mod telemetry_view;
+pub mod perf;
 pub mod theme;
 pub mod types;
 pub mod view_models;
@@ -257,6 +258,31 @@ pub struct VpnApp {
     pub(crate) traffic_up_total: u64,
     pub(crate) traffic_down_total: u64,
     pub(crate) traffic_history: VecDeque<(f32, f32)>,
+    /// 代理本次运行的起始时刻（进入 Running 时记录，停止/失败清空），仪表盘算运行时长用。
+    pub(crate) proxy_started_at: Option<std::time::Instant>,
+    /// 服务连通性检测结果（Google/YouTube/GitHub/ChatGPT 经当前代理实测）。
+    pub(crate) service_checks: Option<Vec<types::ServiceCheck>>,
+    pub(crate) service_checks_running: bool,
+    /// 本轮检测的发起时刻：超过 35 秒没回结果就允许重新发起（自愈，避免永久"检测中"）。
+    pub(crate) service_check_started: Option<std::time::Instant>,
+    pub(crate) last_service_check: std::time::Instant,
+    /// 本机局域网 IP（UDP 探测主网卡出口地址，不发包），局域网代理开/关的文案用。
+    pub(crate) lan_ip: String,
+    pub(crate) last_lan_ip_check: std::time::Instant,
+    /// 上一帧性能原始采样（墙钟、CPU 累计时间、磁盘读写计数），差分算 CPU%/磁盘速率。
+    pub(crate) perf_prev: Option<(std::time::Instant, u64, u64, u64)>,
+    pub(crate) perf_stats: perf::PerfSample,
+    pub(crate) last_perf_sample: std::time::Instant,
+    /// 仪表盘策略组抽屉：当前展开的组名（None = 收起）。
+    pub(crate) group_drawer: Option<String>,
+    /// 策略组抽屉的节点筛选词（当场过滤，不落库）。
+    pub(crate) group_drawer_filter: String,
+    /// 策略组抽屉的地区筛选（all / HK / JP / US / SG / TW / KR / OTHER）。
+    pub(crate) group_drawer_region: String,
+    /// 各策略组选定的调度方式（组名 → 延迟选优/故障转移/负载均衡/手动指定）。
+    pub(crate) group_scheduling: std::collections::HashMap<String, String>,
+    /// 未启动代理时在抽屉里记住的调度选择（组名, 成员），进入 Running 后自动应用。
+    pub(crate) pending_group_pick: Option<(String, String)>,
     pub(crate) active_connections: Vec<ActiveConnectionInfo>,
     pub(crate) traffic_prev_sample: Option<(std::time::Instant, u64, u64)>,
     pub(crate) last_traffic_poll: std::time::Instant,
@@ -446,6 +472,23 @@ impl VpnApp {
             busy: false,
             proxy_busy: false,
             last_proxy_state_log: None,
+            proxy_started_at: None,
+            service_checks: None,
+            service_checks_running: false,
+            service_check_started: None,
+            // 置成"已过期"，首帧就立即开始第一轮服务连通性检测
+            last_service_check: std::time::Instant::now() - std::time::Duration::from_secs(61),
+            lan_ip: String::new(),
+            // 置成"已过期"，首帧就把局域网 IP 探测出来
+            last_lan_ip_check: std::time::Instant::now() - std::time::Duration::from_secs(61),
+            perf_prev: None,
+            perf_stats: perf::PerfSample::default(),
+            last_perf_sample: std::time::Instant::now(),
+            group_drawer: None,
+            group_drawer_filter: String::new(),
+            group_drawer_region: "all".into(),
+            pending_group_pick: None,
+            group_scheduling: std::collections::HashMap::new(),
             gist_pages: 100,
             gist_query_flags: crate::collector::GIST_DISCOVERY_QUERIES
                 .iter()
@@ -784,6 +827,71 @@ impl VpnApp {
             if let Ok(rows) = db.fetch_history_all(2000).await {
                 let _ = tx.send(BgMsg::FetchHistory(rows));
             }
+        });
+    }
+
+    /// 经当前代理实测 Google/YouTube/GitHub/ChatGPT 的连通性与延迟。
+    /// 代理运行中每 60 秒自动刷新一次；进入 Running 后立即跑一轮。
+    pub(crate) fn maybe_check_services(&mut self) {
+        // 上一轮 15 秒还没回结果就视为丢失，允许重新发起（自愈，避免永久"检测中"；
+        // 一轮是四站并行、单站 3s 超时，正常 3 秒内必回）
+        if self.service_checks_running {
+            if let Some(started) = self.service_check_started {
+                if started.elapsed() < std::time::Duration::from_secs(15) {
+                    return;
+                }
+            }
+        }
+        if self.last_service_check.elapsed() < std::time::Duration::from_secs(30) {
+            return;
+        }
+        self.last_service_check = std::time::Instant::now();
+        self.service_checks_running = true;
+        self.service_check_started = Some(std::time::Instant::now());
+
+        // 代理运行 → 经代理实测；未运行 → 直连实测（也能看出裸网是否可达）
+        let use_proxy = matches!(
+            self.proxy_status.state,
+            ProxyState::Running | ProxyState::Degraded
+        );
+        let proxy_port = self.proxy_status.mixed_port;
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            let mut builder = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(3))
+                .connect_timeout(std::time::Duration::from_secs(2));
+            if use_proxy {
+                builder = builder
+                    .proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{proxy_port}")).expect("本地混合端口代理地址有效"));
+            }
+            let client = builder.build().ok();
+
+            // 单站点探测：有响应即连通（Cloudflare 的 403 也证明链路是通的）
+            async fn probe(client: Option<&reqwest::Client>, url: &str) -> Option<u128> {
+                let started = std::time::Instant::now();
+                match client {
+                    Some(client) => match client.get(url).send().await {
+                        Ok(_) => Some(started.elapsed().as_millis()),
+                        Err(_) => None,
+                    },
+                    None => None,
+                }
+            }
+
+            // 四个站点并行探测，一轮最多 3 秒
+            let (g, c, h, y) = tokio::join!(
+                probe(client.as_ref(), "https://www.google.com/generate_204"),
+                probe(client.as_ref(), "https://chatgpt.com"),
+                probe(client.as_ref(), "https://api.github.com"),
+                probe(client.as_ref(), "https://www.youtube.com"),
+            );
+            let results = vec![
+                crate::gui::types::ServiceCheck { name: "Google", latency_ms: g },
+                crate::gui::types::ServiceCheck { name: "ChatGPT", latency_ms: c },
+                crate::gui::types::ServiceCheck { name: "GitHub", latency_ms: h },
+                crate::gui::types::ServiceCheck { name: "YouTube", latency_ms: y },
+            ];
+            let _ = tx.send(BgMsg::ServiceChecks(results));
         });
     }
 
@@ -2110,6 +2218,10 @@ impl VpnApp {
     }
 
     pub(crate) fn switch_proxy_node(&mut self, id: String, name: String, reason: &str) {
+        // 出口变化：服务连通性立即重测（先清掉旧结果，卡片转入"检测中"）
+        self.last_service_check =
+            std::time::Instant::now() - std::time::Duration::from_secs(61);
+        self.service_checks = None;
         let from_id = self.selected_proxy_node_id.clone();
         let from_name = self.selected_proxy_node_name.clone();
         if from_id.as_deref() != Some(id.as_str()) {
@@ -2964,6 +3076,10 @@ impl VpnApp {
     }
 
     pub(crate) fn select_kernel_member(&mut self, group: String, target: String) {
+        // 出口变化：服务连通性立即重测（先清掉旧结果，卡片转入"检测中"）
+        self.last_service_check =
+            std::time::Instant::now() - std::time::Duration::from_secs(61);
+        self.service_checks = None;
         let port = self.proxy_status.controller_port;
         let secret = self.proxy_status.controller_secret.clone();
         let tx = self.tx.clone();
@@ -3118,6 +3234,50 @@ impl VpnApp {
         self.pending_open_url = Some(url);
     }
 
+    /// 查询当前选中代理节点的落地风险。
+    /// 静默检测出口 IP 归属：不弹框，结果直接刷新状态卡的"机房/住宅"标签。
+    /// 启动代理或切换节点后自动调用。
+    pub(crate) fn refresh_egress_silently(&mut self) {
+        // 内核的 ProxyStatus（含 node_id）可能还没到，用当前选中节点兜底
+        let id = self
+            .proxy_status
+            .node_id
+            .clone()
+            .or_else(|| self.selected_proxy_node_id.clone());
+        let Some(id) = id else {
+            return;
+        };
+        // 已经在查或已有本节点的结果就不重复发起
+        if self.ip_risk_busy
+            || self.ip_risk_egress_pending
+            || (self.ip_risk_egress.is_some() && self.ip_risk_egress_for.as_deref() == Some(id.as_str()))
+        {
+            return;
+        }
+        self.ip_risk_egress = None;
+        self.ip_risk_egress_for = None;
+        self.ip_risk_egress_error = None;
+        self.ip_risk_egress_pending = true;
+        let url = format!("http://127.0.0.1:{}", self.proxy_status.mixed_port);
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            let client = reqwest::Client::new();
+            let egress = crate::ip_risk::lookup_egress(&client, &url)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(BgMsg::IpEgress(id, egress, false));
+        });
+    }
+
+    pub(crate) fn check_ip_risk(&mut self) {
+        let Some(id) = self.selected_proxy_node_id.clone() else {
+            self.show_ip_risk_dialog = true;
+            self.ip_risk_error = Some("请先选择代理节点".into());
+            self.status = "请先选择代理节点".into();
+            return;
+        };
+        self.check_ip_risk_for(&id);
+    }
 
     /// 查询指定节点的 IP 检测：入口 = 节点服务器（域名先解析）。出口只在该节点**正是
     /// 当前运行的节点**时才自动查 —— 本机只有一个 mixed 端口，拿它去查别的节点得到的是

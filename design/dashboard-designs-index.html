@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>仪表盘 UI 方案总览 · 4 套设计对比</title>
+<style>
+  :root{
+    --bg:#0C0D12; --card:#14151C; --stroke:#23242E;
+    --text:#EDEEF3; --text2:#9CA0B0; --muted:#62667A;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);min-height:100vh;padding:44px 48px 60px;
+    font-family:"SF Pro Display","Segoe UI Variable","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  header{margin-bottom:34px;display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap}
+  h1{font-size:27px;font-weight:800;letter-spacing:-.4px}
+  .sub{color:var(--text2);font-size:14px;padding-bottom:3px}
+  .count{margin-left:auto;font-size:12px;color:var(--muted);border:1px solid var(--stroke);padding:6px 14px;border-radius:99px}
+  .wall{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+  .scheme{cursor:pointer}
+  .frame-card{background:var(--card);border:1px solid var(--stroke);border-radius:18px;overflow:hidden;
+    transition:border-color .2s,transform .2s,box-shadow .2s}
+  .scheme:hover .frame-card{border-color:#3A3C4C;transform:translateY(-4px);box-shadow:0 20px 48px rgba(0,0,0,.45)}
+  .viewport{position:relative;width:100%;aspect-ratio:16/10;overflow:hidden}
+  .viewport iframe{position:absolute;top:0;left:0;width:1600px;height:1000px;
+    transform-origin:0 0;border:0;pointer-events:none}
+  .meta{display:flex;align-items:center;gap:12px;padding:15px 18px;border-top:1px solid var(--stroke)}
+  .idx{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font-size:13px;font-weight:800;flex:none}
+  .name{font-size:15px;font-weight:700}
+  .desc{font-size:12px;color:var(--text2);margin-top:2px}
+  .open{margin-left:auto;font-size:12px;color:var(--muted)}
+  .scheme:hover .open{color:var(--text)}
+  @media (max-width:1200px){.wall{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>仪表盘 UI 设计方案</h1>
+  <span class="sub">基于当前功能布局 · 4 套不同设计语言 · 点击卡片打开完整大图</span>
+  <span class="count">4 SCHEMES</span>
+</header>
+
+<div class="wall">
+  <a class="scheme" href="dashboard-scheme-1-aurora.html" target="_blank">
+    <div class="frame-card">
+      <div class="viewport"><iframe src="dashboard-scheme-1-aurora.html" style="transform:scale(0.625)" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta">
+        <span class="idx" style="background:linear-gradient(135deg,#4E8CFF,#22D3EE);color:#fff">1</span>
+        <div><div class="name">极光玻璃拟态 · Aurora Glass</div><div class="desc">深空底 + 流动极光背景 + 磨砂玻璃卡片 + 渐变光晕主按钮，现代 SaaS 质感</div></div>
+        <span class="open">打开完整预览 →</span>
+      </div>
+    </div>
+  </a>
+
+  <a class="scheme" href="dashboard-scheme-2-apple.html" target="_blank">
+    <div class="frame-card">
+      <div class="viewport"><iframe src="dashboard-scheme-2-apple.html" style="transform:scale(0.625)" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta">
+        <span class="idx" style="background:linear-gradient(135deg,#3AA0FF,#0071E3);color:#fff">2</span>
+        <div><div class="name">苹果原生雅致浅色 · Apple Light</div><div class="desc">温润灰白底 + 纯白卡片 + 系统蓝实体按钮 + 绿橙红语义色，桌面原生应用质感</div></div>
+        <span class="open">打开完整预览 →</span>
+      </div>
+    </div>
+  </a>
+
+  <a class="scheme" href="dashboard-scheme-3-cyber.html" target="_blank">
+    <div class="frame-card">
+      <div class="viewport"><iframe src="dashboard-scheme-3-cyber.html" style="transform:scale(0.625)" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta">
+        <span class="idx" style="background:#0A1410;color:#00E5A0;box-shadow:inset 0 0 0 1px #00E5A0">3</span>
+        <div><div class="name">赛博终端霓虹 · Cyber Terminal</div><div class="desc">网格暗底 + 切角面板 + 霓虹翡翠绿 + 等宽字体 + 呼吸闪烁状态灯，极客 HUD 风</div></div>
+        <span class="open">打开完整预览 →</span>
+      </div>
+    </div>
+  </a>
+
+  <a class="scheme" href="dashboard-scheme-4-violet.html" target="_blank">
+    <div class="frame-card">
+      <div class="viewport"><iframe src="dashboard-scheme-4-violet.html" style="transform:scale(0.625)" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta">
+        <span class="idx" style="background:linear-gradient(135deg,#8B5CF6,#F472B6);color:#fff">4</span>
+        <div><div class="name">暗夜紫新拟态 · Violet Night</div><div class="desc">深紫夜空渐变 + 悬浮厚阴影卡片 + 紫→粉渐变主按钮，柔软高级的夜间氛围</div></div>
+        <span class="open">打开完整预览 →</span>
+      </div>
+    </div>
+  </a>
+</div>
+</body>
+</html>

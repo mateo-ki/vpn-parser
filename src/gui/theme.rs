@@ -389,7 +389,7 @@ token_accessors! {
 // ---------------------------------------------------------------------------
 
 /// 卡片/弹框容器圆角。
-pub const RADIUS_CARD: u8 = 12;
+pub const RADIUS_CARD: u8 = 14;
 /// 导航项圆角。
 pub const RADIUS_NAV: u8 = 8;
 /// 按钮、标签页、状态胶囊圆角。
@@ -421,6 +421,11 @@ pub fn card_shadow() -> eframe::egui::Shadow {
 #[inline]
 pub fn is_light() -> bool {
     CURRENT.read().map(|p| p.light).unwrap_or(false)
+}
+
+#[inline]
+pub fn is_dark() -> bool {
+    !is_light()
 }
 
 #[inline]

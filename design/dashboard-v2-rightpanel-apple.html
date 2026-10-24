@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>方案 B · 右侧列表布局 · 苹果浅色</title>
+<style>
+  :root{
+    --page:#EBEEF2; --card:#FFFFFF; --stroke:#E3E6EB; --stroke2:#EEF0F4;
+    --text:#1D1D1F; --text2:#4B5260; --muted:#86868B;
+    --blue:#0071E3; --green:#1B7A3A; --greenbg:#E8F6ED;
+    --amber:#B45309; --amberbg:#FDF3E4; --red:#C92A2A; --redbg:#FCEBEA;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--page);color:var(--text);font-size:14px;
+    font-family:"SF Pro Text","Segoe UI Variable","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .num{font-variant-numeric:tabular-nums}
+  .app{display:flex;min-height:100vh}
+
+  aside{width:210px;flex:none;background:rgba(255,255,255,.72);border-right:1px solid var(--stroke);
+    padding:20px 14px;backdrop-filter:blur(20px)}
+  .logo-row{display:flex;align-items:center;gap:11px;padding:2px 8px 18px}
+  .logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(180deg,#3AA0FF,#0071E3);
+    display:grid;place-items:center;box-shadow:0 3px 10px rgba(0,113,227,.3)}
+  .logo-row b{font-size:15px}
+  .logo-row span{display:block;font-size:10.5px;color:var(--muted);font-weight:500}
+  .sec{font-size:11px;color:var(--muted);font-weight:600;padding:12px 10px 5px}
+  .item{display:flex;align-items:center;gap:10px;padding:8.5px 10px;border-radius:9px;color:var(--text2);
+    cursor:pointer;font-size:13.5px;font-weight:500;transition:.15s}
+  .item:hover{background:rgba(0,0,0,.045);color:var(--text)}
+  .item.active{background:var(--blue);color:#fff;font-weight:600;box-shadow:0 2px 8px rgba(0,113,227,.25)}
+
+  .center{flex:1;min-width:0;padding:28px 30px 44px;display:flex;flex-direction:column;gap:16px}
+  header{display:flex;align-items:center;gap:14px}
+  h1{font-size:24px;font-weight:750;letter-spacing:-.3px}
+  .conn{display:inline-flex;align-items:center;gap:8px;background:var(--greenbg);color:var(--green);
+    padding:6px 14px;border-radius:99px;font-size:12.5px;font-weight:650}
+  .conn i{width:7px;height:7px;border-radius:50%;background:var(--green)}
+  .mode-pill{display:flex;gap:5px;background:var(--page);border:1px solid var(--stroke2);padding:4px;border-radius:11px;width:100%}
+  .mode-pill button{flex:1;padding:8px 0;border:none;border-radius:8px;background:transparent;color:var(--text2);
+    font-size:12.5px;font-weight:600;cursor:pointer;transition:.15s}
+  .mode-pill button.active{background:var(--blue);color:#fff;box-shadow:0 2px 8px rgba(0,113,227,.25)}
+
+  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+  .s3{grid-column:span 3}.s6{grid-column:span 6}.s12{grid-column:span 12}
+  .card{background:var(--card);border:1px solid var(--stroke);border-radius:14px;padding:20px 22px;
+    box-shadow:0 1px 3px rgba(20,30,60,.05);transition:box-shadow .18s,transform .18s}
+  .card:hover{box-shadow:0 8px 24px rgba(20,30,60,.09);transform:translateY(-1px)}
+  .c-label{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text2);font-weight:650;margin-bottom:12px}
+  .c-label .peak{margin-left:auto;color:var(--muted);font-weight:500;font-size:12px}
+
+  .status{display:flex;justify-content:space-between;align-items:center;gap:20px}
+  .ip-row{display:flex;align-items:center;gap:14px;margin:8px 0 12px}
+  .flag{width:44px;height:44px;border-radius:12px;background:var(--page);border:1px solid var(--stroke);
+    display:grid;place-items:center;font-size:14px;font-weight:800}
+  .ip{font-size:33px;font-weight:800;letter-spacing:-.5px}
+  .tags{display:flex;gap:8px;margin-bottom:18px}
+  .tag{font-size:11.5px;padding:4px 11px;border-radius:99px;background:var(--page);color:var(--text2);border:1px solid var(--stroke)}
+  .tag.good{background:var(--greenbg);color:var(--green);border-color:transparent}
+  .meta{display:flex;gap:42px}
+  .meta b{display:block;font-size:11.5px;color:var(--muted);font-weight:500;margin-bottom:4px}
+  .meta span{font-size:14.5px;font-weight:650}
+  .play{width:86px;height:86px;border-radius:50%;border:none;flex:none;display:grid;place-items:center;cursor:pointer;
+    background:linear-gradient(180deg,#3AA0FF,#0071E3);
+    box-shadow:0 8px 22px rgba(0,113,227,.35),inset 0 1px 0 rgba(255,255,255,.4);transition:transform .18s}
+  .play:hover{transform:scale(1.04)}
+  .play:active{transform:scale(.97)}
+
+  .rate-num{font-size:27px;font-weight:800;margin:2px 0 4px}
+  .rate-num small{font-size:13px;color:var(--muted);font-weight:500;margin-left:3px}
+  .rate-sub{font-size:12px;color:var(--muted)}
+  .spark{display:block;margin-top:12px;width:100%}
+
+  .svc-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .svc{display:flex;align-items:center;gap:10px;background:var(--page);border:1px solid var(--stroke2);border-radius:11px;padding:11px 13px}
+  .svc-dot{width:8px;height:8px;border-radius:50%;flex:none}
+  .ok{background:#34C759}.warn{background:#FF9500}.bad{background:#FF3B30}
+  .svc-name{font-size:13.5px;font-weight:600}
+  .ms{margin-left:auto;font-size:12px;font-weight:700}
+  .ms.good{color:var(--green)}.ms.mid{color:var(--amber)}.ms.slow{color:var(--red)}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{color:var(--muted);font-weight:600;text-align:left;font-size:11px;letter-spacing:.6px;padding:0 10px 10px}
+  td{padding:11px 10px;color:var(--text2);border-top:1px solid var(--stroke2)}
+  td:first-child{color:var(--text);font-weight:600}
+  .chip{font-size:10.5px;padding:2px 8px;border-radius:99px;background:var(--page);border:1px solid var(--stroke);margin-left:6px;color:var(--muted)}
+  .down{color:var(--green)}
+
+  /* ---------- 右侧列表 ---------- */
+  .right{width:296px;flex:none;padding:28px 26px 44px 12px;display:flex;flex-direction:column;gap:14px}
+  .panel{background:var(--card);border:1px solid var(--stroke);border-radius:14px;padding:18px 20px;
+    box-shadow:0 1px 3px rgba(20,30,60,.05)}
+  .p-head{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text2);font-weight:650;margin-bottom:13px}
+  .p-head .act{margin-left:auto;color:var(--muted);cursor:pointer;display:flex;transition:.15s}
+  .p-head .act:hover{color:var(--blue);transform:rotate(60deg)}
+
+  .node-current{display:flex;align-items:center;gap:12px;background:var(--page);border:1px solid var(--stroke);
+    border-radius:12px;padding:13px 14px;margin-bottom:10px}
+  .node-flag{width:40px;height:40px;border-radius:11px;font-size:19px;display:grid;place-items:center;
+    background:#fff;border:1px solid var(--stroke)}
+  .node-info{min-width:0}
+  .node-name{font-size:14.5px;font-weight:750}
+  .node-sub{font-size:11px;color:var(--muted);margin-top:3px}
+  .node-ms{margin-left:auto;font-size:12px;font-weight:750;color:var(--green);background:var(--greenbg);
+    padding:4px 9px;border-radius:99px;flex:none}
+  .node-list{display:flex;flex-direction:column;gap:4px}
+  .node-item{display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:10px;cursor:pointer;transition:.15s}
+  .node-item:hover{background:var(--page)}
+  .node-item .em{font-size:15px}
+  .node-item .nm{font-size:12.5px;color:var(--text2);font-weight:550}
+  .node-item .lt{margin-left:auto;font-size:11px;font-weight:700}
+  .lt.g{color:var(--green)}.lt.m{color:var(--amber)}.lt.s{color:var(--red)}
+
+  .stack{display:flex;flex-direction:column}
+  .stack .panel{padding:0;overflow:hidden}
+  .row{display:flex;align-items:center;gap:13px;padding:15px 18px}
+  .row+.row{border-top:1px solid var(--stroke2)}
+  .row .ico{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;flex:none}
+  .row .tx{min-width:0;flex:1}
+  .row .tx b{display:block;font-size:13.5px;font-weight:700}
+  .row .tx span{display:block;font-size:11px;color:var(--muted);margin-top:3px}
+  .row .tx span.on{color:var(--green)}
+  .switch{position:relative;width:46px;height:27px;flex:none;cursor:pointer}
+  .switch input{opacity:0;width:0;height:0}
+  .knob{position:absolute;inset:0;border-radius:99px;background:#D6DAE1;transition:.2s}
+  .knob::after{content:"";position:absolute;width:23px;height:23px;border-radius:50%;background:#fff;top:2px;left:2px;
+    transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+  .switch input:checked + .knob{background:#34C759}
+  .switch input:checked + .knob::after{left:21px}
+  .ico-proxy{background:#EAF3FF;border:1px solid #CFE4FB;color:#0071E3}
+  .ico-tun{background:#F3EEFF;border:1px solid #E4DAFB;color:#7C5CD6}
+  .ico-lan{background:#E6F8FB;border:1px solid #CCEEF4;color:#0891B2}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="logo-row">
+      <div class="logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5"/></svg></div>
+      <div><b>VPN Parser</b><span>v1.6.5</span></div>
+    </div>
+    <div class="sec">概览</div>
+    <div class="item active"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>仪表盘</div>
+    <div class="item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>配置文件</div>
+    <div class="item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="2.4"/><circle cx="5" cy="19" r="2.4"/><circle cx="19" cy="19" r="2.4"/><path d="M12 7.5V12m0 0-5.5 4.8M12 12l5.5 4.8"/></svg>节点代理</div>
+    <div class="sec">工具</div>
+    <div class="item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 12h-4l-3 8-6-16-3 8H2"/></svg>连接日志</div>
+    <div class="item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.35.4.64.74.83"/></svg>设置</div>
+  </aside>
+
+  <div class="center">
+    <header>
+      <h1>仪表盘</h1>
+      <span class="conn"><i></i>已连接 · 香港 HK-01</span>
+    </header>
+
+    <div class="grid">
+      <div class="card s6 status">
+        <div>
+          <div class="c-label">状态</div>
+          <div class="ip-row"><span class="flag">CN</span><span class="ip num">119.131.199.175</span></div>
+          <div class="tags"><span class="tag">商业</span><span class="tag good">质度优</span><span class="tag">IPv4</span></div>
+          <div class="meta">
+            <div><b>运行时长</b><span class="num">02:47:13</span></div>
+            <div><b>组织</b><span>Chinanet</span></div>
+            <div><b>协议</b><span>Hysteria2</span></div>
+          </div>
+        </div>
+        <button class="play"><svg width="27" height="27" viewBox="0 0 24 24" fill="#fff"><path d="M8 5.5v13l11-6.5z"/></svg></button>
+      </div>
+
+      <div class="card s3">
+        <div class="c-label">上传<span class="peak num">峰值 3.1 MB/s</span></div>
+        <div class="rate-num num">2.4<small>MB/s</small></div>
+        <div class="rate-sub num">累计 1.28 GB</div>
+        <svg class="spark" height="32" viewBox="0 0 200 32" preserveAspectRatio="none"><path d="M0 26 L18 22 L36 25 L54 16 L72 20 L90 10 L108 15 L126 7 L144 13 L162 5 L180 11 L200 6" fill="none" stroke="#34C759" stroke-width="2.2" stroke-linecap="round"/></svg>
+      </div>
+
+      <div class="card s3">
+        <div class="c-label">下载<span class="peak num">峰值 18.6 MB/s</span></div>
+        <div class="rate-num num">12.8<small>MB/s</small></div>
+        <div class="rate-sub num">累计 6.42 GB</div>
+        <svg class="spark" height="32" viewBox="0 0 200 32" preserveAspectRatio="none"><path d="M0 28 L20 24 L40 27 L60 18 L80 22 L100 12 L120 17 L140 8 L160 14 L180 4 L200 9" fill="none" stroke="#0071E3" stroke-width="2.2" stroke-linecap="round"/></svg>
+      </div>
+
+      <div class="card s6">
+        <div class="c-label">服务状态</div>
+        <div class="svc-grid">
+          <div class="svc"><span class="svc-dot ok"></span><span class="svc-name">Google</span><span class="ms good num">48 ms</span></div>
+          <div class="svc"><span class="svc-dot ok"></span><span class="svc-name">GitHub</span><span class="ms good num">120 ms</span></div>
+          <div class="svc"><span class="svc-dot warn"></span><span class="svc-name">YouTube</span><span class="ms mid num">212 ms</span></div>
+          <div class="svc"><span class="svc-dot bad"></span><span class="svc-name">ChatGPT</span><span class="ms slow">超时</span></div>
+        </div>
+      </div>
+
+      <div class="card s6">
+        <div class="c-label">策略组</div>
+        <div class="svc-grid">
+          <div class="svc"><span class="svc-dot ok"></span><span class="svc-name">自动选择</span><span class="ms good num">86 ms · 12 节点</span></div>
+          <div class="svc"><span class="svc-dot ok"></span><span class="svc-name">流媒体</span><span class="ms mid num">154 ms · 6 节点</span></div>
+        </div>
+      </div>
+
+      <div class="card s12">
+        <div class="c-label">实时连接<span class="peak num">23 条活跃</span></div>
+        <table>
+          <tr><th>目标</th><th>协议</th><th>出口</th><th>下载</th><th>上传</th><th>时长</th></tr>
+          <tr><td>www.youtube.com<span class="chip">视频</span></td><td>QUIC</td><td>🇭🇰 HK-01</td><td class="num down">8.2 MB/s</td><td class="num">41 KB/s</td><td class="num">12:36</td></tr>
+          <tr><td>api.github.com<span class="chip">开发</span></td><td>TLS</td><td>🇯🇵 JP-03</td><td class="num down">316 KB/s</td><td class="num">12 KB/s</td><td class="num">05:41</td></tr>
+          <tr><td>cdn.jsdelivr.net<span class="chip">下载</span></td><td>TLS</td><td>🇸🇬 SG-02</td><td class="num down">2.9 MB/s</td><td class="num">88 KB/s</td><td class="num">01:08</td></tr>
+          <tr><td>dns.alidns.com</td><td>DoH</td><td>直连</td><td class="num down">2 KB/s</td><td class="num">1 KB/s</td><td class="num">00:03</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右侧功能列表 -->
+  <div class="right">
+    <div class="stack">
+      <div class="panel">
+        <div class="row">
+          <span class="ico ico-proxy"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></span>
+          <div class="tx"><b>系统代理</b><span class="on">已开启 · 127.0.0.1:7890</span></div>
+          <label class="switch"><input type="checkbox" checked><span class="knob"></span></label>
+        </div>
+        <div class="row">
+          <span class="ico ico-tun"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2 4 6v6c0 5 3.4 8.6 8 10 4.6-1.4 8-5 8-10V6z"/><path d="m9 12 2 2 4-4"/></svg></span>
+          <div class="tx"><b>TUN 模式</b><span>虚拟网卡 · 全局接管</span></div>
+          <label class="switch"><input type="checkbox"><span class="knob"></span></label>
+        </div>
+        <div class="row">
+          <span class="ico ico-lan"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="12" rx="2.5"/><path d="M8 20h8m-4-4v4"/></svg></span>
+          <div class="tx"><b>局域网共享</b><span>192.168.56.1:7890</span></div>
+          <label class="switch"><input type="checkbox"><span class="knob"></span></label>
+        </div>
+      </div>
+    </div>
+
+    <!-- 出站模式 -->
+    <div class="panel">
+      <div class="p-head">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v6m0 0 4-4m-4 4L8 5M5 21v-6a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v6"/></svg>
+        出站模式
+      </div>
+      <div class="mode-pill">
+        <button class="active">规则</button>
+        <button>全局</button>
+        <button>直连</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="p-head">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.4 4 5.3 4 8.5s-1.4 6.1-4 8.5c-2.6-2.4-4-5.3-4-8.5s1.4-6.1 4-8.5z"/></svg>
+        活动节点
+        <span class="act"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg></span>
+      </div>
+      <div class="node-current">
+        <span class="node-flag">🇭🇰</span>
+        <div class="node-info">
+          <div class="node-name">香港 HK-01 · IEPL</div>
+          <div class="node-sub">Hysteria2 · 专线</div>
+        </div>
+        <span class="node-ms num">86 ms</span>
+      </div>
+      <div class="node-list">
+        <div class="node-item"><span class="em">🇹🇼</span><span class="nm">台湾 TW-01 · IEPL</span><span class="lt g num">74 ms</span></div>
+        <div class="node-item"><span class="em">🇸🇬</span><span class="nm">新加坡 SG-02</span><span class="lt g num">98 ms</span></div>
+        <div class="node-item"><span class="em">🇯🇵</span><span class="nm">日本 JP-03 · BGP</span><span class="lt m num">132 ms</span></div>
+        <div class="node-item"><span class="em">🇺🇸</span><span class="nm">美国 US-11</span><span class="lt s num">256 ms</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

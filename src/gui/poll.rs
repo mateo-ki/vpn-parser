@@ -9,8 +9,72 @@ use eframe::egui;
 use std::sync::mpsc::TryRecvError;
 
 impl VpnApp {
+    /// 跟踪代理进入/退出 Running 的时刻，仪表盘"运行时长"的数据源。
+    pub(crate) fn note_proxy_state_transition(&mut self, new_state: ProxyState) {
+        let now_running = matches!(new_state, ProxyState::Running | ProxyState::Degraded);
+        let was_running = matches!(
+            self.proxy_status.state,
+            ProxyState::Running | ProxyState::Degraded
+        );
+        if now_running && !was_running {
+            self.proxy_started_at = Some(std::time::Instant::now());
+            // 刚跑起来就先测一轮服务连通性（把上次检测时间回拨到刚好"过期"）
+            self.last_service_check = std::time::Instant::now() - std::time::Duration::from_secs(61);
+            // 启动代理立刻检测出口 IP 归属（机房/住宅标签马上有真实数据）
+            self.check_ip_risk();
+            // 应用未启动代理时在抽屉里记住的调度选择
+            if let Some((grp, mbr)) = self.pending_group_pick.take() {
+                self.select_kernel_member(grp, mbr);
+            }
+        } else if matches!(new_state, ProxyState::Stopped | ProxyState::Failed) {
+            self.proxy_started_at = None;
+        }
+    }
+
+    /// 性能采样：每 500ms 差分一次本软件的 CPU / 内存 / 磁盘占用，供性能卡显示。
+    fn update_perf_stats(&mut self) {
+        if self.last_perf_sample.elapsed() < std::time::Duration::from_millis(500) {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let sample = crate::gui::perf::raw_sample();
+        let mem_mb = crate::gui::perf::working_set_mb();
+        let mut cpu = self.perf_stats.cpu_percent;
+        let mut disk = self.perf_stats.disk_mbps;
+        if let (Some(prev), Some(cur)) = (self.perf_prev, sample) {
+            let dt = now.duration_since(prev.0).as_secs_f32();
+            if dt > 0.05 {
+                // 除以全部逻辑核心数：100% = 满载所有核心（单核口径看着太夸张）
+                let cores = std::thread::available_parallelism()
+                    .map(|n| n.get() as f32)
+                    .unwrap_or(1.0);
+                let cpu_s = (cur.cpu_100ns.saturating_sub(prev.1)) as f32 / 10_000_000.0;
+                cpu = (cpu_s / dt * 100.0 / cores).clamp(0.0, 100.0);
+                let bytes = (cur.read_bytes.saturating_sub(prev.2)
+                    + cur.write_bytes.saturating_sub(prev.3)) as f32;
+                disk = (bytes / dt / (1024.0 * 1024.0)).max(0.0);
+            }
+        }
+        self.perf_prev = sample.map(|s| (now, s.cpu_100ns, s.read_bytes, s.write_bytes));
+        self.perf_stats = crate::gui::perf::PerfSample {
+            cpu_percent: cpu,
+            mem_mb,
+            disk_mbps: disk,
+        };
+        self.last_perf_sample = now;
+    }
+
     pub(crate) fn poll_bg(&mut self, ctx: &egui::Context) {
         let mut need_repaint = false;
+        // 服务连通性检测的自动刷新（每 60s 一轮；代理运行走代理、未运行走直连）
+        self.maybe_check_services();
+        // 本软件 CPU/内存/磁盘 占用采样（500ms 一次差分）
+        self.update_perf_stats();
+        // 局域网 IP 每 60 秒刷新一次（切换网络后能跟上）
+        if self.last_lan_ip_check.elapsed() > std::time::Duration::from_secs(60) {
+            self.last_lan_ip_check = std::time::Instant::now();
+            self.lan_ip = crate::gui::views::proxy::charts::detect_lan_ip();
+        }
         loop {
             match self.rx.try_recv() {
                 Ok(msg) => {
@@ -628,7 +692,14 @@ impl VpnApp {
                                 }
                             }
                         }
-                        BgMsg::ProxyStatus(status) => self.proxy_status = status,
+                        BgMsg::ProxyStatus(status) => {
+                            self.note_proxy_state_transition(status.state);
+                            self.proxy_status = status;
+                        }
+                        BgMsg::ServiceChecks(results) => {
+                            self.service_checks = Some(results);
+                            self.service_checks_running = false;
+                        }
                         BgMsg::ProxyConfig(Ok(config)) => self.set_proxy_config(config),
                         BgMsg::ProxyConfig(Err(error)) => {
                             self.status = format!("读取代理配置失败: {error}");
@@ -658,10 +729,14 @@ impl VpnApp {
                                     self.status = message;
                                     if self.status.contains("已停止") {
                                         self.proxy_status.state = ProxyState::Stopped;
+                                        self.note_proxy_state_transition(ProxyState::Stopped);
                                         self.proxy_status.local_proxy_ready = false;
                                         self.proxy_status.system_proxy_enabled = false;
                                     } else {
                                         self.proxy_status.state = ProxyState::Running;
+                                        self.note_proxy_state_transition(ProxyState::Running);
+                                        // 立刻静默查出口归属：状态卡"机房/住宅"马上有真实数据
+                                        self.refresh_egress_silently();
                                         self.proxy_status.local_proxy_ready = true;
                                         self.proxy_status.system_proxy_enabled = self.proxy_config.mode == ProxyMode::System;
                                     }
@@ -669,6 +744,7 @@ impl VpnApp {
                                 Err(error) => {
                                     self.status = format!("代理操作失败: {error}");
                                     self.proxy_status.state = ProxyState::Failed;
+                                    self.note_proxy_state_transition(ProxyState::Failed);
                                 }
                             }
                             self.reload_proxy();

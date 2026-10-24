@@ -184,23 +184,16 @@ impl VpnApp {
         // ===================================================================
         // macOS 药丸分段选择条 (Segmented Control Bar)
         // ===================================================================
-        let tr_charts = self.tr("汇总图表");
+        let tr_charts = self.tr("仪表盘");
         let tr_nodes = self.tr("可用节点");
         let tr_groups = self.tr("分流策略组");
-        let tr_conns = self.tr("活跃连接");
         let tr_rules = self.tr("分流规则");
         let tr_network = self.tr("DNS / TUN");
-        let conn_label = if self.active_connections.is_empty() {
-            tr_conns.to_string()
-        } else {
-            format!("{} ({})", tr_conns, self.active_connections.len())
-        };
 
         let tabs = [
             (ProxyPanel::Charts, Icon::Dashboard, tr_charts),
             (ProxyPanel::Nodes, Icon::Pin, tr_nodes),
             (ProxyPanel::Groups, Icon::Rocket, tr_groups),
-            (ProxyPanel::Connections, Icon::Radar, &conn_label),
             (ProxyPanel::Rules, Icon::Rules, tr_rules),
             (ProxyPanel::Network, Icon::Globe, tr_network),
             (ProxyPanel::Kernels, Icon::Cpu, self.tr("内核管理")),
@@ -232,9 +225,8 @@ impl VpnApp {
             ProxyPanel::Groups => {
                 ui.push_id("panel_groups", |ui| self.ui_proxy_groups(ui));
             }
-            ProxyPanel::Connections => {
-                ui.push_id("panel_connections", |ui| self.ui_proxy_connections(ui));
-            }
+            // 活跃连接已并入仪表盘"实时连接"卡（三个子页），不再作为独立标签页
+            ProxyPanel::Connections => {}
             ProxyPanel::Rules => {
                 ui.push_id("panel_rules", |ui| self.ui_proxy_rules(ui));
             }

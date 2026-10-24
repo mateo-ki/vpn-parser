@@ -28,13 +28,8 @@ use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, 
 use std::sync::atomic::Ordering;
 
 impl VpnApp {
-    pub(crate) fn ui_proxy_connections(&mut self, ui: &mut Ui) {
-        section_title(
-            ui,
-            "网络连接与 DNS 审计",
-            "分流流向监控、活动连接跟踪、进程带宽矩阵及内核实时 DNS 解析记录",
-        );
-
+    /// 仪表盘"实时连接"卡的嵌入视图：连接列表 / 连接进程 / DNS 记录 三个子页。
+    pub(crate) fn ui_proxy_connections_embedded(&mut self, ui: &mut Ui) {
         let is_running = self.proxy_status.state == ProxyState::Running;
         let mut close_id = None;
         let mut close_all = false;
@@ -80,17 +75,51 @@ impl VpnApp {
         let total_traffic = direct_bytes + proxy_bytes;
         let total_conns = (direct_conns + proxy_conns) as f32;
 
-        // 顶部 macOS 风格次级 Tab 切换栏：连接列表 / 连接进程 / DNS 记录
+        // 顶部紧凑子 Tab 切换栏：连接 / 进程 / DNS（小号胶囊，适配仪表盘卡片）
         ui.horizontal(|ui| {
-            let conn_str = format!("连接列表 ({})", self.active_connections.len());
-            let proc_str = format!("连接进程 ({})", process_list.len());
-            let dns_str = format!("DNS 记录 ({})", self.dns_records.len());
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let conn_str = format!("连接 ({})", self.active_connections.len());
+            let proc_str = format!("进程 ({})", process_list.len());
+            let dns_str = format!("DNS ({})", self.dns_records.len());
             let tabs = [
-                (ConnectionsTab::List, Icon::Radar, conn_str.as_str()),
-                (ConnectionsTab::Processes, Icon::Cpu, proc_str.as_str()),
-                (ConnectionsTab::Dns, Icon::Globe, dns_str.as_str()),
+                (ConnectionsTab::List, conn_str.as_str()),
+                (ConnectionsTab::Processes, proc_str.as_str()),
+                (ConnectionsTab::Dns, dns_str.as_str()),
             ];
-            macos_segmented_tabs(ui, &mut self.connections_tab, &tabs);
+            egui::Frame::NONE
+                .fill(theme::sidebar())
+                .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                .corner_radius(CornerRadius::same(99))
+                .inner_margin(Margin::symmetric(3, 2))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        for (tab, label) in tabs {
+                            let selected = self.connections_tab == tab;
+                            let (fill, fg) = if selected {
+                                (theme::accent(), theme::on_primary())
+                            } else {
+                                (Color32::TRANSPARENT, theme::text_secondary())
+                            };
+                            let inner = egui::Frame::NONE
+                                .fill(fill)
+                                .corner_radius(CornerRadius::same(99))
+                                .inner_margin(Margin::symmetric(8, 3))
+                                .show(ui, |ui| {
+                                    ui.set_min_height(14.0);
+                                    ui.label(RichText::new(label).size(9.5).strong().color(fg));
+                                });
+                            let resp = ui.interact(
+                                inner.response.rect,
+                                egui::Id::new(("conn_tab", label)),
+                                Sense::click(),
+                            );
+                            if resp.clicked() {
+                                self.connections_tab = tab;
+                            }
+                        }
+                    });
+                });
         });
 
         ui.add_space(8.0);
@@ -108,97 +137,9 @@ impl VpnApp {
             .show(ui, |ui| {
                 match self.connections_tab {
             ConnectionsTab::List => {
-                // 1. 工具栏：筛选 + 统计 + 批量断开
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("筛选");
-                    let conn_filter_field = ui.add(
-                        egui::TextEdit::singleline(&mut self.connections_filter)
-                            .hint_text("按进程、域名或 IP 过滤")
-                            .desired_width(180.0),
-                    );
-                    crate::gui::widgets::note_text_field(ui, &conn_filter_field);
-                    if !self.connections_filter.is_empty() && ui.button("清空").clicked() {
-                        self.connections_filter.clear();
-                    }
-                    ui.separator();
-                    ui.label(format!("当前活跃连接: {} 条", self.active_connections.len()));
-                    ui.separator();
-                    if ui
-                        .add_enabled(!self.active_connections.is_empty(), danger_btn("断开全部连接"))
-                        .on_hover_text("向内核发送指令关闭所有活动的网络连接")
-                        .clicked()
-                    {
-                        close_all = true;
-                    }
-                });
-
-                ui.add_space(8.0);
-
-                // 2. 分流流向概览
-                if total_conns > 0.0 {
-                    Frame::NONE
-                        .fill(theme::panel())
-                        .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
-                        .corner_radius(CornerRadius::same(10))
-                        .inner_margin(Margin::symmetric(14, 10))
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.vertical(|ui| {
-                                ui.horizontal(|ui| {
-                                    icon_label(ui, Icon::Radar, 13.0, theme::accent());
-                                    ui.label(RichText::new("分流流向监控").small().strong().color(theme::text_primary()));
-                                });
-                                ui.add_space(4.0);
-
-                                let segments = [
-                                    ("代理分流 (Proxy)", proxy_conns as f32, theme::accent()),
-                                    ("国内直连 (Direct)", direct_conns as f32, theme::border()),
-                                ];
-                                crate::gui::widgets::render_distribution_bar(ui, &segments, total_conns, 8.0);
-                                ui.add_space(4.0);
-
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "代理: {} 连 ({})",
-                                            proxy_conns,
-                                            format_bytes(proxy_bytes)
-                                        ))
-                                        .small()
-                                        .color(theme::accent_strong()),
-                                    );
-                                    ui.separator();
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "直连: {} 连 ({})",
-                                            direct_conns,
-                                            format_bytes(direct_bytes)
-                                        ))
-                                        .small()
-                                        .color(theme::text_secondary()),
-                                    );
-                                });
-                            });
-                        });
-                    ui.add_space(8.0);
-                }
-
-                // 3. 连接列表表格
-                let filter = self.connections_filter.trim().to_lowercase();
-                let filtered: Vec<&ActiveConnectionInfo> = self
-                    .active_connections
-                    .iter()
-                    .filter(|c| {
-                        if filter.is_empty() {
-                            true
-                        } else {
-                            c.process.to_lowercase().contains(&filter)
-                                || c.host.to_lowercase().contains(&filter)
-                                || c.destination.to_lowercase().contains(&filter)
-                                || c.rule.to_lowercase().contains(&filter)
-                        }
-                    })
-                    .collect();
+                // 连接列表表格（只保留表格本身）
+                let filtered: Vec<&ActiveConnectionInfo> =
+                    self.active_connections.iter().collect();
 
                 if filtered.is_empty() {
                     card_frame().show(ui, |ui| {
@@ -224,7 +165,6 @@ impl VpnApp {
                                         header_cell(ui, "分流规则");
                                         header_cell(ui, "上传流量");
                                         header_cell(ui, "下载流量");
-                                        header_cell(ui, "操作");
                                         ui.end_row();
 
                                         for c in filtered {
@@ -249,9 +189,18 @@ impl VpnApp {
                                                 .corner_radius(CornerRadius::same(6))
                                                 .inner_margin(Margin::symmetric(6, 2))
                                                 .show(ui, |ui| {
+                                                    ui.set_max_width(110.0);
                                                     ui.horizontal(|ui| {
                                                         icon_label(ui, Icon::Terminal, 10.0, theme::muted());
-                                                        ui.label(RichText::new(&c.process).strong().small().color(theme::text_primary()));
+                                                        ui.add(
+                                                            egui::Label::new(
+                                                                RichText::new(&c.process)
+                                                                    .strong()
+                                                                    .small()
+                                                                    .color(theme::text_primary()),
+                                                            )
+                                                            .truncate(),
+                                                        );
                                                     });
                                                 });
 
@@ -261,8 +210,16 @@ impl VpnApp {
                                             } else {
                                                 c.destination.clone()
                                             };
-                                            ui.label(RichText::new(target_text).small().color(theme::text_primary()))
-                                                .on_hover_text(&c.destination);
+                                            ui.add_sized(
+                                                [170.0, 16.0],
+                                                egui::Label::new(
+                                                    RichText::new(&target_text)
+                                                        .small()
+                                                        .color(theme::text_primary()),
+                                                )
+                                                .truncate(),
+                                            )
+                                            .on_hover_text(&c.destination);
 
                                             // 4. 分流规则微标
                                             let is_direct = c.target.eq_ignore_ascii_case("direct") || c.rule.contains("DIRECT");
@@ -276,7 +233,16 @@ impl VpnApp {
                                                 .corner_radius(CornerRadius::same(6))
                                                 .inner_margin(Margin::symmetric(6, 2))
                                                 .show(ui, |ui| {
-                                                    ui.label(RichText::new(&c.rule).small().strong().color(rule_color));
+                                                    ui.set_max_width(120.0);
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            RichText::new(&c.rule)
+                                                                .small()
+                                                                .strong()
+                                                                .color(rule_color),
+                                                        )
+                                                        .truncate(),
+                                                    );
                                                 });
 
                                             // 5. 上传
@@ -294,14 +260,6 @@ impl VpnApp {
                                                     .color(theme::accent_strong()),
                                             );
 
-                                            // 7. 操作
-                                            if ui
-                                                .add(danger_btn("断开"))
-                                                .on_hover_text("断开此连接")
-                                                .clicked()
-                                            {
-                                                close_id = Some(c.id.clone());
-                                            }
                                             ui.end_row();
                                         }
                                     });
@@ -309,57 +267,9 @@ impl VpnApp {
                 }
             }
             ConnectionsTab::Processes => {
-                // 1. 工具栏
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("筛选进程");
-                    let proc_filter_field = ui.add(
-                        egui::TextEdit::singleline(&mut self.connections_process_filter)
-                            .hint_text("按进程名过滤")
-                            .desired_width(180.0),
-                    );
-                    crate::gui::widgets::note_text_field(ui, &proc_filter_field);
-                    if !self.connections_process_filter.is_empty() && ui.button("清空").clicked() {
-                        self.connections_process_filter.clear();
-                    }
-                    ui.separator();
-                    ui.label(format!("当前活跃进程: {} 个", process_list.len()));
-                    ui.separator();
-                    ui.label(RichText::new(format!("进程产生总流量: {}", format_bytes(total_traffic))).small().color(theme::muted()));
-                });
-
-                ui.add_space(8.0);
-
-                // 2. Top 进程矩阵卡片
-                let top_matrix: Vec<(&str, u64, usize)> = process_list
-                    .iter()
-                    .map(|p| (p.0.as_str(), p.1 + p.2, p.3))
-                    .collect();
-                if !top_matrix.is_empty() {
-                    Frame::NONE
-                        .fill(theme::panel())
-                        .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
-                        .corner_radius(CornerRadius::same(10))
-                        .inner_margin(Margin::symmetric(14, 10))
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.vertical(|ui| {
-                                ui.horizontal(|ui| {
-                                    icon_label(ui, Icon::Cpu, 13.0, theme::accent());
-                                    ui.label(RichText::new("Top 进程流量与带宽占比").small().strong().color(theme::text_primary()));
-                                });
-                                ui.add_space(4.0);
-                                crate::gui::widgets::render_top_processes_card(ui, &top_matrix, total_traffic);
-                            });
-                        });
-                    ui.add_space(8.0);
-                }
-
-                // 3. 进程详细聚合表
-                let p_filter = self.connections_process_filter.trim().to_lowercase();
-                let filtered_procs: Vec<&(String, u64, u64, usize, usize, usize)> = process_list
-                    .iter()
-                    .filter(|p| p_filter.is_empty() || p.0.to_lowercase().contains(&p_filter))
-                    .collect();
+                // 进程表格（只保留表格本身）
+                let filtered_procs: Vec<&(String, u64, u64, usize, usize, usize)> =
+                    process_list.iter().collect();
 
                 if filtered_procs.is_empty() {
                     card_frame().show(ui, |ui| {
@@ -378,7 +288,6 @@ impl VpnApp {
                                         header_cell(ui, "上行流量");
                                         header_cell(ui, "下行流量");
                                         header_cell(ui, "总流量");
-                                        header_cell(ui, "操作");
                                         ui.end_row();
 
                                         for p in filtered_procs {
@@ -396,9 +305,17 @@ impl VpnApp {
                                                 .corner_radius(CornerRadius::same(6))
                                                 .inner_margin(Margin::symmetric(8, 4))
                                                 .show(ui, |ui| {
+                                                    ui.set_max_width(120.0);
                                                     ui.horizontal(|ui| {
                                                         icon_label(ui, Icon::Terminal, 11.0, theme::accent());
-                                                        ui.label(RichText::new(proc_name).strong().color(theme::text_primary()));
+                                                        ui.add(
+                                                            egui::Label::new(
+                                                                RichText::new(proc_name)
+                                                                    .strong()
+                                                                    .color(theme::text_primary()),
+                                                            )
+                                                            .truncate(),
+                                                        );
                                                     });
                                                 });
 
@@ -424,14 +341,6 @@ impl VpnApp {
                                             // 6. 总流量
                                             ui.label(RichText::new(format_bytes(proc_traffic)).strong().color(theme::text_primary()));
 
-                                            // 7. 操作：关闭该进程的所有连接
-                                            if ui
-                                                .add(danger_btn("断开全部"))
-                                                .on_hover_text(format!("关闭进程 {proc_name} 的全部活动连接"))
-                                                .clicked()
-                                            {
-                                                close_process_name = Some(proc_name.clone());
-                                            }
                                             ui.end_row();
                                         }
                                     });
@@ -439,65 +348,8 @@ impl VpnApp {
                 }
             }
             ConnectionsTab::Dns => {
-                // 1. 工具栏：筛选 + 统计 + 清空
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("筛选记录");
-                    let dns_filter_field = ui.add(
-                        egui::TextEdit::singleline(&mut self.connections_dns_filter)
-                            .hint_text("按域名、解析 IP 或发起进程过滤")
-                            .desired_width(200.0),
-                    );
-                    crate::gui::widgets::note_text_field(ui, &dns_filter_field);
-                    if !self.connections_dns_filter.is_empty() && ui.button("清空").clicked() {
-                        self.connections_dns_filter.clear();
-                    }
-                    ui.separator();
-                    ui.label(format!("已记录 DNS 轨迹: {} 条", self.dns_records.len()));
-                    ui.separator();
-                    if ui.button("清空全部记录").clicked() {
-                        self.dns_records.clear();
-                    }
-                });
-
-                ui.add_space(8.0);
-
-                // 2. DNS 运行配置摘要
-                Frame::NONE
-                    .fill(theme::panel())
-                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
-                    .corner_radius(CornerRadius::same(10))
-                    .inner_margin(Margin::symmetric(14, 10))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            icon_label(ui, Icon::Globe, 14.0, theme::accent());
-                            ui.label(RichText::new("DNS 架构状态:").strong().color(theme::text_primary()));
-                            let (mode_str, mode_color) = match self.proxy_config.dns.enhanced_mode {
-                                DnsEnhancedMode::FakeIp => ("Fake-IP (秒级并发映射)", theme::accent_strong()),
-                                DnsEnhancedMode::RedirHost => ("Redir-Host (真实解析直通)", theme::accent()),
-                            };
-                            ui.label(RichText::new(mode_str).strong().color(mode_color));
-                            ui.separator();
-                            let ns = self.proxy_config.dns.nameservers.first().map(|s| s.as_str()).unwrap_or("doh.pub");
-                            ui.label(RichText::new(format!("主上游: {ns}")).small().color(theme::muted()));
-                        });
-                    });
-
-                ui.add_space(8.0);
-
-                // 3. DNS 记录表格
-                let d_filter = self.connections_dns_filter.trim().to_lowercase();
-                let filtered_dns: Vec<&DnsRecord> = self
-                    .dns_records
-                    .iter()
-                    .filter(|r| {
-                        d_filter.is_empty()
-                            || r.host.to_lowercase().contains(&d_filter)
-                            || r.ip.to_lowercase().contains(&d_filter)
-                            || r.process.to_lowercase().contains(&d_filter)
-                            || r.rule.to_lowercase().contains(&d_filter)
-                    })
-                    .collect();
+                // DNS 记录表格（只保留表格本身）
+                let filtered_dns: Vec<&DnsRecord> = self.dns_records.iter().collect();
 
                 if filtered_dns.is_empty() {
                     card_frame().show(ui, |ui| {
@@ -523,7 +375,6 @@ impl VpnApp {
                                         header_cell(ui, "发起进程");
                                         header_cell(ui, "网络");
                                         header_cell(ui, "分流动作");
-                                        header_cell(ui, "操作");
                                         ui.end_row();
 
                                         for r in filtered_dns {
@@ -531,8 +382,17 @@ impl VpnApp {
                                             ui.label(RichText::new(&r.time_str).small().monospace().color(theme::muted()));
 
                                             // 2. 域名
-                                            ui.label(RichText::new(&r.host).strong().small().color(theme::text_primary()))
-                                                .on_hover_text(&r.host);
+                                            ui.add_sized(
+                                                [150.0, 16.0],
+                                                egui::Label::new(
+                                                    RichText::new(&r.host)
+                                                        .strong()
+                                                        .small()
+                                                        .color(theme::text_primary()),
+                                                )
+                                                .truncate(),
+                                            )
+                                            .on_hover_text(&r.host);
 
                                             // 3. 解析目标
                                             ui.label(RichText::new(&r.ip).small().monospace().color(theme::text_secondary()))
@@ -544,9 +404,17 @@ impl VpnApp {
                                                 .corner_radius(CornerRadius::same(6))
                                                 .inner_margin(Margin::symmetric(6, 2))
                                                 .show(ui, |ui| {
+                                                    ui.set_max_width(110.0);
                                                     ui.horizontal(|ui| {
                                                         icon_label(ui, Icon::Terminal, 9.0, theme::muted());
-                                                        ui.label(RichText::new(&r.process).small().color(theme::text_primary()));
+                                                        ui.add(
+                                                            egui::Label::new(
+                                                                RichText::new(&r.process)
+                                                                    .small()
+                                                                    .color(theme::text_primary()),
+                                                            )
+                                                            .truncate(),
+                                                        );
                                                     });
                                                 });
 
@@ -576,18 +444,18 @@ impl VpnApp {
                                                 .corner_radius(CornerRadius::same(6))
                                                 .inner_margin(Margin::symmetric(6, 2))
                                                 .show(ui, |ui| {
-                                                    ui.label(RichText::new(&r.rule).small().strong().color(rule_color));
+                                                    ui.set_max_width(120.0);
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            RichText::new(&r.rule)
+                                                                .small()
+                                                                .strong()
+                                                                .color(rule_color),
+                                                        )
+                                                        .truncate(),
+                                                    );
                                                 });
 
-                                            // 7. 复制
-                                            ui.horizontal(|ui| {
-                                                if ui.small_button("复制域名").clicked() {
-                                                    copy_text_payload = Some(r.host.clone());
-                                                }
-                                                if ui.small_button("复制IP").clicked() {
-                                                    copy_text_payload = Some(r.ip.clone());
-                                                }
-                                            });
                                             ui.end_row();
                                         }
                                     });
