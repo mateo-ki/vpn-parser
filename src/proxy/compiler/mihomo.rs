@@ -474,8 +474,11 @@ impl BackendCompiler for MihomoCompiler {
                     IRMatcher::IpCidr(c) => format!("IP-CIDR,{c},{target}"),
                     IRMatcher::Port(p) => format!("DST-PORT,{p},{target}"),
                     IRMatcher::PortRange(s, e) => format!("DST-PORT,{s}-{e},{target}"),
-                    IRMatcher::GeoSite(s) => format!("GEOSITE,{s},{target}"),
+                    IRMatcher::GeoSite(s) => {
+                        format!("GEOSITE,{},{}", crate::geo::normalize_geo_code(s), target)
+                    }
                     IRMatcher::GeoIp(c) => {
+                        let c = crate::geo::normalize_geo_code(c);
                         if ir_rule.no_resolve {
                             format!("GEOIP,{c},{target},no-resolve")
                         } else {

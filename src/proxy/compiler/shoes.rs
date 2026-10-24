@@ -406,32 +406,45 @@ fn translate_ir_rule(rule: &crate::proxy::ir::IRRule) -> Vec<Value> {
             IRMatcher::Quic => {}
             IRMatcher::GeoSite(site) => {
                 if let Some(p) = find_geo_file("geosite.dat") {
-                    let mut m = Mapping::new();
-                    m.insert(
-                        Value::String("path".into()),
-                        Value::String(p.to_string_lossy().replace('\\', "/")),
-                    );
-                    m.insert(
-                        Value::String("format".into()),
-                        Value::String("geosite_dat".into()),
-                    );
-                    m.insert(Value::String("code".into()), Value::String(site.clone()));
-                    geo_predicates.push(Value::Mapping(m));
+                    // 订阅惯用别名（LAN→private）先归一；内核对"类别不存在"是
+                    // 致命错误（整个配置拒启），再查一遍存在性，查不到的规则
+                    // 直接丢弃 —— 该规则本来也永远匹配不上。
+                    let code = crate::geo::normalize_geo_code(site);
+                    if crate::geo::dat_has_category(&p, code) {
+                        let mut m = Mapping::new();
+                        m.insert(
+                            Value::String("path".into()),
+                            Value::String(p.to_string_lossy().replace('\\', "/")),
+                        );
+                        m.insert(
+                            Value::String("format".into()),
+                            Value::String("geosite_dat".into()),
+                        );
+                        m.insert(Value::String("code".into()), Value::String(code.into()));
+                        geo_predicates.push(Value::Mapping(m));
+                    } else {
+                        tracing::warn!(code = %code, "geosite.dat 中不存在该类别，规则已跳过");
+                    }
                 }
             }
             IRMatcher::GeoIp(country) => {
                 if let Some(p) = find_geo_file("geoip.dat") {
-                    let mut m = Mapping::new();
-                    m.insert(
-                        Value::String("path".into()),
-                        Value::String(p.to_string_lossy().replace('\\', "/")),
-                    );
-                    m.insert(
-                        Value::String("format".into()),
-                        Value::String("geoip_dat".into()),
-                    );
-                    m.insert(Value::String("code".into()), Value::String(country.clone()));
-                    geo_predicates.push(Value::Mapping(m));
+                    let code = crate::geo::normalize_geo_code(country);
+                    if crate::geo::dat_has_category(&p, code) {
+                        let mut m = Mapping::new();
+                        m.insert(
+                            Value::String("path".into()),
+                            Value::String(p.to_string_lossy().replace('\\', "/")),
+                        );
+                        m.insert(
+                            Value::String("format".into()),
+                            Value::String("geoip_dat".into()),
+                        );
+                        m.insert(Value::String("code".into()), Value::String(code.into()));
+                        geo_predicates.push(Value::Mapping(m));
+                    } else {
+                        tracing::warn!(code = %code, "geoip.dat 中不存在该类别，规则已跳过");
+                    }
                 }
             }
             _ => {}

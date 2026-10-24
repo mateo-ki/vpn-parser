@@ -190,6 +190,74 @@ fn human_mb(bytes: u64) -> String {
     format!("{:.1}MB", bytes as f64 / 1_048_576.0)
 }
 
+/// 订阅惯用类别码 → dat 库实际类别。
+///
+/// `LAN` 是各家订阅的常见写法，但 Loyalsoldier 的 geosite/geoip 库里
+/// 都没有这个类别（对应类别叫 `private`），直传会让内核拒启
+/// （shoes：`DAT category "LAN" not found`）。映射后语义不变：局域网/私有地址直连。
+pub fn normalize_geo_code(code: &str) -> &str {
+    if code.eq_ignore_ascii_case("lan") {
+        "private"
+    } else {
+        code
+    }
+}
+
+/// dat 文件（protobuf）里是否存在指定类别码（大小写不敏感，与内核判定一致）。
+///
+/// 为什么需要：内核对"类别不存在"是**致命错误** —— shoes 会拒绝整个配置
+/// （`DAT category "LAN" not found`，代理起不来），而订阅里常见的
+/// `GEOIP,LAN,DIRECT` 在 Loyalsoldier 的库里根本没有这个类别（对应的是
+/// `private`）。编译配置前先查一遍，不存在的类别码对应规则直接丢弃：
+/// 该规则本来也永远匹配不上，丢掉比让内核拒启好。
+///
+/// 文件读不出 / 结构解析不了时返回 true —— 解析是尽力而为，裁决权交还内核，
+/// 让它报出真实的错误。
+pub fn dat_has_category(path: &Path, code: &str) -> bool {
+    let Ok(data) = std::fs::read(path) else {
+        return true;
+    };
+    let code = code.as_bytes();
+    let mut pos = 0usize;
+    while pos < data.len() {
+        // 顶层是重复的 Category 消息（field 1, length-delimited）；
+        // 出现别的 tag 说明结构对不上，交给内核裁决。
+        if data[pos] != 0x0a {
+            return true;
+        }
+        pos += 1;
+        let mut length = 0usize;
+        let mut shift = 0u32;
+        loop {
+            let Some(&b) = data.get(pos) else { return true };
+            pos += 1;
+            length |= ((b & 0x7f) as usize) << shift;
+            if b & 0x80 == 0 {
+                break;
+            }
+            shift += 7;
+            if shift > 28 {
+                return true;
+            }
+        }
+        let Some(chunk) = data.get(pos..pos + length) else {
+            return true;
+        };
+        pos += length;
+        // Category 内部 field 1（0x0a）是类别码字符串
+        if chunk.first() == Some(&0x0a) {
+            if let Some(&code_len) = chunk.get(1) {
+                if let Some(found) = chunk.get(2..2 + code_len as usize) {
+                    if found.eq_ignore_ascii_case(code) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 fn host_of(url: &str) -> String {
     url.split('/')
         .nth(2)
@@ -201,6 +269,42 @@ fn host_of(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 手搓一个最小 dat：顶层重复 Category(field 1)，内部 field 1 是类别码字符串。
+    fn build_dat(codes: &[&str]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for code in codes {
+            let inner_len = 2 + code.len(); // 0x0a + code_len 字节 + code
+            out.push(0x0a);
+            out.push(inner_len as u8);
+            out.push(0x0a);
+            out.push(code.len() as u8);
+            out.extend_from_slice(code.as_bytes());
+        }
+        out
+    }
+
+    #[test]
+    fn dat_category_lookup_is_case_insensitive_and_lenient_on_corruption() {
+        let dir = std::env::temp_dir().join("vpn-parser-dat-category-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("geosite.dat");
+        std::fs::write(&path, build_dat(&["cn", "private", "category-ads-all"])).unwrap();
+
+        // 命中（任意大小写）
+        assert!(dat_has_category(&path, "cn"));
+        assert!(dat_has_category(&path, "CN"));
+        assert!(dat_has_category(&path, "CATEGORY-ADS-ALL"));
+        // 不存在 → false（编译器据此丢弃规则，防内核拒启）
+        assert!(!dat_has_category(&path, "lan"));
+        assert!(!dat_has_category(&path, "LAN"));
+        // 文件不存在 / 结构对不上 → true（裁决权交还内核）
+        assert!(dat_has_category(&dir.join("missing.dat"), "cn"));
+        let corrupt = dir.join("corrupt.dat");
+        std::fs::write(&corrupt, [0x08, 0x01, 0x02]).unwrap();
+        assert!(dat_has_category(&corrupt, "cn"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn truncated_or_html_bodies_are_rejected() {

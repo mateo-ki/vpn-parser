@@ -529,7 +529,8 @@ impl ProxyManager {
         }
         // 分流数据库没备好就别急着起内核：半截库会让内核直接拒绝启动，而且报出来的
         // 是一句要人复制才能看懂的长错误。这里缺就补（镜像优先，其次系统代理）。
-        if kernel == KernelKind::Mihomo && runtime.options.uses_geo() {
+        // 不限 Mihomo：shoes 的 geosite/geoip 规则同样引用这份库（shared mihomo 目录）。
+        if runtime.options.uses_geo() {
             let dir = crate::geo::mihomo_dir();
             if !crate::geo::geo_ready(&dir) {
                 let system = crate::system_proxy::current_system_proxy_url();
