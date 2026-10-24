@@ -3238,6 +3238,10 @@ impl VpnApp {
     /// 静默检测出口 IP 归属：不弹框，结果直接刷新状态卡的"机房/住宅"标签。
     /// 启动代理或切换节点后自动调用。
     pub(crate) fn refresh_egress_silently(&mut self) {
+        // TUN 模式启动后不要自动进行 IP 检测
+        if self.proxy_config.mode.has_tun() {
+            return;
+        }
         // 内核的 ProxyStatus（含 node_id）可能还没到，用当前选中节点兜底
         let id = self
             .proxy_status
@@ -3290,6 +3294,10 @@ impl VpnApp {
     /// 静默 = 不弹详情框、不抢状态栏文案（状态栏那个「IP 检测」按钮 2026-10-23 撤掉了，
     /// 手动入口还剩节点卡片和右键，那条会照常弹框）。
     pub(crate) fn auto_ip_risk_for_egress(&mut self) {
+        // TUN 模式启动后不要自动进行 IP 检测
+        if self.proxy_config.mode.has_tun() {
+            return;
+        }
         if !matches!(
             self.proxy_status.state,
             ProxyState::Running | ProxyState::Degraded

@@ -811,6 +811,11 @@ mod egress_ip_badge_tests {
             !text.contains("self.check_ip_risk();"),
             "状态栏不该再留 IP 检测的按钮入口"
         );
+        let poll_text = include_str!("../../poll.rs");
+        assert!(
+            !poll_text.contains("self.check_ip_risk();"),
+            "轮询或状态转换中不该自动调用 check_ip_risk 弹框"
+        );
         // 模式切换 chip 于 2026-10-24 移入仪表盘底部控制栏（mod.rs 不再有 mode_label）
         assert!(
             !text.contains("status_btn(mode_label)"),

@@ -20,8 +20,6 @@ impl VpnApp {
             self.proxy_started_at = Some(std::time::Instant::now());
             // 刚跑起来就先测一轮服务连通性（把上次检测时间回拨到刚好"过期"）
             self.last_service_check = std::time::Instant::now() - std::time::Duration::from_secs(61);
-            // 启动代理立刻检测出口 IP 归属（机房/住宅标签马上有真实数据）
-            self.check_ip_risk();
             // 应用未启动代理时在抽屉里记住的调度选择
             if let Some((grp, mbr)) = self.pending_group_pick.take() {
                 self.select_kernel_member(grp, mbr);
@@ -728,13 +726,13 @@ impl VpnApp {
                                 Ok(message) => {
                                     self.status = message;
                                     if self.status.contains("已停止") {
-                                        self.proxy_status.state = ProxyState::Stopped;
                                         self.note_proxy_state_transition(ProxyState::Stopped);
+                                        self.proxy_status.state = ProxyState::Stopped;
                                         self.proxy_status.local_proxy_ready = false;
                                         self.proxy_status.system_proxy_enabled = false;
                                     } else {
-                                        self.proxy_status.state = ProxyState::Running;
                                         self.note_proxy_state_transition(ProxyState::Running);
+                                        self.proxy_status.state = ProxyState::Running;
                                         // 立刻静默查出口归属：状态卡"机房/住宅"马上有真实数据
                                         self.refresh_egress_silently();
                                         self.proxy_status.local_proxy_ready = true;
@@ -743,8 +741,8 @@ impl VpnApp {
                                 }
                                 Err(error) => {
                                     self.status = format!("代理操作失败: {error}");
-                                    self.proxy_status.state = ProxyState::Failed;
                                     self.note_proxy_state_transition(ProxyState::Failed);
+                                    self.proxy_status.state = ProxyState::Failed;
                                 }
                             }
                             self.reload_proxy();
