@@ -3,6 +3,7 @@ use crate::gui::icons::{draw_icon, Icon};
 use crate::gui::theme;
 use crate::gui::widgets::{country_code_and_color, format_bytes, format_speed};
 use crate::gui::VpnApp;
+use crate::kernel::KernelPreference;
 use crate::proxy::{ProxyMode, ProxyState, RoutingMode};
 use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use std::collections::VecDeque;
@@ -976,18 +977,24 @@ impl VpnApp {
                                                         self.set_start_node(&node);
                                                     }
                                                     if proxy_up {
-                                                        self.select_kernel_member(
-                                                            group.name.clone(),
-                                                            m.clone(),
-                                                        );
+                                                        if group.name != "全部" && group.name != "all" {
+                                                            if self.kernel_groups.iter().any(|g| g.name == group.name) {
+                                                                self.select_kernel_member(
+                                                                    group.name.clone(),
+                                                                    m.clone(),
+                                                                );
+                                                            }
+                                                        }
                                                         self.status = format!(
                                                             "延迟选优：已切换至 {m}（{ms} ms）"
                                                         );
                                                     } else {
-                                                        self.pending_group_pick = Some((
-                                                            group.name.clone(),
-                                                            m.clone(),
-                                                        ));
+                                                        if group.name != "全部" && group.name != "all" {
+                                                            self.pending_group_pick = Some((
+                                                                group.name.clone(),
+                                                                m.clone(),
+                                                            ));
+                                                        }
                                                         self.status = format!(
                                                             "延迟选优：已选定 {m}（{ms} ms），启动代理后自动使用"
                                                         );
@@ -1016,17 +1023,23 @@ impl VpnApp {
                                                     self.set_start_node(&node);
                                                 }
                                                 if proxy_up {
-                                                    self.select_kernel_member(
-                                                        group.name.clone(),
-                                                        m.clone(),
-                                                    );
+                                                    if group.name != "全部" && group.name != "all" {
+                                                        if self.kernel_groups.iter().any(|g| g.name == group.name) {
+                                                            self.select_kernel_member(
+                                                                group.name.clone(),
+                                                                m.clone(),
+                                                            );
+                                                        }
+                                                    }
                                                     self.status =
                                                         format!("负载均衡：已切换至 {m}");
                                                 } else {
-                                                    self.pending_group_pick = Some((
-                                                        group.name.clone(),
-                                                        m.clone(),
-                                                    ));
+                                                    if group.name != "全部" && group.name != "all" {
+                                                        self.pending_group_pick = Some((
+                                                            group.name.clone(),
+                                                            m.clone(),
+                                                        ));
+                                                    }
                                                     self.status = format!(
                                                         "负载均衡：已选定 {m}，启动代理后自动使用"
                                                     );
@@ -1251,10 +1264,10 @@ impl VpnApp {
                                     );
 
                                     let (lat_text, lat_fg) = match node.latency_ms {
-                                        Some(ms) if ms <= 150 => {
+                                        Some(ms) if ms <= 300 => {
                                             (format!("{ms}ms"), ok_fg_green())
                                         }
-                                        Some(ms) if ms <= 300 => {
+                                        Some(ms) if ms <= 800 => {
                                             (format!("{ms}ms"), ok_fg_amber())
                                         }
                                         Some(ms) => (format!("{ms}ms"), ok_fg_red()),
@@ -1288,10 +1301,12 @@ impl VpnApp {
                                             self.status =
                                                 format!("已切换出口至 {}", node.name);
                                         } else {
-                                            self.pending_group_pick = Some((
-                                                group.name.clone(),
-                                                node.name.clone(),
-                                            ));
+                                            if group.name != "全部" && group.name != "all" {
+                                                self.pending_group_pick = Some((
+                                                    group.name.clone(),
+                                                    node.name.clone(),
+                                                ));
+                                            }
                                             self.status =
                                                 "已选择节点，启动代理将使用该节点".into();
                                         }
@@ -1324,7 +1339,11 @@ impl VpnApp {
             self.group_drawer = None;
         }
         if let Some(member) = picked {
-            self.select_kernel_member(group.name.clone(), member);
+            if group.name != "全部" && group.name != "all" {
+                if self.kernel_groups.iter().any(|g| g.name == group.name) {
+                    self.select_kernel_member(group.name.clone(), member);
+                }
+            }
         }
     }
 
@@ -1496,11 +1515,14 @@ impl VpnApp {
                             } else {
                                 theme::danger()
                             };
-                            // 质量按当前节点实测延迟分档（真实数据，非固定文案）
+                            // 质量按当前节点实测延迟分档（真实数据，非固定文案）。
+                            // 这里的延迟是"完整走一遍代理隧道"的 HTTP 实测值：中转/WS 节点
+                            // 光建链就要几百毫秒，150/300 的旧阈值会把所有可用节点都打成
+                            // "质度差"，与实际可用性脱节 —— 按隧道链路常见分布放宽到 300/800。
                             let latency = selected_node.as_ref().and_then(|n| n.latency_ms);
                             let (tag_q, q_bg, q_fg) = match latency {
-                                Some(ms) if ms <= 150 => ("质度优", good_bg, good_fg),
-                                Some(ms) if ms <= 300 => ("质度良", mid_bg, mid_fg),
+                                Some(ms) if ms <= 300 => ("质度优", good_bg, good_fg),
+                                Some(ms) if ms <= 800 => ("质度良", mid_bg, mid_fg),
                                 Some(_) => ("质度差", bad_bg, bad_fg),
                                 None => ("未测速", apple_sub_bg(), theme::muted()),
                             };
@@ -1532,9 +1554,9 @@ impl VpnApp {
 
                         ui.add_space(6.0);
 
-                        // 三列元信息 [运行时长] [组织] [协议]
+                        // 四列元信息 [运行时长] [组织] [协议] [内核]
                         ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = if is_compact { 14.0 } else { 28.0 };
+                            ui.spacing_mut().item_spacing.x = if is_compact { 10.0 } else { 20.0 };
 
                             // 1. 运行时长
                             let uptime_str = if is_running { "02:47:13" } else { "00:00:00" };
@@ -1554,7 +1576,7 @@ impl VpnApp {
                             ui.vertical(|ui| {
                                 ui.label(RichText::new("组织").size(10.5).color(theme::muted()));
                                 ui.add_sized(
-                                    [if is_compact { 65.0 } else { 95.0 }, 16.0],
+                                    [if is_compact { 55.0 } else { 80.0 }, 16.0],
                                     egui::Label::new(
                                         RichText::new(org_str)
                                             .size(13.0)
@@ -1575,6 +1597,67 @@ impl VpnApp {
                             ui.vertical(|ui| {
                                 ui.label(RichText::new("协议").size(10.5).color(theme::muted()));
                                 ui.label(RichText::new(proto_str).size(13.0).strong().color(theme::text_primary()));
+                            });
+
+                            // 4. 内核（下拉选，支持 自动选择 / Mihomo / Shoes / Sing-box / Xray）
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new("内核").size(10.5).color(theme::muted()));
+                                let prev_pref = self.proxy_config.kernel_preference;
+                                let mut current_pref = prev_pref;
+                                let combo_label = match current_pref {
+                                    KernelPreference::Auto => "自动选择",
+                                    KernelPreference::Mihomo => "Mihomo",
+                                    KernelPreference::Shoes => "Shoes",
+                                    KernelPreference::SingBox => "Sing-box",
+                                    KernelPreference::Xray => "Xray",
+                                };
+                                let combo_w = if is_compact { 72.0 } else { 84.0 };
+                                egui::ComboBox::from_id_salt("dash_status_kernel_dropdown")
+                                    .width(combo_w)
+                                    .selected_text(
+                                        RichText::new(combo_label)
+                                            .size(12.0)
+                                            .strong()
+                                            .color(theme::text_primary()),
+                                    )
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut current_pref,
+                                            KernelPreference::Auto,
+                                            "自动选择",
+                                        );
+                                        ui.selectable_value(
+                                            &mut current_pref,
+                                            KernelPreference::Mihomo,
+                                            "Mihomo",
+                                        );
+                                        ui.selectable_value(
+                                            &mut current_pref,
+                                            KernelPreference::Shoes,
+                                            "Shoes",
+                                        );
+                                        ui.selectable_value(
+                                            &mut current_pref,
+                                            KernelPreference::SingBox,
+                                            "Sing-box",
+                                        );
+                                        ui.selectable_value(
+                                            &mut current_pref,
+                                            KernelPreference::Xray,
+                                            "Xray",
+                                        );
+                                    })
+                                    .response
+                                    .on_hover_text("切换代理运行内核（可手动指定或自动选择）");
+
+                                if current_pref != prev_pref {
+                                    self.proxy_config.kernel_preference = current_pref;
+                                    if is_running && !self.proxy_busy {
+                                        self.start_proxy();
+                                    } else {
+                                        self.save_proxy_config();
+                                    }
+                                }
                             });
                         });
                     });
@@ -1997,14 +2080,16 @@ impl VpnApp {
 
     /// 分流规则：按真实连接遥测展示命中次数最多的前 4 条规则。
     fn dash_rules_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
-        // rule_tally 按 (规则可读名, 派发目标) 计数 —— 聚合出每条规则的总命中并排序
-        let mut hits: Vec<(&String, i64)> = self
+        // rule_tally 按 (规则可读名, 派发目标) 计数 —— 聚合出每条规则的总命中并排序。
+        // 归一化后的规则徽标（GEOSITE(cn) 等）不再携带 DIRECT/REJECT 字样，
+        // 直连/拦截分类必须看派发目标而不是规则名。
+        let mut hits: Vec<(&String, &String, i64)> = self
             .rule_tally
             .iter()
-            .map(|((rule, _target), count)| (rule, *count))
+            .map(|((rule, target), count)| (rule, target, *count))
             .collect();
-        hits.sort_by(|a, b| b.1.cmp(&a.1));
-        let total_hits: i64 = hits.iter().map(|(_, c)| c).sum();
+        hits.sort_by(|a, b| b.2.cmp(&a.2));
+        let total_hits: i64 = hits.iter().map(|(_, _, c)| c).sum();
 
         dash_card()
             .inner_margin(Margin::symmetric(14, 10))
@@ -2050,10 +2135,14 @@ impl VpnApp {
                         };
                         let proxy_fg = apple_blue();
 
-                        for (idx, (rule, count)) in hits.iter().take(4).enumerate() {
-                            let (tag, tag_bg, tag_fg) = if rule.contains("REJECT") {
+                        for (idx, (rule, target, count)) in hits.iter().take(4).enumerate() {
+                            let is_direct =
+                                target.eq_ignore_ascii_case("DIRECT") || rule.contains("DIRECT");
+                            let is_reject =
+                                target.eq_ignore_ascii_case("REJECT") || rule.contains("REJECT");
+                            let (tag, tag_bg, tag_fg) = if is_reject {
                                 ("拦截", reject_bg, reject_fg)
-                            } else if rule.contains("DIRECT") {
+                            } else if is_direct {
                                 ("直连", direct_bg, direct_fg)
                             } else {
                                 ("代理", proxy_bg, proxy_fg)
@@ -2239,8 +2328,8 @@ impl VpnApp {
                                     .and_then(|n| n.latency_ms)
                             });
                         let (status_str, dot_col, text_col) = match latency {
-                            Some(ms) if ms <= 150 => (format!("{ms} ms"), apple_green_dot(), ok_fg),
-                            Some(ms) if ms <= 300 => (format!("{ms} ms"), apple_amber_dot(), warn_fg),
+                            Some(ms) if ms <= 300 => (format!("{ms} ms"), apple_green_dot(), ok_fg),
+                            Some(ms) if ms <= 800 => (format!("{ms} ms"), apple_amber_dot(), warn_fg),
                             Some(ms) => (format!("{ms} ms"), apple_red_dot(), bad_fg),
                             None => ("—".into(), theme::muted(), theme::muted()),
                         };

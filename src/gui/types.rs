@@ -507,6 +507,8 @@ pub(crate) struct MihomoConnectionItem {
     pub(crate) rule: Option<String>,
     #[serde(rename = "rulePayload", default)]
     pub(crate) rule_payload: Option<String>,
+    #[serde(default)]
+    pub(crate) chains: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

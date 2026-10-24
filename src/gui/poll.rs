@@ -22,12 +22,18 @@ impl VpnApp {
             self.last_service_check = std::time::Instant::now() - std::time::Duration::from_secs(61);
             // 启动代理立刻静默检测出口 IP 归属（机房/住宅标签马上有真实数据，不弹窗）
             self.refresh_egress_silently();
-            // 应用未启动代理时在抽屉里记住的调度选择
+            // 应用未启动代理时在抽屉里记住的调度选择：
+            // 若为 PROXY 主组则立刻应用；若为其它子策略组，因此时内核尚未上报 groups，留待 KernelGroups 消息到达时校验后应用
             if let Some((grp, mbr)) = self.pending_group_pick.take() {
-                self.select_kernel_member(grp, mbr);
+                if grp == "PROXY" {
+                    self.select_kernel_member(grp, mbr);
+                } else if grp != "全部" && grp != "all" {
+                    self.pending_group_pick = Some((grp, mbr));
+                }
             }
         } else if matches!(new_state, ProxyState::Stopped | ProxyState::Failed) {
             self.proxy_started_at = None;
+            self.pending_group_pick = None;
         }
     }
 
@@ -943,6 +949,11 @@ impl VpnApp {
                         BgMsg::KernelGroups(groups, latencies) => {
                             self.kernel_groups = groups;
                             self.feed_router_kernel_latency(latencies);
+                            if let Some((grp, mbr)) = self.pending_group_pick.take() {
+                                if self.kernel_groups.iter().any(|g| g.name == grp) {
+                                    self.select_kernel_member(grp, mbr);
+                                }
+                            }
                         }
                         BgMsg::ConnectionClosed(id) => {
                             self.active_connections.retain(|c| c.id != id);

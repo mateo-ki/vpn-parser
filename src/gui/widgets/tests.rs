@@ -308,4 +308,82 @@ mod button_radius_tests {
             "还是那个 16 的大圆角 —— 说明 helper 里那两行没删掉"
         );
     }
+
+    #[test]
+    fn format_connection_rule_normalizes_shoes_and_mihomo_rules() {
+        // 1. Shoes GeoSite 规则
+        let shoes_geosite = r#"local-mixed (root): {"path":"D:/software/VPN Parser/data/kernels/mihomo/geosite.dat","format":"geosite_dat","code":"cn"}"#;
+        assert_eq!(
+            format_connection_rule(Some("Shoes"), Some(shoes_geosite)),
+            "GEOSITE(cn)"
+        );
+
+        // 2. Shoes GeoIp 规则
+        let shoes_geoip = r#"local-mixed (root): {"path":"D:/software/VPN Parser/data/kernels/mihomo/geoip.dat","format":"geoip_dat","code":"cn"}"#;
+        assert_eq!(
+            format_connection_rule(Some("Shoes"), Some(shoes_geoip)),
+            "GEOIP(cn)"
+        );
+
+        // 3. Shoes Domain Suffix 规则
+        let shoes_ds = r#"local-mixed (root): {"domain_suffix":["youtube.com"]}"#;
+        assert_eq!(
+            format_connection_rule(Some("Shoes"), Some(shoes_ds)),
+            "DOMAIN-SUFFIX(youtube.com)"
+        );
+
+        // 4. Shoes Domain 规则
+        let shoes_domain = r#"local-mixed (root): {"domain":["localhost"]}"#;
+        assert_eq!(
+            format_connection_rule(Some("Shoes"), Some(shoes_domain)),
+            "DOMAIN(localhost)"
+        );
+
+        // 5. Shoes Domain Keyword 规则
+        let shoes_keyword = r#"local-mixed (root): {"domain_keyword":["stun","turn","webrtc"]}"#;
+        assert_eq!(
+            format_connection_rule(Some("Shoes"), Some(shoes_keyword)),
+            "DOMAIN-KEYWORD(stun, +2)"
+        );
+
+        // 6. Shoes 兜底匹配与 CIDR
+        assert_eq!(
+            format_connection_rule(Some("Shoes"), Some("local-mixed (root): 0.0.0.0/0")),
+            "MATCH"
+        );
+        assert_eq!(
+            format_connection_rule(Some("Shoes"), Some("local-mixed (root): 127.0.0.0/8")),
+            "IP-CIDR(127.0.0.0/8)"
+        );
+
+        // 7. 标准 Mihomo 规则
+        assert_eq!(
+            format_connection_rule(Some("GEOSITE"), Some("cn")),
+            "GEOSITE(cn)"
+        );
+        assert_eq!(
+            format_connection_rule(Some("MATCH"), Some("")),
+            "MATCH"
+        );
+        assert_eq!(
+            format_connection_rule(None, None),
+            "-"
+        );
+    }
+
+    #[test]
+    fn format_connection_target_resolves_chains_and_payload() {
+        // 1. Shoes 代理链：过滤 local-mixed
+        let chains = vec!["local-mixed".to_string(), "PROXY".to_string(), "proxy".to_string()];
+        assert_eq!(format_connection_target(&chains, None), "PROXY > proxy");
+
+        // 2. Shoes 直连链
+        let direct_chains = vec!["local-mixed".to_string(), "direct".to_string()];
+        assert_eq!(format_connection_target(&direct_chains, None), "DIRECT");
+
+        // 3. 无 chains 回退
+        assert_eq!(format_connection_target(&[], Some("DIRECT")), "DIRECT");
+        assert_eq!(format_connection_target(&[], Some("PROXY")), "PROXY");
+        assert_eq!(format_connection_target(&[], None), "-");
+    }
 }

@@ -2984,16 +2984,8 @@ impl VpnApp {
                                 }
                                 None => ("tcp".into(), String::new(), String::new(), "-".into()),
                             };
-                            let rule_str = match (&c.rule, &c.rule_payload) {
-                                (Some(r), Some(p)) if !p.is_empty() => format!("{r}({p})"),
-                                (Some(r), _) => r.clone(),
-                                _ => "-".into(),
-                            };
-                            let target_str = c
-                                .rule_payload
-                                .clone()
-                                .filter(|payload| !payload.is_empty())
-                                .unwrap_or_else(|| "-".into());
+                            let rule_str = format_connection_rule(c.rule.as_deref(), c.rule_payload.as_deref());
+                            let target_str = format_connection_target(&c.chains, c.rule_payload.as_deref());
                             connections.push(ActiveConnectionInfo {
                                 id: c.id,
                                 network,
@@ -3080,6 +3072,19 @@ impl VpnApp {
     }
 
     pub(crate) fn select_kernel_member(&mut self, group: String, target: String) {
+        if group == "全部" || group == "all" || group.trim().is_empty() {
+            return;
+        }
+        // Shoes 内核只具有 PROXY 主策略组，不向其请求任何其它策略组切换，避免 404
+        let is_shoes = self.proxy_status.kernel == Some(KernelKind::Shoes)
+            || self.proxy_config.kernel_preference.kernel() == Some(KernelKind::Shoes);
+        if is_shoes && group != "PROXY" {
+            return;
+        }
+        // 若内核已上报策略组列表，且该 group 并不存在于内核真实策略组中，则直接忽略，避免触发 404 错误
+        if !self.kernel_groups.is_empty() && !self.kernel_groups.iter().any(|g| g.name == group) {
+            return;
+        }
         // 出口变化：服务连通性立即重测（先清掉旧结果，卡片转入"检测中"）
         self.last_service_check =
             std::time::Instant::now() - std::time::Duration::from_secs(61);
@@ -3087,10 +3092,11 @@ impl VpnApp {
         let port = self.proxy_status.controller_port;
         let secret = self.proxy_status.controller_secret.clone();
         let tx = self.tx.clone();
+        let encoded_group = percent_encoding::utf8_percent_encode(&group, percent_encoding::NON_ALPHANUMERIC).to_string();
         self.status = format!("正在让内核切换 {group} → {target}...");
         self.rt.spawn(async move {
             let client = reqwest::Client::new();
-            let url = format!("http://127.0.0.1:{port}/proxies/{group}");
+            let url = format!("http://127.0.0.1:{port}/proxies/{encoded_group}");
             let response_res = crate::proxy::with_controller_auth(client.put(&url), &secret)
                 .json(&serde_json::json!({ "name": target }))
                 .send()

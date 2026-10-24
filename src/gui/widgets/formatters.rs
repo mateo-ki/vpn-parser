@@ -335,3 +335,149 @@ pub fn requires_tun_elevation(mode: ProxyMode, elevated: bool) -> bool {
         false
     }
 }
+
+/// 将内核返回的分流规则与负载格式化为规范的展示文本。
+/// 针对 Shoes 等内核输出的复杂 criteria JSON / 前缀（例如 `local-mixed (root): {"format":"geosite_dat","code":"cn"}`）
+/// 进行提炼抽象，对齐为与其他内核一致的标准徽标（`GEOSITE(cn)`, `DOMAIN-SUFFIX(youtube.com)`, `MATCH` 等）。
+pub fn format_connection_rule(rule: Option<&str>, payload: Option<&str>) -> String {
+    let raw_rule = rule.unwrap_or("").trim();
+    let raw_payload = payload.unwrap_or("").trim();
+
+    if raw_rule.eq_ignore_ascii_case("shoes") || raw_payload.contains("(root):") {
+        return normalize_shoes_rule(raw_payload);
+    }
+
+    match (raw_rule, raw_payload) {
+        ("", "") => "-".into(),
+        (r, "") => r.to_string(),
+        (r, p) => format!("{r}({p})"),
+    }
+}
+
+fn normalize_shoes_rule(raw_payload: &str) -> String {
+    let content = if let Some((_prefix, rest)) = raw_payload.split_once("(root):") {
+        rest.trim()
+    } else if let Some((_prefix, rest)) = raw_payload.split_once(':') {
+        rest.trim()
+    } else {
+        raw_payload.trim()
+    };
+
+    if content.is_empty() {
+        return "MATCH".into();
+    }
+
+    if content.starts_with('{') && content.ends_with('}') {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(content) {
+            if let Some(format) = val.get("format").and_then(|v| v.as_str()) {
+                let code = val.get("code").and_then(|v| v.as_str()).unwrap_or("unknown");
+                match format {
+                    "geosite_dat" => return format!("GEOSITE({code})"),
+                    "geoip_dat" => return format!("GEOIP({code})"),
+                    _ => return format!("{}({})", format.to_uppercase(), code),
+                }
+            }
+
+            if let Some(list) = val.get("domain_suffix").and_then(|v| v.as_array()) {
+                let first = list.first().and_then(|v| v.as_str()).unwrap_or("");
+                if list.len() > 1 {
+                    return format!("DOMAIN-SUFFIX({first}, +{})", list.len() - 1);
+                } else if !first.is_empty() {
+                    return format!("DOMAIN-SUFFIX({first})");
+                }
+            }
+
+            if let Some(list) = val.get("domain").and_then(|v| v.as_array()) {
+                let first = list.first().and_then(|v| v.as_str()).unwrap_or("");
+                if list.len() > 1 {
+                    return format!("DOMAIN({first}, +{})", list.len() - 1);
+                } else if !first.is_empty() {
+                    return format!("DOMAIN({first})");
+                }
+            }
+
+            if let Some(list) = val.get("domain_keyword").and_then(|v| v.as_array()) {
+                let first = list.first().and_then(|v| v.as_str()).unwrap_or("");
+                if list.len() > 1 {
+                    return format!("DOMAIN-KEYWORD({first}, +{})", list.len() - 1);
+                } else if !first.is_empty() {
+                    return format!("DOMAIN-KEYWORD({first})");
+                }
+            }
+
+            if let Some(list) = val.get("domain_regex").and_then(|v| v.as_array()) {
+                let first = list.first().and_then(|v| v.as_str()).unwrap_or("");
+                if !first.is_empty() {
+                    return format!("DOMAIN-REGEX({first})");
+                }
+            }
+
+            if let Some(ports) = val.get("destination_port").and_then(|v| v.as_array()) {
+                let p_strs: Vec<String> = ports.iter().filter_map(|p| p.as_u64().map(|n| n.to_string())).collect();
+                if !p_strs.is_empty() {
+                    return format!("DST-PORT({})", p_strs.join(","));
+                }
+            }
+
+            if let Some(ranges) = val.get("destination_port_range").and_then(|v| v.as_array()) {
+                let r_strs: Vec<String> = ranges.iter().filter_map(|r| r.as_str().map(|s| s.to_string())).collect();
+                if !r_strs.is_empty() {
+                    return format!("PORT-RANGE({})", r_strs.join(","));
+                }
+            }
+
+            if let Some(any_list) = val.get("any").and_then(|v| v.as_array()) {
+                for item in any_list {
+                    if let Some(ports) = item.get("destination_port").and_then(|v| v.as_array()) {
+                        let p_strs: Vec<String> = ports.iter().filter_map(|p| p.as_u64().map(|n| n.to_string())).collect();
+                        if !p_strs.is_empty() {
+                            return format!("PORT({})", p_strs.join(","));
+                        }
+                    }
+                    if let Some(ranges) = item.get("destination_port_range").and_then(|v| v.as_array()) {
+                        let r_strs: Vec<String> = ranges.iter().filter_map(|r| r.as_str().map(|s| s.to_string())).collect();
+                        if !r_strs.is_empty() {
+                            return format!("PORT-RANGE({})", r_strs.join(","));
+                        }
+                    }
+                }
+                return "ANY".into();
+            }
+        }
+    }
+
+    if content == "0.0.0.0/0" || content == "::/0" {
+        return "MATCH".into();
+    }
+    if content.contains('/') && (content.contains('.') || content.contains(':')) {
+        return format!("IP-CIDR({content})");
+    }
+
+    content.to_string()
+}
+
+/// 解析连接的出站目标（代理组 / 节点名 / DIRECT）。
+pub fn format_connection_target(chains: &[String], payload: Option<&str>) -> String {
+    if !chains.is_empty() {
+        let filtered: Vec<&str> = chains
+            .iter()
+            .map(|s| s.as_str())
+            .filter(|s| *s != "local-mixed")
+            .collect();
+        if let Some(last) = filtered.last() {
+            if last.eq_ignore_ascii_case("direct") {
+                return "DIRECT".into();
+            }
+            if filtered.len() > 1 {
+                return filtered.join(" > ");
+            }
+            return (*last).to_string();
+        }
+    }
+    if let Some(p) = payload {
+        if !p.is_empty() && !p.contains('{') && !p.contains("(root)") {
+            return p.to_string();
+        }
+    }
+    "-".into()
+}

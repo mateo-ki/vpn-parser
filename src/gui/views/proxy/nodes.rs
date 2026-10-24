@@ -423,7 +423,11 @@ impl VpnApp {
                                                 switch_to_manual = true;
                                             }
                                             selected = Some((node_id.clone(), node_name.clone()));
-                                            if running && self.proxy_selected_group != "全部" && self.proxy_selected_group != "PROXY" {
+                                            if running
+                                                && self.proxy_selected_group != "全部"
+                                                && self.proxy_selected_group != "PROXY"
+                                                && self.kernel_groups.iter().any(|g| g.name == self.proxy_selected_group)
+                                            {
                                                 group_switch_member = Some((self.proxy_selected_group.clone(), node_name.clone()));
                                             }
                                             ui.close_menu();
@@ -461,7 +465,11 @@ impl VpnApp {
                                         switch_to_manual = true;
                                     }
                                     selected = Some((node_id.clone(), node_name.clone()));
-                                    if running && self.proxy_selected_group != "全部" && self.proxy_selected_group != "PROXY" {
+                                    if running
+                                        && self.proxy_selected_group != "全部"
+                                        && self.proxy_selected_group != "PROXY"
+                                        && self.kernel_groups.iter().any(|g| g.name == self.proxy_selected_group)
+                                    {
                                         group_switch_member = Some((self.proxy_selected_group.clone(), node_name.clone()));
                                     }
                                 } else if clicked {

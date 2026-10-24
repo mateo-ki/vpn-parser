@@ -2,12 +2,16 @@ use crate::gui::theme;
 use eframe::egui::{self, Color32, CornerRadius, Sense, Ui};
 
 /// 延迟频谱分布统计数据
+///
+/// 这里的延迟是"完整走一遍代理隧道"的实测值（建链 + 隧道 + 目标响应），
+/// 中转/WS 节点普遍在几百毫秒量级，旧尺度（100/200/400）会把绝大多数
+/// 可用节点全部塞进"迟缓"档，失去分布意义 —— 按 200/500/1000 分档。
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LatencySpectrumStats {
-    pub ultra_fast: usize, // < 100ms
-    pub fast: usize,       // 100~200ms
-    pub medium: usize,     // 200~400ms
-    pub slow: usize,       // > 400ms
+    pub ultra_fast: usize, // <= 200ms
+    pub fast: usize,       // 200~500ms
+    pub medium: usize,     // 500~1000ms
+    pub slow: usize,       // > 1000ms
     pub untested: usize,   // 未测速
     pub total: usize,
 }
@@ -18,10 +22,10 @@ impl LatencySpectrumStats {
         for lat in latencies {
             stats.total += 1;
             match lat {
-                Some(ms) if ms > 0 && ms <= 100 => stats.ultra_fast += 1,
-                Some(ms) if ms > 100 && ms <= 200 => stats.fast += 1,
-                Some(ms) if ms > 200 && ms <= 400 => stats.medium += 1,
-                Some(ms) if ms > 400 => stats.slow += 1,
+                Some(ms) if ms > 0 && ms <= 200 => stats.ultra_fast += 1,
+                Some(ms) if ms > 200 && ms <= 500 => stats.fast += 1,
+                Some(ms) if ms > 500 && ms <= 1000 => stats.medium += 1,
+                Some(ms) if ms > 1000 => stats.slow += 1,
                 _ => stats.untested += 1,
             }
         }
@@ -49,10 +53,10 @@ pub fn render_latency_spectrum(
 
     // 方案二：莫兰迪低饱和延迟阶梯色系（柔和护眼 · 语义保留，彻底替代刺眼荧光大红大绿）
     let tiers: [(&str, usize, Color32); 5] = [
-        ("极速 <100ms", stats.ultra_fast, Color32::from_rgb(82, 121, 111)),  // 莫兰迪鼠尾草绿 #52796F
-        ("良好 100-200ms", stats.fast, Color32::from_rgb(122, 154, 139)),   // 莫兰迪柔和橄榄 #7A9A8B
-        ("中等 200-400ms", stats.medium, Color32::from_rgb(198, 138, 76)),  // 莫兰迪暖沙琥珀 #C68A4C
-        ("迟缓 >400ms", stats.slow, Color32::from_rgb(158, 90, 84)),       // 莫兰迪陶土玫瑰粉褐 #9E5A54 替代大红
+        ("极速 <200ms", stats.ultra_fast, Color32::from_rgb(82, 121, 111)),  // 莫兰迪鼠尾草绿 #52796F
+        ("良好 200-500ms", stats.fast, Color32::from_rgb(122, 154, 139)),   // 莫兰迪柔和橄榄 #7A9A8B
+        ("中等 500-1000ms", stats.medium, Color32::from_rgb(198, 138, 76)),  // 莫兰迪暖沙琥珀 #C68A4C
+        ("迟缓 >1000ms", stats.slow, Color32::from_rgb(158, 90, 84)),       // 莫兰迪陶土玫瑰粉褐 #9E5A54 替代大红
         ("未测速", stats.untested, theme::border_subtle()),
     ];
 
