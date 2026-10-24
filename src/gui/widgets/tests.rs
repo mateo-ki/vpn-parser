@@ -308,6 +308,10 @@ mod button_radius_tests {
             "还是那个 16 的大圆角 —— 说明 helper 里那两行没删掉"
         );
     }
+}
+
+mod formatter_tests {
+    use super::*;
 
     #[test]
     fn format_connection_rule_normalizes_shoes_and_mihomo_rules() {
@@ -346,7 +350,15 @@ mod button_radius_tests {
             "DOMAIN-KEYWORD(stun, +2)"
         );
 
-        // 6. Shoes 兜底匹配与 CIDR
+        // 6. Shoes 兜底匹配与 CIDR（Clash API 实际返回的标量带 JSON 引号）
+        assert_eq!(
+            format_connection_rule(Some("Shoes"), Some(r#"local-mixed (root): "0.0.0.0/0""#)),
+            "MATCH"
+        );
+        assert_eq!(
+            format_connection_rule(Some("Shoes"), Some(r#"local-mixed (root): "127.0.0.0/8""#)),
+            "IP-CIDR(127.0.0.0/8)"
+        );
         assert_eq!(
             format_connection_rule(Some("Shoes"), Some("local-mixed (root): 0.0.0.0/0")),
             "MATCH"

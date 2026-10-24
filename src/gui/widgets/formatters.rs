@@ -362,83 +362,40 @@ fn normalize_shoes_rule(raw_payload: &str) -> String {
     } else {
         raw_payload.trim()
     };
+    // Shoes 的 criteria 标量值序列化后带 JSON 引号（如 `"0.0.0.0/0"`），先剥掉
+    let content = serde_json::from_str::<String>(content).unwrap_or_else(|_| content.to_string());
 
     if content.is_empty() {
         return "MATCH".into();
     }
 
     if content.starts_with('{') && content.ends_with('}') {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(content) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(format) = val.get("format").and_then(|v| v.as_str()) {
                 let code = val.get("code").and_then(|v| v.as_str()).unwrap_or("unknown");
-                match format {
-                    "geosite_dat" => return format!("GEOSITE({code})"),
-                    "geoip_dat" => return format!("GEOIP({code})"),
-                    _ => return format!("{}({})", format.to_uppercase(), code),
+                return match format {
+                    "geosite_dat" => format!("GEOSITE({code})"),
+                    "geoip_dat" => format!("GEOIP({code})"),
+                    other => format!("{}({})", other.to_uppercase(), code),
+                };
+            }
+            for (key, label) in [
+                ("domain_suffix", "DOMAIN-SUFFIX"),
+                ("domain", "DOMAIN"),
+                ("domain_keyword", "DOMAIN-KEYWORD"),
+                ("domain_regex", "DOMAIN-REGEX"),
+            ] {
+                if let Some(badge) = string_list_badge(&val, key, label) {
+                    return badge;
                 }
             }
-
-            if let Some(list) = val.get("domain_suffix").and_then(|v| v.as_array()) {
-                let first = list.first().and_then(|v| v.as_str()).unwrap_or("");
-                if list.len() > 1 {
-                    return format!("DOMAIN-SUFFIX({first}, +{})", list.len() - 1);
-                } else if !first.is_empty() {
-                    return format!("DOMAIN-SUFFIX({first})");
-                }
+            if let Some(badge) = ports_badge(&val) {
+                return badge;
             }
-
-            if let Some(list) = val.get("domain").and_then(|v| v.as_array()) {
-                let first = list.first().and_then(|v| v.as_str()).unwrap_or("");
-                if list.len() > 1 {
-                    return format!("DOMAIN({first}, +{})", list.len() - 1);
-                } else if !first.is_empty() {
-                    return format!("DOMAIN({first})");
-                }
-            }
-
-            if let Some(list) = val.get("domain_keyword").and_then(|v| v.as_array()) {
-                let first = list.first().and_then(|v| v.as_str()).unwrap_or("");
-                if list.len() > 1 {
-                    return format!("DOMAIN-KEYWORD({first}, +{})", list.len() - 1);
-                } else if !first.is_empty() {
-                    return format!("DOMAIN-KEYWORD({first})");
-                }
-            }
-
-            if let Some(list) = val.get("domain_regex").and_then(|v| v.as_array()) {
-                let first = list.first().and_then(|v| v.as_str()).unwrap_or("");
-                if !first.is_empty() {
-                    return format!("DOMAIN-REGEX({first})");
-                }
-            }
-
-            if let Some(ports) = val.get("destination_port").and_then(|v| v.as_array()) {
-                let p_strs: Vec<String> = ports.iter().filter_map(|p| p.as_u64().map(|n| n.to_string())).collect();
-                if !p_strs.is_empty() {
-                    return format!("DST-PORT({})", p_strs.join(","));
-                }
-            }
-
-            if let Some(ranges) = val.get("destination_port_range").and_then(|v| v.as_array()) {
-                let r_strs: Vec<String> = ranges.iter().filter_map(|r| r.as_str().map(|s| s.to_string())).collect();
-                if !r_strs.is_empty() {
-                    return format!("PORT-RANGE({})", r_strs.join(","));
-                }
-            }
-
             if let Some(any_list) = val.get("any").and_then(|v| v.as_array()) {
                 for item in any_list {
-                    if let Some(ports) = item.get("destination_port").and_then(|v| v.as_array()) {
-                        let p_strs: Vec<String> = ports.iter().filter_map(|p| p.as_u64().map(|n| n.to_string())).collect();
-                        if !p_strs.is_empty() {
-                            return format!("PORT({})", p_strs.join(","));
-                        }
-                    }
-                    if let Some(ranges) = item.get("destination_port_range").and_then(|v| v.as_array()) {
-                        let r_strs: Vec<String> = ranges.iter().filter_map(|r| r.as_str().map(|s| s.to_string())).collect();
-                        if !r_strs.is_empty() {
-                            return format!("PORT-RANGE({})", r_strs.join(","));
-                        }
+                    if let Some(badge) = ports_badge(item) {
+                        return badge;
                     }
                 }
                 return "ANY".into();
@@ -453,7 +410,40 @@ fn normalize_shoes_rule(raw_payload: &str) -> String {
         return format!("IP-CIDR({content})");
     }
 
-    content.to_string()
+    content
+}
+
+/// 数组型域名类谓词 → `LABEL(first)` / `LABEL(first, +N)`
+fn string_list_badge(val: &serde_json::Value, key: &str, label: &str) -> Option<String> {
+    let list = val.get(key)?.as_array()?;
+    let first = list.first().and_then(|v| v.as_str()).unwrap_or("");
+    if first.is_empty() {
+        return None;
+    }
+    Some(if list.len() > 1 {
+        format!("{label}({first}, +{})", list.len() - 1)
+    } else {
+        format!("{label}({first})")
+    })
+}
+
+/// 端口类谓词（destination_port / destination_port_range）→ `DST-PORT(...)` / `PORT-RANGE(...)`
+fn ports_badge(val: &serde_json::Value) -> Option<String> {
+    if let Some(ports) = val.get("destination_port").and_then(|v| v.as_array()) {
+        let ports: Vec<String> =
+            ports.iter().filter_map(|p| p.as_u64().map(|n| n.to_string())).collect();
+        if !ports.is_empty() {
+            return Some(format!("DST-PORT({})", ports.join(",")));
+        }
+    }
+    if let Some(ranges) = val.get("destination_port_range").and_then(|v| v.as_array()) {
+        let ranges: Vec<String> =
+            ranges.iter().filter_map(|r| r.as_str()).map(str::to_string).collect();
+        if !ranges.is_empty() {
+            return Some(format!("PORT-RANGE({})", ranges.join(",")));
+        }
+    }
+    None
 }
 
 /// 解析连接的出站目标（代理组 / 节点名 / DIRECT）。
