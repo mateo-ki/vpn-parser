@@ -61,12 +61,15 @@ impl BackendCompiler for ShoesCompiler {
                 Value::String("clash_api_address".into()),
                 Value::String(format!("127.0.0.1:{}", plan.inbounds.controller_port)),
             );
-            if !plan.inbounds.controller_secret.is_empty() {
-                clash_api.insert(
-                    Value::String("secret".into()),
-                    Value::String(plan.inbounds.controller_secret.clone()),
-                );
-            }
+            let secret = if plan.inbounds.controller_secret.is_empty() {
+                "shoes-internal-secret".to_string()
+            } else {
+                plan.inbounds.controller_secret.clone()
+            };
+            clash_api.insert(
+                Value::String("secret".into()),
+                Value::String(secret),
+            );
             clash_api.insert(
                 Value::String("cors_origins".into()),
                 Value::Sequence(vec![Value::String("*".into())]),
@@ -355,23 +358,41 @@ fn translate_ir_rule(rule: &crate::proxy::ir::IRRule) -> Option<Value> {
                     .entry(Value::String("destination_port_range".into()))
                     .or_insert_with(|| Value::Sequence(Vec::new()));
                 if let Value::Sequence(seq) = entry {
-                    seq.push(Value::String(format!("{start}-{end}")));
+                    seq.push(Value::String(format!("{start}:{end}")));
                 }
             }
             _ => {}
         }
     }
 
-    let masks_val = if !legacy_masks.is_empty() && masks_map.is_empty() {
-        if legacy_masks.len() == 1 {
-            legacy_masks.pop().unwrap()
+    let mut predicates = Vec::new();
+    if !legacy_masks.is_empty() {
+        if legacy_masks.len() == 1 && masks_map.is_empty() {
+            // 单一 IP-CIDR 可以直接作为字面量 mask
+            predicates.push(legacy_masks.pop().unwrap());
         } else {
-            Value::Sequence(legacy_masks)
+            let mut m = Mapping::new();
+            m.insert(
+                Value::String("ip_cidr".into()),
+                Value::Sequence(legacy_masks),
+            );
+            predicates.push(Value::Mapping(m));
         }
-    } else if !masks_map.is_empty() {
-        Value::Mapping(masks_map)
-    } else {
+    }
+    for (k, v) in masks_map {
+        let mut m = Mapping::new();
+        m.insert(k, v);
+        predicates.push(Value::Mapping(m));
+    }
+
+    let masks_val = if predicates.is_empty() {
         return None;
+    } else if predicates.len() == 1 {
+        predicates.pop().unwrap()
+    } else {
+        let mut any_map = Mapping::new();
+        any_map.insert(Value::String("any".into()), Value::Sequence(predicates));
+        Value::Mapping(any_map)
     };
 
     let mut shoes_rule = Mapping::new();
@@ -501,8 +522,6 @@ fn build_protocol_layer(node: &Node, client_fingerprint: Option<&str>) -> Result
         "vless" => {
             let user_id = string_from_cfg(&cfg, &["uuid", "id"])
                 .ok_or_else(|| anyhow!("VLESS 缺少 uuid"))?;
-            let flow = string_from_cfg(&cfg, &["flow"]).unwrap_or_default();
-            let vision = flow.contains("vision");
 
             let mut vless_proto = Mapping::new();
             vless_proto.insert(
@@ -510,7 +529,6 @@ fn build_protocol_layer(node: &Node, client_fingerprint: Option<&str>) -> Result
                 Value::String("vless".into()),
             );
             vless_proto.insert(Value::String("user_id".into()), Value::String(user_id));
-            vless_proto.insert(Value::String("vision".into()), Value::Bool(vision));
             vless_proto.insert(Value::String("udp_enabled".into()), Value::Bool(true));
 
             wrap_transport(vless_proto, &cfg, &node.server, client_fingerprint)

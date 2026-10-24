@@ -1157,10 +1157,42 @@ use std::time::Duration;
         let sing_box_wg_artifact = SingBoxCompiler::new().compile(&plan_wg).unwrap();
         assert!(KernelValidator::validate_artifact(KernelKind::SingBox, &sing_box_wg_artifact).is_ok());
 
-        // 测试场景 5：Shoes + Shadowsocks / Trojan 编译与校验
+        // 测试场景 5：Shoes + Shadowsocks / Trojan / VMess / VLESS 编译与校验
         let shoes_ss_artifact = ShoesCompiler::new().compile(&plan_china).unwrap();
         assert!(KernelValidator::validate_artifact(KernelKind::Shoes, &shoes_ss_artifact).is_ok());
 
         let shoes_trojan_artifact = ShoesCompiler::new().compile(&plan_trojan).unwrap();
         assert!(KernelValidator::validate_artifact(KernelKind::Shoes, &shoes_trojan_artifact).is_ok());
+
+        let vmess_node = node(
+            "vmess",
+            json!({
+                "server": "1.2.3.4",
+                "port": 443,
+                "uuid": "550e8400-e29b-41d4-a716-446655440000",
+                "alterId": 0,
+                "cipher": "auto",
+                "network": "ws",
+                "ws-path": "/ws",
+                "tls": true
+            }),
+        );
+        let plan_vmess = lower_options_to_ir(&options_china, Some(&vmess_node));
+        let shoes_vmess_artifact = ShoesCompiler::new().compile(&plan_vmess).unwrap();
+        assert!(KernelValidator::validate_artifact(KernelKind::Shoes, &shoes_vmess_artifact).is_ok());
+
+        let vless_node = node(
+            "vless",
+            json!({
+                "server": "1.2.3.4",
+                "port": 443,
+                "uuid": "550e8400-e29b-41d4-a716-446655440000",
+                "flow": "xtls-rprx-vision",
+                "tls": true,
+                "sni": "example.com"
+            }),
+        );
+        let plan_vless = lower_options_to_ir(&options_china, Some(&vless_node));
+        let shoes_vless_artifact = ShoesCompiler::new().compile(&plan_vless).unwrap();
+        assert!(KernelValidator::validate_artifact(KernelKind::Shoes, &shoes_vless_artifact).is_ok());
     }
