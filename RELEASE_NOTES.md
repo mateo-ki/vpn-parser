@@ -1,3 +1,26 @@
+# 🚀 VPN Parser v1.11.0 发布说明 / Release Notes
+
+🎉 欢迎使用 **VPN Parser v1.11.0**！本版正式集成 **Shoes 多协议代理内核**（仪表盘可直接切换），并修复其分流规则编译中的严重缺陷：
+
+### ✨ 新功能
+- **运行内核下拉选择**：仪表盘状态卡"协议"右侧新增内核选择器（自动选择 / Mihomo / Shoes / Sing-box / Xray），支持运行中热切换并持久化保存；
+- **Shoes 内核完整集成**：订阅节点编译为 Shoes 配置（VLESS/VMess/Trojan/Shadowsocks/AnyTLS/Reality），支持下载更新、批量测速与 Clash API 流量统计。
+
+### 🛠️ 关键缺陷修复
+- **Shoes 误拦全部 HTTPS（ERR_EMPTY_RESPONSE 根因）**：
+  - QUIC 拦截规则此前被译成裸 `destination_port: 443`，而 Shoes 规则无 TCP/UDP 维度，导致所有未命中前置域名规则的普通 HTTPS 网站被静默拦截；现按语义整体跳过；
+  - 多谓词规则（如 STUN 端口列表 + 端口段）拆分为多条平铺规则，规避 Shoes `any: + no_resolve` 组合缺陷；
+  - VLESS Reality 节点识别增强：兼容 `reality-opts` 内嵌公钥写法与空 `pbk` 字段（不再把普通 TLS 误判为 Reality）；
+  - WebSocket + TLS 节点自动兜底 `alpn_protocols: ["http/1.1"]`，规避 CDN 边缘 HTTP/2 协商破坏 WS 握手；
+  - 局域网直连规则补齐 `no_resolve`，防止境内 DNS 污染抢先解析境外域名。
+- **策略组切换防护**：Shoes 仅暴露 PROXY 主策略组，切换其它子组前先校验组是否真实存在，不再触发内核 404 报错；启动代理后的待应用调度选择延迟到内核上报组列表后再执行。
+
+### 🎨 界面优化
+- **连接分流规则徽标归一化**：Shoes 返回的原始规则 JSON（`local-mixed (root): {...}`）提炼为与 Mihomo 一致的标准徽标（`GEOSITE(cn)`、`DOMAIN-SUFFIX(...)`、`MATCH` 等），目标列直接显示 `PROXY` / `DIRECT`；
+- **节点质量分档校准**：质度徽标与延迟着色按隧道实测场景放宽为 优≤300ms / 良≤800ms / 差>800ms，全库延迟频谱条同步调整为 200/500/1000 分档，不再把可用节点一律判成"质度差"。
+
+---
+
 # 🚀 VPN Parser v1.10.1 发布说明 / Release Notes
 
 🎉 欢迎使用 **VPN Parser v1.10.1**！本版主要修复 TUN 模式启动体验与仪表盘状态卡出口归属检测的稳定性：
