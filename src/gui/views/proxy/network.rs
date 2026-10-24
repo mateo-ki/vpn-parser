@@ -75,6 +75,7 @@ impl VpnApp {
                                     KernelPreference::Mihomo => "Mihomo",
                                     KernelPreference::SingBox => "Sing-box",
                                     KernelPreference::Xray => "Xray",
+                                    KernelPreference::Shoes => "Shoes",
                                 })
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(
@@ -96,6 +97,11 @@ impl VpnApp {
                                         &mut self.proxy_config.kernel_preference,
                                         KernelPreference::Xray,
                                         "Xray",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.proxy_config.kernel_preference,
+                                        KernelPreference::Shoes,
+                                        "Shoes",
                                     );
                                 });
                         });
@@ -279,6 +285,7 @@ impl VpnApp {
                                 KernelPreference::Mihomo => kernel.kind == KernelKind::Mihomo,
                                 KernelPreference::SingBox => kernel.kind == KernelKind::SingBox,
                                 KernelPreference::Xray => kernel.kind == KernelKind::Xray,
+                                KernelPreference::Shoes => kernel.kind == KernelKind::Shoes,
                                 _ => false,
                             };
 
@@ -304,6 +311,7 @@ impl VpnApp {
                                         KernelKind::Mihomo => (Icon::Cpu, theme::accent()),
                                         KernelKind::SingBox => (Icon::Lightning, theme::accent_strong()),
                                         KernelKind::Xray => (Icon::Radar, theme::text_secondary()),
+                                        KernelKind::Shoes => (Icon::Shield, theme::accent()),
                                     };
                                     icon_label(ui, chip_icon, 15.0, chip_color);
                                     ui.add(
@@ -336,6 +344,7 @@ impl VpnApp {
                                     KernelKind::Mihomo => "智能分流 · TUN · Fake-IP · 规则集",
                                     KernelKind::SingBox => "ShadowTLS · VLESS · Hysteria2",
                                     KernelKind::Xray => "XTLS · VLESS · Trojan · Splithttp",
+                                    KernelKind::Shoes => "Snell · NaiveProxy · AnyTLS · Clash API",
                                 };
                                 ui.add(
                                     egui::Label::new(

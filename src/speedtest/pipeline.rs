@@ -439,6 +439,7 @@ pub async fn run_speedtest_pipeline(
     let mut mihomo_nodes = Vec::new();
     let mut sing_box_nodes = Vec::new();
     let mut xray_nodes = Vec::new();
+    let mut shoes_nodes = Vec::new();
     let mut proxy_results = Vec::new();
     let mut result_kernels = HashMap::new();
 
@@ -455,6 +456,10 @@ pub async fn run_speedtest_pipeline(
             Ok(KernelKind::Xray) => {
                 result_kernels.insert(node.id.clone(), KernelKind::Xray);
                 xray_nodes.push(node);
+            }
+            Ok(KernelKind::Shoes) => {
+                result_kernels.insert(node.id.clone(), KernelKind::Shoes);
+                shoes_nodes.push(node);
             }
             Err(error) => proxy_results.push(ProxyProbeResult {
                 id: node.id,
@@ -515,6 +520,21 @@ pub async fn run_speedtest_pipeline(
                 .await
             });
         }
+        if !shoes_nodes.is_empty() {
+            let limit = network_limit.clone();
+            kernel_tasks.spawn(async move {
+                verify_nodes_with_kernel_progress(
+                    KernelKind::Shoes,
+                    shoes_nodes,
+                    proxy_timeout,
+                    None,
+                    limit,
+                    proxy_batch_size,
+                    conditional_isolation,
+                )
+                .await
+            });
+        }
         while let Some(res) = kernel_tasks.join_next().await {
             match res {
                 Ok(Ok(items)) => proxy_results.extend(items),
@@ -563,7 +583,7 @@ pub async fn run_speedtest_pipeline(
             KernelKind::Xray,
             xray_nodes,
             proxy_timeout,
-            network_limit,
+            network_limit.clone(),
             proxy_batch_size,
             conditional_isolation,
             progress.as_ref(),
@@ -573,7 +593,25 @@ pub async fn run_speedtest_pipeline(
             started,
         )
         .await?;
+        let done_after_xray = done_after_sing_box + xray_results.len();
+        let ok_after_xray = ok_after_sing_box + xray_results.iter().filter(|r| r.ok).count();
         proxy_results.extend(xray_results);
+
+        let shoes_results = run_sequential_kernel(
+            KernelKind::Shoes,
+            shoes_nodes,
+            proxy_timeout,
+            network_limit,
+            proxy_batch_size,
+            conditional_isolation,
+            progress.as_ref(),
+            done_after_xray,
+            ok_after_xray,
+            proxy_total,
+            started,
+        )
+        .await?;
+        proxy_results.extend(shoes_results);
     }
 
     if let Some(progress) = progress.as_ref() {

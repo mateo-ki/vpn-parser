@@ -206,6 +206,7 @@ fn main() -> Result<()> {
         let kernel = match kernel_str.to_ascii_lowercase().as_str() {
             "sing-box" | "singbox" => crate::kernel::KernelKind::SingBox,
             "xray" => crate::kernel::KernelKind::Xray,
+            "shoes" => crate::kernel::KernelKind::Shoes,
             _ => crate::kernel::KernelKind::Mihomo,
         };
         let executable = cli.executable.unwrap_or_default();

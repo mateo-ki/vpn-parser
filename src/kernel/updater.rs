@@ -1357,7 +1357,7 @@ mod tests {
     /// 暂存名的形状是这次排障的关键，钉住它：以 .exe 结尾、不前导点、不撞正式名。
     #[test]
     fn staging_files_keep_an_executable_name() {
-        for kind in [KernelKind::Mihomo, KernelKind::Xray, KernelKind::SingBox] {
+        for kind in [KernelKind::Mihomo, KernelKind::Xray, KernelKind::SingBox, KernelKind::Shoes] {
             let name = staging_name(kind);
             // `.exe` 结尾是 Windows 那侧针对杀软的取证结论，Linux 上反过来是负担
             // （一个叫 `mihomo.exe` 的 ELF 只会误导排障），所以按平台分别要求。
@@ -1371,7 +1371,7 @@ mod tests {
         }
     }
 
-    /// 三家的资产名与容器格式都是拿 GitHub Release API 实测过写死的（2026-10-15）。
+    /// 四家的资产名与容器格式都是拿 GitHub Release API 实测过写死的（2026-10-15）。
     /// 这条测试的意义：以后谁把 Linux 那套偷偷写成 `.zip`，下载会 404，这里先红。
     #[test]
     fn linux_assets_use_each_vendors_own_container() {
@@ -1397,6 +1397,13 @@ mod tests {
             Some(KernelArchive::Zip)
         );
 
+        let shoes = KernelKind::Shoes.asset_name_for(KernelPlatform::Linux, "v0.3.3");
+        assert_eq!(shoes, "shoes-x86_64-unknown-linux-gnu.tar.gz");
+        assert_eq!(
+            KernelArchive::from_asset_name(&shoes),
+            Some(KernelArchive::TarGz)
+        );
+
         // 反向对照：Windows 那三行必须一个都没被 Linux 的形状污染。
         assert_eq!(
             KernelKind::Mihomo.asset_name_for(KernelPlatform::Windows, "v1.19.32"),
@@ -1406,14 +1413,19 @@ mod tests {
             KernelKind::Xray.asset_name_for(KernelPlatform::Windows, "v26.3.27"),
             "Xray-windows-64.zip"
         );
+        assert_eq!(
+            KernelKind::Shoes.asset_name_for(KernelPlatform::Windows, "v0.3.3"),
+            "shoes-x86_64-pc-windows-msvc.zip"
+        );
     }
 
-    /// 条目名判据不许只认 `.exe`：Linux 容器里的可执行文件就叫 `mihomo` / `xray` / `sing-box`。
+    /// 条目名判据不许只认 `.exe`：Linux 容器里的可执行文件就叫 `mihomo` / `xray` / `sing-box` / `shoes`。
     #[test]
     fn archive_entries_match_without_an_exe_suffix() {
         assert!(KernelKind::Mihomo.matches_archive_executable("mihomo"));
         assert!(KernelKind::Xray.matches_archive_executable("xray"));
         assert!(KernelKind::SingBox.matches_archive_executable("sing-box"));
+        assert!(KernelKind::Shoes.matches_archive_executable("shoes"));
         assert!(KernelKind::Mihomo.matches_archive_executable("mihomo-windows-amd64.exe"));
         assert!(!KernelKind::Xray.matches_archive_executable("geoip.dat"));
         assert!(!KernelKind::Xray.matches_archive_executable("wv2ray"));

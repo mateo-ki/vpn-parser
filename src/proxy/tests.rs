@@ -627,6 +627,8 @@ use std::time::Duration;
         for (kernel, config_name, log_name) in [
             (KernelKind::Mihomo, "config.yaml", "mihomo.log"),
             (KernelKind::SingBox, "config.json", "sing-box.log"),
+            (KernelKind::Xray, "config.json", "xray.log"),
+            (KernelKind::Shoes, "config.yaml", "shoes.log"),
         ] {
             let work_dir = ProxyWorkDir::create(kernel).await.unwrap();
             let root = work_dir.root().to_path_buf();
@@ -639,8 +641,9 @@ use std::time::Duration;
                     work_dir.data_root(),
                     crate::kernel::managed_kernel_root().join("mihomo")
                 ),
-                KernelKind::SingBox => assert_eq!(work_dir.data_root(), root),
-                KernelKind::Xray => unreachable!(),
+                KernelKind::SingBox | KernelKind::Xray | KernelKind::Shoes => {
+                    assert_eq!(work_dir.data_root(), root)
+                }
             }
 
             work_dir.cleanup().await.unwrap();
@@ -1153,4 +1156,11 @@ use std::time::Duration;
         let plan_wg = lower_options_to_ir(&options_china, Some(&wg_node));
         let sing_box_wg_artifact = SingBoxCompiler::new().compile(&plan_wg).unwrap();
         assert!(KernelValidator::validate_artifact(KernelKind::SingBox, &sing_box_wg_artifact).is_ok());
+
+        // 测试场景 5：Shoes + Shadowsocks / Trojan 编译与校验
+        let shoes_ss_artifact = ShoesCompiler::new().compile(&plan_china).unwrap();
+        assert!(KernelValidator::validate_artifact(KernelKind::Shoes, &shoes_ss_artifact).is_ok());
+
+        let shoes_trojan_artifact = ShoesCompiler::new().compile(&plan_trojan).unwrap();
+        assert!(KernelValidator::validate_artifact(KernelKind::Shoes, &shoes_trojan_artifact).is_ok());
     }

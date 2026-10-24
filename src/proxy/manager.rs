@@ -41,7 +41,7 @@ impl ProxyWorkDir {
         tokio::fs::create_dir_all(&root).await?;
         let data_root = match kernel {
             KernelKind::Mihomo => managed_kernel_root().join(kernel.directory_name()),
-            KernelKind::SingBox | KernelKind::Xray => root.clone(),
+            KernelKind::SingBox | KernelKind::Xray | KernelKind::Shoes => root.clone(),
         };
         tokio::fs::create_dir_all(&data_root).await?;
         Ok(Self {
@@ -61,7 +61,7 @@ impl ProxyWorkDir {
 
     pub fn config_path(&self) -> PathBuf {
         self.root.join(match self.kernel {
-            KernelKind::Mihomo => "config.yaml",
+            KernelKind::Mihomo | KernelKind::Shoes => "config.yaml",
             KernelKind::SingBox | KernelKind::Xray => "config.json",
         })
     }
@@ -71,6 +71,7 @@ impl ProxyWorkDir {
             KernelKind::Mihomo => "mihomo.log",
             KernelKind::SingBox => "sing-box.log",
             KernelKind::Xray => "xray.log",
+            KernelKind::Shoes => "shoes.log",
         })
     }
 

@@ -31,7 +31,7 @@ impl KernelValidator {
         std::fs::create_dir_all(&temp_dir)?;
 
         let config_file_name = match kernel {
-            KernelKind::Mihomo => "config.yaml",
+            KernelKind::Mihomo | KernelKind::Shoes => "config.yaml",
             _ => "config.json",
         };
         let config_path = temp_dir.join(config_file_name);
@@ -77,6 +77,9 @@ impl KernelValidator {
                     .arg("-test")
                     .arg("-c")
                     .arg(&config_path);
+            }
+            KernelKind::Shoes => {
+                cmd.arg("check").arg(&config_path);
             }
         }
 

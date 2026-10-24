@@ -2554,6 +2554,7 @@ impl VpnApp {
             crate::kernel::KernelKind::Mihomo,
             crate::kernel::KernelKind::SingBox,
             crate::kernel::KernelKind::Xray,
+            crate::kernel::KernelKind::Shoes,
         ]
         .into_iter()
         .any(|kind| crate::kernel::find_kernel_executable(kind).is_some())
@@ -2785,6 +2786,7 @@ impl VpnApp {
                                     KernelKind::Mihomo => "mihomo",
                                     KernelKind::SingBox => "sing_box",
                                     KernelKind::Xray => "xray",
+                                    KernelKind::Shoes => "shoes",
                                 });
                                 let _ = db
                                     .update_node_speed(
@@ -2814,6 +2816,7 @@ impl VpnApp {
                                         KernelKind::Mihomo => "mihomo",
                                         KernelKind::SingBox => "sing_box",
                                         KernelKind::Xray => "xray",
+                                        KernelKind::Shoes => "shoes",
                                     });
                                 let _ = db
                                     .update_node_speed(
