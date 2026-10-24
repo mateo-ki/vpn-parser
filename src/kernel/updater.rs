@@ -1045,6 +1045,39 @@ impl KernelUpdater {
 ///   解出来 61,993,086 字节的静态 ELF，`chmod +x` 后 `-v` 退出码 0。
 /// 代价是版本号会慢慢落后；更新它只改下面这几行常量。
 fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
+    if kind == KernelKind::Shoes {
+        const SHOES_TAG: &str = "v0.3.4";
+        let (name, digest, size) = match KernelPlatform::current() {
+            KernelPlatform::Windows => (
+                "shoes-x86_64-pc-windows-msvc.zip",
+                "sha256:1de2f7e8d724930f55706a42f321018a9fe1e846960037e7bd0c7290b13e9dd7",
+                8_228_104_u64,
+            ),
+            KernelPlatform::Linux => (
+                "shoes-x86_64-unknown-linux-gnu.tar.gz",
+                "sha256:1381a48f7b69e63ea718fb50120ad059e20ed626838bd50aecdbc1b221fe3d79",
+                9_172_862_u64,
+            ),
+            KernelPlatform::MacOS => (
+                "shoes-x86_64-apple-darwin.tar.gz",
+                "sha256:c8977e83503912984248897bae29e90064d61206fb68c9536e1ff6a4cf758020",
+                8_947_237_u64,
+            ),
+        };
+        return Some(GithubRelease {
+            tag_name: SHOES_TAG.to_string(),
+            assets: vec![GithubAsset {
+                name: name.to_string(),
+                browser_download_url: format!(
+                    "https://github.com/mateo-ki/shoes/releases/download/{SHOES_TAG}/{name}"
+                ),
+                size,
+                digest: Some(digest.to_string()),
+            }],
+            fallback: true,
+        });
+    }
+
     if kind != KernelKind::Mihomo {
         return None;
     }

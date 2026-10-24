@@ -846,9 +846,14 @@ fn send_terminate(pid: u32) -> bool {
 /// 平台上都是同一份逻辑，不会出现"Windows 列表改了、Linux 忘了改"。
 pub fn is_proxy_core_name(name_lower: &str) -> bool {
     let stem = name_lower.strip_suffix(".exe").unwrap_or(name_lower);
-    [KernelKind::Mihomo, KernelKind::Xray, KernelKind::SingBox]
-        .iter()
-        .any(|kind| kind.directory_name() == stem)
+    [
+        KernelKind::Mihomo,
+        KernelKind::Xray,
+        KernelKind::SingBox,
+        KernelKind::Shoes,
+    ]
+    .iter()
+    .any(|kind| kind.directory_name() == stem)
 }
 
 #[cfg(test)]

@@ -2397,6 +2397,7 @@ impl VpnApp {
             crate::kernel::KernelKind::Mihomo,
             crate::kernel::KernelKind::Xray,
             crate::kernel::KernelKind::SingBox,
+            crate::kernel::KernelKind::Shoes,
         ] {
             programs.push(
                 root.join(kind.directory_name())
