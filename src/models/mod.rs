@@ -385,10 +385,10 @@ fn default_ui_language() -> String {
     }
 }
 
-/// 字体/界面大小的默认值：1.0 = 不缩放。老库里没这一列时（`ensure_column` 给的也是 1.0）
-/// 行为要和升级前完全一致。
+/// 字体/界面大小的默认值：120%（用户 2026-10-24 调大默认）。
+/// 老库里没这一列时走这个默认。
 fn default_ui_scale() -> f32 {
-    1.0
+    1.2
 }
 
 fn default_ui_dark() -> bool {

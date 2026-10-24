@@ -1708,8 +1708,8 @@ impl VpnApp {
         let lan_on = self.proxy_config.allow_lan;
         let mode = self.proxy_config.mode;
         let editable = self.proxy_status.config_editable() && !self.proxy_busy;
-        let sys_on = mode == ProxyMode::System;
-        let tun_on = mode == ProxyMode::Tun;
+        let sys_on = mode.has_system();
+        let tun_on = mode.has_tun();
         let sys_supported = crate::system_proxy::system_proxy_supported_on_this_platform();
         let running = matches!(
             self.proxy_status.state,
@@ -1803,9 +1803,15 @@ impl VpnApp {
                     let sys_sub = format!("{}:{}", sub, self.proxy_status.mixed_port);
                     dash_bottom_proxy_item(ui, item_w, card_h, icon, icon_col, title, &sys_sub, |ui| {
                         let resp = dash_switch(ui, sys_on);
-                        if resp.clicked() && !sys_on {
+                        if resp.clicked() {
                             if editable {
-                                self.proxy_config.mode = ProxyMode::System;
+                                self.proxy_config.mode = if sys_on {
+                                    // 关系统代理：Both→Tun，System 不可能（sys_on=true 只有 System/Both）
+                                    if tun_on { ProxyMode::Tun } else { ProxyMode::System }
+                                } else {
+                                    // 开系统代理：System→Both，Tun→Both
+                                    ProxyMode::Both
+                                };
                                 self.save_proxy_config();
                             } else {
                                 self.status = "请先停止代理后再切换工作模式".into();
@@ -1816,9 +1822,15 @@ impl VpnApp {
                 ProxyItemKind::Tun => {
                     dash_bottom_proxy_item(ui, item_w, card_h, icon, icon_col, title, sub, |ui| {
                         let resp = dash_switch(ui, tun_on);
-                        if resp.clicked() && !tun_on {
+                        if resp.clicked() {
                             if editable {
-                                self.proxy_config.mode = ProxyMode::Tun;
+                                self.proxy_config.mode = if tun_on {
+                                    // 关 TUN：Both→System
+                                    ProxyMode::System
+                                } else {
+                                    // 开 TUN：System→Both，Tun→Tun
+                                    if sys_on { ProxyMode::Both } else { ProxyMode::Tun }
+                                };
                                 self.save_proxy_config();
                             } else {
                                 self.status = "请先停止代理后再切换工作模式".into();

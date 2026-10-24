@@ -17,6 +17,8 @@ pub fn is_node_connectivity_failure(message: &str) -> bool {
 pub enum ProxyMode {
     System,
     Tun,
+    /// 系统代理 + TUN 同时开：应用层走系统代理，网络层被 TUN 兜底接管。
+    Both,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +39,17 @@ pub enum AutoRoutingStrategy {
     UrlTest,
     Fallback,
     LoadBalance,
+}
+
+impl ProxyMode {
+    /// TUN 是否参与（Tun 或 Both）。
+    pub fn has_tun(self) -> bool {
+        matches!(self, ProxyMode::Tun | ProxyMode::Both)
+    }
+    /// 系统代理是否参与（System 或 Both）。
+    pub fn has_system(self) -> bool {
+        matches!(self, ProxyMode::System | ProxyMode::Both)
+    }
 }
 
 impl AutoRoutingStrategy {

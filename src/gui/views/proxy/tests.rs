@@ -811,9 +811,10 @@ mod egress_ip_badge_tests {
             !text.contains("self.check_ip_risk();"),
             "状态栏不该再留 IP 检测的按钮入口"
         );
+        // 模式切换 chip 于 2026-10-24 移入仪表盘底部控制栏（mod.rs 不再有 mode_label）
         assert!(
-            text.contains("status_btn(mode_label)"),
-            "同一排的模式 chip 与测速按钮还在，别顺手删过头"
+            !text.contains("status_btn(mode_label)"),
+            "模式切换已迁至仪表盘底栏，状态栏不应残留"
         );
     }
 }

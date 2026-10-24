@@ -190,10 +190,17 @@ impl VpnApp {
         let tr_rules = self.tr("分流规则");
         let tr_network = self.tr("DNS / TUN");
 
+        let tr_conns = self.tr("活跃连接");
+        let conn_label = if self.active_connections.is_empty() {
+            tr_conns.to_string()
+        } else {
+            format!("{} ({})", tr_conns, self.active_connections.len())
+        };
         let tabs = [
             (ProxyPanel::Charts, Icon::Dashboard, tr_charts),
             (ProxyPanel::Nodes, Icon::Pin, tr_nodes),
             (ProxyPanel::Groups, Icon::Rocket, tr_groups),
+            (ProxyPanel::Connections, Icon::Radar, &conn_label),
             (ProxyPanel::Rules, Icon::Rules, tr_rules),
             (ProxyPanel::Network, Icon::Globe, tr_network),
             (ProxyPanel::Kernels, Icon::Cpu, self.tr("内核管理")),
@@ -225,8 +232,9 @@ impl VpnApp {
             ProxyPanel::Groups => {
                 ui.push_id("panel_groups", |ui| self.ui_proxy_groups(ui));
             }
-            // 活跃连接已并入仪表盘"实时连接"卡（三个子页），不再作为独立标签页
-            ProxyPanel::Connections => {}
+            ProxyPanel::Connections => {
+                ui.push_id("panel_connections", |ui| self.ui_proxy_connections(ui));
+            }
             ProxyPanel::Rules => {
                 ui.push_id("panel_rules", |ui| self.ui_proxy_rules(ui));
             }
@@ -296,35 +304,7 @@ impl VpnApp {
             }
         }
 
-        // 系统代理 / TUN：一个按钮来回切，运行中不给改（改了要重载内核）。
-        // 以前它是手搓的 `Frame`（6px 圆角、自己的内边距、9px 小字），和同排那三个
-        // 按钮四种长相 —— 现在走同一个 `status_btn`，只剩语义差别（用户 2026-10-15）。
-        let mode_label = match self.proxy_config.mode {
-            // Linux 没有"系统代理"那一格，这个模式下实际做的事就是把端口开着等人来指，
-            // 所以叫「本地端口」；存储值仍是 System，不改数据层、不发明第三态。
-            ProxyMode::System if crate::system_proxy::system_proxy_supported_on_this_platform() => {
-                "系统代理"
-            }
-            ProxyMode::System => "本地端口",
-            ProxyMode::Tun => "TUN 模式",
-        };
-        let mode_resp = ui
-            .add(status_btn(mode_label))
-            .on_hover_text("点击切换 系统代理 / TUN 模式");
-        if mode_resp.clicked() {
-            if self.proxy_status.config_editable() {
-                self.proxy_config.mode = match self.proxy_config.mode {
-                    ProxyMode::System => ProxyMode::Tun,
-                    ProxyMode::Tun => ProxyMode::System,
-                };
-                self.save_proxy_config();
-            } else {
-                self.status = "请先停止代理后再切换工作模式".into();
-            }
-        }
-
-        // 这里原来挂过一条「系统代理被外部关闭」的黄字，2026-10-15 他一句"不用显示这个"撤了：
-        // 核对逻辑还在（喂设置页那个「自动重开系统代理」开关），但界面不再画它。
+        // 系统代理 / TUN 切换按钮已移除（2026-10-24：仪表盘底部控制栏已有同样功能）。
 
         // 测速全部：走的就是订阅源页/节点页那条 `speedtest_all_sources`，不另开一条通道。
         // 并发用系统设置里那个数（默认 128），批量作业自带 TCP 预筛。

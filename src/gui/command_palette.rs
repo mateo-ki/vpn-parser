@@ -267,7 +267,7 @@ impl VpnApp {
                 }
                 self.proxy_config.mode = match self.proxy_config.mode {
                     ProxyMode::System => ProxyMode::Tun,
-                    ProxyMode::Tun => ProxyMode::System,
+                    ProxyMode::Tun | ProxyMode::Both => ProxyMode::System,
                 };
                 self.save_proxy_config();
             }

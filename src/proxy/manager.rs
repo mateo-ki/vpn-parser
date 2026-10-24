@@ -462,7 +462,7 @@ impl ProxyManager {
         let kernel = match select_proxy_kernel_preference(
             &node.protocol,
             preference,
-            options.mode == ProxyMode::System,
+            options.mode.has_system(),
         ) {
             Ok(kernel) => kernel,
             Err(error) => {
@@ -512,11 +512,11 @@ impl ProxyManager {
             return Err(anyhow!("代理正在运行或切换状态"));
         }
         #[cfg(windows)]
-        if runtime.options.mode == ProxyMode::Tun && !crate::platform::is_elevated() {
+        if runtime.options.mode.has_tun() && !crate::platform::is_elevated() {
             return Err(anyhow!("TUN 模式需要管理员权限"));
         }
         #[cfg(target_os = "linux")]
-        if runtime.options.mode == ProxyMode::Tun && !crate::platform::kernel_has_tun_capability(executable_path) {
+        if runtime.options.mode.has_tun() && !crate::platform::kernel_has_tun_capability(executable_path) {
             let cmd = crate::platform::tun_capability_command(executable_path);
             let message = format!(
                 "TUN 模式启动失败：内核进程缺少 CAP_NET_ADMIN 权限。\n\
@@ -615,7 +615,7 @@ impl ProxyManager {
             }
         };
         let requires_elevation = cfg!(windows)
-            && runtime.options.mode == ProxyMode::Tun
+            && runtime.options.mode.has_tun()
             && !crate::platform::is_elevated();
 
         let mut child = if requires_elevation {
@@ -767,7 +767,7 @@ impl ProxyManager {
             "代理启动阶段完成"
         );
 
-        if runtime.options.mode == ProxyMode::Tun {
+        if runtime.options.mode.has_tun() {
             // 给内核轻微缓冲时间尝试完成 TUN 网卡设备创建
             tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -824,7 +824,7 @@ impl ProxyManager {
             }
         }
 
-        if runtime.options.mode == ProxyMode::System && self.system_proxy.supported() {
+        if runtime.options.mode.has_system() && self.system_proxy.supported() {
             if tokio::time::Instant::now() >= startup_deadline {
                 let _ = child.kill().await;
                 let _ = child.wait().await;

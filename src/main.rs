@@ -540,11 +540,8 @@ fn main() -> Result<()> {
             api_controller,
             initial_proxy_node,
         ) = gui_handles.clone();
-        let (window_w, window_h) = match app_settings.window_size.as_str() {
-            "large" => (1440.0, 880.0),
-            "medium" => (1280.0, 800.0),
-            _ => (1024.0, 680.0),
-        };
+        // 窗口大小配置已移除（2026-10-24）：固定中屏 1280x800
+        let (window_w, window_h) = (1280.0, 800.0);
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 // Linux / Wayland 下合成器按 app_id 关联 .desktop 与图标

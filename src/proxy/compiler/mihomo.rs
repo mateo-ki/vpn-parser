@@ -668,7 +668,7 @@ impl BackendCompiler for MihomoCompiler {
             "geosite": "https://fastly.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"
         });
 
-        if plan.inbounds.mode == crate::proxy::ProxyMode::Tun {
+        if plan.inbounds.mode.has_tun() {
             let mut dns_hijack = plan.inbounds.tun.dns_hijack.clone();
             if !dns_hijack.iter().any(|h| h.contains("tcp://")) {
                 dns_hijack.push("tcp://any:53".into());

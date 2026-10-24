@@ -150,37 +150,6 @@ impl VpnApp {
             ui.separator();
             ui.add_space(8.0);
 
-            ui.label(RichText::new(self.tr("窗口大小配置 (Window Dimensions)")).strong());
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new("根据显示器或桌面环境选择合适视口大小，改动即时生效并自动保存。")
-                    .small()
-                    .color(theme::muted()),
-            );
-            ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| {
-                let tr_small = self.tr("小屏 (1024 × 680)");
-                let tr_medium = self.tr("中屏 (1280 × 800)");
-                let tr_large = self.tr("大屏 (1440 × 880)");
-                let presets = [
-                    ("small", tr_small, 1024.0, 680.0, "轻量小巧，适合窄屏、低分辨率或平铺桌面 (如 niri/sway)"),
-                    ("medium", tr_medium, 1280.0, 800.0, "标准平衡比例，舒适适配绝大多数主流笔记本与显示器"),
-                    ("large", tr_large, 1440.0, 880.0, "开阔大视野，提供最宽裕的监控图表、多列节点卡片与日志空间"),
-                ];
-                for (id, label, w, h, desc) in presets {
-                    let selected = self.edit_window_size == id;
-                    if ui.selectable_label(selected, label).on_hover_text(desc).clicked() {
-                        self.edit_window_size = id.to_string();
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
-                        auto_save = true;
-                    }
-                }
-            });
-
-            ui.add_space(10.0);
-            ui.separator();
-            ui.add_space(8.0);
-
             ui.label(RichText::new(self.tr("控制台标签页显示 (Console Tabs)")).strong());
             ui.add_space(4.0);
             ui.label(
