@@ -1,3 +1,20 @@
+# 🚀 VPN Parser v1.11.1 发布说明 / Release Notes
+
+🎉 欢迎使用 **VPN Parser v1.11.1**！本版修复部分订阅在 Shoes 内核下无法启动的问题：
+
+### 🛠️ 缺陷修复
+- **Shoes 因 `GEOIP,LAN` 类别不存在而拒启**（`DAT category "LAN" not found`）：
+  - 订阅里常见的 `GEOIP,LAN,DIRECT` / `GEOSITE,LAN,DIRECT` 写法，在 Loyalsoldier geo 库里
+    对应类别叫 `private`，直传会让 Shoes 拒绝整个配置、代理起不来；
+  - 现在编译配置时自动映射 `LAN → private`（mihomo / Shoes 两个编译器都接入），语义不变；
+  - 新增类别存在性防护：编译前直扫 dat 库（大小写不敏感，与内核判定一致），
+    库里确实没有的类别对应规则自动丢弃——该规则本来也匹配不上，不再拖垮整个代理；
+  - geo 分流库的就绪检查从"仅 Mihomo"扩展到全部内核，Shoes 首次启动也会自动补库。
+- **连接表规则徽标修正**：Shoes 返回的标量规则带 JSON 引号（如 `"0.0.0.0/0"`），
+  兜底规则此前显示成 `IP-CIDR("0.0.0.0/0")`，已正确显示为 `MATCH`。
+
+---
+
 # 🚀 VPN Parser v1.11.0 发布说明 / Release Notes
 
 🎉 欢迎使用 **VPN Parser v1.11.0**！本版正式集成 **Shoes 多协议代理内核**（仪表盘可直接切换），并修复其分流规则编译中的严重缺陷：
