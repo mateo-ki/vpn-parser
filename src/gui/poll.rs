@@ -20,6 +20,8 @@ impl VpnApp {
             self.proxy_started_at = Some(std::time::Instant::now());
             // 刚跑起来就先测一轮服务连通性（把上次检测时间回拨到刚好"过期"）
             self.last_service_check = std::time::Instant::now() - std::time::Duration::from_secs(61);
+            // 启动代理立刻静默检测出口 IP 归属（机房/住宅标签马上有真实数据，不弹窗）
+            self.refresh_egress_silently();
             // 应用未启动代理时在抽屉里记住的调度选择
             if let Some((grp, mbr)) = self.pending_group_pick.take() {
                 self.select_kernel_member(grp, mbr);
