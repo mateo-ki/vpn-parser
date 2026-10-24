@@ -85,7 +85,9 @@ mod imp {
         let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
         let rest = stat.rsplit(')').next()?;
         let fields: Vec<&str> = rest.split_whitespace().collect();
-        let ticks: u64 = fields.get(11)?.parse().ok()? + fields.get(12)?.parse().ok()?;
+        let u: u64 = fields.get(11)?.parse().ok()?;
+        let s: u64 = fields.get(12)?.parse().ok()?;
+        let ticks: u64 = u + s;
         // 时钟频率按 100Hz（绝大多数 Linux 如此），换算成 100ns 单位
         let cpu_100ns = ticks * 100_000;
 
@@ -109,11 +111,12 @@ mod imp {
     }
 
     pub fn working_set_mb() -> f32 {
-        let status = std::fs::read_to_string("/proc/self/status").ok()?;
-        for line in status.lines() {
-            if let Some(v) = line.strip_prefix("VmRSS:") {
-                let kb: f32 = v.trim_end_matches("kB").trim().parse().unwrap_or(0.0);
-                return kb / 1024.0;
+        if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+            for line in status.lines() {
+                if let Some(v) = line.strip_prefix("VmRSS:") {
+                    let kb: f32 = v.trim_end_matches("kB").trim().parse().unwrap_or(0.0);
+                    return kb / 1024.0;
+                }
             }
         }
         0.0

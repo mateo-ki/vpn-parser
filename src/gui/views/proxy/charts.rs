@@ -92,7 +92,6 @@ fn ok_fg_red() -> Color32 {
 /// 卡片外框：Apple 设计稿 v4 —— 圆角 14px 白卡 + 细边框 + 微阴影。
 /// 在指定矩形上画一张卡（外框尺寸完全由 rect 决定，内容溢出也不影响外框）。
 fn dash_card_at(ui: &mut Ui, rect: Rect) {
-    let f = dash_card();
     let painter = ui.painter().clone();
     // epaint 指令手工展开：填充 + 描边 + 阴影 + 圆角
     let cr = CornerRadius::same(14);
@@ -641,7 +640,7 @@ impl VpnApp {
         let gap = 8.0_f32;
         let row1_h = 176.0_f32;
         let row2_h = 124.0_f32;
-        let row3_h = 154.0_f32;
+        let _row3_h = 154.0_f32;
 
         // 宽度预算先扣除每张卡自身的左右内边距（Frame 外框 = 内容 + margin）。
         let cm = 40.0_f32;  // 状态卡边距 20*2
@@ -670,7 +669,7 @@ impl VpnApp {
         let out_rate = rate_w + cm;
         let out_col = col_w + cm2;
         let out_mode = mode_w + cm2;
-        let out_perf = perf_w + cm2;
+        let _out_perf = perf_w + cm2;
         // 列 x 坐标（行首为 0）
         let x_status = 0.0_f32;
         let x_up = x_status + out_status + gap;
@@ -933,7 +932,7 @@ impl VpnApp {
                                 let g = p.layout_no_wrap(
                                     mode.to_string(),
                                     f,
-                                    if selected { theme::accent_strong() } else { theme::text_secondary() },
+                                    fg,
                                 );
                                 p.galley(
                                     egui::pos2(
@@ -941,7 +940,7 @@ impl VpnApp {
                                         rect.center().y - g.rect.height() / 2.0,
                                     ),
                                     g,
-                                    if selected { theme::accent_strong() } else { theme::text_secondary() },
+                                    fg,
                                 );
                                 if resp.clicked() {
                                     self.group_scheduling
@@ -1151,7 +1150,7 @@ impl VpnApp {
                                 return;
                             }
                             let switching_id = self.switching_node_id.clone();
-                            let is_switching = move |id: &str| {
+                            let _is_switching = move |id: &str| {
                                 switching_id.as_deref() == Some(id)
                             };
                             // 一行两个节点：精确矩形自绘（compact_node_card 会
@@ -1939,7 +1938,7 @@ impl VpnApp {
                     } else {
                         theme::danger()
                     };
-                    let off_fg = theme::muted();
+                    let _off_fg = theme::muted();
 
                     // 按最近一轮实测结果渲染；结果缺失或检测中显示对应状态
                     let lookup = |name: &str| -> (String, Color32, Color32) {
