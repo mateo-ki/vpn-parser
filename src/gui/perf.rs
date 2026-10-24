@@ -133,3 +133,16 @@ mod imp {
         0.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn perf_samples_can_be_read_without_panicking() {
+        let _ = raw_sample();
+        let mem = working_set_mb();
+        assert!(mem >= 0.0, "内存工作集不应为负数: {mem}");
+    }
+}
+
