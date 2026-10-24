@@ -629,6 +629,7 @@ use std::time::Duration;
             (KernelKind::SingBox, "config.json", "sing-box.log"),
             (KernelKind::Xray, "config.json", "xray.log"),
             (KernelKind::Shoes, "config.yaml", "shoes.log"),
+            (KernelKind::Meow, "config.yaml", "meow.log"),
         ] {
             let work_dir = ProxyWorkDir::create(kernel).await.unwrap();
             let root = work_dir.root().to_path_buf();
@@ -644,6 +645,10 @@ use std::time::Duration;
                 KernelKind::SingBox | KernelKind::Xray | KernelKind::Shoes => {
                     assert_eq!(work_dir.data_root(), root)
                 }
+                KernelKind::Meow => assert_eq!(
+                    work_dir.data_root(),
+                    crate::kernel::managed_kernel_root().join("meow")
+                ),
             }
 
             work_dir.cleanup().await.unwrap();

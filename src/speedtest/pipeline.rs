@@ -440,6 +440,7 @@ pub async fn run_speedtest_pipeline(
     let mut sing_box_nodes = Vec::new();
     let mut xray_nodes = Vec::new();
     let mut shoes_nodes = Vec::new();
+    let mut meow_nodes = Vec::new();
     let mut proxy_results = Vec::new();
     let mut result_kernels = HashMap::new();
 
@@ -460,6 +461,10 @@ pub async fn run_speedtest_pipeline(
             Ok(KernelKind::Shoes) => {
                 result_kernels.insert(node.id.clone(), KernelKind::Shoes);
                 shoes_nodes.push(node);
+            }
+            Ok(KernelKind::Meow) => {
+                result_kernels.insert(node.id.clone(), KernelKind::Meow);
+                meow_nodes.push(node);
             }
             Err(error) => proxy_results.push(ProxyProbeResult {
                 id: node.id,
@@ -526,6 +531,21 @@ pub async fn run_speedtest_pipeline(
                 verify_nodes_with_kernel_progress(
                     KernelKind::Shoes,
                     shoes_nodes,
+                    proxy_timeout,
+                    None,
+                    limit,
+                    proxy_batch_size,
+                    conditional_isolation,
+                )
+                .await
+            });
+        }
+        if !meow_nodes.is_empty() {
+            let limit = network_limit.clone();
+            kernel_tasks.spawn(async move {
+                verify_nodes_with_kernel_progress(
+                    KernelKind::Meow,
+                    meow_nodes,
                     proxy_timeout,
                     None,
                     limit,

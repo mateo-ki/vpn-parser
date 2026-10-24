@@ -207,6 +207,7 @@ fn main() -> Result<()> {
             "sing-box" | "singbox" => crate::kernel::KernelKind::SingBox,
             "xray" => crate::kernel::KernelKind::Xray,
             "shoes" => crate::kernel::KernelKind::Shoes,
+            "meow" => crate::kernel::KernelKind::Meow,
             _ => crate::kernel::KernelKind::Mihomo,
         };
         let executable = cli.executable.unwrap_or_default();

@@ -76,6 +76,7 @@ impl VpnApp {
                                     KernelPreference::SingBox => "Sing-box",
                                     KernelPreference::Xray => "Xray",
                                     KernelPreference::Shoes => "Shoes",
+                                    KernelPreference::Meow => "Meow",
                                 })
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(
@@ -312,6 +313,7 @@ impl VpnApp {
                                         KernelKind::SingBox => (Icon::Lightning, theme::accent_strong()),
                                         KernelKind::Xray => (Icon::Radar, theme::text_secondary()),
                                         KernelKind::Shoes => (Icon::Shield, theme::accent()),
+                                        KernelKind::Meow => (Icon::Lightning, theme::accent()),
                                     };
                                     icon_label(ui, chip_icon, 15.0, chip_color);
                                     ui.add(
@@ -345,6 +347,7 @@ impl VpnApp {
                                     KernelKind::SingBox => "ShadowTLS · VLESS · Hysteria2",
                                     KernelKind::Xray => "XTLS · VLESS · Trojan · Splithttp",
                                     KernelKind::Shoes => "Snell · NaiveProxy · AnyTLS · Clash API",
+                                    KernelKind::Meow => "Rust 版 Mihomo · 高性能 · Clash API",
                                 };
                                 ui.add(
                                     egui::Label::new(

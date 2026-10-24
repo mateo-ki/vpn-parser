@@ -315,7 +315,7 @@ mod tests {
     use chrono::Utc;
     use serde_json::json;
 
-    fn node(protocol: &str, config: serde_json::Value) -> Node {
+    pub(crate) fn node(protocol: &str, config: serde_json::Value) -> Node {
         Node {
             id: "test-node".into(),
             source_id: None,
@@ -529,5 +529,155 @@ mod tests {
         assert!(yaml_str.contains("alpn_protocols"));
         assert!(yaml_str.contains("http/1.1"));
         assert!(yaml_str.contains("no_resolve: true"));
+    }
+}
+
+/// meow 集成的核心断言：配置是 mihomo 形态 + meow 特化裁剪。
+/// 编译主体复用 MihomoCompiler（meow 官方按 mihomo 兼容设计），
+/// 关键差异是剥掉 mihomo 的 geo 字段、TUN 拒绝。
+#[cfg(test)]
+mod meow_tests {
+    use super::tests::node;
+    use super::*;
+    use crate::proxy::config::TrafficRule;
+    use crate::proxy::{ProxyMode, RoutingMode, RuleAction, RuleMatcher};
+    use serde_json::json;
+
+    fn meow_options() -> MihomoConfigOptions {
+        let mut options = MihomoConfigOptions::default();
+        options.mixed_port = 19991;
+        options.controller_port = 19091;
+        options.controller_secret = "secret123".into();
+        options
+    }
+
+    #[test]
+    fn builds_meow_config_from_mihomo_shape_without_geo_fields() {
+        let n = node("vless", json!({
+            "type": "vless",
+            "name": "meow节点",
+            "server": "saas.sin.fan",
+            "port": 443,
+            "uuid": "2561db48-c4d2-4b36-808a-db5093797aeb",
+            "tls": true,
+            "servername": "next-a64.pages.dev",
+            "network": "ws",
+            "ws-opts": {"path": "/x?ed=2048", "headers": {"Host": "next-a64.pages.dev"}}
+        }));
+        let mut options = meow_options();
+        options.routing_mode = RoutingMode::ChinaDirect;
+        let val = crate::proxy::compiler::MeowCompiler
+            .compile(&crate::proxy::ir::lower_options_to_ir(&options, Some(&n)))
+            .expect("valid meow config")
+            .as_json_value()
+            .expect("json artifact");
+        let yaml_str = serde_yaml::to_string(&val).unwrap();
+        assert!(yaml_str.contains("mixed-port: 19991"));
+        assert!(yaml_str.contains("external-controller: 127.0.0.1:19091"));
+        // mihomo 遗留 geo 字段必须剥掉（meow 自管 home 里的 dat/mmdb）
+        assert!(!yaml_str.contains("geodata-mode"));
+        assert!(!yaml_str.contains("geox-url"));
+        assert!(!yaml_str.contains("geo-auto-update"));
+    }
+
+    #[test]
+    fn rejects_meow_tun_mode() {
+        let n = node("ss", json!({"cipher":"aes-128-gcm","password":"p"}));
+        let mut options = meow_options();
+        options.mode = ProxyMode::Tun;
+        let result = crate::proxy::compiler::MeowCompiler
+            .compile(&crate::proxy::ir::lower_options_to_ir(&options, Some(&n)));
+        assert!(result.is_err(), "meow v1 不放行 TUN");
+    }
+
+    #[test]
+    fn meow_lan_alias_and_port_rules_flow_through() {
+        let n = node("ss", json!({"cipher":"aes-128-gcm","password":"p"}));
+        let mut options = meow_options();
+        options.rules = vec![
+            TrafficRule {
+                matcher: RuleMatcher::GeoIp("LAN".into()),
+                action: RuleAction::Direct,
+            },
+            TrafficRule {
+                matcher: RuleMatcher::Quic,
+                action: RuleAction::Reject,
+            },
+        ];
+        let val = crate::proxy::compiler::MeowCompiler
+            .compile(&crate::proxy::ir::lower_options_to_ir(&options, Some(&n)))
+            .expect("valid meow config")
+            .as_json_value()
+            .expect("json artifact");
+        let yaml_str = serde_yaml::to_string(&val).unwrap();
+        // LAN→private 别名在 mihomo 编译主体里生效，meow 继承
+        assert!(yaml_str.contains("GEOIP,private"), "LAN 应映射为 private:\n{yaml_str}");
+        // 不应出现裸 443 端口拦截（那是 shoes 编译器已修的坑，meow 走 mihomo 语义不存在）
+        assert!(!yaml_str.contains("DST-PORT,443,REJECT"));
+    }
+}
+
+/// 真实内核冒烟：若本机有已下载的 meow.exe，就用 App 生成的配置跑 `meow -t`。
+/// CI / 未下载内核时静默跳过。
+#[cfg(test)]
+mod meow_real_kernel_tests {
+    use super::tests::node;
+    use super::*;
+    use crate::proxy::RoutingMode;
+    use serde_json::json;
+
+    #[test]
+    fn meow_config_passes_real_kernel_validation() {
+        let p = std::path::PathBuf::from(
+            "C:/Users/loukas/AppData/Local/Temp/meow-sdk/mw/meow-v0.26.1-x86_64-pc-windows-msvc/meow.exe",
+        );
+        if !p.exists() {
+            eprintln!("skip: meow.exe 不在本机（CI / 未下载内核）");
+            return;
+        }
+        let meow_exe = p;
+
+        let n = node("vless", json!({
+            "type": "vless",
+            "name": "meow节点",
+            "server": "saas.sin.fan",
+            "port": 443,
+            "uuid": "2561db48-c4d2-4b36-808a-db5093797aeb",
+            "tls": true,
+            "servername": "next-a64.pages.dev",
+            "network": "ws",
+            "ws-opts": {"path": "/x?ed=2048", "headers": {"Host": "next-a64.pages.dev"}}
+        }));
+        let mut options = MihomoConfigOptions::default();
+        options.mixed_port = 19991;
+        options.controller_port = 19091;
+        options.controller_secret = "secret123".into();
+        options.routing_mode = RoutingMode::ChinaDirect;
+        let val = crate::proxy::compiler::MeowCompiler
+            .compile(&crate::proxy::ir::lower_options_to_ir(&options, Some(&n)))
+            .expect("compile")
+            .as_json_value()
+            .expect("json");
+        let text = serde_yaml::to_string(&val).unwrap();
+
+        let home = std::env::temp_dir().join("vpn-parser-meow-smoke");
+        std::fs::create_dir_all(&home).unwrap();
+        let cfg = home.join("config.yaml");
+        std::fs::write(&cfg, &text).unwrap();
+
+        let out = std::process::Command::new(&meow_exe)
+            .arg("-t")
+            .arg("-d")
+            .arg(&home)
+            .arg("-f")
+            .arg(&cfg)
+            .output()
+            .expect("spawn meow");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("Configuration test passed") || out.status.success(),
+            "meow -t 未通过: {}",
+            stderr
+        );
     }
 }

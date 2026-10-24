@@ -31,7 +31,7 @@ impl KernelValidator {
         std::fs::create_dir_all(&temp_dir)?;
 
         let config_file_name = match kernel {
-            KernelKind::Mihomo | KernelKind::Shoes => "config.yaml",
+            KernelKind::Mihomo | KernelKind::Shoes | KernelKind::Meow => "config.yaml",
             _ => "config.json",
         };
         let config_path = temp_dir.join(config_file_name);
@@ -80,6 +80,20 @@ impl KernelValidator {
             }
             KernelKind::Shoes => {
                 cmd.arg("check").arg(&config_path);
+            }
+            KernelKind::Meow => {
+                // meow 与 mihomo 同构：geo 从 -d home 的发现路径加载
+                let geo_dir = crate::geo::mihomo_dir();
+                let data_dir = if geo_dir.exists() {
+                    geo_dir
+                } else {
+                    temp_dir.clone()
+                };
+                cmd.arg("-t")
+                    .arg("-d")
+                    .arg(data_dir)
+                    .arg("-f")
+                    .arg(&config_path);
             }
         }
 

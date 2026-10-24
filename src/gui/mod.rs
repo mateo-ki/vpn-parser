@@ -2398,6 +2398,7 @@ impl VpnApp {
             crate::kernel::KernelKind::Xray,
             crate::kernel::KernelKind::SingBox,
             crate::kernel::KernelKind::Shoes,
+            crate::kernel::KernelKind::Meow,
         ] {
             programs.push(
                 root.join(kind.directory_name())
@@ -2556,6 +2557,7 @@ impl VpnApp {
             crate::kernel::KernelKind::SingBox,
             crate::kernel::KernelKind::Xray,
             crate::kernel::KernelKind::Shoes,
+            crate::kernel::KernelKind::Meow,
         ]
         .into_iter()
         .any(|kind| crate::kernel::find_kernel_executable(kind).is_some())
@@ -2788,6 +2790,7 @@ impl VpnApp {
                                     KernelKind::SingBox => "sing_box",
                                     KernelKind::Xray => "xray",
                                     KernelKind::Shoes => "shoes",
+                                    KernelKind::Meow => "meow",
                                 });
                                 let _ = db
                                     .update_node_speed(
@@ -2818,6 +2821,7 @@ impl VpnApp {
                                         KernelKind::SingBox => "sing_box",
                                         KernelKind::Xray => "xray",
                                         KernelKind::Shoes => "shoes",
+                                        KernelKind::Meow => "meow",
                                     });
                                 let _ = db
                                     .update_node_speed(

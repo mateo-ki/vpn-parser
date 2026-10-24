@@ -1599,7 +1599,7 @@ impl VpnApp {
                                 ui.label(RichText::new(proto_str).size(13.0).strong().color(theme::text_primary()));
                             });
 
-                            // 4. 内核（下拉选，支持 自动选择 / Mihomo / Shoes / Sing-box / Xray）
+                            // 4. 内核（下拉选，支持 自动选择 / Mihomo / Shoes / Sing-box / Xray / Meow）
                             ui.vertical(|ui| {
                                 ui.label(RichText::new("内核").size(10.5).color(theme::muted()));
                                 let prev_pref = self.proxy_config.kernel_preference;
@@ -1610,6 +1610,7 @@ impl VpnApp {
                                     KernelPreference::Shoes => "Shoes",
                                     KernelPreference::SingBox => "Sing-box",
                                     KernelPreference::Xray => "Xray",
+                                    KernelPreference::Meow => "Meow",
                                 };
                                 let combo_w = if is_compact { 72.0 } else { 84.0 };
                                 egui::ComboBox::from_id_salt("dash_status_kernel_dropdown")
@@ -1645,6 +1646,11 @@ impl VpnApp {
                                             &mut current_pref,
                                             KernelPreference::Xray,
                                             "Xray",
+                                        );
+                                        ui.selectable_value(
+                                            &mut current_pref,
+                                            KernelPreference::Meow,
+                                            "Meow",
                                         );
                                     })
                                     .response

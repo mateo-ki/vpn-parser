@@ -1570,6 +1570,9 @@ pub fn run_elevated_kernel_supervisor(args: ElevatedKernelArgs) -> Result<()> {
         KernelKind::Shoes => {
             command.arg("--no-reload").arg(&args.config);
         }
+        KernelKind::Meow => {
+            command.arg("-d").arg(&args.data_root).arg("-f").arg(&args.config);
+        }
     }
     command
         .stdout(log)

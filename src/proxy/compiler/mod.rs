@@ -1,8 +1,10 @@
+pub mod meow;
 pub mod mihomo;
 pub mod shoes;
 pub mod sing_box;
 pub mod xray;
 
+pub use meow::MeowCompiler;
 pub use mihomo::MihomoCompiler;
 pub use shoes::ShoesCompiler;
 pub use sing_box::SingBoxCompiler;
@@ -149,5 +151,6 @@ pub fn get_backend_compiler(kernel: KernelKind) -> Box<dyn BackendCompiler> {
         KernelKind::SingBox => Box::new(SingBoxCompiler::new()),
         KernelKind::Xray => Box::new(XrayCompiler::new()),
         KernelKind::Shoes => Box::new(ShoesCompiler::new()),
+        KernelKind::Meow => Box::new(MeowCompiler),
     }
 }

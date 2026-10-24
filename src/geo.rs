@@ -96,6 +96,94 @@ pub fn geo_ready(dir: &Path) -> bool {
     geo_state(dir).iter().all(|(_, size)| size.is_some())
 }
 
+/// meow 的 GEOIP 用 MaxMind MMDB（meta-rules-dat 的 country.mmdb），完整库约 7.6MB。
+pub const MIN_MMDB_BYTES: u64 = 4_000_000;
+
+/// meow 内核 home 目录的 geo 准备：
+/// 1. 复用 mihomo 目录的 geosite.dat / geoip.dat（meow 的发现路径接受 protobuf dat，实测加载成功）；
+/// 2. Country.mmdb 缺失时从镜像下载（meow 自己也会下，但走 GitHub，境内大概率卡住启动）。
+/// 文件已就位（大小达标）时跳过，幂等。
+pub async fn ensure_meow_home_geo(home: &Path, proxy_url: Option<&str>) -> Result<String> {
+    std::fs::create_dir_all(home)?;
+    let mut report = Vec::new();
+
+    // 1. mihomo 目录的 dat 先备好
+    let mihomo = mihomo_dir();
+    if !geo_ready(&mihomo) {
+        provision(&mihomo, proxy_url, false).await?;
+    }
+
+    // 2. 拷进 meow home（meow 的发现路径之一是 <home>/geosite.dat）
+    for name in GEO_FILES {
+        let Some(size) = geo_state(&mihomo)
+            .into_iter()
+            .find(|(n, _)| *n == name)
+            .and_then(|(_, s)| s)
+        else {
+            continue;
+        };
+        let dst = home.join(name);
+        let needs_copy = std::fs::metadata(&dst)
+            .map(|m| m.len() != size)
+            .unwrap_or(true);
+        if needs_copy {
+            let candidates = [
+                mihomo.join(name),
+                mihomo.join(if name == "geosite.dat" { "GeoSite.dat" } else { "GeoIP.dat" }),
+            ];
+            if let Some(src) = candidates.iter().find(|p| p.exists()) {
+                std::fs::copy(src, &dst)?;
+                report.push(format!("{name} 已复制到 meow 目录"));
+            }
+        }
+    }
+
+    // 3. Country.mmdb
+    let mmdb = home.join("Country.mmdb");
+    let mmdb_ok = std::fs::metadata(&mmdb)
+        .map(|m| m.len() >= MIN_MMDB_BYTES)
+        .unwrap_or(false);
+    if !mmdb_ok {
+        const MMDB_UPSTREAMS: [&str; 4] = [
+            "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/",
+            "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/",
+            "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/",
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/",
+        ];
+        let mut builder = Client::builder()
+            .user_agent("vpn-parser geo-updater")
+            .connect_timeout(Duration::from_secs(6))
+            .timeout(Duration::from_secs(180));
+        if let Some(proxy_url) = proxy_url {
+            builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
+        }
+        let client = builder.build()?;
+        let mut failures = Vec::new();
+        let mut done = false;
+        for upstream in MMDB_UPSTREAMS {
+            let url = format!("{upstream}Country.mmdb");
+            match download_into(&client, &url, &mmdb, "Country.mmdb").await {
+                Ok(bytes) => {
+                    report.push(format!("Country.mmdb 就绪 {}", human_mb(bytes)));
+                    done = true;
+                    break;
+                }
+                Err(error) => failures.push(format!("{}: {error}", host_of(&url))),
+            }
+        }
+        if !done {
+            return Err(anyhow!(
+                "Meow 的 Country.mmdb 各源都失败（{}），GEOIP 规则将不匹配",
+                failures.join("；")
+            ));
+        }
+    } else {
+        report.push("Country.mmdb 已就绪".into());
+    }
+
+    Ok(report.join("，"))
+}
+
 /// 校验响应体：够大、且不是镜像挂了返回的 HTML。
 fn validate_geo_body(name: &str, bytes: &[u8]) -> Result<u64> {
     let min_len = min_bytes_for_file(name);

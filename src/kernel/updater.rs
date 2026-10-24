@@ -1045,6 +1045,46 @@ impl KernelUpdater {
 ///   解出来 61,993,086 字节的静态 ELF，`chmod +x` 后 `-v` 退出码 0。
 /// 代价是版本号会慢慢落后；更新它只改下面这几行常量。
 fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
+    if kind == KernelKind::Meow {
+        // meow v0.3.x 时代没有兜底元数据；Windows 资产实测过（2026-10-24：
+        // 走本地代理 2 秒下完 6,923,117 字节，SHA-256 本地计算，解包后
+        // `meow --version` 输出 0.26.1）。Linux/macOS 暂无兜底，走在线查询。
+        const MEOW_TAG: &str = "v0.26.1";
+        let (name, digest, size) = match KernelPlatform::current() {
+            KernelPlatform::Windows => (
+                format!("meow-{MEOW_TAG}-x86_64-pc-windows-msvc.zip"),
+                "sha256:c212a27184973bd1eb1c8c713d919da0eaa2daaf2695afb7b73ca61705ea97a9",
+                6_923_117_u64,
+            ),
+            KernelPlatform::Linux => (
+                format!("meow-{MEOW_TAG}-x86_64-unknown-linux-gnu.tar.gz"),
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                0_u64,
+            ),
+            KernelPlatform::MacOS => (
+                format!("meow-{MEOW_TAG}-aarch64-apple-darwin.tar.gz"),
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                0_u64,
+            ),
+        };
+        if size == 0 {
+            // 未实测的平台没有兜底元数据，宁缺毋滥（避免套错号校验必挂）
+            return None;
+        }
+        return Some(GithubRelease {
+            tag_name: MEOW_TAG.to_string(),
+            assets: vec![GithubAsset {
+                name: name.clone(),
+                browser_download_url: format!(
+                    "https://github.com/meow-rs/meow-rs/releases/download/{MEOW_TAG}/{name}"
+                ),
+                size,
+                digest: Some(digest.to_string()),
+            }],
+            fallback: true,
+        });
+    }
+
     if kind == KernelKind::Shoes {
         const SHOES_TAG: &str = "v0.3.4";
         let (name, digest, size) = match KernelPlatform::current() {

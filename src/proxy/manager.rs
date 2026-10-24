@@ -40,7 +40,9 @@ impl ProxyWorkDir {
         let root = std::env::temp_dir().join(format!("vpn-parser-proxy-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(&root).await?;
         let data_root = match kernel {
-            KernelKind::Mihomo => managed_kernel_root().join(kernel.directory_name()),
+            KernelKind::Mihomo | KernelKind::Meow => {
+                managed_kernel_root().join(kernel.directory_name())
+            }
             KernelKind::SingBox | KernelKind::Xray | KernelKind::Shoes => root.clone(),
         };
         tokio::fs::create_dir_all(&data_root).await?;
@@ -61,7 +63,7 @@ impl ProxyWorkDir {
 
     pub fn config_path(&self) -> PathBuf {
         self.root.join(match self.kernel {
-            KernelKind::Mihomo | KernelKind::Shoes => "config.yaml",
+            KernelKind::Mihomo | KernelKind::Shoes | KernelKind::Meow => "config.yaml",
             KernelKind::SingBox | KernelKind::Xray => "config.json",
         })
     }
@@ -72,6 +74,7 @@ impl ProxyWorkDir {
             KernelKind::SingBox => "sing-box.log",
             KernelKind::Xray => "xray.log",
             KernelKind::Shoes => "shoes.log",
+            KernelKind::Meow => "meow.log",
         })
     }
 
@@ -537,6 +540,16 @@ impl ProxyManager {
                 if let Err(error) = crate::geo::provision(&dir, system.as_deref(), false).await {
                     tracing::warn!(%error, "分流数据库准备未完全完成，尝试继续启动");
                 }
+            }
+        }
+        if kernel == KernelKind::Meow {
+            // meow 的 GEOSITE/GEOIP 读 home 目录的 dat 与 Country.mmdb；
+            // mmdb 缺失时 meow 会自己走 GitHub 下载，境内大概率卡住启动，这里抢先备好。
+            let system = crate::system_proxy::current_system_proxy_url();
+            let meow_home = managed_kernel_root().join(KernelKind::Meow.directory_name());
+            if let Err(error) = crate::geo::ensure_meow_home_geo(&meow_home, system.as_deref()).await
+            {
+                tracing::warn!(%error, "meow geo 准备未完全完成，尝试继续启动");
             }
         }
 
