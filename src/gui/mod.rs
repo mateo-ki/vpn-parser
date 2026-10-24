@@ -3262,10 +3262,12 @@ impl VpnApp {
         let tx = self.tx.clone();
         self.rt.spawn(async move {
             let client = reqwest::Client::new();
-            let egress = crate::ip_risk::lookup_egress(&client, &url)
-                .await
-                .map_err(|error| error.to_string());
-            let _ = tx.send(BgMsg::IpEgress(id, egress, false));
+            let mut egress = crate::ip_risk::lookup_egress(&client, &url).await;
+            if egress.is_err() {
+                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                egress = crate::ip_risk::lookup_egress(&client, &url).await;
+            }
+            let _ = tx.send(BgMsg::IpEgress(id, egress.map_err(|error| error.to_string()), false));
         });
     }
 
@@ -3438,10 +3440,12 @@ impl VpnApp {
         let id = node_id.to_owned();
         self.rt.spawn(async move {
             let client = reqwest::Client::new();
-            let egress = crate::ip_risk::lookup_egress(&client, &url)
-                .await
-                .map_err(|error| error.to_string());
-            let _ = tx.send(BgMsg::IpEgress(id, egress, manual));
+            let mut egress = crate::ip_risk::lookup_egress(&client, &url).await;
+            if egress.is_err() {
+                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                egress = crate::ip_risk::lookup_egress(&client, &url).await;
+            }
+            let _ = tx.send(BgMsg::IpEgress(id, egress.map_err(|error| error.to_string()), manual));
         });
     }
 

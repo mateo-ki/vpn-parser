@@ -1388,6 +1388,16 @@ impl VpnApp {
                 // 主体两栏：左侧 IP 画像与信息，右侧启停大按钮
                 let btn_diameter = if is_compact { 50.0_f32 } else { 58.0_f32 };
                 let left_w = (w - btn_diameter - 36.0).max(180.0);
+                let (egress_ip, egress_dc, egress_org, egress_country, egress_checking) = {
+                    let view = self.egress_risk_view();
+                    (
+                        view.risk.map(|r| r.ip.clone()),
+                        view.risk.map(|r| r.datacenter),
+                        view.risk.map(|r| r.org.clone()),
+                        view.risk.map(|r| r.country.clone()),
+                        view.checking,
+                    )
+                };
 
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
@@ -1402,9 +1412,8 @@ impl VpnApp {
                             painter.rect_filled(flag_rect, CornerRadius::same(9), apple_sub_bg());
                             painter.rect_stroke(flag_rect, CornerRadius::same(9), Stroke::new(1.0_f32, apple_stroke()), egui::StrokeKind::Inside);
 
-                            let country_code = selected_node
-                                .as_ref()
-                                .and_then(|n| n.country.clone())
+                            let country_code = egress_country
+                                .or_else(|| selected_node.as_ref().and_then(|n| n.country.clone()))
                                 .unwrap_or_else(|| "CN".into());
                             let galley = painter.layout_no_wrap(
                                 country_code,
@@ -1418,8 +1427,8 @@ impl VpnApp {
                             painter.galley(pos, galley, theme::text_primary());
 
 
-                            let display_title = if let Some(risk) = self.ip_risk_egress.as_ref() {
-                                risk.ip.clone()
+                            let display_title = if let Some(ip) = egress_ip.as_ref() {
+                                ip.clone()
                             } else if let Some(node) = selected_node {
                                 crate::gui::widgets::clean_node_display_name(&node.name).to_string()
                             } else {
@@ -1443,8 +1452,10 @@ impl VpnApp {
                         // 标签药丸行：IP 类型 / 质量（按实测延迟分档）/ IP 协议版本
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing.x = 5.0;
-                            let tag_dc = if let Some(risk) = self.ip_risk_egress.as_ref() {
-                                if risk.datacenter { "机房" } else { "住宅" }
+                            let tag_dc = if let Some(dc) = egress_dc {
+                                if dc { "机房" } else { "住宅" }
+                            } else if egress_checking {
+                                "检测中"
                             } else {
                                 "未检测"
                             };
@@ -1505,10 +1516,8 @@ impl VpnApp {
                             }
                             q_resp.on_hover_text("点击测速当前节点延迟");
 
-                            let ip_text = self
-                                .ip_risk_egress
-                                .as_ref()
-                                .map(|r| r.ip.clone())
+                            let ip_text = egress_ip
+                                .clone()
                                 .or_else(|| selected_node.as_ref().map(|n| n.server.clone()))
                                 .unwrap_or_default();
                             let tag_v = if ip_text.contains(':') {
@@ -1535,8 +1544,8 @@ impl VpnApp {
                             });
 
                             // 2. 组织
-                            let org_str = if let Some(risk) = self.ip_risk_egress.as_ref() {
-                                if risk.org.is_empty() { "Chinanet" } else { &risk.org }
+                            let org_str = if let Some(ref org) = egress_org {
+                                if org.is_empty() { "Chinanet" } else { org.as_str() }
                             } else if let Some(node) = selected_node {
                                 if node.server.is_empty() { "Chinanet" } else { &node.server }
                             } else {
