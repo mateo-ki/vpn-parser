@@ -1,7 +1,7 @@
-name: Release
+name: Windows
 
 # 打 tag（v1.0.0 这种）就在 GitHub Actions 的 Windows runner 上：
-# 跑全部测试 → cargo build --release → Inno Setup 编安装包 → 算 SHA-256 → 发 GitHub Release。
+# 跑全部测试 → cargo build --release → Inno Setup 编安装包 + 便携版 zip → 算 SHA-256 → 发 GitHub Release。
 # 手动跑（workflow_dispatch）只产出"工作流产物"，不会发布 Release。
 
 on:
@@ -19,7 +19,7 @@ env:
 
 jobs:
   installer:
-    name: 打包 Windows 安装包并发布
+    name: 打包 Windows 安装包与便携版并发布
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,10 +57,31 @@ jobs:
       - name: 编译安装包
         run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer/vpn-parser.iss'
 
+      - name: 打包 Windows 便携版 (zip)
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^\s*version\s*=\s*"([^"]+)"' |
+              Select-Object -First 1).Matches[0].Groups[1].Value
+          $zipName = "vpn-parser-$version-windows-x64-portable.zip"
+          $zipPath = "dist/$zipName"
+          if (!(Test-Path "dist")) {
+            New-Item -ItemType Directory -Force -Path "dist" | Out-Null
+          }
+          # 创建临时便携版目录，放入可执行文件与说明文件
+          $stageDir = "dist/vpn-parser-$version-windows-x64"
+          if (Test-Path $stageDir) { Remove-Item -Recurse -Force $stageDir }
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+          Copy-Item "target/release/vpn-parser.exe" "$stageDir/"
+          if (Test-Path "README.md") { Copy-Item "README.md" "$stageDir/" }
+          if (Test-Path "LICENSE") { Copy-Item "LICENSE" "$stageDir/" }
+          Compress-Archive -Path "$stageDir/*" -DestinationPath $zipPath -Force
+          Remove-Item -Recurse -Force $stageDir
+          Write-Host "Portable package created at $zipPath"
+
       - name: 算 SHA-256
         shell: pwsh
         run: |
-          Get-ChildItem dist -Filter *-setup.exe | ForEach-Object {
+          Get-ChildItem dist | Where-Object { $_.Name -match '\.(exe|zip)$' } | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             "$hash  $($_.Name)"
           } | Set-Content -Encoding ascii dist/sha256.txt
@@ -69,9 +90,10 @@ jobs:
       - name: 上传为工作流产物（任何一次运行都留一份）
         uses: actions/upload-artifact@v4
         with:
-          name: windows-installer
+          name: windows-binaries
           path: |
             dist/*-setup.exe
+            dist/*-portable.zip
             dist/sha256.txt
           if-no-files-found: error
 
@@ -83,7 +105,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          $exe = (Get-ChildItem dist -Filter *-setup.exe | Select-Object -First 1).FullName
+          $assets = Get-ChildItem dist | Where-Object { $_.Name -match '\.(exe|zip|txt)$' } | Select-Object -ExpandProperty FullName
           # tag 里带 -alpha./-beta./-rc./-dev./-preview. 就发成预发布版：GitHub 的 /releases/latest 会跳过
           # prerelease，稳定通道的用户收不到它，只有「关于」里勾了「参与预发」或主动切换版本的人才拿得到。
           $pre = $env:TAG -match '-(alpha|beta|rc|dev|preview)(\.|\b)' -or $env:TAG -match '-[0-9A-Za-z]+'
@@ -91,21 +113,21 @@ jobs:
           $notesValid = (Test-Path "RELEASE_NOTES.md") -and ((Get-Content "RELEASE_NOTES.md" -Raw) -match [regex]::Escape($versionClean))
           if (gh release view "$env:TAG" 2>$null) {
             Write-Host "Release $env:TAG already exists, updating assets with --clobber..."
-            gh release upload "$env:TAG" $exe dist/sha256.txt --clobber
+            gh release upload "$env:TAG" @assets --clobber
             if ($notesValid) {
               gh release edit "$env:TAG" --notes-file RELEASE_NOTES.md
             }
             if ($pre) { gh release edit "$env:TAG" --prerelease } else { gh release edit "$env:TAG" --prerelease=false }
           } elseif ($pre) {
             if ($notesValid) {
-              gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG（预发）" --notes-file RELEASE_NOTES.md --prerelease
+              gh release create "$env:TAG" @assets --title "VPN Parser $env:TAG（预发）" --notes-file RELEASE_NOTES.md --prerelease
             } else {
-              gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG（预发）" --generate-notes --prerelease
+              gh release create "$env:TAG" @assets --title "VPN Parser $env:TAG（预发）" --generate-notes --prerelease
             }
           } else {
             if ($notesValid) {
-              gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG" --notes-file RELEASE_NOTES.md
+              gh release create "$env:TAG" @assets --title "VPN Parser $env:TAG" --notes-file RELEASE_NOTES.md
             } else {
-              gh release create "$env:TAG" $exe dist/sha256.txt --title "VPN Parser $env:TAG" --generate-notes
+              gh release create "$env:TAG" @assets --title "VPN Parser $env:TAG" --generate-notes
             }
           }

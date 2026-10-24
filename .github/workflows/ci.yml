@@ -1,7 +1,7 @@
 name: CI
 
 # 每次推 master / 开 PR 都跑：快速跑全部单元测试。
-# 打包发布走 release.yml（打 tag 才触发）。
+# 打包发布走 windows.yml（打 tag 才触发）。
 
 on:
   push:

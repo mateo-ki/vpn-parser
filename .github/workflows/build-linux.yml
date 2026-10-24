@@ -1,6 +1,6 @@
 name: Linux
 
-# Windows 那条路已经有 ci.yml + release.yml 了。这个作业补另外两件事：
+# Windows 那条路已经有 ci.yml + windows.yml 了。这个作业补另外两件事：
 #   1) 在干净环境里跑全量测试 —— 他那台机器的环回会被间歇拦掉（collector 那批用例因此
 #      在本地时红时绿），本地红了分不清是回归还是环境；ubuntu runner 上没有这个变量。
 #   2) 打 tag 时造出 Linux 的两个包（deb / rpm），并进同一个 GitHub Release。
@@ -185,5 +185,5 @@ jobs:
             fi
             sleep 15
           done
-          echo "等 Release $tag 出现超时（10 分钟）—— 检查 release.yml 那次运行" >&2
+          echo "等 Release $tag 出现超时（10 分钟）—— 检查 windows.yml 那次运行" >&2
           exit 1

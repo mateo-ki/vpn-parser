@@ -699,7 +699,7 @@ impl VpnApp {
             edit_ui_theme: theme::DEFAULT_THEME.to_string(),
             edit_app_icon_style: "classic".to_string(),
             edit_ui_language: "zh-CN".to_string(),
-            edit_ui_scale: 1.0,
+            edit_ui_scale: 1.2,
             edit_ui_dark: false,
             edit_sidebar_expanded: false,
             edit_insider_channel: false,
@@ -4680,7 +4680,7 @@ mod tests {
         assert!(state.is_dirty(&settings), "只换主题也要算未保存");
 
         let mut state = SettingsEditState::from_settings(&settings);
-        state.ui_scale = 1.2;
+        state.ui_scale = 1.0;
         assert!(state.is_dirty(&settings), "只调字号也要算未保存");
 
         let state = SettingsEditState::from_settings(&settings);
@@ -4690,12 +4690,12 @@ mod tests {
         // 设置会把它们显示成默认值（老版本连这一步都没有，见 `settings_seeded`）。
         let stored = AppSettings {
             ui_theme: "soft-teal".to_string(),
-            ui_scale: 1.2,
+            ui_scale: 1.0,
             ..AppSettings::default()
         };
         let state = SettingsEditState::from_settings(&stored);
         assert_eq!(state.ui_theme, "soft-teal");
-        assert!((state.ui_scale - 1.2).abs() < 0.001);
+        assert!((state.ui_scale - 1.0).abs() < 0.001);
         assert!(!state.is_dirty(&stored));
     }
 
@@ -4708,8 +4708,8 @@ mod tests {
         assert_eq!(clamp_ui_scale(1.0), 1.0);
         assert_eq!(clamp_ui_scale(0.1), 0.85);
         assert_eq!(clamp_ui_scale(9.0), 1.40);
-        assert_eq!(clamp_ui_scale(f32::NAN), 1.0, "坏值退回不缩放");
-        assert_eq!(clamp_ui_scale(f32::INFINITY), 1.0);
+        assert_eq!(clamp_ui_scale(f32::NAN), 1.2, "坏值退回默认 120%");
+        assert_eq!(clamp_ui_scale(f32::INFINITY), 1.2);
     }
 
     /// 钉住这条设置的全部依据：`set_zoom_factor` 确实会把整屏的 `pixels_per_point` 改掉

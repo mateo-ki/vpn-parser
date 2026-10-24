@@ -1,7 +1,7 @@
 use super::groups::visible_group_names;
 use crate::gui::icons::{draw_icon, Icon};
 use crate::gui::theme;
-use crate::gui::widgets::{compact_node_card, country_code_and_color, format_bytes, format_speed};
+use crate::gui::widgets::{country_code_and_color, format_bytes, format_speed};
 use crate::gui::VpnApp;
 use crate::proxy::{ProxyMode, ProxyState, RoutingMode};
 use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, Vec2};
@@ -2171,39 +2171,6 @@ impl VpnApp {
             });
     }
 
-    /// 实时连接表：6 列 [目标, 协议, 出口, 下载, 上传, 时长]。
-    /// 实时连接卡：内嵌"连接列表 / 连接进程 / DNS 记录"三个子页（原活跃连接页整体并入）。
-    fn dash_connections_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
-        let conns = self.active_connections.clone();
-
-        // 外框矩形精确绘制：连接数据出现/变化时内容变多也不会把卡撑宽
-        let outer = Rect::from_min_size(ui.cursor().min, Vec2::new(w + 28.0, h + 20.0));
-        dash_card_at(ui, outer);
-    // 画框不推进 cursor：显式把光标拨到卡右侧，行内下一元素从这继续
-    ui.advance_cursor_after_rect(outer);
-        let inner = outer.shrink2(Vec2::new(14.0, 10.0));
-        // 用 ClipRect 硬裁剪：表格再宽也只显示在卡片内，超出部分剪掉
-        ui.push_id("conn_card_clip", |ui| {
-            ui.set_clip_rect(inner);
-            ui.allocate_ui_at_rect(inner, |ui| {
-                ui.set_max_width(w);
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    dash_label(
-                        ui,
-                        "实时连接",
-                        Some(format!("{} 条活跃", conns.len())),
-                    );
-                    ui.add_space(4.0);
-                    ui.push_id("conn_embed", |ui| {
-                        ui.set_max_width(w);
-                        self.ui_proxy_connections_embedded(ui);
-                    });
-                });
-            });
-        });
-    }
-
     /// 策略组：2x2 网格，显示每个组当前节点的真实实测延迟。
     fn dash_groups_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
         let visible_names = visible_group_names(
@@ -2311,102 +2278,5 @@ impl VpnApp {
         });
     }
 
-    /// 性能卡：本软件的 CPU / 内存 / 磁盘，三块"池子"图（液面高度 = 占用比例）。
-    fn dash_perf_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
-        let stats = self.perf_stats;
-        dash_card()
-            .inner_margin(Margin::symmetric(14, 10))
-            .show(ui, |ui| {
-            ui.set_min_size(Vec2::new(w, h));
-            ui.set_max_size(Vec2::new(w, h));
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
-                dash_label(ui, "性能", Some("本软件".into()));
-                ui.add_space(8.0);
-
-                // 三块池子：液面 = 占用/容量上限
-                let blocks = [
-                    ("CPU", stats.cpu_percent, format!("{:.0} %", stats.cpu_percent), 100.0),
-                    ("内存", stats.mem_mb, format!("{:.0} MB", stats.mem_mb), 1024.0),
-                    ("磁盘", stats.disk_mbps, format!("{:.1} MB/s", stats.disk_mbps), 20.0),
-                ];
-                let cell_w = (ui.available_width() - 16.0) / 3.0;
-                let pool_h = 78.0_f32;
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    for (label, value, value_text, cap) in blocks {
-                        let level = (value / cap).clamp(0.05, 1.0);
-                        let (rect, resp) =
-                            ui.allocate_exact_size(Vec2::new(cell_w, pool_h), Sense::hover());
-                        let painter = ui.painter();
-
-                        // 池子底 + 描边
-                        painter.rect_filled(rect, CornerRadius::same(10), apple_sub_bg());
-                        painter.rect_stroke(
-                            rect,
-                            CornerRadius::same(10),
-                            Stroke::new(1.0_f32, apple_stroke()),
-                            egui::StrokeKind::Inside,
-                        );
-
-                        // 液面（带平滑动画，像水池蓄水）
-                        let anim_id = egui::Id::new(("perf_pool", label));
-                        let level_s = ui
-                            .ctx()
-                            .animate_value_with_time(anim_id, level, 0.4);
-                        let fill_h = (pool_h - 4.0) * level_s;
-                        let liquid = if theme::is_light() {
-                            Color32::from_rgb(0, 113, 227).gamma_multiply(0.22)
-                        } else {
-                            apple_blue().gamma_multiply(0.35)
-                        };
-                        let fill_rect = egui::Rect::from_min_max(
-                            egui::pos2(rect.left() + 2.0, rect.bottom() - 2.0 - fill_h),
-                            egui::pos2(rect.right() - 2.0, rect.bottom() - 2.0),
-                        );
-                        painter.rect_filled(fill_rect, CornerRadius::same(8), liquid);
-
-                        // 数值居中画在池子里
-                        let value_font = egui::FontId::proportional(11.5);
-                        let value_g = painter.layout_no_wrap(
-                            value_text.clone(),
-                            value_font,
-                            theme::text_primary(),
-                        );
-                        painter.galley(
-                            egui::pos2(
-                                rect.center().x - value_g.rect.width() / 2.0,
-                                rect.center().y - value_g.rect.height() - 1.0,
-                            ),
-                            value_g,
-                            theme::text_primary(),
-                        );
-                        let label_font = egui::FontId::proportional(9.5);
-                        let label_g =
-                            painter.layout_no_wrap(label.to_string(), label_font, theme::muted());
-                        painter.galley(
-                            egui::pos2(
-                                rect.center().x - label_g.rect.width() / 2.0,
-                                rect.center().y + 1.0,
-                            ),
-                            label_g,
-                            theme::muted(),
-                        );
-
-                        resp.on_hover_text(format!(
-                            "{label}：{value_text}（池子刻度上限 {}）",
-                            if label == "CPU" {
-                                "100%".to_string()
-                            } else if label == "内存" {
-                                "1024 MB".to_string()
-                            } else {
-                                "20 MB/s".to_string()
-                            }
-                        ));
-                    }
-                });
-            });
-        });
-    }
-
 }
+
