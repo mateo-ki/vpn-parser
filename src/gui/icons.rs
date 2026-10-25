@@ -166,20 +166,36 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
             );
         }
         Icon::Gear => {
-            // Mechanical cog
-            let r_inner = s * 0.18;
-            let r_outer = s * 0.38;
-            painter.circle_stroke(center, r_inner, stroke);
-            for i in 0..6 {
-                let angle = i as f32 * std::f32::consts::PI / 3.0;
-                let (sin, cos) = angle.sin_cos();
-                let p1 = Pos2::new(
-                    center.x + (r_inner + 1.0) * cos,
-                    center.y + (r_inner + 1.0) * sin,
-                );
-                let p2 = Pos2::new(center.x + r_outer * cos, center.y + r_outer * sin);
-                painter.line_segment([p1, p2], stroke);
+            // 精密工业级机械齿轮：真实齿厚轮廓（6 个厚实梯形轮齿 + 轮毂 + 中心轴孔）
+            // 彻底解决原先"圆圈+细射线"导致的与日间模式太阳图标严重撞脸冲突
+            let r_hole = s * 0.12;
+            let r_root = s * 0.25;
+            let r_tip = s * 0.38;
+
+            let teeth = 6;
+            let mut pts = Vec::with_capacity(teeth * 4);
+
+            for i in 0..teeth {
+                let mid_angle = (i as f32) * std::f32::consts::PI / 3.0;
+                let a1 = mid_angle - 0.28; // 齿根谷底
+                let a2 = mid_angle - 0.14; // 齿顶左侧
+                let a3 = mid_angle + 0.14; // 齿顶右侧
+                let a4 = mid_angle + 0.28; // 齿根谷底
+
+                pts.push(Pos2::new(center.x + a1.cos() * r_root, center.y + a1.sin() * r_root));
+                pts.push(Pos2::new(center.x + a2.cos() * r_tip, center.y + a2.sin() * r_tip));
+                pts.push(Pos2::new(center.x + a3.cos() * r_tip, center.y + a3.sin() * r_tip));
+                pts.push(Pos2::new(center.x + a4.cos() * r_root, center.y + a4.sin() * r_root));
             }
+
+            // 闭合绘制齿轮轮廓
+            for i in 0..pts.len() {
+                let next = (i + 1) % pts.len();
+                painter.line_segment([pts[i], pts[next]], stroke);
+            }
+            // 轮毂微晶质感与中轴孔
+            painter.circle_filled(center, r_root, color.gamma_multiply(0.18));
+            painter.circle_stroke(center, r_hole, stroke);
         }
         Icon::Plug => {
             // API Connector plug
@@ -932,11 +948,14 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
             painter.line_segment([Pos2::new(back_x, center.y + arm), tip], bold_stroke);
         }
         Icon::Sun => {
-            // Central sun disk + 8 crisp radiating rays
-            let r = s * 0.18;
-            painter.circle_stroke(center, r, stroke);
-            let ray_start = s * 0.26;
-            let ray_end = s * 0.40;
+            // 阳光暖阳天体：饱满的微晶阳光核心圆盘 + 8 束精短阳光金芒
+            // 与机械齿轮的厚齿轮廓和中心空心轴孔形成强烈视觉质感差异，绝不混淆
+            let r_core = s * 0.17;
+            painter.circle_filled(center, r_core, color.gamma_multiply(0.28));
+            painter.circle_stroke(center, r_core, stroke);
+
+            let ray_start = s * 0.25;
+            let ray_end = s * 0.38;
             for i in 0..8 {
                 let angle = (i as f32) * std::f32::consts::PI / 4.0;
                 let (sin, cos) = angle.sin_cos();

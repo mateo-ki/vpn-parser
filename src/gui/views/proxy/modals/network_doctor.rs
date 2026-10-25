@@ -334,25 +334,29 @@ pub async fn perform_network_diagnosis(
         });
     }
 
-    // 2.3 孤儿内核残留检测
-    let orphan_count = tokio::task::spawn_blocking(crate::platform::kill_orphan_proxy_cores)
-        .await
-        .unwrap_or(0);
+    // 2.3 孤儿内核残留检测 (只读探测，不杀进程，保证幂等与无副作用)
+    let orphan_count = if is_running {
+        0 // 代理运行时内核受管
+    } else {
+        tokio::task::spawn_blocking(crate::platform::count_orphan_proxy_cores)
+            .await
+            .unwrap_or(0)
+    };
     if orphan_count > 0 {
         items.push(DiagnosticItem {
             id: "kernel_orphan_cores".into(),
             category: "代理内核".into(),
-            name: "后台孤儿内核清理".into(),
+            name: "后台孤儿内核检测".into(),
             status: DiagnosticStatus::Warning,
-            detail: format!("发现并清理了 {orphan_count} 个未受管的僵尸内核进程。"),
-            repairable: false,
-            suggestion: None,
+            detail: format!("检测到系统存在 {orphan_count} 个未受管的残留内核进程，可能占用代理端口。"),
+            repairable: true,
+            suggestion: Some("点击修复可安全清理孤儿内核进程。".into()),
         });
     } else {
         items.push(DiagnosticItem {
             id: "kernel_orphan_cores".into(),
             category: "代理内核".into(),
-            name: "后台孤儿内核清理".into(),
+            name: "后台孤儿内核检测".into(),
             status: DiagnosticStatus::Pass,
             detail: "系统无残留的未受管孤儿内核进程。".into(),
             repairable: false,
@@ -394,14 +398,47 @@ pub async fn perform_network_diagnosis(
                     });
                 }
             }
-            #[cfg(not(windows))]
+            #[cfg(target_os = "linux")]
+            {
+                let check_tun = tokio::task::spawn_blocking(|| {
+                    let out = std::process::Command::new("ip")
+                        .args(["link", "show"])
+                        .output();
+                    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                    let adapters = ["tun0", "meta", "meow", "sing-box"];
+                    adapters.into_iter().find(|&a| text.contains(a)).map(|s| s.to_string())
+                }).await.unwrap_or(None);
+
+                if let Some(adapter) = check_tun {
+                    items.push(DiagnosticItem {
+                        id: "kernel_tun_adapter".into(),
+                        category: "代理内核".into(),
+                        name: "TUN 虚拟网卡状态".into(),
+                        status: DiagnosticStatus::Pass,
+                        detail: format!("TUN 虚拟网卡已就绪 ({adapter})，流量透明接管中。"),
+                        repairable: false,
+                        suggestion: None,
+                    });
+                } else {
+                    items.push(DiagnosticItem {
+                        id: "kernel_tun_adapter".into(),
+                        category: "代理内核".into(),
+                        name: "TUN 虚拟网卡状态".into(),
+                        status: DiagnosticStatus::Fail,
+                        detail: "未能检测到活跃的 TUN 虚拟网络设备，可能缺少 root/CAP_NET_ADMIN 权限。".into(),
+                        repairable: true,
+                        suggestion: Some("请确保以 root 权限运行或赋予内核 cap_net_admin+ep 权能。".into()),
+                    });
+                }
+            }
+            #[cfg(not(any(windows, target_os = "linux")))]
             {
                 items.push(DiagnosticItem {
                     id: "kernel_tun_adapter".into(),
                     category: "代理内核".into(),
                     name: "TUN 虚拟网卡状态".into(),
                     status: DiagnosticStatus::Pass,
-                    detail: "TUN 模式正常。".into(),
+                    detail: "TUN 模式运行中。".into(),
                     repairable: false,
                     suggestion: None,
                 });
@@ -838,6 +875,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_diagnostic_status_properties() {
+        assert_eq!(DiagnosticStatus::Pass.label(), "正常");
+        assert_eq!(DiagnosticStatus::Warning.label(), "警告");
+        assert_eq!(DiagnosticStatus::Fail.label(), "异常");
+    }
+
+    #[test]
     fn test_network_doctor_report_counts() {
         let items = vec![
             DiagnosticItem {
@@ -872,5 +916,27 @@ mod tests {
         assert_eq!(report.pass_count, 1);
         assert_eq!(report.fail_count, 1);
         assert_eq!(report.warn_count, 1);
+        assert_eq!(report.items.len(), 3);
+        assert!(!report.timestamp.is_empty());
+    }
+
+    #[test]
+    fn test_network_doctor_report_empty() {
+        let report = NetworkDoctorReport::new(vec![]);
+        assert_eq!(report.pass_count, 0);
+        assert_eq!(report.fail_count, 0);
+        assert_eq!(report.warn_count, 0);
+        assert!(report.items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_perform_network_diagnosis_stopped() {
+        let options = MihomoConfigOptions::default();
+        let status = ProxyRuntimeStatus::stopped(options.clone());
+        let report = perform_network_diagnosis(options, status).await;
+        // 应该至少包含系统网络和代理内核的诊断项
+        assert!(!report.items.is_empty());
+        assert!(report.items.iter().any(|i| i.category == "系统网络"));
+        assert!(report.items.iter().any(|i| i.category == "代理内核"));
     }
 }

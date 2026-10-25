@@ -667,6 +667,81 @@ pub fn kill_orphan_proxy_cores() -> usize {
     killed_count
 }
 
+/// 纯只读探测归属于本程序的孤儿代理内核进程数量，绝不执行 TerminateProcess，无副作用。
+#[cfg(windows)]
+pub fn count_orphan_proxy_cores() -> usize {
+    use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot.is_null() {
+        return 0;
+    }
+
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+
+    let mut count = 0;
+
+    if unsafe { Process32FirstW(snapshot, &mut entry) } != FALSE {
+        loop {
+            let len = entry
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            let exe_name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+            let exe_lower = exe_name.to_ascii_lowercase();
+
+            if is_proxy_core_name(&exe_lower) {
+                unsafe {
+                    let proc_handle = OpenProcess(
+                        PROCESS_QUERY_LIMITED_INFORMATION,
+                        FALSE,
+                        entry.th32ProcessID,
+                    );
+                    if !proc_handle.is_null() {
+                        let mut full_path: [u16; 1024] = [0; 1024];
+                        let mut size = full_path.len() as u32;
+                        let mut is_ours = false;
+                        if windows_sys::Win32::System::Threading::QueryFullProcessImageNameW(
+                            proc_handle,
+                            0,
+                            full_path.as_mut_ptr(),
+                            &mut size,
+                        ) != 0 {
+                            let path_str = String::from_utf16_lossy(&full_path[..size as usize]).to_ascii_lowercase();
+                            if path_str.contains("vpn-parser") || path_str.contains("vpn_parser") || path_str.contains("vpn-orphan") {
+                                is_ours = true;
+                            } else if let Ok(cwd) = std::env::current_dir() {
+                                let cwd_lower = cwd.to_string_lossy().to_ascii_lowercase();
+                                if path_str.starts_with(&cwd_lower) {
+                                    is_ours = true;
+                                }
+                            }
+                        }
+                        if is_ours {
+                            count += 1;
+                        }
+                        CloseHandle(proc_handle);
+                    }
+                }
+            }
+
+            if unsafe { Process32NextW(snapshot, &mut entry) } == FALSE {
+                break;
+            }
+        }
+    }
+
+    unsafe { CloseHandle(snapshot) };
+    count
+}
+
 #[cfg(windows)]
 pub fn kill_duplicate_vpn_parser_instances() -> usize {
     use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
@@ -802,6 +877,18 @@ pub fn kill_orphan_proxy_cores() -> usize {
         }
     }
     killed
+}
+
+/// Linux/Unix 侧纯只读探测归属于本程序的孤儿代理内核进程数量，无副作用。
+#[cfg(not(windows))]
+pub fn count_orphan_proxy_cores() -> usize {
+    let mut count = 0;
+    for pid in proc_pids() {
+        if is_our_proxy_core(pid) {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// 第二个 GUI 实例：在 Linux 上通过 Unix Domain Socket 进行优雅探测并唤醒已有窗口，
