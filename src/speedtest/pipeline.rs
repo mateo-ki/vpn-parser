@@ -12,11 +12,50 @@ use crate::speedtest::{
 use anyhow::Result;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::info;
+
+/// 精准生成节点出口聚类指纹。
+/// 仅当 IP、端口、协议、SNI/Host 伪装域名、路径（WS/gRPC）和节点凭证（UUID/密码）全部一致时，
+/// 才认定为真正相同物理落地的镜像节点，杜绝 CDN Anycast / 共享中转 IP 的误聚类。
+pub fn node_physical_egress_key(node: &Node, resolved_ip: Option<std::net::IpAddr>) -> String {
+    let endpoint = if let Some(ip) = resolved_ip {
+        format!("{}:{}", ip, node.port)
+    } else {
+        format!("{}:{}", node.server.trim().to_ascii_lowercase(), node.port)
+    };
+    let protocol = node.protocol.trim().to_ascii_lowercase();
+    let host_or_sni = node
+        .config
+        .get("sni")
+        .or_else(|| node.config.get("server_name"))
+        .or_else(|| node.config.get("host"))
+        .or_else(|| {
+            node.config
+                .get("ws-opts")
+                .and_then(|w| w.get("headers"))
+                .and_then(|h| h.get("Host"))
+        })
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let path = node
+        .config
+        .get("path")
+        .or_else(|| node.config.get("ws-opts").and_then(|w| w.get("path")))
+        .or_else(|| node.config.get("grpc-opts").and_then(|g| g.get("grpc-service-name")))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let fingerprint = crate::parser::node_fingerprint(node);
+    format!("{endpoint}|{protocol}|{host_or_sni}|{path}|{fingerprint}")
+}
 
 /// 二阶段淘汰里"谁有资格进真实握手"的判据。
 ///
@@ -24,6 +63,7 @@ use tracing::info;
 /// 2. 私网 / 端口 0 / 非法主机名直接淘汰 —— 内核拿着它也一样连不上，没必要花一次握手。
 /// 3. 公网主机名：只有"我们这一侧压根没解出地址"才交给内核（内核有 DoH / 经代理那条解析路，
 ///    不能替它判死）；解出了地址却连不上 ⇒ 淘汰，由调用方按 `tcp_prefilter` 落库标成不可用。
+/// 4. DNS 污染容错：若本地 DNS 返回了疑似被污染的保留/虚假 IP（Bogon 等），放行交由内核 DoH 救活。
 pub fn reaches_proxy_stage(
     result: &LatencyResult,
     dns: Option<&Result<Vec<SocketAddr>, String>>,
@@ -37,7 +77,17 @@ pub fn reaches_proxy_stage(
     match dns {
         None => true,
         Some(Err(_)) => true,
-        Some(Ok(addresses)) => addresses.is_empty(),
+        Some(Ok(addresses)) => {
+            if addresses.is_empty() {
+                return true;
+            }
+            // 若为域名，且解析出的地址疑似包含被投毒/保留地址，放行交由内核 DoH 尝试解析
+            let is_domain = result.server.parse::<std::net::IpAddr>().is_err();
+            if is_domain && addresses.iter().any(|sa| crate::speedtest::dns::is_suspected_polluted_ip(&sa.ip())) {
+                return true;
+            }
+            false
+        }
     }
 }
 
@@ -54,7 +104,11 @@ pub async fn run_speedtest_pipeline(
     opts: SpeedTestOptions,
     progress: Option<impl Fn(SpeedTestProgress) + Send + Sync>,
     network_limit: Arc<Semaphore>,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<SpeedTestSummary> {
+    if cancelled.load(Ordering::Relaxed) {
+        anyhow::bail!("测速任务已取消");
+    }
     // 「沿用已验证结果」：N 分钟内真验证过的节点直接不进本轮
     let nodes = if opts.reuse_verified_minutes > 0 {
         let cutoff =
@@ -183,8 +237,6 @@ pub async fn run_speedtest_pipeline(
                 &node.server,
                 node.port,
                 prefilter_timeout_ms,
-                opts.download_test_ms,
-                false, // 统一在预检完成、延迟排序后再做分级下载测速
                 addresses,
             )
             .await;
@@ -208,6 +260,11 @@ pub async fn run_speedtest_pipeline(
     let mut done = 0;
     let mut ok_count = 0;
     while let Some(task_result) = tasks.join_next().await {
+        if cancelled.load(Ordering::Relaxed) {
+            tasks.abort_all();
+            info!("TCP 预筛阶段收到中断信号，提前终止余下预筛任务");
+            break;
+        }
         if let Ok(result) = task_result {
             done += 1;
             if result.ok {
@@ -230,53 +287,18 @@ pub async fn run_speedtest_pipeline(
         }
     }
 
-    // === 针对开启了 measure_download 的情况，做分级梯队下载测速 ===
-    if opts.measure_download {
-        let mut healthy: Vec<usize> = (0..results.len())
-            .filter(|&i| results[i].ok && results[i].latency_ms.is_some())
-            .collect();
-        healthy.sort_by_key(|&i| results[i].latency_ms.unwrap_or(i64::MAX));
-
-        let top_limit = if opts.download_top_n > 0 {
-            opts.download_top_n as usize
-        } else {
-            (healthy.len() / 10).clamp(1, 50)
-        };
-
-        let target_indices: Vec<usize> = healthy.into_iter().take(top_limit).collect();
-        if !target_indices.is_empty() {
-            info!(
-                candidates = target_indices.len(),
-                top_limit, "执行分级下载吞吐量测速（梯队精简）"
-            );
-            let mut dl_tasks = JoinSet::new();
-            for index in target_indices {
-                let res = &results[index];
-                let host = res.server.clone();
-                let port = res.port;
-                let addrs = resolved
-                    .get(&(host.clone(), port))
-                    .cloned()
-                    .unwrap_or(Ok(vec![]));
-                let net_limit = network_limit.clone();
-                let dl_ms = opts.download_test_ms;
-                dl_tasks.spawn(async move {
-                    let Ok(_permit) = net_limit.acquire_owned().await else {
-                        return (index, None);
-                    };
-                    let (_, _, kbps, msg) =
-                        probe_full_resolved(&host, port, 1500, dl_ms, true, addrs).await;
-                    (index, kbps.map(|k| (k, msg)))
-                });
-            }
-
-            while let Some(dl_res) = dl_tasks.join_next().await {
-                if let Ok((idx, Some((kbps, msg)))) = dl_res {
-                    results[idx].download_kbps = Some(kbps);
-                    results[idx].message = format!("{} / {}", results[idx].message, msg);
-                }
-            }
-        }
+    if cancelled.load(Ordering::Relaxed) {
+        info!("测速任务已收到中断请求，提前退出");
+        let ok = results.iter().filter(|r| r.ok).count();
+        let fail = results.len() - ok;
+        return Ok(SpeedTestSummary {
+            total: results.len(),
+            ok,
+            fail,
+            avg_ms: None,
+            avg_download_kbps: None,
+            results,
+        });
     }
 
     // === 双模测速分支：如果开启了 tcp_ping_only，直接完成并落库，跳过所有内核握手 ===
@@ -369,6 +391,20 @@ pub async fn run_speedtest_pipeline(
         db.update_node_speeds_batch(chunk).await?;
     }
 
+    if cancelled.load(Ordering::Relaxed) {
+        info!("测速任务已收到中断请求，跳过真实代理握手");
+        let ok = results.iter().filter(|r| r.ok).count();
+        let fail = results.len() - ok;
+        return Ok(SpeedTestSummary {
+            total: results.len(),
+            ok,
+            fail,
+            avg_ms: None,
+            avg_download_kbps: None,
+            results,
+        });
+    }
+
     info!(
         candidates = proxy_candidates.len(),
         "starting real proxy verification"
@@ -388,31 +424,11 @@ pub async fn run_speedtest_pipeline(
         let mut groups: std::collections::HashMap<String, Vec<Node>> =
             std::collections::HashMap::new();
         for node in proxy_candidates {
-            let physical_key =
-                if let Some(Ok(addrs)) = resolved.get(&(node.server.clone(), node.port)) {
-                    if let Some(first) = addrs.first() {
-                        format!(
-                            "{}:{}:{}",
-                            first.ip(),
-                            node.port,
-                            node.protocol.to_ascii_lowercase()
-                        )
-                    } else {
-                        format!(
-                            "{}:{}:{}",
-                            node.server.to_ascii_lowercase(),
-                            node.port,
-                            node.protocol.to_ascii_lowercase()
-                        )
-                    }
-                } else {
-                    format!(
-                        "{}:{}:{}",
-                        node.server.to_ascii_lowercase(),
-                        node.port,
-                        node.protocol.to_ascii_lowercase()
-                    )
-                };
+            let resolved_ip = resolved
+                .get(&(node.server.clone(), node.port))
+                .and_then(|res| res.as_ref().ok())
+                .and_then(|addrs| addrs.first().map(|a| a.ip()));
+            let physical_key = node_physical_egress_key(&node, resolved_ip);
             groups.entry(physical_key).or_default().push(node);
         }
 
@@ -556,6 +572,11 @@ pub async fn run_speedtest_pipeline(
             });
         }
         while let Some(res) = kernel_tasks.join_next().await {
+            if cancelled.load(Ordering::Relaxed) {
+                kernel_tasks.abort_all();
+                info!("多内核并发握手收到中断请求，提前退出");
+                break;
+            }
             match res {
                 Ok(Ok(items)) => proxy_results.extend(items),
                 Ok(Err(e)) => tracing::error!("parallel kernel verification failed: {e}"),
@@ -581,56 +602,68 @@ pub async fn run_speedtest_pipeline(
         let ok_after_mihomo = rejected_ok + mihomo_results.iter().filter(|r| r.ok).count();
         proxy_results.extend(mihomo_results);
 
-        let sing_box_results = run_sequential_kernel(
-            KernelKind::SingBox,
-            sing_box_nodes,
-            proxy_timeout,
-            network_limit.clone(),
-            proxy_batch_size,
-            conditional_isolation,
-            progress.as_ref(),
-            done_after_mihomo,
-            ok_after_mihomo,
-            proxy_total,
-            started,
-        )
-        .await?;
+        let sing_box_results = if !cancelled.load(Ordering::Relaxed) {
+            run_sequential_kernel(
+                KernelKind::SingBox,
+                sing_box_nodes,
+                proxy_timeout,
+                network_limit.clone(),
+                proxy_batch_size,
+                conditional_isolation,
+                progress.as_ref(),
+                done_after_mihomo,
+                ok_after_mihomo,
+                proxy_total,
+                started,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
         let done_after_sing_box = done_after_mihomo + sing_box_results.len();
         let ok_after_sing_box = ok_after_mihomo + sing_box_results.iter().filter(|r| r.ok).count();
         proxy_results.extend(sing_box_results);
 
-        let xray_results = run_sequential_kernel(
-            KernelKind::Xray,
-            xray_nodes,
-            proxy_timeout,
-            network_limit.clone(),
-            proxy_batch_size,
-            conditional_isolation,
-            progress.as_ref(),
-            done_after_sing_box,
-            ok_after_sing_box,
-            proxy_total,
-            started,
-        )
-        .await?;
+        let xray_results = if !cancelled.load(Ordering::Relaxed) {
+            run_sequential_kernel(
+                KernelKind::Xray,
+                xray_nodes,
+                proxy_timeout,
+                network_limit.clone(),
+                proxy_batch_size,
+                conditional_isolation,
+                progress.as_ref(),
+                done_after_sing_box,
+                ok_after_sing_box,
+                proxy_total,
+                started,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
         let done_after_xray = done_after_sing_box + xray_results.len();
         let ok_after_xray = ok_after_sing_box + xray_results.iter().filter(|r| r.ok).count();
         proxy_results.extend(xray_results);
 
-        let shoes_results = run_sequential_kernel(
-            KernelKind::Shoes,
-            shoes_nodes,
-            proxy_timeout,
-            network_limit,
-            proxy_batch_size,
-            conditional_isolation,
-            progress.as_ref(),
-            done_after_xray,
-            ok_after_xray,
-            proxy_total,
-            started,
-        )
-        .await?;
+        let shoes_results = if !cancelled.load(Ordering::Relaxed) {
+            run_sequential_kernel(
+                KernelKind::Shoes,
+                shoes_nodes,
+                proxy_timeout,
+                network_limit,
+                proxy_batch_size,
+                conditional_isolation,
+                progress.as_ref(),
+                done_after_xray,
+                ok_after_xray,
+                proxy_total,
+                started,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
         proxy_results.extend(shoes_results);
     }
 

@@ -1,7 +1,4 @@
 use super::*;
-use eframe::egui::{self, CornerRadius, Color32, RawInput, Rect, Vec2};
-use crate::gui::types::KernelGroup;
-use crate::models::NodeSummary;
 
 #[cfg(test)]
 mod rule_import_help_probe_tests {
@@ -744,7 +741,7 @@ mod egress_ip_badge_tests {
         }
     }
 
-    fn view(risk: Option<&crate::ip_risk::IpRisk>, failed: bool, checking: bool) -> EgressRiskView {
+    fn view(risk: Option<&crate::ip_risk::IpRisk>, failed: bool, checking: bool) -> EgressRiskView<'_> {
         EgressRiskView {
             risk,
             failed,

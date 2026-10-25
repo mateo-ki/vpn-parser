@@ -447,7 +447,7 @@ impl Default for AppSettings {
             speedtest_reuse_minutes: 0,
             speedtest_conditional_isolation: false,
             speedtest_download_top_n: 0,
-            speedtest_dedup_egress: true,
+            speedtest_dedup_egress: false,
             speedtest_tcp_ping_only: false,
             bandwidth_guard: false,
             bandwidth_min_kbps: 0,

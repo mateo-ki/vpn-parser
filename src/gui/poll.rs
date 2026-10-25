@@ -493,24 +493,37 @@ impl VpnApp {
                         BgMsg::FailoverTarget(outcome) => self.on_failover_target(outcome),
                         BgMsg::SpeedDone(Ok(sum)) => {
                             self.busy = false;
-                            let avg = sum
-                                .avg_ms
-                                .map(|v| format!("{v:.0}ms"))
-                                .unwrap_or_else(|| "-".into());
-                            let avg_dl = sum
-                                .avg_download_kbps
-                                .map(|v| format!("{v:.1}KB/s"))
-                                .unwrap_or_else(|| "-".into());
-                            self.status = format!(
-                                "测速完成：可用 {}/{}，平均延迟 {}，平均下载 {}",
-                                sum.ok, sum.total, avg, avg_dl
-                            );
+                            self.speedtest_busy = false;
+                            if self.speedtester.is_cancelled() {
+                                self.status = format!(
+                                    "测速已手动停止（已测通 {}/{} 个节点）",
+                                    sum.ok, sum.total
+                                );
+                            } else {
+                                let avg = sum
+                                    .avg_ms
+                                    .map(|v| format!("{v:.0}ms"))
+                                    .unwrap_or_else(|| "-".into());
+                                let avg_dl = sum
+                                    .avg_download_kbps
+                                    .map(|v| format!("{v:.1}KB/s"))
+                                    .unwrap_or_else(|| "-".into());
+                                self.status = format!(
+                                    "测速完成：可用 {}/{}，平均延迟 {}，平均下载 {}",
+                                    sum.ok, sum.total, avg, avg_dl
+                                );
+                            }
                             self.request_full_reload();
                             crate::platform::trim_working_set();
                         }
                         BgMsg::SpeedDone(Err(e)) => {
                             self.busy = false;
-                            self.status = format!("测速失败: {e}");
+                            self.speedtest_busy = false;
+                            if self.speedtester.is_cancelled() {
+                                self.status = "测速已手动停止".into();
+                            } else {
+                                self.status = format!("测速失败: {e}");
+                            }
                         }
                         BgMsg::Kernels(kernels) => self.kernels = kernels,
                         BgMsg::IpRisk(Ok(risk), manual) => {

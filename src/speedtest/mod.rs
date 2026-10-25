@@ -1,5 +1,4 @@
 pub mod dns;
-pub mod download;
 pub mod pipeline;
 pub mod prefilter;
 
@@ -9,6 +8,7 @@ use crate::parser::node_fingerprint;
 use crate::tasks::{TaskKind, TaskPhase, TaskTracker};
 use anyhow::Result;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
@@ -49,13 +49,16 @@ impl SpeedtestIntensity {
 pub struct SpeedTester {
     db: Database,
     tasks: TaskTracker,
+    cancel: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Copy)]
 pub struct SpeedTestOptions {
     pub concurrency: u32,
     pub timeout_ms: u32,
+    #[allow(dead_code)]
     pub measure_download: bool,
+    #[allow(dead_code)]
     pub download_test_ms: u32,
     pub intensity: SpeedtestIntensity,
     /// 以下选项对应「系统设置 → 测速优化」的开关
@@ -63,6 +66,7 @@ pub struct SpeedTestOptions {
     pub persistent_kernel: bool,
     pub reuse_verified_minutes: u32,
     pub conditional_isolation: bool,
+    #[allow(dead_code)]
     pub download_top_n: u32,
     pub dedup_egress: bool,
     /// 快速 TCP Ping 模式：跳过内核代理真实握手，仅测试网络连通性
@@ -103,7 +107,7 @@ impl Default for SpeedTestOptions {
             reuse_verified_minutes: 0,
             conditional_isolation: false,
             download_top_n: 0,
-            dedup_egress: true,
+            dedup_egress: false,
             tcp_ping_only: false,
         }
     }
@@ -111,7 +115,28 @@ impl Default for SpeedTestOptions {
 
 impl SpeedTester {
     pub fn new(db: Database, tasks: TaskTracker) -> Self {
-        Self { db, tasks }
+        Self {
+            db,
+            tasks,
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+
+    pub fn reset_cancel(&self) {
+        self.cancel.store(false, Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+
+    #[allow(dead_code)]
+    pub fn cancel_token(&self) -> Arc<AtomicBool> {
+        self.cancel.clone()
     }
 
     pub async fn test_one(&self, node_id: &str, opts: SpeedTestOptions) -> Result<LatencyResult> {
@@ -149,6 +174,7 @@ impl SpeedTester {
         opts: SpeedTestOptions,
         progress: Option<impl Fn(usize, usize) + Send + Sync>,
     ) -> Result<SpeedTestSummary> {
+        self.reset_cancel();
         let groups = self.db.list_node_groups(None, None, None).await?;
         let source_keys: Vec<String> = groups
             .iter()
@@ -324,6 +350,7 @@ impl SpeedTester {
         progress: Option<impl Fn(SpeedTestProgress) + Send + Sync>,
         network_limit: Arc<Semaphore>,
     ) -> Result<SpeedTestSummary> {
+        self.reset_cancel();
         let nodes = if let Some(ids) = node_ids {
             self.db.get_nodes(&ids).await?
         } else {
@@ -340,7 +367,15 @@ impl SpeedTester {
         progress: Option<impl Fn(SpeedTestProgress) + Send + Sync>,
         network_limit: Arc<Semaphore>,
     ) -> Result<SpeedTestSummary> {
-        pipeline::run_speedtest_pipeline(&self.db, nodes, opts, progress, network_limit).await
+        pipeline::run_speedtest_pipeline(
+            &self.db,
+            nodes,
+            opts,
+            progress,
+            network_limit,
+            self.cancel.clone(),
+        )
+        .await
     }
 }
 
@@ -496,5 +531,97 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(format!("{}-wal", path.display()));
         let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[tokio::test]
+    async fn speedtester_cancellation_controls() {
+        let path = std::env::temp_dir().join(format!("vpn-parser-cancel-{}.db", uuid::Uuid::new_v4()));
+        let db = Database::connect(path.to_str().unwrap()).await.unwrap();
+        let tester = SpeedTester::new(db.clone(), TaskTracker::default());
+        assert!(!tester.is_cancelled());
+        tester.cancel();
+        assert!(tester.is_cancelled());
+        tester.reset_cancel();
+        assert!(!tester.is_cancelled());
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[test]
+    fn physical_egress_key_differentiates_cdn_and_credentials() {
+        let now = chrono::Utc::now();
+        let node_a = Node {
+            id: "n1".into(),
+            source_id: None,
+            protocol: "vless".into(),
+            name: "US-01".into(),
+            server: "104.16.88.99".into(),
+            port: 443,
+            raw: "".into(),
+            config: serde_json::json!({
+                "uuid": "uuid-1111",
+                "sni": "us.example.com",
+                "path": "/us"
+            }),
+            country: None,
+            latency_ms: None,
+            latency_ok: None,
+            download_kbps: None,
+            latency_kernel: None,
+            latency_test_kind: None,
+            latency_tested_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let node_b = Node {
+            id: "n2".into(),
+            source_id: None,
+            protocol: "vless".into(),
+            name: "JP-01".into(),
+            server: "104.16.88.99".into(),
+            port: 443,
+            raw: "".into(),
+            config: serde_json::json!({
+                "uuid": "uuid-2222",
+                "sni": "jp.example.com",
+                "path": "/jp"
+            }),
+            country: None,
+            latency_ms: None,
+            latency_ok: None,
+            download_kbps: None,
+            latency_kernel: None,
+            latency_test_kind: None,
+            latency_tested_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let key_a = pipeline::node_physical_egress_key(&node_a, Some("104.16.88.99".parse().unwrap()));
+        let key_b = pipeline::node_physical_egress_key(&node_b, Some("104.16.88.99".parse().unwrap()));
+        assert_ne!(key_a, key_b, "CDN Anycast 节点的聚类特征必须区分 SNI、路径与凭证");
+    }
+
+    #[test]
+    fn reaches_proxy_stage_tolerates_polluted_dns() {
+        let res = LatencyResult {
+            id: "test".into(),
+            name: "test".into(),
+            server: "polluted.example.com".into(),
+            port: 443,
+            ok: false,
+            latency_ms: None,
+            download_kbps: None,
+            latency_kernel: None,
+            latency_test_kind: None,
+            message: "timeout 2500ms".into(),
+        };
+        // 模拟 DNS 被投毒解析为 127.0.0.1
+        let polluted_addrs = Ok(vec!["127.0.0.1:443".parse().unwrap()]);
+        assert!(
+            pipeline::reaches_proxy_stage(&res, Some(&polluted_addrs)),
+            "被投毒的域名应放行进入第二阶段真实内核测试"
+        );
     }
 }

@@ -297,17 +297,27 @@ impl VpnApp {
 
         // 测速全部：走的就是订阅源页/节点页那条 `speedtest_all_sources`，不另开一条通道。
         // 并发用系统设置里那个数（默认 128），批量作业自带 TCP 预筛。
-        let testing = self.busy;
-        if ui
-            .add_enabled(!testing, status_btn("测速全部"))
-            .on_hover_text(if testing {
-                "已经有任务在跑，等它结束再测速"
-            } else {
-                "对所有订阅节点跑一轮批量测速：先 TCP 预筛，再逐个真实握手测延迟"
-            })
-            .clicked()
-        {
-            self.speedtest_all_sources();
+        if self.speedtest_busy {
+            if ui
+                .add(danger_btn("停止测速"))
+                .on_hover_text("正在批量测速中，点击立即停止并清理测速任务")
+                .clicked()
+            {
+                self.cancel_speedtest();
+            }
+        } else {
+            let testing = self.busy;
+            if ui
+                .add_enabled(!testing, status_btn("测速全部"))
+                .on_hover_text(if testing {
+                    "已经有任务在跑，等它结束再测速"
+                } else {
+                    "对所有订阅节点跑一轮批量测速：先 TCP 预筛，再逐个真实握手测延迟"
+                })
+                .clicked()
+            {
+                self.speedtest_all_sources();
+            }
         }
     }
 

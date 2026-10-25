@@ -209,21 +209,6 @@ impl VpnApp {
                         ui.label(RichText::new("握手与 204 探针超时").small().color(theme::muted()));
                     });
                 });
-                ui.add_space(8.0);
-                ui.group(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("📦 下载探测时长").strong());
-                        let r6 = ui.add(
-                            egui::DragValue::new(&mut self.edit_download_test_ms)
-                                .range(200..=5000)
-                                .suffix(" ms"),
-                        );
-                        if r6.drag_stopped() || r6.lost_focus() {
-                            auto_save = true;
-                        }
-                        ui.label(RichText::new("仅开启下载测速时生效").small().color(theme::muted()));
-                    });
-                });
             });
 
             ui.add_space(8.0);
@@ -232,15 +217,6 @@ impl VpnApp {
 
             ui.label(RichText::new("测速加速与剪枝优化").strong());
             ui.add_space(4.0);
-            if ui
-                .checkbox(
-                    &mut self.edit_speedtest_download,
-                    "额外探测节点真实下载速度（进行真实数据包吞吐测试，耗时较长）",
-                )
-                .changed()
-            {
-                auto_save = true;
-            }
             if ui
                 .checkbox(
                     &mut self.edit_speedtest_dedup_egress,

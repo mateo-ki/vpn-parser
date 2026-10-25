@@ -120,6 +120,7 @@ pub struct VpnApp {
     pub(crate) kernel_progress: Option<KernelUpdateProgress>,
     pub(crate) kernel_cancel: Arc<AtomicBool>,
     pub(crate) kernel_busy: bool,
+    pub(crate) speedtest_busy: bool,
     /// 「关于」页的应用自身更新：最新 Release、下载进度、已校验的安装包。
     pub(crate) app_release: Option<crate::app_update::AppReleaseInfo>,
     pub(crate) app_update_progress: Option<crate::app_update::AppUpdateProgress>,
@@ -535,6 +536,7 @@ impl VpnApp {
             kernel_progress: None,
             kernel_cancel: Arc::new(AtomicBool::new(false)),
             kernel_busy: false,
+            speedtest_busy: false,
             app_release: None,
             app_update_progress: None,
             app_update_busy: false,
@@ -672,7 +674,7 @@ impl VpnApp {
             edit_speedtest_reuse_minutes: 0,
             edit_speedtest_conditional_isolation: false,
             edit_speedtest_download_top_n: 0,
-            edit_speedtest_dedup_egress: true,
+            edit_speedtest_dedup_egress: false,
             edit_speedtest_tcp_ping_only: false,
             failover_switches: 0,
             failover_last_reason: None,
@@ -1847,11 +1849,17 @@ impl VpnApp {
         });
     }
 
+    pub(crate) fn cancel_speedtest(&mut self) {
+        self.speedtester.cancel();
+        self.status = "正在停止测速...".into();
+    }
+
     pub(crate) fn speedtest_ids(&mut self, ids: Option<Vec<String>>, label: &str) {
         let st = self.speedtester.clone();
         let opts = self.speed_opts();
         let tx = self.tx.clone();
         self.busy = true;
+        self.speedtest_busy = true;
         self.status = label.into();
         self.rt.spawn(async move {
             let progress_tx = tx.clone();
@@ -1874,6 +1882,7 @@ impl VpnApp {
         let opts = self.speed_opts();
         let tx = self.tx.clone();
         self.busy = true;
+        self.speedtest_busy = true;
         self.status = "正在并发测试所有订阅节点...".into();
         self.rt.spawn(async move {
             let progress_tx = tx.clone();
@@ -2144,6 +2153,7 @@ impl VpnApp {
         let tx = self.tx.clone();
 
         self.busy = true;
+        self.speedtest_busy = true;
         self.status = "正在检索当前筛选节点列表...".into();
 
         self.rt.spawn(async move {
@@ -3597,6 +3607,7 @@ impl VpnApp {
         let tx = self.tx.clone();
         let sid = source_id.to_string();
         self.busy = true;
+        self.speedtest_busy = true;
         self.status = format!("正在测速订阅“{source_name}”全部节点...");
         self.rt.spawn(async move {
             let result = async {

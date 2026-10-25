@@ -1237,6 +1237,14 @@ mod tests {
         }
     }
 
+    async fn bind_test_listener() -> TcpListener {
+        let port = {
+            let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            std_listener.local_addr().unwrap().port()
+        };
+        TcpListener::bind(format!("127.0.0.1:{port}")).await.unwrap()
+    }
+
     #[tokio::test]
     async fn transient_http_failure_is_retried_and_task_finishes() {
         let requests = Arc::new(AtomicUsize::new(0));
@@ -1259,7 +1267,7 @@ mod tests {
                 }
             }),
         );
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = bind_test_listener().await;
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
@@ -1326,7 +1334,7 @@ mod tests {
         }));
         // IPv6 loopback keeps this test on its own per-host semaphore, away from the
         // 127.0.0.1 tests that share the process-wide host limit.
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = bind_test_listener().await;
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
@@ -1436,7 +1444,7 @@ mod tests {
                     .unwrap()
             }
         }));
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = bind_test_listener().await;
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
@@ -1530,14 +1538,14 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(600)).await;
             ""
         }));
-        let slow_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let slow_listener = bind_test_listener().await;
         let slow_address = slow_listener.local_addr().unwrap();
         let slow_server =
             tokio::spawn(async move { axum::serve(slow_listener, slow).await.unwrap() });
         let fast = Router::new().fallback(get(|| async {
             "ss://YWVzLTEyOC1nY206cGFzcw==@1.2.3.4:443#node"
         }));
-        let fast_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let fast_listener = bind_test_listener().await;
         let fast_address = fast_listener.local_addr().unwrap();
         let fast_server =
             tokio::spawn(async move { axum::serve(fast_listener, fast).await.unwrap() });
@@ -1679,7 +1687,7 @@ mod tests {
                 }
             }
         });
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = bind_test_listener().await;
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
@@ -1802,7 +1810,7 @@ mod tests {
                 }
             }
         }));
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = bind_test_listener().await;
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
@@ -1873,7 +1881,7 @@ mod tests {
                 }
             }),
         );
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = bind_test_listener().await;
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
@@ -1910,7 +1918,7 @@ mod tests {
             "/subscription",
             get(|| async { "ss://YWVzLTEyOC1nY206cGFzcw==@1.2.3.4:443#node" }),
         );
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = bind_test_listener().await;
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));

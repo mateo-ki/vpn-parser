@@ -1,5 +1,4 @@
 use crate::hostutil::is_public_proxy_host;
-use crate::speedtest::download::measure_tcp_download;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
@@ -7,7 +6,7 @@ use tokio::net::TcpStream;
 pub async fn connect_resolved(
     addresses: Vec<SocketAddr>,
     timeout: Duration,
-) -> Result<(TcpStream, i64), String> {
+) -> Result<i64, String> {
     let start = Instant::now();
     let mut last_error = String::from("connect failed");
     let total_candidates = addresses.len().min(2);
@@ -26,9 +25,9 @@ pub async fn connect_resolved(
         };
 
         match tokio::time::timeout(per_addr_budget, TcpStream::connect(addr)).await {
-            Ok(Ok(stream)) => {
+            Ok(Ok(_stream)) => {
                 let latency_ms = start.elapsed().as_millis() as i64;
-                return Ok((stream, latency_ms.max(1)));
+                return Ok(latency_ms.max(1));
             }
             Ok(Err(e)) => last_error = format!("connect error: {e}"),
             Err(_) => last_error = format!("timeout {}ms", per_addr_budget.as_millis()),
@@ -38,12 +37,12 @@ pub async fn connect_resolved(
     Err(last_error)
 }
 
+/// 纯粹的 TCP 预筛探测：验证公网目标与端口可达性，测量 TCP 握手往返延迟。
+/// 不再发送任何伪造的明文 HTTP 流量，避免对各种专有代理服务端造成协议解析异常。
 pub async fn probe_full_resolved(
     host: &str,
     port: u16,
     timeout_ms: u32,
-    download_test_ms: u32,
-    measure_download: bool,
     addresses: Result<Vec<SocketAddr>, String>,
 ) -> (bool, Option<i64>, Option<f64>, String) {
     if !is_public_proxy_host(host) || port == 0 {
@@ -62,33 +61,13 @@ pub async fn probe_full_resolved(
     };
 
     let timeout = Duration::from_millis(timeout_ms.max(200) as u64);
-    let (stream, latency_ms) = match connect_resolved(addresses, timeout).await {
-        Ok(v) => v,
-        Err(msg) => return (false, None, None, msg),
-    };
-
-    if !measure_download {
-        return (
+    match connect_resolved(addresses, timeout).await {
+        Ok(latency_ms) => (
             true,
             Some(latency_ms),
             None,
             format!("{latency_ms} ms (TCP)"),
-        );
+        ),
+        Err(msg) => (false, None, None, msg),
     }
-
-    let download_ms = download_test_ms.clamp(200, 5000) as u64;
-    let (kbps, detail) = measure_tcp_download(stream, host, download_ms).await;
-    let kbps = kbps.and_then(|k| {
-        if k.is_finite() && k > 0.0 && k < 20_480.0 {
-            Some(k)
-        } else {
-            None
-        }
-    });
-
-    let message = match kbps {
-        Some(value) => format!("{latency_ms} ms / {value:.1} KB/s"),
-        None => format!("{latency_ms} ms / 下载不可测 ({detail})"),
-    };
-    (true, Some(latency_ms), kbps, message)
 }

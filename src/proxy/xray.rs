@@ -41,15 +41,9 @@ pub async fn verify_nodes_with_xray_progress_limited(
     let mut results = Vec::with_capacity(total);
     let batch_total = xray_batch_count(nodes.len());
     for (batch_index, batch) in nodes.chunks(XRAY_BATCH_SIZE).enumerate() {
-        match probe_batch(&binary, batch.to_vec(), timeout, network_limit.clone()).await {
-            Ok(mut batch_results) => results.append(&mut batch_results),
-            Err(error) => results.extend(batch.iter().map(|node| ProxyProbeResult {
-                id: node.id.clone(),
-                ok: false,
-                latency_ms: None,
-                message: format!("Xray 测速批次失败: {error}"),
-            })),
-        }
+        let batch_results =
+            probe_batch_isolated(&binary, batch.to_vec(), timeout, network_limit.clone()).await;
+        results.extend(batch_results);
         if let Some(progress) = progress.as_ref() {
             let ok = results.iter().filter(|result| result.ok).count();
             progress(ProxyProbeProgress {
@@ -64,6 +58,58 @@ pub async fn verify_nodes_with_xray_progress_limited(
         }
     }
     Ok(results)
+}
+
+async fn probe_batch_isolated(
+    binary: &std::path::Path,
+    nodes: Vec<Node>,
+    timeout: Duration,
+    network_limit: Arc<Semaphore>,
+) -> Vec<ProxyProbeResult> {
+    if nodes.is_empty() {
+        return Vec::new();
+    }
+    match probe_batch(binary, nodes.clone(), timeout, network_limit.clone()).await {
+        Ok(results) => results,
+        Err(err) => {
+            if nodes.len() <= 1 {
+                return nodes
+                    .into_iter()
+                    .map(|n| ProxyProbeResult {
+                        id: n.id,
+                        ok: false,
+                        latency_ms: None,
+                        message: format!("Xray 节点配置不支持: {err}"),
+                    })
+                    .collect();
+            }
+            let mid = nodes.len() / 2;
+            let (left, right) = nodes.split_at(mid);
+            tracing::warn!(
+                total = nodes.len(),
+                left = left.len(),
+                right = right.len(),
+                %err,
+                "Xray 批次启动异常，自动二分隔离异常节点"
+            );
+            let mut left_res = Box::pin(probe_batch_isolated(
+                binary,
+                left.to_vec(),
+                timeout,
+                network_limit.clone(),
+            ))
+            .await;
+            let right_res = Box::pin(probe_batch_isolated(
+                binary,
+                right.to_vec(),
+                timeout,
+                network_limit,
+            ))
+            .await;
+            left_res.extend(right_res);
+            left_res
+        }
+    }
 }
 
 async fn probe_batch(

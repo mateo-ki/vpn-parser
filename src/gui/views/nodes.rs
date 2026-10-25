@@ -1,3 +1,4 @@
+use crate::gui::danger_btn;
 use crate::gui::icons::{icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::view_models::nodes_vm::{NodeCardAction, NodesViewModel};
@@ -436,42 +437,52 @@ impl VpnApp {
         tr_prune_stale: &str,
         tr_dedup: &str,
     ) {
-        // 1. 测速菜单
-        ui.add_enabled_ui(!self.busy, |ui| {
-            ui.menu_button("⚡ 批量测速 ▼", |ui| {
-                if ui
-                    .button("⚡ 测速当前页")
-                    .on_hover_text("测试当前分页显示的节点")
-                    .clicked()
-                {
-                    self.speedtest_page();
-                    ui.close_menu();
-                }
-                if ui
-                    .button("⚡ 测速当前列表")
-                    .on_hover_text("测试符合当前筛选条件的全部节点（跨越分页）")
-                    .clicked()
-                {
-                    self.speedtest_current_list();
-                    ui.close_menu();
-                }
-                if ui
-                    .button("⚡ 测速全库全部节点")
-                    .on_hover_text("忽略筛选条件，并发测速全库所有节点")
-                    .clicked()
-                {
-                    self.speedtest_all_sources();
-                    ui.close_menu();
-                }
-                ui.separator();
-                ui.label(RichText::new("测速强度设置:").small().color(theme::muted()));
-                for intensity in [SpeedtestIntensity::Fast, SpeedtestIntensity::Standard, SpeedtestIntensity::Deep] {
-                    if ui.selectable_value(&mut self.speedtest_intensity, intensity, intensity.label()).changed() {
+        // 1. 测速菜单 / 停止测速
+        if self.speedtest_busy {
+            if ui
+                .add(danger_btn("⏹ 停止测速"))
+                .on_hover_text("正在批量测速中，点击立即停止并清理测速任务")
+                .clicked()
+            {
+                self.cancel_speedtest();
+            }
+        } else {
+            ui.add_enabled_ui(!self.busy, |ui| {
+                ui.menu_button("⚡ 批量测速 ▼", |ui| {
+                    if ui
+                        .button("⚡ 测速当前页")
+                        .on_hover_text("测试当前分页显示的节点")
+                        .clicked()
+                    {
+                        self.speedtest_page();
                         ui.close_menu();
                     }
-                }
+                    if ui
+                        .button("⚡ 测速当前列表")
+                        .on_hover_text("测试符合当前筛选条件的全部节点（跨越分页）")
+                        .clicked()
+                    {
+                        self.speedtest_current_list();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("⚡ 测速全库全部节点")
+                        .on_hover_text("忽略筛选条件，并发测速全库所有节点")
+                        .clicked()
+                    {
+                        self.speedtest_all_sources();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    ui.label(RichText::new("测速强度设置:").small().color(theme::muted()));
+                    for intensity in [SpeedtestIntensity::Fast, SpeedtestIntensity::Standard, SpeedtestIntensity::Deep] {
+                        if ui.selectable_value(&mut self.speedtest_intensity, intensity, intensity.label()).changed() {
+                            ui.close_menu();
+                        }
+                    }
+                });
             });
-        });
+        }
 
         ui.separator();
 
