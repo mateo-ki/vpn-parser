@@ -57,17 +57,21 @@ impl BackendCompiler for MeowCompiler {
                 obj.remove(key);
             }
             // TUN：meow 的 tun 键集与 mihomo 不同，只发它认的键（docs/tun.md）。
-            // device 钉成 "meow"：platform 的提权 runner 按这个名字自动把网卡
-            // DNS 指向 fake-ip 网段（198.18.0.2），退出时还原 —— 不做这步 TUN 不通。
-            // fake-ip 是 meow TUN 的硬性要求（docs/tun.md），非 fake-ip 的 DNS 配置
-            // 在 TUN 下强制覆盖为 fake-ip。
+            // auto-route: "global"（全局路由）让所有 IPv4 流量（含 IP 直连与 UDP）完整导进 TUN 并自动
+            // 绑定物理网卡防环（IP_UNICAST_IF），对齐 mihomo 的透明代理体验；
+            // 配合 dns-hijack 实现 Fake-IP 劫持与域名还原。
             if plan.inbounds.mode.has_tun() {
+                let auto_route_val = if plan.inbounds.tun.auto_route {
+                    serde_json::json!("global")
+                } else {
+                    serde_json::json!(false)
+                };
                 obj.insert(
                     "tun".into(),
                     serde_json::json!({
                         "enable": true,
                         "device": "meow",
-                        "auto-route": true,
+                        "auto-route": auto_route_val,
                         "dns-hijack": ["any:53"],
                     }),
                 );

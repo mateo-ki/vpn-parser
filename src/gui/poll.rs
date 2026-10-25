@@ -1020,6 +1020,23 @@ impl VpnApp {
                             self.homogeneity_busy = false;
                             self.status = format!("反向剔除同质化源失败: {e}");
                         }
+                        BgMsg::NetworkDoctorReport(report) => {
+                            self.network_doctor_busy = false;
+                            self.network_doctor_report = Some(report);
+                        }
+                        BgMsg::NetworkDoctorRepairResult(res) => {
+                            self.network_doctor_repairing = false;
+                            match res {
+                                Ok(msg) => {
+                                    self.network_doctor_message = Some(msg);
+                                }
+                                Err(err) => {
+                                    self.network_doctor_message = Some(format!("修复遇到错误: {err}"));
+                                }
+                            }
+                            // 修复后立即自动重新扫描
+                            self.run_network_doctor();
+                        }
                     }
                 }
                 Err(TryRecvError::Empty) => break,

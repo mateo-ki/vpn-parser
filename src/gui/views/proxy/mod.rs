@@ -319,6 +319,14 @@ impl VpnApp {
                 self.speedtest_all_sources();
             }
         }
+
+        if ui
+            .add(status_btn("网络检测"))
+            .on_hover_text("全面体检：检测软件、内核与系统网络状态，支持一键修复死回环DNS/死代理/端口冲突")
+            .clicked()
+        {
+            self.open_network_doctor();
+        }
     }
 
 }

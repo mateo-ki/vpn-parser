@@ -1017,6 +1017,10 @@ impl ProxyManager {
                     errors.push(format!("恢复系统代理失败: {error}"));
                 }
             }
+            #[cfg(windows)]
+            {
+                let _ = crate::platform::restore_all_stale_loopback_dns();
+            }
             None
         } else {
             snapshot

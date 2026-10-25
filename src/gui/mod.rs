@@ -308,6 +308,11 @@ pub struct VpnApp {
     pub(crate) ip_risk_busy: bool,
     pub(crate) ip_risk_error: Option<String>,
     pub(crate) show_ip_risk_dialog: bool,
+    pub(crate) show_network_doctor: bool,
+    pub(crate) network_doctor_report: Option<crate::gui::views::proxy::modals::network_doctor::NetworkDoctorReport>,
+    pub(crate) network_doctor_busy: bool,
+    pub(crate) network_doctor_repairing: bool,
+    pub(crate) network_doctor_message: Option<String>,
     /// 弹窗当前展示的是哪个节点。
     pub(crate) ip_risk_target: Option<String>,
     pub(crate) ip_risk_egress: Option<crate::ip_risk::IpRisk>,
@@ -653,6 +658,11 @@ impl VpnApp {
             ip_risk_busy: false,
             ip_risk_error: None,
             show_ip_risk_dialog: false,
+            show_network_doctor: false,
+            network_doctor_report: None,
+            network_doctor_busy: false,
+            network_doctor_repairing: false,
+            network_doctor_message: None,
             ip_risk_target: None,
             ip_risk_egress: None,
             ip_risk_egress_for: None,
@@ -4432,6 +4442,7 @@ impl eframe::App for VpnApp {
         self.ui_homogeneity_dialog(ctx);
         self.ui_ip_risk_dialog(ctx);
         self.ui_kernel_dialog(ctx);
+        self.ui_network_doctor_dialog(ctx);
         self.ui_switch_log(ctx);
         self.ui_command_palette(ctx);
         self.ui_paste_dialog(ctx);

@@ -1155,6 +1155,20 @@ mod tests {
     }
 
     #[test]
+    fn test_check_stale_loopback_dns_safe() {
+        // 检查函数只读扫描，不修改系统现场
+        let items = check_stale_loopback_dns();
+        // 只要能正常执行并返回数组即可
+        let _ = items.len();
+    }
+
+    #[test]
+    fn test_self_heal_stale_dns_safe() {
+        // 当系统无 127.0.0.1 污染时自愈返回 false 并安全跳过
+        let _ = self_heal_stale_dns();
+    }
+
+    #[test]
     fn test_elevated_kernel_args_structure() {
         let args = ElevatedKernelArgs {
             parent_pid: 12345,
@@ -1234,6 +1248,7 @@ unsafe extern "system" fn seh_crash_unhandled_exception_filter(
     _exception_info: *const windows_sys::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
 ) -> i32 {
     crate::system_proxy::direct_disable_wininet_proxy_atomic();
+    let _ = restore_all_stale_loopback_dns();
     0 // EXCEPTION_CONTINUE_SEARCH
 }
 
@@ -1243,9 +1258,10 @@ unsafe extern "system" fn console_ctrl_handler(ctrl_type: u32) -> windows_sys::W
     match ctrl_type {
         CTRL_C_EVENT | CTRL_BREAK_EVENT | CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
             crate::startup_log(&format!(
-                "Console ctrl signal {ctrl_type} received; atomic disabling wininet system proxy..."
+                "Console ctrl signal {ctrl_type} received; atomic disabling wininet system proxy & restoring stale DNS..."
             ));
             crate::system_proxy::direct_disable_wininet_proxy_atomic();
+            let _ = restore_all_stale_loopback_dns();
             0 // 返回 FALSE (0)，允许后续默认处理或操作系统继续关闭/注销流程
         }
         _ => 0,
@@ -1320,6 +1336,155 @@ pub fn self_heal_stale_system_proxy(mixed_port: u16) -> bool {
     #[cfg(not(windows))]
     {
         let _ = mixed_port;
+        false
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StaleDnsItem {
+    pub interface_alias: String,
+    pub address_family: String,
+    pub server_addresses: Vec<String>,
+}
+
+#[cfg(windows)]
+pub fn check_stale_loopback_dns() -> Vec<StaleDnsItem> {
+    use std::os::windows::process::CommandExt;
+    const SCRIPT: &str = r#"
+Get-DnsClientServerAddress -ErrorAction SilentlyContinue |
+Where-Object {
+    $_.ServerAddresses -contains '127.0.0.1' -or
+    $_.ServerAddresses -contains '::1' -or
+    $_.ServerAddresses -contains '198.18.0.2'
+} |
+ForEach-Object {
+    $_.InterfaceAlias + '|' + $_.AddressFamily + '|' + ($_.ServerAddresses -join ',')
+}
+"#;
+    let output = match std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", SCRIPT])
+        .creation_flags(0x0800_0000)
+        .output()
+    {
+        Ok(out) => out,
+        Err(_) => return Vec::new(),
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut items = Vec::new();
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.trim().split('|').collect();
+        if parts.len() >= 3 {
+            let alias = parts[0].trim().to_string();
+            let fam = if parts[1].trim() == "2" {
+                "IPv4".to_string()
+            } else {
+                "IPv6".to_string()
+            };
+            let addrs = parts[2]
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            items.push(StaleDnsItem {
+                interface_alias: alias,
+                address_family: fam,
+                server_addresses: addrs,
+            });
+        }
+    }
+    items
+}
+
+#[cfg(not(windows))]
+pub fn check_stale_loopback_dns() -> Vec<StaleDnsItem> {
+    Vec::new()
+}
+
+#[cfg(windows)]
+pub fn restore_all_stale_loopback_dns() -> Result<usize> {
+    use std::os::windows::process::CommandExt;
+    const SCRIPT: &str = r#"
+$count = 0
+foreach ($fam in 'IPv4','IPv6') {
+    Get-DnsClientServerAddress -AddressFamily $fam -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.ServerAddresses -contains '127.0.0.1' -or
+        $_.ServerAddresses -contains '::1' -or
+        $_.ServerAddresses -contains '198.18.0.2'
+    } |
+    ForEach-Object {
+        Set-DnsClientServerAddress -InterfaceAlias $_.InterfaceAlias -ResetServerAddresses -ErrorAction SilentlyContinue
+        $count++
+    }
+}
+Clear-DnsClientCache -ErrorAction SilentlyContinue
+Write-Output $count
+"#;
+
+    let output = if is_elevated() {
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", SCRIPT])
+            .creation_flags(0x0800_0000)
+            .output()?
+    } else {
+        let runas_cmd = format!(
+            "Start-Process powershell -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList '-NoProfile -Command \"{}\"'",
+            SCRIPT.replace('"', "\"\"")
+        );
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &runas_cmd])
+            .creation_flags(0x0800_0000)
+            .output()?
+    };
+
+    let count_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let count = count_str
+        .lines()
+        .last()
+        .unwrap_or("0")
+        .parse::<usize>()
+        .unwrap_or(0);
+    if count > 0 {
+        crate::startup_log(&format!(
+            "restore_all_stale_loopback_dns finished, reset {count} adapters"
+        ));
+    }
+    Ok(count)
+}
+
+#[cfg(not(windows))]
+pub fn restore_all_stale_loopback_dns() -> Result<usize> {
+    Ok(0)
+}
+
+pub fn self_heal_stale_dns() -> bool {
+    #[cfg(windows)]
+    {
+        let stale = check_stale_loopback_dns();
+        let has_stale = stale.iter().any(|item| {
+            item.server_addresses
+                .iter()
+                .any(|a| a == "127.0.0.1" || a == "::1")
+        });
+        if has_stale {
+            crate::startup_log("检测到网卡残留死回环 DNS 设置 (127.0.0.1 或 ::1)，自动执行 DNS 自愈恢复...");
+            match restore_all_stale_loopback_dns() {
+                Ok(count) => {
+                    crate::startup_log(&format!(
+                        "DNS 自动自愈完成，已重置 {count} 个受损网卡配置并刷新 DNS 缓存。"
+                    ));
+                    return true;
+                }
+                Err(e) => {
+                    crate::startup_log(&format!("警告：DNS 自愈执行失败: {e}"));
+                }
+            }
+        }
+        false
+    }
+    #[cfg(not(windows))]
+    {
         false
     }
 }
@@ -1620,9 +1785,6 @@ pub fn run_elevated_kernel_supervisor(args: ElevatedKernelArgs) -> Result<()> {
     crate::startup_log(&format!(
         "Elevated supervisor spawned kernel child_pid={child_pid}"
     ));
-    #[allow(unused_mut)]
-    let mut meow_dns_set = false;
-
     // 4. 将内核进程圈入专属 Job Object
     if !job.is_null() {
         unsafe {
@@ -1632,46 +1794,6 @@ pub fn run_elevated_kernel_supervisor(args: ElevatedKernelArgs) -> Result<()> {
                 CloseHandle(child_proc);
             }
         }
-    }
-
-    // 4.5 meow TUN 的网卡 DNS 自动化：meow 的 auto-route 只把 fake-ip 网段
-    // （198.18.0.0/16）导进 TUN 网卡，系统解析器必须指向网段内的 198.18.0.2
-    // 才能让域名解析进隧道（docs/tun.md 明确要求的手动步骤）。runner 本身
-    // 已提权，正好由它代劳：等网卡出现 → 设 DNS → 内核退出后还原。
-    // 编译器已把网卡名钉为 "meow"（tun.device）。
-    if args.kernel == KernelKind::Meow {
-        const TUN_ADAPTER: &str = "meow";
-        const FAKE_IP_DNS: &str = "198.18.0.2";
-        let mut adapter_ready = false;
-        for _ in 0..40 {
-            if let Ok(out) = std::process::Command::new("netsh")
-                .arg("interface")
-                .arg("show")
-                .arg("interface")
-                .creation_flags(0x0800_0000)
-                .output()
-            {
-                if String::from_utf8_lossy(&out.stdout).contains(TUN_ADAPTER) {
-                    adapter_ready = true;
-                    break;
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
-        if adapter_ready {
-            let set = std::process::Command::new("netsh")
-                .args(["interface", "ip", "set", "dns", "name", TUN_ADAPTER,
-                       "source=static", "addr", FAKE_IP_DNS])
-                .creation_flags(0x0800_0000)
-                .output();
-            crate::startup_log(&format!(
-                "meow TUN adapter DNS set to {FAKE_IP_DNS}: {}",
-                set.map(|o| o.status.success().to_string()).unwrap_or_else(|e| e.to_string())
-            ));
-        } else {
-            crate::startup_log("meow TUN adapter 'meow' not found in 20s; skip DNS setup");
-        }
-        meow_dns_set = true;
     }
 
     // 5. 监听父进程与子内核进程
@@ -1696,14 +1818,10 @@ pub fn run_elevated_kernel_supervisor(args: ElevatedKernelArgs) -> Result<()> {
 
     let _ = child.wait();
 
-    // meow TUN：内核退出后把网卡 DNS 还原为 DHCP（网卡可能已被删除，失败忽略）
-    if meow_dns_set {
-        let _ = std::process::Command::new("netsh")
-            .args(["interface", "ip", "set", "dns", "name", "meow", "source=dhcp"])
-            .creation_flags(0x0800_0000)
-            .output();
-        crate::startup_log("meow TUN adapter DNS restored to dhcp");
-    }
+    // 内核退出（或主 GUI 异常终止）后的系统网络保护：
+    // 强制恢复所有被内核（如 Meow TUN）篡改后遗留的 127.0.0.1 / ::1 / 198.18.0.2 死回环 DNS，
+    // 并在提权环境下刷新 DNS 缓存，确保系统物理网卡立即恢复直连网络！
+    let _ = restore_all_stale_loopback_dns();
 
     unsafe {
         CloseHandle(parent_handle);

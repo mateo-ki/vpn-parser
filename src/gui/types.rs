@@ -382,6 +382,8 @@ pub enum BgMsg {
         result: Result<String, String>,
     },
     RemoteApiCheck(Result<String, String>),
+    NetworkDoctorReport(crate::gui::views::proxy::modals::network_doctor::NetworkDoctorReport),
+    NetworkDoctorRepairResult(Result<String, String>),
     PublishDone(Result<String, String>),
     OpDone {
         result: Result<String, String>,

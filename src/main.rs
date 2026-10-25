@@ -141,7 +141,10 @@ fn main() -> Result<()> {
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("PANIC: {info}");
         #[cfg(windows)]
-        system_proxy::direct_disable_wininet_proxy_atomic();
+        {
+            system_proxy::direct_disable_wininet_proxy_atomic();
+            let _ = platform::restore_all_stale_loopback_dns();
+        }
         let _ = std::fs::write("panic.log", &msg);
         startup_log(&msg);
     }));
@@ -315,6 +318,7 @@ fn main() -> Result<()> {
 
     if !diag {
         platform::self_heal_stale_system_proxy(9980);
+        platform::self_heal_stale_dns();
     }
 
     if _single_instance.is_some() {
