@@ -56,6 +56,10 @@ const GIST_MAX_NEW_PER_RUN: usize = 2000;
 /// 发现任务在任务面板里使用的伪源 id。
 pub mod telegram;
 
+#[cfg(test)]
+#[path = "tests_file_source.rs"]
+mod tests_file_source;
+
 pub const GIST_DISCOVERY_SOURCE_ID: &str = "__gist_discovery__";
 /// 默认搜索词（q 参数会被 percent-encode）。
 pub const GIST_DISCOVERY_DEFAULT_QUERY: &str = "vless//";
@@ -366,6 +370,29 @@ impl Collector {
     /// Race every candidate for this URL and keep the first body that arrives. A blocked
     /// `raw.githubusercontent.com` then costs one header timeout instead of the whole
     /// budget, because the mirror legs keep running in parallel.
+    /// 读本地文件源：body 原样交给下游，mtime 记进 last_modified。
+    async fn download_local_file(
+        &self,
+        path: &str,
+        resolved_url: &str,
+    ) -> Result<Option<Downloaded>, String> {
+        let bytes = tokio::fs::read(path)
+            .await
+            .map_err(|e| format!("读取本地文件失败 {path}: {e}"))?;
+        let last_modified = std::fs::metadata(path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
+        info!(path = %path, bytes = bytes.len(), "reading local file source");
+        Ok(Some(Downloaded {
+            body: bytes,
+            final_url: resolved_url.to_string(),
+            etag: None,
+            last_modified,
+            via: None,
+        }))
+    }
+
     async fn download_source(
         &self,
         source: &Source,
@@ -374,6 +401,10 @@ impl Collector {
         budget: Duration,
         header_budget: Duration,
     ) -> Result<Option<Downloaded>, String> {
+        // 本地文件源：直接读文件，复用下游同一套 sha256 去重 / 解析 / 写库管线
+        if let Some(path) = local_file_path(resolved_url) {
+            return self.download_local_file(&path, resolved_url).await;
+        }
         let candidates = fetch_candidates(resolved_url, source.last_fetch_host.as_deref());
         if candidates.len() == 1 {
             return self
@@ -1024,6 +1055,30 @@ fn url_host(url: &str) -> Option<String> {
 }
 
 /// 直连 + （仅对 GitHub raw）镜像候选。上次成功的来源排第一位，但不会因此丢掉其它候选。
+/// 本地文件源识别：`file://` 前缀或裸本地路径（盘符 / 斜杠开头）。
+/// 返回可直接 `tokio::fs::read` 的路径。
+pub fn local_file_path(url: &str) -> Option<String> {
+    let t = url.trim();
+    if let Some(rest) = t.strip_prefix("file://") {
+        // file:///C:/x/y → /C:/x/y（去掉 scheme 后以 / 开头）→ Windows 盘符形式再去一层
+        let rest = if let Some(stripped) = rest.strip_prefix('/') {
+            if stripped.len() >= 2 && stripped.as_bytes()[1] == b':' {
+                stripped
+            } else {
+                rest
+            }
+        } else {
+            rest
+        };
+        return (!rest.is_empty()).then(|| rest.to_string());
+    }
+    let looks_local = t.len() >= 3
+        && ((t.as_bytes()[1] == b':' && t.as_bytes()[0].is_ascii_alphabetic())
+            || (t.starts_with('/') && !t.starts_with("//"))
+            || t.starts_with("\\"));
+    looks_local.then(|| t.to_string())
+}
+
 fn fetch_candidates(resolved_url: &str, winner: Option<&str>) -> Vec<FetchCandidate> {
     let mut candidates = vec![FetchCandidate {
         url: resolved_url.to_string(),

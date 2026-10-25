@@ -273,6 +273,11 @@ pub struct VpnApp {
     pub(crate) perf_prev: Option<(std::time::Instant, u64, u64, u64)>,
     pub(crate) perf_stats: perf::PerfSample,
     pub(crate) last_perf_sample: std::time::Instant,
+    /// 控制器轮询共享 Client：reqwest 的 Client 克隆廉价（内部 Arc 连接池），
+    /// 以前每次轮询各自新建 = 每秒对本地控制器重开一条 TCP。键是端口，内核换端口才重建。
+    pub(crate) controller_client: Option<(u16, reqwest::Client)>,
+    /// 服务卡探测共享 Client：键是 (是否经代理, 混合端口)，状态变化才重建。
+    pub(crate) service_check_client: Option<(bool, u16, reqwest::Client)>,
     /// 仪表盘策略组抽屉：当前展开的组名（None = 收起）。
     pub(crate) group_drawer: Option<String>,
     /// 策略组抽屉的节点筛选词（当场过滤，不落库）。
@@ -677,6 +682,8 @@ impl VpnApp {
             health_fail_streak: 0,
             rule_seen: std::collections::HashMap::new(),
             rule_tally: std::collections::HashMap::new(),
+            controller_client: None,
+            service_check_client: None,
             last_hit_flush: std::time::Instant::now(),
             rule_hits_today: Vec::new(),
             fetch_history: std::collections::HashMap::new(),
@@ -856,15 +863,10 @@ impl VpnApp {
         );
         let proxy_port = self.proxy_status.mixed_port;
         let tx = self.tx.clone();
+        // 共享 Client：按 (是否经代理, 端口) 缓存，探测节奏 60s 一次不再各自新建
+        let client = self.service_check_client(use_proxy, proxy_port);
         self.rt.spawn(async move {
-            let mut builder = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(3))
-                .connect_timeout(std::time::Duration::from_secs(2));
-            if use_proxy {
-                builder = builder
-                    .proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{proxy_port}")).expect("本地混合端口代理地址有效"));
-            }
-            let client = builder.build().ok();
+            let client = client;
 
             // 单站点探测：有响应即连通（Cloudflare 的 403 也证明链路是通的）
             async fn probe(client: Option<&reqwest::Client>, url: &str) -> Option<u128> {
@@ -2945,23 +2947,56 @@ impl VpnApp {
         });
     }
 
+    /// 控制器轮询共享 Client：同端口直接克隆复用，端口变化（换内核）才重建。
+    /// 各轮询的差异化超时用 per-request 的 `.timeout()` 覆盖。
+    fn controller_client(&mut self, port: u16) -> Option<reqwest::Client> {
+        if let Some((built_port, client)) = &self.controller_client {
+            if *built_port == port {
+                return Some(client.clone());
+            }
+        }
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5)) // 兜底，具体请求各自覆盖
+            .build()
+            .ok()?;
+        self.controller_client = Some((port, client.clone()));
+        Some(client)
+    }
+
+    /// 服务卡探测 Client：经代理与否、混合端口变了才重建（reqwest 的 proxy 绑在 Client 上）。
+    fn service_check_client(&mut self, use_proxy: bool, proxy_port: u16) -> Option<reqwest::Client> {
+        if let Some((key_use, key_port, client)) = &self.service_check_client {
+            if *key_use == use_proxy && *key_port == proxy_port {
+                return Some(client.clone());
+            }
+        }
+        let mut builder = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .connect_timeout(std::time::Duration::from_secs(2));
+        if use_proxy {
+            builder = builder.proxy(
+                reqwest::Proxy::all(format!("http://127.0.0.1:{proxy_port}"))
+                    .expect("本地混合端口代理地址有效"),
+            );
+        }
+        let client = builder.build().ok()?;
+        self.service_check_client = Some((use_proxy, proxy_port, client.clone()));
+        Some(client)
+    }
+
     pub(crate) fn poll_traffic_snapshot(&mut self) {
         let port = self.proxy_status.controller_port;
         let secret = self.proxy_status.controller_secret.clone();
         let tx = self.tx.clone();
+        let client = self.controller_client(port);
         self.rt.spawn(async move {
-            let client = match reqwest::Client::builder()
-                .timeout(std::time::Duration::from_millis(1200))
-                .build()
-            {
-                Ok(c) => c,
-                Err(_) => {
-                    let _ = tx.send(BgMsg::TrafficPollDone);
-                    return;
-                }
+            let Some(client) = client else {
+                let _ = tx.send(BgMsg::TrafficPollDone);
+                return;
             };
             let url = format!("http://127.0.0.1:{port}/connections");
             let resp = crate::proxy::with_controller_auth(client.get(&url), &secret)
+                .timeout(std::time::Duration::from_millis(1200))
                 .send()
                 .await;
             match resp {
@@ -3025,16 +3060,12 @@ impl VpnApp {
         let port = self.proxy_status.controller_port;
         let secret = self.proxy_status.controller_secret.clone();
         let tx = self.tx.clone();
+        let client = self.controller_client(port);
         self.rt.spawn(async move {
-            let client = match reqwest::Client::builder()
-                .timeout(std::time::Duration::from_millis(1500))
-                .build()
-            {
-                Ok(client) => client,
-                Err(_) => return,
-            };
+            let Some(client) = client else { return };
             let url = format!("http://127.0.0.1:{port}/proxies");
             let response = crate::proxy::with_controller_auth(client.get(&url), &secret)
+                .timeout(std::time::Duration::from_millis(1500))
                 .send()
                 .await
                 .ok()
@@ -3181,23 +3212,18 @@ impl VpnApp {
             return;
         }
         self.status = "正在向内核请求更新 GeoIP / GeoSite 规则文件...".into();
+        let client = self.controller_client(port);
         self.rt.spawn(async move {
             // 这个调用是**同步**的：内核要自己下完两个库（11MB + 16MB）才回话，
             // 30 秒会把还在正常下载的情况误判成失败。
-            let client = match reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(180))
-                .build()
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    let _ = tx.send(BgMsg::GeoUpdated(Err(e.to_string())));
-                    return;
-                }
+            let Some(client) = client else {
+                return;
             };
             let resp = crate::proxy::with_controller_auth(
                 client.post(format!("http://127.0.0.1:{port}/configs/geo")),
                 &secret,
             )
+            .timeout(std::time::Duration::from_secs(180))
             .send()
             .await;
             let res = match resp {

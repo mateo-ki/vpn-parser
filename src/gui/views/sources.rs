@@ -544,6 +544,16 @@ impl VpnApp {
                         .small()
                         .color(theme::accent_strong()),
                     );
+            } else if crate::collector::local_file_path(self.form_url.trim()).is_some() {
+                    ui.label(
+                        RichText::new(
+                            "本地文件源 —— 直接读取该文件，格式自动识别 \
+                             （Clash YAML / 节点链接 / base64）。改完文件等下一轮拉取即可，\
+                             内容没变不会重复解析，不联网也能用。",
+                        )
+                        .small()
+                        .color(theme::accent_strong()),
+                    );
             }
             ui.checkbox(&mut self.form_enabled, "启用");
             ui.horizontal(|ui| {
