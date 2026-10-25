@@ -110,23 +110,36 @@ jobs:
           # prerelease，稳定通道的用户收不到它，只有「关于」里勾了「参与预发」或主动切换版本的人才拿得到。
           $pre = $env:TAG -match '-(alpha|beta|rc|dev|preview)(\.|\b)' -or $env:TAG -match '-[0-9A-Za-z]+'
           $versionClean = $env:TAG.TrimStart('v')
-          $notesValid = (Test-Path "RELEASE_NOTES.md") -and ((Get-Content "RELEASE_NOTES.md" -Raw) -match [regex]::Escape($versionClean))
+          $escapedVer = [regex]::Escape($versionClean)
+          $notesFile = $null
+          if (Test-Path "RELEASE_NOTES.md") {
+            $rawNotes = Get-Content -Encoding utf8 "RELEASE_NOTES.md" -Raw
+            # 精准提取当前版本对应的单独发布说明段落，截断到下一个 --- 分隔线或下一个主标题，杜绝带入历史旧版本
+            if ($rawNotes -match "(?ms)(^#[ \t]+[^\r\n]*?\bv$escapedVer\b[^\r\n]*\r?\n.*?)(?=\r?\n---\r?\n|\Z)") {
+              $matchedNotes = $matches[1].Trim()
+              $notesFile = "dist/release_notes_$versionClean.md"
+              Set-Content -Path $notesFile -Value $matchedNotes -Encoding utf8
+              Write-Host "Extracted single-version release notes ($($matchedNotes.Length) chars)"
+            }
+          }
+          $notesValid = ($null -ne $notesFile) -and (Test-Path $notesFile)
+
           if (gh release view "$env:TAG" 2>$null) {
             Write-Host "Release $env:TAG already exists, updating assets with --clobber..."
             gh release upload "$env:TAG" @assets --clobber
             if ($notesValid) {
-              gh release edit "$env:TAG" --notes-file RELEASE_NOTES.md
+              gh release edit "$env:TAG" --notes-file $notesFile
             }
             if ($pre) { gh release edit "$env:TAG" --prerelease } else { gh release edit "$env:TAG" --prerelease=false }
           } elseif ($pre) {
             if ($notesValid) {
-              gh release create "$env:TAG" @assets --title "VPN Parser $env:TAG（预发）" --notes-file RELEASE_NOTES.md --prerelease
+              gh release create "$env:TAG" @assets --title "VPN Parser $env:TAG（预发）" --notes-file $notesFile --prerelease
             } else {
               gh release create "$env:TAG" @assets --title "VPN Parser $env:TAG（预发）" --generate-notes --prerelease
             }
           } else {
             if ($notesValid) {
-              gh release create "$env:TAG" @assets --title "VPN Parser $env:TAG" --notes-file RELEASE_NOTES.md
+              gh release create "$env:TAG" @assets --title "VPN Parser $env:TAG" --notes-file $notesFile
             } else {
               gh release create "$env:TAG" @assets --title "VPN Parser $env:TAG" --generate-notes
             }
