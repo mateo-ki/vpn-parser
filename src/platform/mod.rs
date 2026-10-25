@@ -278,6 +278,7 @@ pub fn is_elevated() -> bool {
 /// - 若运行在 Windows / macOS 上：由系统 API 或用户提权处理，返回 true。
 /// - 若运行在 Linux 上且当前进程是 root (eUID == 0)：返回 true。
 /// - 若运行在 Linux 上且为普通用户：通过 getcap 检查内核文件是否具有 cap_net_admin。
+#[allow(dead_code)]
 pub fn kernel_has_tun_capability(kernel_path: &std::path::Path) -> bool {
     if is_elevated() {
         return true;
@@ -1236,11 +1237,30 @@ unsafe extern "system" fn seh_crash_unhandled_exception_filter(
     0 // EXCEPTION_CONTINUE_SEARCH
 }
 
+#[cfg(windows)]
+unsafe extern "system" fn console_ctrl_handler(ctrl_type: u32) -> windows_sys::Win32::Foundation::BOOL {
+    use windows_sys::Win32::System::Console::*;
+    match ctrl_type {
+        CTRL_C_EVENT | CTRL_BREAK_EVENT | CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
+            crate::startup_log(&format!(
+                "Console ctrl signal {ctrl_type} received; atomic disabling wininet system proxy..."
+            ));
+            crate::system_proxy::direct_disable_wininet_proxy_atomic();
+            0 // 返回 FALSE (0)，允许后续默认处理或操作系统继续关闭/注销流程
+        }
+        _ => 0,
+    }
+}
+
 pub fn register_crash_rollback_hook() {
     #[cfg(windows)]
     unsafe {
         windows_sys::Win32::System::Diagnostics::Debug::SetUnhandledExceptionFilter(
             Some(seh_crash_unhandled_exception_filter),
+        );
+        windows_sys::Win32::System::Console::SetConsoleCtrlHandler(
+            Some(console_ctrl_handler),
+            1, // TRUE: 注册控制台关闭/关机处理器
         );
     }
 }
@@ -1316,6 +1336,7 @@ pub struct ElevatedKernelArgs {
 
 #[cfg(windows)]
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ElevatedChild {
     pub pid: u32,
     pub handle: windows_sys::Win32::Foundation::HANDLE,
@@ -1340,6 +1361,7 @@ impl Drop for ElevatedChild {
 
 #[cfg(windows)]
 impl ElevatedChild {
+    #[allow(dead_code)]
     pub fn id(&self) -> Option<u32> {
         Some(self.pid)
     }

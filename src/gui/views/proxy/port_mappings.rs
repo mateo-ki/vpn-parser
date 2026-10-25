@@ -1,31 +1,10 @@
-use super::groups::{node_matches_group, override_group_names, visible_group_names};
-use super::CLASH_VERGE_RECOMMENDED_OVERRIDE;
-use crate::gui::icons::{self, icon_label, Icon};
+use crate::gui::icons::{icon_label, Icon};
 use crate::gui::theme;
-use crate::gui::types::{
-    ActiveConnectionInfo, ConnectionsTab, DnsRecord, GroupsTab, KernelGroup, ProxyPanel, ProxySortBy,
-    ProxyView, ProxyViewRow, RuleDraftKind, RulesTab,
-};
-use crate::gui::view_models::nodes_vm::{NodeCardAction, NodesViewModel};
 use crate::gui::widgets::{
-    card_frame, compact_node_card, country_flag_and_name, danger_btn, dns_mode_label,
-    format_bytes, format_speed, header_cell, macos_segmented_tabs, panel_frame, panel_tab, primary_btn,
-    protocol_pill, render_country_code_badge, render_health_strip, render_node_health_bar,
-    render_protocol_donut_chart_sized, render_signal_bars, render_speedometer, render_top_processes_card,
-    render_traffic_waveform_card, routing_mode_description, routing_mode_detail,
-    rule_action_label, rule_matcher_label, sanitize_node_name, section_title, status_badge, tun_stack_label,
+    panel_frame, section_title,
 };
 use crate::gui::VpnApp;
-use crate::kernel::{KernelKind, KernelPreference};
-use crate::models::NodeSummary;
-use crate::proxy::{
-    adblock_quic_rules, ai_service_rules, dev_mirrors_rules, game_platforms_rules,
-    mihomo_dns_poison_overrides, optimize_traffic_rules, recommended_traffic_rules,
-    social_telegram_rules, streaming_media_rules, AutoRoutingStrategy, DnsEnhancedMode, ProxyMode, ProxyState,
-    RoutingMode, RuleAction, TrafficRule, TunStack, URL_TEST_GROUP,
-};
-use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, Vec2};
-use std::sync::atomic::Ordering;
+use eframe::egui::{self, CornerRadius, RichText, Stroke, Ui};
 
 impl VpnApp {
     pub(crate) fn ui_proxy_port_mappings(&mut self, ui: &mut Ui) {

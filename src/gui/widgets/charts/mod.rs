@@ -8,6 +8,8 @@ pub mod waveform;
 pub use donut::*;
 pub use health::*;
 pub use sparkline::*;
+#[allow(unused_imports)]
 pub use speedometer::*;
 pub use spectrum::*;
+#[allow(unused_imports)]
 pub use waveform::*;

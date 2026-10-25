@@ -92,6 +92,7 @@ pub(crate) enum ProxyChild {
 }
 
 impl ProxyChild {
+    #[allow(dead_code)]
     pub fn id(&self) -> Option<u32> {
         match self {
             Self::Standard(child) => child.id(),

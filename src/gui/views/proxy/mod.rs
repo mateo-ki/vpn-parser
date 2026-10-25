@@ -11,38 +11,27 @@ pub mod security;
 #[cfg(test)]
 mod tests;
 
+#[allow(unused_imports)]
 pub use groups::node_matches_group;
+#[allow(unused_imports)]
 pub(crate) use groups::{override_group_names, visible_group_names};
+#[allow(unused_imports)]
 pub use modals::ui_rule_import_help_window;
+#[allow(unused_imports)]
 pub use network::clean_kernel_version;
+#[allow(unused_imports)]
 pub(crate) use rules::{RULES_ACTIONS_WIDTH, RULES_TABS_MIN_WIDTH};
 
-use crate::gui::icons::{self, icon_label, Icon};
+
+use crate::gui::icons::Icon;
 use crate::gui::theme;
-use crate::gui::types::{
-    ActiveConnectionInfo, ConnectionsTab, DnsRecord, GroupsTab, KernelGroup, ProxyPanel, ProxySortBy,
-    ProxyView, ProxyViewRow, RuleDraftKind, RulesTab,
-};
-use crate::gui::view_models::nodes_vm::{NodeCardAction, NodesViewModel};
+use crate::gui::types::ProxyPanel;
 use crate::gui::widgets::{
-    card_frame, compact_node_card, country_flag_and_name, danger_btn, dns_mode_label,
-    format_bytes, format_speed, header_cell, macos_segmented_tabs, panel_frame, panel_tab, primary_btn,
-    protocol_pill, render_country_code_badge, render_health_strip, render_node_health_bar,
-    render_protocol_donut_chart_sized, render_signal_bars, render_speedometer, render_top_processes_card,
-    render_traffic_waveform_card, routing_mode_description, routing_mode_detail,
-    rule_action_label, rule_matcher_label, sanitize_node_name, section_title, status_badge, tun_stack_label,
+    danger_btn, macos_segmented_tabs, primary_btn,
 };
 use crate::gui::VpnApp;
-use crate::kernel::{KernelKind, KernelPreference};
-use crate::models::NodeSummary;
-use crate::proxy::{
-    adblock_quic_rules, ai_service_rules, dev_mirrors_rules, game_platforms_rules,
-    mihomo_dns_poison_overrides, optimize_traffic_rules, recommended_traffic_rules,
-    social_telegram_rules, streaming_media_rules, AutoRoutingStrategy, DnsEnhancedMode, ProxyMode, ProxyState,
-    RoutingMode, RuleAction, TrafficRule, TunStack, URL_TEST_GROUP,
-};
-use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, Vec2};
-use std::sync::atomic::Ordering;
+use crate::proxy::ProxyState;
+use eframe::egui::{self, RichText, Stroke, Ui};
 
 pub const CLASH_VERGE_RECOMMENDED_OVERRIDE: &str = r#"# =========================================================
 # Clash Verge Rev / Mihomo 通用推荐覆写片段

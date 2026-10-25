@@ -15,12 +15,14 @@ use crate::proxy::ir::{IRMatcher, RoutingPlan};
 use anyhow::Result;
 use std::collections::HashSet;
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiagnosticSeverity {
     Warning,
     Error,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompilationDiagnostic {
     pub severity: DiagnosticSeverity,
@@ -28,6 +30,7 @@ pub struct CompilationDiagnostic {
     pub rule_index: Option<usize>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct CompilerCapabilities {
     pub supports_tun: bool,
@@ -46,6 +49,7 @@ pub enum CompiledArtifact {
 }
 
 impl CompiledArtifact {
+    #[allow(dead_code)]
     pub fn to_string_pretty(&self) -> Result<String> {
         match self {
             CompiledArtifact::Yaml(yaml) => Ok(yaml.clone()),
@@ -61,6 +65,7 @@ impl CompiledArtifact {
     }
 }
 
+#[allow(dead_code)]
 pub trait BackendCompiler: Send + Sync {
     fn kernel(&self) -> KernelKind;
     fn capabilities(&self) -> &CompilerCapabilities;
@@ -145,6 +150,7 @@ pub trait BackendCompiler: Send + Sync {
 }
 
 /// 根据内核种类获取对应的 BackendCompiler 实例
+#[allow(dead_code)]
 pub fn get_backend_compiler(kernel: KernelKind) -> Box<dyn BackendCompiler> {
     match kernel {
         KernelKind::Mihomo => Box::new(MihomoCompiler::new()),

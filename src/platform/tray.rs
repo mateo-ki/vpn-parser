@@ -183,6 +183,7 @@ pub fn detect_linux_tray_backend() -> LinuxTrayBackend {
 }
 
 #[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
 pub fn detect_linux_tray_backend() -> LinuxTrayBackend {
     LinuxTrayBackend::NoHostFallback
 }

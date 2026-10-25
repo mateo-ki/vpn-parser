@@ -1,7 +1,7 @@
 use crate::models::Node;
 use crate::proxy::config::{
     gfwlist_traffic_rules, optimize_traffic_rules, recommended_traffic_rules, RoutingMode,
-    RuleAction, RuleMatcher, TrafficRule,
+    RuleAction, RuleMatcher,
 };
 use crate::proxy::types::MihomoConfigOptions;
 use super::types::{
@@ -174,6 +174,10 @@ pub fn lower_options_to_ir(options: &MihomoConfigOptions, primary_node: Option<&
         });
     }
 
+    // 4.3.5 自定义覆写 YAML (override_yaml) 中的分流规则：转译为统一 IR 规则，使 Sing-box / Shoes / Xray 等所有内核均能直接生效
+    let override_rules = parse_override_rules_to_ir(options.override_yaml.as_deref());
+    rules.extend(override_rules);
+
     // 4.4 场景预设与用户自定义分流规则
     let user_traffic_rules = match options.routing_mode {
         RoutingMode::Rule => optimize_traffic_rules(&options.rules),
@@ -250,4 +254,84 @@ fn convert_matcher(matcher: &RuleMatcher) -> (IRMatcher, bool) {
         RuleMatcher::Network(proto) => (IRMatcher::Network(*proto), false),
         RuleMatcher::Quic => (IRMatcher::Quic, false),
     }
+}
+
+/// 解析用户自定义 YAML 覆写中的 rules 列表，将其降阶转译为统一的 IRRule，
+/// 赋能非 Mihomo 内核（如 Sing-box、Shoes、Xray）也能无缝识别与执行自定义 Clash 分流规则。
+pub fn parse_override_rules_to_ir(override_yaml: Option<&str>) -> Vec<IRRule> {
+    let Some(text) = override_yaml.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Vec::new();
+    };
+
+    let Ok(val) = serde_yaml::from_str::<serde_json::Value>(text) else {
+        return Vec::new();
+    };
+
+    let Some(raw_rules) = val.get("rules").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+
+    let mut rules = Vec::new();
+    for item in raw_rules {
+        let Some(rule_line) = item.as_str() else {
+            continue;
+        };
+        let parts: Vec<&str> = rule_line.split(',').map(str::trim).collect();
+        if parts.len() < 3 {
+            continue;
+        }
+
+        let matcher_type = parts[0].to_ascii_uppercase();
+        let target = parts[1];
+        let action_str = parts[2];
+        let no_resolve = parts
+            .get(3)
+            .map(|&opt| opt.eq_ignore_ascii_case("no-resolve"))
+            .unwrap_or(false);
+
+        let matcher = match matcher_type.as_str() {
+            "DOMAIN" => IRMatcher::Domain(target.to_string()),
+            "DOMAIN-SUFFIX" => IRMatcher::DomainSuffix(target.to_string()),
+            "DOMAIN-KEYWORD" => IRMatcher::DomainKeyword(target.to_string()),
+            "DOMAIN-REGEX" => IRMatcher::DomainRegex(target.to_string()),
+            "GEOSITE" => {
+                IRMatcher::GeoSite(crate::geo::normalize_geo_code(target).to_ascii_lowercase())
+            }
+            "GEOIP" => {
+                IRMatcher::GeoIp(crate::geo::normalize_geo_code(target).to_ascii_uppercase())
+            }
+            "IP-CIDR" | "IP-CIDR6" => IRMatcher::IpCidr(target.to_string()),
+            "DST-PORT" | "PORT" => {
+                if let Some((start, end)) = target.split_once('-').or_else(|| target.split_once(':')) {
+                    if let (Ok(s), Ok(e)) = (start.trim().parse::<u16>(), end.trim().parse::<u16>()) {
+                        IRMatcher::PortRange(s, e)
+                    } else {
+                        continue;
+                    }
+                } else if let Ok(port) = target.parse::<u16>() {
+                    IRMatcher::Port(port)
+                } else {
+                    continue;
+                }
+            }
+            "PROCESS-NAME" => IRMatcher::ProcessName(target.to_string()),
+            _ => continue,
+        };
+
+        let action = match action_str.to_ascii_uppercase().as_str() {
+            "DIRECT" => IRAction::Direct,
+            "REJECT" => IRAction::Reject,
+            "PROXY" => IRAction::Proxy(None),
+            _ => IRAction::Proxy(Some(action_str.to_string())),
+        };
+
+        rules.push(IRRule {
+            matchers: vec![matcher],
+            action,
+            no_resolve: no_resolve || matches!(matcher_type.as_str(), "GEOIP"),
+            source: RuleSource::Override,
+        });
+    }
+
+    rules
 }

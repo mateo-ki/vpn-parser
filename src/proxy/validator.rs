@@ -4,8 +4,10 @@ use anyhow::{anyhow, Result};
 use std::process::Command;
 use uuid::Uuid;
 
+#[allow(dead_code)]
 pub struct KernelValidator;
 
+#[allow(dead_code)]
 impl KernelValidator {
     /// 校验编译好的配置工件在目标内核中语法与语义是否有效（使用内核 CLI 自检命令：-t / check / -test）
     pub fn validate_artifact(kernel: KernelKind, artifact: &CompiledArtifact) -> Result<()> {

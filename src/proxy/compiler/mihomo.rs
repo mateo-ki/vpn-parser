@@ -1,7 +1,6 @@
 use super::{BackendCompiler, CompiledArtifact, CompilerCapabilities};
 use crate::export::nodes_to_clash_proxies;
 use crate::kernel::KernelKind;
-use crate::models::Node;
 use crate::proxy::ir::{IRAction, IRMatcher, RoutingPlan};
 use crate::proxy::types::AutoRoutingStrategy;
 use anyhow::{anyhow, Result};
@@ -596,11 +595,15 @@ impl BackendCompiler for MihomoCompiler {
                         let mut user_r = Vec::new();
                         for r in user_rules {
                             if let Some(s) = r.as_str() {
-                                user_r.push(s.to_string());
+                                if !final_rules.iter().any(|existing| existing == s) {
+                                    user_r.push(s.to_string());
+                                }
                             }
                         }
-                        user_r.extend(final_rules);
-                        final_rules = user_r;
+                        if !user_r.is_empty() {
+                            user_r.extend(final_rules);
+                            final_rules = user_r;
+                        }
                     }
                 }
             }

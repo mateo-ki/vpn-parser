@@ -5,6 +5,7 @@ use eframe::egui::{self, Stroke, Ui};
 use std::collections::VecDeque;
 
 /// 实时吞吐大波形图：平滑 Catmull-Rom 贝塞尔曲线、下行半透明发光渐变填充、上行虚线、悬停交叉准星与标尺
+#[allow(dead_code)]
 pub fn render_traffic_waveform_card(
     ui: &mut Ui,
     history: &VecDeque<(f32, f32)>,

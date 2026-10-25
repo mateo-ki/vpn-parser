@@ -424,6 +424,7 @@ pub fn is_light() -> bool {
 }
 
 #[inline]
+#[allow(dead_code)]
 pub fn is_dark() -> bool {
     !is_light()
 }

@@ -182,6 +182,7 @@ impl AppReleaseInfo {
         self.update_available.then(|| self.tag.as_str())
     }
 
+    #[allow(dead_code)]
     pub fn downloadable(&self) -> bool {
         self.update_available && self.asset.is_some()
     }

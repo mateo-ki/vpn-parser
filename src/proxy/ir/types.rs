@@ -43,6 +43,7 @@ pub enum RuleSource {
     SmartRouting,
     Preset,
     User,
+    Override,
     Fallback,
 }
 
@@ -56,6 +57,7 @@ pub struct IRRule {
 }
 
 impl IRRule {
+    #[allow(dead_code)]
     pub fn new(matcher: IRMatcher, action: IRAction, source: RuleSource) -> Self {
         Self {
             matchers: vec![matcher],
@@ -65,6 +67,7 @@ impl IRRule {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_no_resolve(mut self, no_resolve: bool) -> Self {
         self.no_resolve = no_resolve;
         self

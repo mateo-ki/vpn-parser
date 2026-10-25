@@ -470,6 +470,7 @@ fn history_series(history: &VecDeque<(f32, f32)>, want_up: bool, take: usize) ->
 #[derive(Debug, Default)]
 pub(crate) struct EgressRiskView<'a> {
     pub(crate) risk: Option<&'a crate::ip_risk::IpRisk>,
+    #[allow(dead_code)]
     pub(crate) failed: bool,
     pub(crate) checking: bool,
 }
@@ -502,6 +503,7 @@ pub(crate) fn front_risk_belongs_to(
 }
 
 /// 节点出口 IP 的归属，画在汇总卡片第一张的那颗徽章上。
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NodeIpKind {
     PublicProxy,
@@ -513,6 +515,7 @@ pub(crate) enum NodeIpKind {
 }
 
 impl NodeIpKind {
+    #[allow(dead_code)]
     pub(crate) fn label(self) -> &'static str {
         match self {
             // 用户要的是一句话答案：屏幕上只有住宅/机房两档，公开代理算"不是住宅"⇒ 机房，
@@ -529,6 +532,7 @@ impl NodeIpKind {
 
 /// 判定顺序是有意的：公开代理（VPN Gate 这类）比“机房”更该警告，两个标记同时为真时
 /// 先报公开代理；已经查到结果就不因为“正在查别的”而退回检测中。
+#[allow(dead_code)]
 pub(crate) fn node_ip_kind(view: &EgressRiskView) -> NodeIpKind {
     match view.risk {
         Some(risk) if risk.public_proxy => NodeIpKind::PublicProxy,
@@ -540,6 +544,7 @@ pub(crate) fn node_ip_kind(view: &EgressRiskView) -> NodeIpKind {
     }
 }
 
+#[allow(dead_code)]
 fn node_ip_kind_color(kind: NodeIpKind) -> Color32 {
     match kind {
         NodeIpKind::PublicProxy | NodeIpKind::Datacenter => theme::warning(),
@@ -601,6 +606,7 @@ impl VpnApp {
     }
 
     /// 运行时长 HH:MM:SS（未运行显示 "—"）。
+    #[allow(dead_code)]
     fn uptime_label(&self) -> String {
         match self.proxy_started_at {
             Some(started) => {
@@ -654,7 +660,7 @@ impl VpnApp {
         // 右侧区域：出站模式与性能平分（出站模式对齐上传卡、性能对齐下载卡）
         let region2 = (total_w - col_w * 2.0 - cm2 * 4.0 - gap * 3.0).max(60.0);
         let mode_w = (region2 * 0.5).max(30.0);
-        let perf_w = (region2 - mode_w).max(30.0);
+        let _perf_w = (region2 - mode_w).max(30.0);
         // 列宽反推：上传/下载内容宽 = rate_w；出站/性能要与它们对齐，则外框差补齐
         // 上传卡外框宽 = rate_w + 40（状态卡同款边距），出站模式外框 = mode_w + 28
         // 对齐公式：mode_w = rate_w + 40 - 28 = rate_w + 12（取平分值与对齐值中较大者）

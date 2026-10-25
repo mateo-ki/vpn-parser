@@ -1,7 +1,7 @@
 use super::{BackendCompiler, CompiledArtifact, CompilerCapabilities};
 use crate::kernel::KernelKind;
 use crate::proxy::ir::RoutingPlan;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 
 /// meow（https://github.com/meow-rs/meow-rs）——mihomo 的 Rust 高性能重写。
 ///

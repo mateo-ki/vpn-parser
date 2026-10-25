@@ -4,6 +4,7 @@ use eframe::egui::{self, Sense, Stroke, Ui};
 
 /// 半圆速度计仪表盘 (Speedometer Gauge)
 /// 支持动态指示针、发光弧轨、实时速率与上传副读数
+#[allow(dead_code)]
 pub fn render_speedometer(
     ui: &mut Ui,
     down_bytes_per_sec: u64,

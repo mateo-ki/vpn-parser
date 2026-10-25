@@ -2,6 +2,11 @@ use super::*;
 use anyhow::Result;
 use crate::kernel::KernelKind;
 use crate::models::Node;
+use crate::proxy::adapter::kernel_adapter;
+use crate::proxy::compiler::{
+    BackendCompiler, CompiledArtifact, ShoesCompiler, SingBoxCompiler, XrayCompiler,
+};
+use crate::proxy::ir::{lower_options_to_ir, IRAction, IRMatcher};
 use crate::proxy::mihomo::{URL_TEST_INTERVAL_SECS, URL_TEST_TIMEOUT_MS, URL_TEST_TOLERANCE_MS};
 use crate::proxy_probe::PROXY_CONNECTIVITY_TEST_URL;
 use crate::system_proxy::{SystemProxyControl, SystemProxySnapshot};
@@ -1200,4 +1205,111 @@ use std::time::Duration;
         let plan_vless = lower_options_to_ir(&options_china, Some(&vless_node));
         let shoes_vless_artifact = ShoesCompiler::new().compile(&plan_vless).unwrap();
         assert!(KernelValidator::validate_artifact(KernelKind::Shoes, &shoes_vless_artifact).is_ok());
+    }
+
+    #[test]
+    fn override_yaml_rules_are_translated_across_all_kernels() {
+        let sample_node = node(
+            "ss",
+            json!({
+                "server": "1.2.3.4",
+                "port": 8388,
+                "cipher": "aes-128-gcm",
+                "password": "pass"
+            }),
+        );
+        let wg_node = node(
+            "wireguard",
+            json!({
+                "server": "1.2.3.4",
+                "port": 51820,
+                "ip": "172.16.0.2/32",
+                "private-key": "EFlemF/JAgdqTmKVb/1W/yv9WnwuzhdqLfDHUUNC11w=",
+                "public-key": "TepNujm+9RJYXvQTB3CGDCnSccm05k6p/NmaHhj1C2c=",
+                "reserved": [0, 0, 0]
+            }),
+        );
+        let mut options = MihomoConfigOptions::default();
+        options.override_yaml = Some(r#"
+rules:
+  - DOMAIN-SUFFIX,custom-direct.com,DIRECT
+  - DOMAIN-KEYWORD,custom-proxy,PROXY
+  - IP-CIDR,192.168.99.0/24,DIRECT
+  - PROCESS-NAME,curl.exe,REJECT
+"#.to_string());
+
+        let plan = lower_options_to_ir(&options, Some(&sample_node));
+        let plan_wg = lower_options_to_ir(&options, Some(&wg_node));
+
+        // 1. 验证 IR 规则层正确降阶与生成
+        let has_direct_suffix = plan.rules.iter().any(|r| {
+            r.action == IRAction::Direct && r.matchers.contains(&IRMatcher::DomainSuffix("custom-direct.com".into()))
+        });
+        let has_proxy_keyword = plan.rules.iter().any(|r| {
+            matches!(r.action, IRAction::Proxy(_)) && r.matchers.contains(&IRMatcher::DomainKeyword("custom-proxy".into()))
+        });
+        let has_direct_cidr = plan.rules.iter().any(|r| {
+            r.action == IRAction::Direct && r.matchers.contains(&IRMatcher::IpCidr("192.168.99.0/24".into()))
+        });
+        let has_reject_proc = plan.rules.iter().any(|r| {
+            r.action == IRAction::Reject && r.matchers.contains(&IRMatcher::ProcessName("curl.exe".into()))
+        });
+        assert!(has_direct_suffix, "IR 应包含 custom-direct.com 直连规则");
+        assert!(has_proxy_keyword, "IR 应包含 custom-proxy 代理规则");
+        assert!(has_direct_cidr, "IR 应包含 192.168.99.0/24 直连规则");
+        assert!(has_reject_proc, "IR 应包含 curl.exe 拦截规则");
+
+        // 2. 验证 Sing-box 编译支持
+        let sing_box_art = SingBoxCompiler::new().compile(&plan_wg).expect("Sing-box 编译应成功");
+        let sing_box_json = sing_box_art.as_json_value().expect("json");
+        let sing_rules = sing_box_json["route"]["rules"].as_array().expect("rules array");
+        assert!(
+            sing_rules.iter().any(|r| {
+                r.get("domain_suffix").and_then(|d| d.as_array()).map(|arr| arr.iter().any(|v| v == "custom-direct.com")).unwrap_or(false)
+                    && r.get("outbound") == Some(&json!("direct"))
+            }),
+            "Sing-box 应成功转译 custom-direct.com 直连规则"
+        );
+        assert!(
+            sing_rules.iter().any(|r| {
+                r.get("domain_keyword").and_then(|d| d.as_array()).map(|arr| arr.iter().any(|v| v == "custom-proxy")).unwrap_or(false)
+                    && r.get("outbound") == Some(&json!("proxy"))
+            }),
+            "Sing-box 应成功转译 custom-proxy 代理规则"
+        );
+        assert!(
+            sing_rules.iter().any(|r| {
+                r.get("process_name").and_then(|d| d.as_array()).map(|arr| arr.iter().any(|v| v == "curl.exe")).unwrap_or(false)
+            }),
+            "Sing-box 应成功转译 curl.exe 拦截规则"
+        );
+
+        // 3. 验证 Shoes 编译支持
+        let shoes_art = ShoesCompiler::new().compile(&plan).expect("Shoes 编译应成功");
+        let shoes_yaml = match shoes_art {
+            CompiledArtifact::Yaml(y) => y,
+            _ => panic!("Shoes 应生成 YAML"),
+        };
+        assert!(shoes_yaml.contains("custom-direct.com"), "Shoes 应包含 custom-direct.com");
+        assert!(shoes_yaml.contains("custom-proxy"), "Shoes 应包含 custom-proxy");
+        assert!(shoes_yaml.contains("192.168.99.0/24"), "Shoes 应包含 192.168.99.0/24");
+
+        // 4. 验证 Xray 编译支持
+        let xray_art = XrayCompiler::new().compile(&plan).expect("Xray 编译应成功");
+        let xray_json = xray_art.as_json_value().expect("json");
+        let xray_rules = xray_json["routing"]["rules"].as_array().expect("xray rules");
+        assert!(
+            xray_rules.iter().any(|r| {
+                r.get("domain").and_then(|d| d.as_array()).map(|arr| arr.iter().any(|v| v == "domain:custom-direct.com")).unwrap_or(false)
+                    && r.get("outboundTag") == Some(&json!("direct"))
+            }),
+            "Xray 应成功转译 domain:custom-direct.com 直连规则"
+        );
+        assert!(
+            xray_rules.iter().any(|r| {
+                r.get("domain").and_then(|d| d.as_array()).map(|arr| arr.iter().any(|v| v == "keyword:custom-proxy")).unwrap_or(false)
+                    && r.get("outboundTag") == Some(&json!("proxy"))
+            }),
+            "Xray 应成功转译 keyword:custom-proxy 代理规则"
+        );
     }

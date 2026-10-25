@@ -325,6 +325,7 @@ pub enum BgMsg {
     /// 服务连通性检测结果（Google/YouTube/GitHub/ChatGPT 经当前代理实测）。
     ServiceChecks(Vec<ServiceCheck>),
     /// 出口切换历史：最近的若干条 + 今天换了几次 + 库里还留着多少条。
+    #[allow(dead_code)]
     EgressSwitches(Vec<crate::db::telemetry::SwitchRow>, i64, i64),
     /// 只要两个计数（今日几次 / 库里共几条）：控制台那行话得在没打开窗口时也是真的。
     SwitchCounts(i64, i64),

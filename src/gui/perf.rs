@@ -10,6 +10,7 @@ pub struct PerfSample {
     /// 进程 CPU 占用（单核百分比，多线程可超 100）。
     pub cpu_percent: f32,
     /// 进程工作集内存（MB）。
+    #[allow(dead_code)]
     pub mem_mb: f32,
     /// 进程磁盘读写速率（MB/s，含一切文件 I/O）。
     pub disk_mbps: f32,

@@ -130,7 +130,12 @@ impl BackendCompiler for XrayCompiler {
                         rule_obj.insert("port".into(), json!(format!("{s}-{e}")));
                     }
                     IRMatcher::ProcessName(name) => {
-                        return Err(anyhow!("Xray 暂不支持进程名分流规则: {name}"));
+                        if ir_rule.source == crate::proxy::ir::RuleSource::Override {
+                            tracing::warn!("Xray 不支持 YAML 覆写中的进程名分流规则: {name}，已自动跳过");
+                            continue;
+                        } else {
+                            return Err(anyhow!("Xray 暂不支持进程名分流规则: {name}"));
+                        }
                     }
                     IRMatcher::Network(proto) => {
                         rule_obj.insert("network".into(), json!(match proto {

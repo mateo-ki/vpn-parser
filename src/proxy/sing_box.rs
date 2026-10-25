@@ -1,6 +1,6 @@
-use super::{
-    MihomoConfigOptions, NetworkProtocol, ProxyMode, RoutingMode, RuleAction, RuleMatcher,
-};
+use super::MihomoConfigOptions;
+#[allow(unused_imports)]
+use super::{NetworkProtocol, ProxyMode, RoutingMode, RuleAction, RuleMatcher};
 use crate::kernel::{find_kernel_executable, KernelKind};
 use crate::models::Node;
 use crate::proxy::compiler::BackendCompiler;
@@ -9,8 +9,7 @@ use crate::proxy_probe::{
     PROXY_CONNECTIVITY_TEST_URL,
 };
 use anyhow::{anyhow, Result};
-use serde_json::{json, Map, Value};
-use std::collections::HashSet;
+use serde_json::{json, Value};
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -21,12 +20,16 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
+#[allow(dead_code)]
 const GEOSITE_CN_URL: &str =
     "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs";
+#[allow(dead_code)]
 const GEOSITE_ADS_URL: &str =
     "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs";
+#[allow(dead_code)]
 const GEOSITE_GFW_URL: &str =
     "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-gfw.srs";
+#[allow(dead_code)]
 const GEOIP_CN_URL: &str =
     "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs";
 const SING_BOX_BATCH_SIZE: usize = 64;

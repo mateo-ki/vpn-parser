@@ -1,6 +1,6 @@
-use super::{
-    MihomoConfigOptions, NetworkProtocol, ProxyMode, RoutingMode, RuleAction, RuleMatcher,
-};
+use super::MihomoConfigOptions;
+#[allow(unused_imports)]
+use super::{NetworkProtocol, ProxyMode, RoutingMode, RuleAction, RuleMatcher};
 use crate::kernel::{find_kernel_executable, KernelKind};
 use crate::models::Node;
 use crate::proxy::compiler::BackendCompiler;
@@ -9,7 +9,7 @@ use crate::proxy_probe::{
     PROXY_CONNECTIVITY_TEST_URL,
 };
 use anyhow::{anyhow, Result};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;

@@ -57,6 +57,7 @@ impl VpnApp {
     /// 取 300 条是**显示上限**而不是保留期：`ScrollArea::show` 不做虚拟化，行数是逐行排版
     /// 的，窗口开着时每帧都要走完这些行。库里到底还有多少条由表头那句"共 N 条"负责说实话，
     /// 被截掉的部分写"更早的 N 条未在此显示"。
+    #[allow(dead_code)]
     pub(crate) fn reload_egress_switches(&self) {
         let db = self.db.clone();
         let tx = self.tx.clone();

@@ -65,6 +65,7 @@ impl AutoRoutingStrategy {
         }
     }
 
+    #[allow(dead_code)]
     pub fn description(self) -> &'static str {
         match self {
             Self::UrlTest => "周期并发探活，将流量自动调度至实时延迟最低的健康节点",

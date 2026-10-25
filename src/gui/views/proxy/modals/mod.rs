@@ -3,4 +3,5 @@ pub mod kernel_dialog;
 pub mod node_picker;
 pub mod rule_modals;
 
+#[allow(unused_imports)]
 pub use rule_modals::ui_rule_import_help_window;

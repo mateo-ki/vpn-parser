@@ -1004,6 +1004,7 @@ impl VpnApp {
         });
     }
 
+    #[allow(dead_code)]
     pub(crate) fn reload_node_view(&mut self) {
         let db = self.db.clone();
         self.rt.spawn(async move {

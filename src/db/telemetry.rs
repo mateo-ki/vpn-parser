@@ -199,6 +199,7 @@ impl Database {
         Ok(rows.into_iter().take_while(|ok| *ok == 0).count() as i64)
     }
 
+    #[allow(dead_code)]
     pub async fn recent_egress_switches(&self, limit: i64) -> Result<Vec<SwitchRow>> {
         let rows = sqlx::query_as::<_, SwitchRow>(
             "SELECT at, from_node, from_name, to_node, to_name, reason, latency_ms \

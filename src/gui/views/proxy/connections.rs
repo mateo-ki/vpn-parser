@@ -2,17 +2,12 @@ use crate::gui::icons::{icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::types::{ActiveConnectionInfo, ConnectionsTab, DnsRecord};
 use crate::gui::widgets::{
-    card_frame, danger_btn, format_bytes, format_speed, header_cell,
-    macos_segmented_tabs, panel_frame, panel_tab, primary_btn, protocol_pill,
-    render_country_code_badge, render_health_strip, render_node_health_bar,
-    render_protocol_donut_chart_sized, render_signal_bars, render_speedometer,
-    render_top_processes_card, routing_mode_description,
-    routing_mode_detail, rule_action_label, rule_matcher_label, sanitize_node_name, section_title,
-    status_badge, tun_stack_label,
+    card_frame, danger_btn, format_bytes, header_cell,
+    macos_segmented_tabs, panel_frame, section_title,
 };
 use crate::gui::VpnApp;
 use crate::proxy::{DnsEnhancedMode, ProxyState};
-use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui};
+use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
 
 impl VpnApp {
     /// 独立的"活跃连接"标签页（从 dev~1 恢复：标题 + 工具栏 + 概览 + 表格）。

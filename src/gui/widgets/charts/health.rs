@@ -318,6 +318,7 @@ pub fn health_hour_buckets(rows: &[crate::db::telemetry::HealthRow]) -> [i8; 24]
     buckets
 }
 
+#[allow(dead_code)]
 pub fn render_health_strip(ui: &mut Ui, buckets: &[i8; 24]) {
     const GAP: f32 = 2.0;
     const CELL_H: f32 = 8.0;
