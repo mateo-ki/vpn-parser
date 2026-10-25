@@ -1617,6 +1617,9 @@ impl VpnApp {
                                 let combo_w = if is_compact { 92.0 } else { 108.0 };
                                 egui::ComboBox::from_id_salt("dash_status_kernel_dropdown")
                                     .width(combo_w)
+                                    // 六个选项按本主题行距约 300px，超过 egui 菜单默认
+                                    // 200px 上限会内部滚动，把第一项"自动选择"卷出可视区
+                                    .height(330.0)
                                     .selected_text(
                                         RichText::new(combo_label)
                                             .size(12.0)
