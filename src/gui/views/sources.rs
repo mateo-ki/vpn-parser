@@ -527,13 +527,22 @@ impl VpnApp {
                 let name_field = ui.text_edit_singleline(&mut self.form_name);
                 crate::gui::widgets::note_text_field(ui, &name_field);
             });
-            ui.label("URL 模板");
+            ui.label("订阅链接或本地文件路径");
             let url_field = ui.add(
                 egui::TextEdit::multiline(&mut self.form_url)
                     .desired_width(f32::INFINITY)
                     .desired_rows(3),
             );
             crate::gui::widgets::note_text_field(ui, &url_field);
+            // 两种来源形态一眼可知；认出来再当场说明那一类的具体规矩。
+            ui.label(
+                RichText::new(
+                    "支持两种来源：远程订阅链接（https://…，也可用 {Ymd} 等日期占位符）\
+                     或本地文件路径（如 C:\\subs\\clash.yaml，改完文件等下一轮拉取即生效）。",
+                )
+                .small()
+                .color(theme::muted()),
+            );
             // 认出来就当场说明这一类源的规矩，别等拉取失败才发现要挂代理。
             if let Some(channel) = crate::collector::telegram::channel_name(&self.form_url) {
                     ui.label(
