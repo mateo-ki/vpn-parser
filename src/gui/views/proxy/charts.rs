@@ -1612,7 +1612,9 @@ impl VpnApp {
                                     KernelPreference::Xray => "Xray",
                                     KernelPreference::Meow => "Meow",
                                 };
-                                let combo_w = if is_compact { 72.0 } else { 84.0 };
+                                // 菜单与按钮同宽：低于 100px（egui 默认）会截断
+                                // "圆点 + 自动选择" 这类选项行，放宽到 92/108
+                                let combo_w = if is_compact { 92.0 } else { 108.0 };
                                 egui::ComboBox::from_id_salt("dash_status_kernel_dropdown")
                                     .width(combo_w)
                                     .selected_text(
