@@ -1598,6 +1598,8 @@ pub fn run_elevated_kernel_supervisor(args: ElevatedKernelArgs) -> Result<()> {
     crate::startup_log(&format!(
         "Elevated supervisor spawned kernel child_pid={child_pid}"
     ));
+    #[allow(unused_mut)]
+    let mut meow_dns_set = false;
 
     // 4. 将内核进程圈入专属 Job Object
     if !job.is_null() {
@@ -1608,6 +1610,46 @@ pub fn run_elevated_kernel_supervisor(args: ElevatedKernelArgs) -> Result<()> {
                 CloseHandle(child_proc);
             }
         }
+    }
+
+    // 4.5 meow TUN 的网卡 DNS 自动化：meow 的 auto-route 只把 fake-ip 网段
+    // （198.18.0.0/16）导进 TUN 网卡，系统解析器必须指向网段内的 198.18.0.2
+    // 才能让域名解析进隧道（docs/tun.md 明确要求的手动步骤）。runner 本身
+    // 已提权，正好由它代劳：等网卡出现 → 设 DNS → 内核退出后还原。
+    // 编译器已把网卡名钉为 "meow"（tun.device）。
+    if args.kernel == KernelKind::Meow {
+        const TUN_ADAPTER: &str = "meow";
+        const FAKE_IP_DNS: &str = "198.18.0.2";
+        let mut adapter_ready = false;
+        for _ in 0..40 {
+            if let Ok(out) = std::process::Command::new("netsh")
+                .arg("interface")
+                .arg("show")
+                .arg("interface")
+                .creation_flags(0x0800_0000)
+                .output()
+            {
+                if String::from_utf8_lossy(&out.stdout).contains(TUN_ADAPTER) {
+                    adapter_ready = true;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        if adapter_ready {
+            let set = std::process::Command::new("netsh")
+                .args(["interface", "ip", "set", "dns", "name", TUN_ADAPTER,
+                       "source=static", "addr", FAKE_IP_DNS])
+                .creation_flags(0x0800_0000)
+                .output();
+            crate::startup_log(&format!(
+                "meow TUN adapter DNS set to {FAKE_IP_DNS}: {}",
+                set.map(|o| o.status.success().to_string()).unwrap_or_else(|e| e.to_string())
+            ));
+        } else {
+            crate::startup_log("meow TUN adapter 'meow' not found in 20s; skip DNS setup");
+        }
+        meow_dns_set = true;
     }
 
     // 5. 监听父进程与子内核进程
@@ -1631,6 +1673,15 @@ pub fn run_elevated_kernel_supervisor(args: ElevatedKernelArgs) -> Result<()> {
     }
 
     let _ = child.wait();
+
+    // meow TUN：内核退出后把网卡 DNS 还原为 DHCP（网卡可能已被删除，失败忽略）
+    if meow_dns_set {
+        let _ = std::process::Command::new("netsh")
+            .args(["interface", "ip", "set", "dns", "name", "meow", "source=dhcp"])
+            .creation_flags(0x0800_0000)
+            .output();
+        crate::startup_log("meow TUN adapter DNS restored to dhcp");
+    }
 
     unsafe {
         CloseHandle(parent_handle);

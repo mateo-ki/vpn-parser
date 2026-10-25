@@ -581,13 +581,20 @@ mod meow_tests {
     }
 
     #[test]
-    fn rejects_meow_tun_mode() {
+    fn meow_tun_mode_emits_meow_shaped_tun_section() {
         let n = node("ss", json!({"cipher":"aes-128-gcm","password":"p"}));
         let mut options = meow_options();
         options.mode = ProxyMode::Tun;
-        let result = crate::proxy::compiler::MeowCompiler
-            .compile(&crate::proxy::ir::lower_options_to_ir(&options, Some(&n)));
-        assert!(result.is_err(), "meow v1 不放行 TUN");
+        let val = crate::proxy::compiler::MeowCompiler
+            .compile(&crate::proxy::ir::lower_options_to_ir(&options, Some(&n)))
+            .expect("meow tun 编译应通过")
+            .as_json_value()
+            .expect("json artifact");
+        let yaml_str = serde_yaml::to_string(&val).unwrap();
+        assert!(yaml_str.contains("device: meow"), "tun 段应钉住网卡名:\n{yaml_str}");
+        assert!(yaml_str.contains("dns-hijack"));
+        // TUN 硬性要求 fake-ip（meow docs/tun.md）
+        assert!(yaml_str.contains("enhanced-mode: fake-ip"));
     }
 
     #[test]

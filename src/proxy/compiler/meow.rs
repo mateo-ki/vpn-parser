@@ -10,9 +10,9 @@ use anyhow::{anyhow, Result};
 /// - 剥掉 mihomo 的 geo 字段（geodata-mode/geo-auto-update/geox-url）：
 ///   meow 的 GEOSITE/GEOIP 走自己 home 目录的 geosite.dat / Country.mmdb，
 ///   由 `crate::geo::ensure_meow_home_geo` 在启动前备好（实测 dat 可直接加载）；
-/// - TUN：meow 自带 TUN（Wintun/nftables），但本应用的 TUN 提权链路围绕
-///   mihomo 建立，v1 先按不支持处理（capabilities.supports_tun = false，
-///   共享的 validate 会给出明确诊断）。
+/// - TUN：meow 自带 TUN（Windows Wintun + lwIP tun2socks），按它的键集
+///   产出 tun 段（enable/device/auto-route/dns-hijack）并强制 fake-ip；
+///   网卡 DNS 自动化在 platform 的提权 runner 里完成。
 ///
 /// 实测（v0.26.1，`meow -f config -d home -t`）：
 /// - dns 段（respect-rules / nameserver-policy geosite: / fake-ip）原样接受；
@@ -33,7 +33,7 @@ impl BackendCompiler for MeowCompiler {
 
     fn capabilities(&self) -> &CompilerCapabilities {
         const CAPS: CompilerCapabilities = CompilerCapabilities {
-            supports_tun: false,
+            supports_tun: true,
             supports_process_name: true,
             supports_domain_keyword: true,
             supports_proxy_groups: true,
@@ -45,11 +45,6 @@ impl BackendCompiler for MeowCompiler {
     }
 
     fn compile(&self, plan: &RoutingPlan) -> Result<CompiledArtifact> {
-        if plan.inbounds.mode.has_tun() {
-            return Err(anyhow!(
-                "Meow 暂不支持 TUN 模式，请切换至系统代理模式或选择 Mihomo / Sing-box"
-            ));
-        }
         let artifact = super::MihomoCompiler::new().compile(plan)?;
         let mut config = artifact.as_json_value()?;
         if let Some(obj) = config.as_object_mut() {
@@ -60,6 +55,26 @@ impl BackendCompiler for MeowCompiler {
                 "geox-url",
             ] {
                 obj.remove(key);
+            }
+            // TUN：meow 的 tun 键集与 mihomo 不同，只发它认的键（docs/tun.md）。
+            // device 钉成 "meow"：platform 的提权 runner 按这个名字自动把网卡
+            // DNS 指向 fake-ip 网段（198.18.0.2），退出时还原 —— 不做这步 TUN 不通。
+            // fake-ip 是 meow TUN 的硬性要求（docs/tun.md），非 fake-ip 的 DNS 配置
+            // 在 TUN 下强制覆盖为 fake-ip。
+            if plan.inbounds.mode.has_tun() {
+                obj.insert(
+                    "tun".into(),
+                    serde_json::json!({
+                        "enable": true,
+                        "device": "meow",
+                        "auto-route": true,
+                        "dns-hijack": ["any:53"],
+                    }),
+                );
+                if let Some(dns) = obj.get_mut("dns").and_then(|d| d.as_object_mut()) {
+                    dns.insert("enhanced-mode".into(), serde_json::json!("fake-ip"));
+                    dns.insert("fake-ip-range".into(), serde_json::json!("198.18.0.1/16"));
+                }
             }
             // meow 的 GEOIP 用 MaxMind mmdb、GEOSITE 用 mrs/dat：缺库时它会按需下载，
             // 默认经"最后一个 MATCH 目标"（= 节点）走 —— 节点劣化时无限卡死"正在启动"。

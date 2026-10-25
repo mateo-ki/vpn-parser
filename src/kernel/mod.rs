@@ -404,9 +404,7 @@ pub fn select_proxy_kernel_preference(
     allow_xray: bool,
 ) -> Result<KernelKind> {
     if let Some(kind) = preference.kernel() {
-        if (kind == KernelKind::Xray || kind == KernelKind::Shoes || kind == KernelKind::Meow)
-            && !allow_xray
-        {
+        if (kind == KernelKind::Xray || kind == KernelKind::Shoes) && !allow_xray {
             return Err(anyhow::anyhow!("{} 暂不支持 TUN 模式", kind.display_name()));
         }
         if !kind.supports_proxy_protocol(protocol) {
@@ -450,12 +448,9 @@ pub fn missing_kernel_for(
     available: impl Fn(KernelKind) -> bool,
 ) -> Option<KernelKind> {
     if let Some(kind) = preference.kernel() {
-        // Xray/Shoes/Meow 在 TUN 下是"不支持"，不是"没装"，别拿下载框去挡。
-        if (kind == KernelKind::Xray
-            || kind == KernelKind::Shoes
-            || kind == KernelKind::Meow)
-            && !system_mode
-        {
+        // Xray/Shoes 在 TUN 下是"不支持"，不是"没装"，别拿下载框去挡。
+        // Meow 支持 TUN（platform 的提权 runner 会自动配置 tun 网卡 DNS），正常走安装检查。
+        if (kind == KernelKind::Xray || kind == KernelKind::Shoes) && !system_mode {
             return None;
         }
         return (!available(kind)).then_some(kind);
