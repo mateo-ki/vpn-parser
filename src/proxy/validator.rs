@@ -98,6 +98,8 @@ impl KernelValidator {
                     .arg(&config_path);
             }
             KernelKind::VpCore => {
+                let vpcore_home = managed_kernel_root().join(KernelKind::VpCore.directory_name());
+                crate::geo::populate_vpcore_work_dir(&vpcore_home, &temp_dir);
                 cmd.arg("validate")
                     .arg("-c")
                     .arg(&config_path);

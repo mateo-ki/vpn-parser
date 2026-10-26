@@ -189,6 +189,129 @@ pub async fn ensure_meow_home_geo(home: &Path, proxy_url: Option<&str>) -> Resul
     Ok(report.join("，"))
 }
 
+/// vp_core 内核目录的 geo 准备：
+/// 1. 确保 mihomo 目录的 geosite.dat 就绪，并复制到 vpcore 目录；
+/// 2. 检查 Country.mmdb：如果已有（或 meow 目录有）直接复用；否则从高速镜像下载；
+/// 文件已就位（大小达标）时跳过，幂等。
+pub async fn ensure_vpcore_geo(home: &Path, proxy_url: Option<&str>) -> Result<String> {
+    std::fs::create_dir_all(home)?;
+    let mut report = Vec::new();
+
+    // 1. mihomo 目录的 dat 先备好
+    let mihomo = mihomo_dir();
+    if !geo_ready(&mihomo) {
+        provision(&mihomo, proxy_url, false).await?;
+    }
+
+    // 2. 将 geosite.dat 拷贝进 vpcore 目录
+    let geosite_name = "geosite.dat";
+    let dst_geosite = home.join(geosite_name);
+    let src_candidates = [
+        mihomo.join(geosite_name),
+        mihomo.join("GeoSite.dat"),
+    ];
+    if let Some(src) = src_candidates.iter().find(|p| p.exists()) {
+        let needs_copy = std::fs::metadata(&dst_geosite)
+            .and_then(|m_dst| std::fs::metadata(src).map(|m_src| m_dst.len() != m_src.len()))
+            .unwrap_or(true);
+        if needs_copy {
+            std::fs::copy(src, &dst_geosite)?;
+            report.push("geosite.dat 已同步至 vpcore 目录".into());
+        }
+    }
+
+    // 3. 检查 Country.mmdb：优先从 meow 目录复用
+    let mmdb = home.join("Country.mmdb");
+    let mmdb_ok = std::fs::metadata(&mmdb)
+        .map(|m| m.len() >= MIN_MMDB_BYTES)
+        .unwrap_or(false);
+    if !mmdb_ok {
+        let meow_mmdb = crate::kernel::managed_kernel_root().join("meow").join("Country.mmdb");
+        if std::fs::metadata(&meow_mmdb).map(|m| m.len() >= MIN_MMDB_BYTES).unwrap_or(false) {
+            std::fs::copy(&meow_mmdb, &mmdb)?;
+            report.push("Country.mmdb 已从 meow 目录复用".into());
+        } else {
+            const MMDB_UPSTREAMS: [&str; 4] = [
+                "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/",
+                "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/",
+                "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/",
+                "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/",
+            ];
+            let mmdb_task = async {
+                let mut builder = Client::builder()
+                    .user_agent("vpn-parser geo-updater")
+                    .connect_timeout(Duration::from_secs(6))
+                    .timeout(Duration::from_secs(20));
+                if let Some(proxy_url) = proxy_url {
+                    builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
+                }
+                let client = builder.build()?;
+                let mut failures = Vec::new();
+                for upstream in MMDB_UPSTREAMS {
+                    let url = format!("{upstream}Country.mmdb");
+                    match download_into(&client, &url, &mmdb, "Country.mmdb").await {
+                        Ok(bytes) => return Ok(bytes),
+                        Err(error) => failures.push(format!("{}: {error}", host_of(&url))),
+                    }
+                }
+                Err(anyhow!("{}", failures.join("；")))
+            };
+            match tokio::time::timeout(Duration::from_secs(25), mmdb_task).await {
+                Ok(Ok(bytes)) => {
+                    report.push(format!("Country.mmdb 就绪 {}", human_mb(bytes)));
+                }
+                Ok(Err(error)) => {
+                    return Err(anyhow!("VP-Core 的 Country.mmdb 下载失败：{error}"));
+                }
+                Err(_) => {
+                    return Err(anyhow!("VP-Core 的 Country.mmdb 下载超时（25s）"));
+                }
+            }
+        }
+    } else {
+        report.push("Country.mmdb 已就绪".into());
+    }
+
+    Ok(report.join("，"))
+}
+
+/// 将 vpcore 所需的分流数据库硬链接（或复制）到目标临时工作目录（供 vpcore run -c 启动时直接相对加载）。
+pub fn populate_vpcore_work_dir(vpcore_home: &Path, work_dir_root: &Path) {
+    let files = ["geosite.dat", "Country.mmdb", "geoip.metadb", "wintun.dll"];
+    for name in files {
+        let src = vpcore_home.join(name);
+        let src = if src.exists() {
+            Some(src)
+        } else if name == "Country.mmdb" {
+            let meow_src = crate::kernel::managed_kernel_root().join("meow").join("Country.mmdb");
+            if meow_src.exists() {
+                Some(meow_src)
+            } else {
+                None
+            }
+        } else if name == "geosite.dat" {
+            let mihomo_src = mihomo_dir().join("geosite.dat");
+            if mihomo_src.exists() {
+                Some(mihomo_src)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(src_path) = src {
+            let dst = work_dir_root.join(name);
+            if !dst.exists() {
+                // 优先硬链接（0 耗时 0 空间），跨磁盘失败则回退为拷贝
+                if std::fs::hard_link(&src_path, &dst).is_err() {
+                    let _ = std::fs::copy(&src_path, &dst);
+                }
+            }
+        }
+    }
+}
+
 /// 校验响应体：够大、且不是镜像挂了返回的 HTML。
 fn validate_geo_body(name: &str, bytes: &[u8]) -> Result<u64> {
     let min_len = min_bytes_for_file(name);
@@ -449,5 +572,24 @@ mod tests {
         std::fs::write(dir.join("geoip.dat"), vec![0x0a; 16_000_000]).unwrap();
         assert!(geo_ready(&dir));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_populate_vpcore_work_dir() {
+        let home = std::env::temp_dir().join(format!("vpn-parser-vpcore-home-{}", uuid::Uuid::new_v4()));
+        let work = std::env::temp_dir().join(format!("vpn-parser-vpcore-work-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+
+        std::fs::write(home.join("geosite.dat"), b"fake-geosite").unwrap();
+        std::fs::write(home.join("Country.mmdb"), b"fake-country-mmdb").unwrap();
+
+        populate_vpcore_work_dir(&home, &work);
+
+        assert_eq!(std::fs::read(work.join("geosite.dat")).unwrap(), b"fake-geosite");
+        assert_eq!(std::fs::read(work.join("Country.mmdb")).unwrap(), b"fake-country-mmdb");
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&work);
     }
 }

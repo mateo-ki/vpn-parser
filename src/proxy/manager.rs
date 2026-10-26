@@ -46,6 +46,9 @@ impl ProxyWorkDir {
             KernelKind::SingBox | KernelKind::Xray | KernelKind::Shoes => root.clone(),
         };
         tokio::fs::create_dir_all(&data_root).await?;
+        if kernel == KernelKind::VpCore {
+            crate::geo::populate_vpcore_work_dir(&data_root, &root);
+        }
         Ok(Self {
             root,
             data_root,
@@ -560,6 +563,14 @@ impl ProxyManager {
             if let Err(error) = crate::geo::ensure_meow_home_geo(&meow_home, system.as_deref()).await
             {
                 tracing::warn!(%error, "meow geo 准备未完全完成，尝试继续启动");
+            }
+        }
+        if kernel == KernelKind::VpCore {
+            let system = crate::system_proxy::current_system_proxy_url();
+            let vpcore_home = managed_kernel_root().join(KernelKind::VpCore.directory_name());
+            if let Err(error) = crate::geo::ensure_vpcore_geo(&vpcore_home, system.as_deref()).await
+            {
+                tracing::warn!(%error, "vp_core geo 准备未完全完成，尝试继续启动");
             }
         }
 

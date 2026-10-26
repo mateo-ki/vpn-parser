@@ -54,6 +54,16 @@ impl BackendCompiler for VpCoreCompiler {
                 obj.remove(key);
             }
 
+            // 配置针对 vp_core 的 Geo 自动更新与远程兜底地址
+            obj.insert(
+                "geosite-url".into(),
+                serde_json::json!("https://fastly.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"),
+            );
+            obj.insert(
+                "geoip-url".into(),
+                serde_json::json!("https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb"),
+            );
+
             // TUN 模式：生成 vp_core 标准 TUN 字段与 Fake-IP DNS 联动
             if plan.inbounds.mode.has_tun() {
                 obj.insert(
@@ -135,6 +145,8 @@ mod tests {
         assert!(yaml.contains("proxy-groups:"));
         assert!(yaml.contains("rules:"));
         assert!(!yaml.contains("geox-url:"));
+        assert!(yaml.contains("geosite-url:"));
+        assert!(yaml.contains("geoip-url:"));
     }
 
     #[test]
