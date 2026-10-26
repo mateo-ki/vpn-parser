@@ -1617,15 +1617,16 @@ impl VpnApp {
                                     KernelPreference::SingBox => "Sing-box",
                                     KernelPreference::Xray => "Xray",
                                     KernelPreference::Meow => "Meow",
+                                    KernelPreference::VpCore => "VP-Core",
                                 };
                                 // 菜单与按钮同宽：低于 100px（egui 默认）会截断
                                 // "圆点 + 自动选择" 这类选项行，放宽到 92/108
                                 let combo_w = if is_compact { 92.0 } else { 108.0 };
                                 egui::ComboBox::from_id_salt("dash_status_kernel_dropdown")
                                     .width(combo_w)
-                                    // 六个选项按本主题行距约 300px，超过 egui 菜单默认
+                                    // 选项按本主题行距约 350px，超过 egui 菜单默认
                                     // 200px 上限会内部滚动，把第一项"自动选择"卷出可视区
-                                    .height(330.0)
+                                    .height(380.0)
                                     .selected_text(
                                         RichText::new(combo_label)
                                             .size(12.0)
@@ -1662,6 +1663,11 @@ impl VpnApp {
                                             &mut current_pref,
                                             KernelPreference::Meow,
                                             "Meow",
+                                        );
+                                        ui.selectable_value(
+                                            &mut current_pref,
+                                            KernelPreference::VpCore,
+                                            "VP-Core",
                                         );
                                     })
                                     .response

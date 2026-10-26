@@ -784,6 +784,7 @@ use std::time::Duration;
             (KernelKind::Xray, "config.json", "xray.log"),
             (KernelKind::Shoes, "config.yaml", "shoes.log"),
             (KernelKind::Meow, "config.yaml", "meow.log"),
+            (KernelKind::VpCore, "config.yaml", "vpcore.log"),
         ] {
             let work_dir = ProxyWorkDir::create(kernel).await.unwrap();
             let root = work_dir.root().to_path_buf();
@@ -802,6 +803,10 @@ use std::time::Duration;
                 KernelKind::Meow => assert_eq!(
                     work_dir.data_root(),
                     crate::kernel::managed_kernel_root().join("meow")
+                ),
+                KernelKind::VpCore => assert_eq!(
+                    work_dir.data_root(),
+                    crate::kernel::managed_kernel_root().join("vpcore")
                 ),
             }
 

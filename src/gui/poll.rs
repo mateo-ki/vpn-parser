@@ -817,6 +817,7 @@ impl VpnApp {
                                             KernelKind::Xray => "xray",
                                             KernelKind::Shoes => "shoes",
                                             KernelKind::Meow => "meow",
+                                            KernelKind::VpCore => "vpcore",
                                         });
                                         self.rt.spawn(async move {
                                             let _ = db

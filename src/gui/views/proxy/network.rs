@@ -54,42 +54,53 @@ impl VpnApp {
 
                         ui.horizontal(|ui| {
                             ui.label("运行内核");
-                            egui::ComboBox::from_id_salt("proxy_kernel_preference")
-                                .selected_text(match self.proxy_config.kernel_preference {
-                                    KernelPreference::Auto => "自动选择",
-                                    KernelPreference::Mihomo => "Mihomo",
-                                    KernelPreference::SingBox => "Sing-box",
-                                    KernelPreference::Xray => "Xray",
-                                    KernelPreference::Shoes => "Shoes",
-                                    KernelPreference::Meow => "Meow",
-                                })
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(
-                                        &mut self.proxy_config.kernel_preference,
-                                        KernelPreference::Auto,
-                                        "自动选择",
-                                    );
-                                    ui.selectable_value(
-                                        &mut self.proxy_config.kernel_preference,
-                                        KernelPreference::Mihomo,
-                                        "Mihomo",
-                                    );
-                                    ui.selectable_value(
-                                        &mut self.proxy_config.kernel_preference,
-                                        KernelPreference::SingBox,
-                                        "Sing-box",
-                                    );
-                                    ui.selectable_value(
-                                        &mut self.proxy_config.kernel_preference,
-                                        KernelPreference::Xray,
-                                        "Xray",
-                                    );
-                                    ui.selectable_value(
-                                        &mut self.proxy_config.kernel_preference,
-                                        KernelPreference::Shoes,
-                                        "Shoes",
-                                    );
-                                });
+	                            egui::ComboBox::from_id_salt("proxy_kernel_preference")
+	                                .selected_text(match self.proxy_config.kernel_preference {
+	                                    KernelPreference::Auto => "自动选择",
+	                                    KernelPreference::Mihomo => "Mihomo",
+	                                    KernelPreference::SingBox => "Sing-box",
+	                                    KernelPreference::Xray => "Xray",
+	                                    KernelPreference::Shoes => "Shoes",
+	                                    KernelPreference::Meow => "Meow",
+	                                    KernelPreference::VpCore => "VP-Core",
+	                                })
+	                                .show_ui(ui, |ui| {
+	                                    ui.selectable_value(
+	                                        &mut self.proxy_config.kernel_preference,
+	                                        KernelPreference::Auto,
+	                                        "自动选择",
+	                                    );
+	                                    ui.selectable_value(
+	                                        &mut self.proxy_config.kernel_preference,
+	                                        KernelPreference::Mihomo,
+	                                        "Mihomo",
+	                                    );
+	                                    ui.selectable_value(
+	                                        &mut self.proxy_config.kernel_preference,
+	                                        KernelPreference::SingBox,
+	                                        "Sing-box",
+	                                    );
+	                                    ui.selectable_value(
+	                                        &mut self.proxy_config.kernel_preference,
+	                                        KernelPreference::Xray,
+	                                        "Xray",
+	                                    );
+	                                    ui.selectable_value(
+	                                        &mut self.proxy_config.kernel_preference,
+	                                        KernelPreference::Shoes,
+	                                        "Shoes",
+	                                    );
+	                                    ui.selectable_value(
+	                                        &mut self.proxy_config.kernel_preference,
+	                                        KernelPreference::Meow,
+	                                        "Meow",
+	                                    );
+	                                    ui.selectable_value(
+	                                        &mut self.proxy_config.kernel_preference,
+	                                        KernelPreference::VpCore,
+	                                        "VP-Core",
+	                                    );
+	                                });
                         });
                         ui.add_space(8.0);
                         ui.horizontal_wrapped(|ui| {
@@ -285,6 +296,8 @@ impl VpnApp {
                                 KernelPreference::SingBox => kernel.kind == KernelKind::SingBox,
                                 KernelPreference::Xray => kernel.kind == KernelKind::Xray,
                                 KernelPreference::Shoes => kernel.kind == KernelKind::Shoes,
+                                KernelPreference::Meow => kernel.kind == KernelKind::Meow,
+                                KernelPreference::VpCore => kernel.kind == KernelKind::VpCore,
                                 _ => false,
                             };
 
@@ -312,6 +325,7 @@ impl VpnApp {
                                         KernelKind::Xray => (Icon::Radar, theme::text_secondary()),
                                         KernelKind::Shoes => (Icon::Shield, theme::accent()),
                                         KernelKind::Meow => (Icon::Lightning, theme::accent()),
+                                        KernelKind::VpCore => (Icon::Rocket, theme::accent_strong()),
                                     };
                                     icon_label(ui, chip_icon, 15.0, chip_color);
                                     ui.add(
@@ -346,6 +360,7 @@ impl VpnApp {
                                     KernelKind::Xray => "XTLS · VLESS · Trojan · Splithttp",
                                     KernelKind::Shoes => "Snell · NaiveProxy · AnyTLS · Clash API",
                                     KernelKind::Meow => "Rust 版 Mihomo · 高性能 · Clash API",
+                                    KernelKind::VpCore => "全协议 Rust 极速内核 · 4MB 纯静态 · 原生 TUN/Wintun · 毫秒级极速测速",
                                 };
                                 ui.add(
                                     egui::Label::new(

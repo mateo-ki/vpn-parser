@@ -374,6 +374,7 @@ async fn proxy_operation_error(st: &AppState, node_id: &str, error: anyhow::Erro
             KernelKind::Xray => "xray",
             KernelKind::Shoes => "shoes",
             KernelKind::Meow => "meow",
+            KernelKind::VpCore => "vpcore",
         });
     let suffix = match st
         .db

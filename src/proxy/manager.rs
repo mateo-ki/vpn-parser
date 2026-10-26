@@ -40,7 +40,7 @@ impl ProxyWorkDir {
         let root = std::env::temp_dir().join(format!("vpn-parser-proxy-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(&root).await?;
         let data_root = match kernel {
-            KernelKind::Mihomo | KernelKind::Meow => {
+            KernelKind::Mihomo | KernelKind::Meow | KernelKind::VpCore => {
                 managed_kernel_root().join(kernel.directory_name())
             }
             KernelKind::SingBox | KernelKind::Xray | KernelKind::Shoes => root.clone(),
@@ -63,7 +63,7 @@ impl ProxyWorkDir {
 
     pub fn config_path(&self) -> PathBuf {
         self.root.join(match self.kernel {
-            KernelKind::Mihomo | KernelKind::Shoes | KernelKind::Meow => "config.yaml",
+            KernelKind::Mihomo | KernelKind::Shoes | KernelKind::Meow | KernelKind::VpCore => "config.yaml",
             KernelKind::SingBox | KernelKind::Xray => "config.json",
         })
     }
@@ -75,6 +75,7 @@ impl ProxyWorkDir {
             KernelKind::Xray => "xray.log",
             KernelKind::Shoes => "shoes.log",
             KernelKind::Meow => "meow.log",
+            KernelKind::VpCore => "vpcore.log",
         })
     }
 

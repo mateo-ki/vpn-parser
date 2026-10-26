@@ -22,6 +22,7 @@ pub enum KernelKind {
     SingBox,
     Shoes,
     Meow,
+    VpCore,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -34,6 +35,7 @@ pub enum KernelPreference {
     Xray,
     Shoes,
     Meow,
+    VpCore,
 }
 
 impl KernelPreference {
@@ -45,6 +47,7 @@ impl KernelPreference {
             Self::Xray => Some(KernelKind::Xray),
             Self::Shoes => Some(KernelKind::Shoes),
             Self::Meow => Some(KernelKind::Meow),
+            Self::VpCore => Some(KernelKind::VpCore),
         }
     }
 }
@@ -117,6 +120,7 @@ impl KernelKind {
             Self::SingBox => "sing_box",
             Self::Shoes => "shoes",
             Self::Meow => "meow",
+            Self::VpCore => "vpcore",
         }
     }
 
@@ -127,6 +131,7 @@ impl KernelKind {
             Self::SingBox => "Sing-box",
             Self::Shoes => "Shoes",
             Self::Meow => "Meow",
+            Self::VpCore => "VP-Core",
         }
     }
 
@@ -137,6 +142,7 @@ impl KernelKind {
             Self::SingBox => "SING_BOX_PATH",
             Self::Shoes => "SHOES_PATH",
             Self::Meow => "MEOW_PATH",
+            Self::VpCore => "VPCORE_PATH",
         }
     }
 
@@ -153,11 +159,13 @@ impl KernelKind {
             (Self::SingBox, KernelPlatform::Windows) => "sing-box.exe",
             (Self::Shoes, KernelPlatform::Windows) => "shoes.exe",
             (Self::Meow, KernelPlatform::Windows) => "meow.exe",
+            (Self::VpCore, KernelPlatform::Windows) => "vpcore.exe",
             (Self::Mihomo, KernelPlatform::Linux | KernelPlatform::MacOS) => "mihomo",
             (Self::Xray, KernelPlatform::Linux | KernelPlatform::MacOS) => "xray",
             (Self::SingBox, KernelPlatform::Linux | KernelPlatform::MacOS) => "sing-box",
             (Self::Shoes, KernelPlatform::Linux | KernelPlatform::MacOS) => "shoes",
             (Self::Meow, KernelPlatform::Linux | KernelPlatform::MacOS) => "meow",
+            (Self::VpCore, KernelPlatform::Linux | KernelPlatform::MacOS) => "vpcore",
         }
     }
 
@@ -166,7 +174,7 @@ impl KernelKind {
             Self::Mihomo => &["-v"],
             Self::Xray | Self::SingBox => &["version"],
             Self::Shoes => &["-V"],
-            Self::Meow => &["--version"],
+            Self::Meow | Self::VpCore => &["--version"],
         }
     }
 
@@ -177,6 +185,7 @@ impl KernelKind {
             Self::SingBox => "sing-box",
             Self::Shoes => "shoes",
             Self::Meow => "meow",
+            Self::VpCore => "vpcore",
         }
     }
 
@@ -187,6 +196,7 @@ impl KernelKind {
             Self::SingBox => "SagerNet/sing-box",
             Self::Shoes => "mateo-ki/shoes",
             Self::Meow => "meow-rs/meow-rs",
+            Self::VpCore => "mateo-ki/vp_core",
         }
     }
 
@@ -249,6 +259,22 @@ impl KernelKind {
                 format!("meow-{tag}-aarch64-apple-darwin.tar.gz"),
                 format!("meow-{tag}-x86_64-apple-darwin.tar.gz"),
             ],
+            (Self::VpCore, KernelPlatform::Windows) => vec![
+                format!("vpcore-v{version}-x86_64-pc-windows-msvc.zip"),
+                format!("vpcore-{tag}-x86_64-pc-windows-msvc.zip"),
+            ],
+            (Self::VpCore, KernelPlatform::Linux) => vec![
+                format!("vpcore-v{version}-x86_64-unknown-linux-musl.tar.gz"),
+                format!("vpcore-{tag}-x86_64-unknown-linux-musl.tar.gz"),
+                format!("vpcore-v{version}-aarch64-unknown-linux-musl.tar.gz"),
+                format!("vpcore-{tag}-aarch64-unknown-linux-musl.tar.gz"),
+            ],
+            (Self::VpCore, KernelPlatform::MacOS) => vec![
+                format!("vpcore-v{version}-aarch64-apple-darwin.tar.gz"),
+                format!("vpcore-v{version}-x86_64-apple-darwin.tar.gz"),
+                format!("vpcore-{tag}-aarch64-apple-darwin.tar.gz"),
+                format!("vpcore-{tag}-x86_64-apple-darwin.tar.gz"),
+            ],
         }
     }
 
@@ -271,6 +297,7 @@ impl KernelKind {
             Self::SingBox => stem == "sing-box",
             Self::Shoes => stem == "shoes",
             Self::Meow => stem == "meow",
+            Self::VpCore => stem == "vpcore",
         }
     }
 
@@ -357,6 +384,30 @@ impl KernelKind {
                     | "socks"
                     | "socks5"
             ),
+            Self::VpCore => matches!(
+                protocol.as_str(),
+                "ss" | "shadowsocks"
+                    | "ssr"
+                    | "shadowsocksr"
+                    | "vmess"
+                    | "vless"
+                    | "trojan"
+                    | "snell"
+                    | "hysteria2"
+                    | "hy2"
+                    | "tuic"
+                    | "anytls"
+                    | "naive"
+                    | "naiveproxy"
+                    | "ssh"
+                    | "brook"
+                    | "wireguard"
+                    | "wg"
+                    | "http"
+                    | "https"
+                    | "socks"
+                    | "socks5"
+            ),
         }
     }
 }
@@ -386,9 +437,10 @@ pub fn select_proxy_kernel_with(
         KernelKind::SingBox => KernelKind::Mihomo,
         KernelKind::Shoes => KernelKind::Mihomo,
         KernelKind::Meow => KernelKind::Mihomo,
+        KernelKind::VpCore => KernelKind::Mihomo,
         KernelKind::Xray => unreachable!(),
     };
-    for candidate in [preferred, fallback, KernelKind::Meow, KernelKind::Shoes, KernelKind::Xray] {
+    for candidate in [preferred, fallback, KernelKind::VpCore, KernelKind::Meow, KernelKind::Shoes, KernelKind::Xray] {
         if candidate.supports_proxy_protocol(protocol) && available(candidate) {
             return Ok(candidate);
         }
@@ -489,6 +541,7 @@ pub fn select_proxy_kernel_preference_with(
     Err(anyhow::anyhow!("没有已安装且支持 {protocol} 的代理内核"))
 }
 
+#[allow(dead_code)]
 pub fn select_proxy_kernel_preference(
     protocol: &str,
     preference: KernelPreference,
@@ -635,6 +688,7 @@ pub fn missing_kernel_for(
     preferred_proxy_kernel(protocol).filter(|kind| kind.supports_proxy_protocol(protocol))
 }
 
+#[allow(dead_code)]
 pub fn missing_kernel_for_node(
     node: &Node,
     preference: KernelPreference,
@@ -699,14 +753,15 @@ impl KernelManager {
     }
 
     pub async fn detect_all(&self) -> Vec<KernelInfo> {
-        let (mihomo, xray, sing_box, shoes, meow) = tokio::join!(
+        let (mihomo, xray, sing_box, shoes, meow, vp_core) = tokio::join!(
             self.detect(KernelKind::Mihomo),
             self.detect(KernelKind::Xray),
             self.detect(KernelKind::SingBox),
             self.detect(KernelKind::Shoes),
-            self.detect(KernelKind::Meow)
+            self.detect(KernelKind::Meow),
+            self.detect(KernelKind::VpCore)
         );
-        vec![mihomo, xray, sing_box, shoes, meow]
+        vec![mihomo, xray, sing_box, shoes, meow, vp_core]
     }
 
     pub async fn check_updates_with_proxy(
@@ -715,11 +770,13 @@ impl KernelManager {
     ) -> Result<Vec<KernelReleaseInfo>> {
         let updater = updater::KernelUpdater::new(managed_kernel_root(), proxy_url.as_deref())?;
         let infos = self.detect_all().await;
-        let (mihomo, xray, sing_box, shoes) = tokio::join!(
+        let (mihomo, xray, sing_box, shoes, meow, vp_core) = tokio::join!(
             updater.check(&infos[0]),
             updater.check(&infos[1]),
             updater.check(&infos[2]),
-            updater.check(&infos[3])
+            updater.check(&infos[3]),
+            updater.check(&infos[4]),
+            updater.check(&infos[5])
         );
         let fallback = |res: Result<KernelReleaseInfo>, info: &KernelInfo| match res {
             Ok(release) => release,
@@ -737,6 +794,8 @@ impl KernelManager {
             fallback(xray, &infos[1]),
             fallback(sing_box, &infos[2]),
             fallback(shoes, &infos[3]),
+            fallback(meow, &infos[4]),
+            fallback(vp_core, &infos[5]),
         ])
     }
 
@@ -1087,6 +1146,8 @@ Use tags: with_gvisor
         assert_eq!(KernelKind::Xray.display_name(), "Xray");
         assert_eq!(KernelKind::SingBox.display_name(), "Sing-box");
         assert_eq!(KernelKind::Shoes.display_name(), "Shoes");
+        assert_eq!(KernelKind::Meow.display_name(), "Meow");
+        assert_eq!(KernelKind::VpCore.display_name(), "VP-Core");
     }
 
     #[test]
@@ -1189,6 +1250,8 @@ Use tags: with_gvisor
         assert_eq!(KernelKind::Xray.version_args(), &["version"]);
         assert_eq!(KernelKind::SingBox.version_args(), &["version"]);
         assert_eq!(KernelKind::Shoes.version_args(), &["-V"]);
+        assert_eq!(KernelKind::Meow.version_args(), &["--version"]);
+        assert_eq!(KernelKind::VpCore.version_args(), &["--version"]);
     }
 
     #[test]
@@ -1197,7 +1260,16 @@ Use tags: with_gvisor
         assert!(KernelKind::Xray.matches_archive_executable("xray.exe"));
         assert!(KernelKind::SingBox.matches_archive_executable("sing-box.exe"));
         assert!(KernelKind::Shoes.matches_archive_executable("shoes.exe"));
+        assert!(KernelKind::Meow.matches_archive_executable("meow.exe"));
+        assert!(KernelKind::VpCore.matches_archive_executable("vpcore.exe"));
         assert!(!KernelKind::Xray.matches_archive_executable("wv2ray.exe"));
+    }
+
+    #[test]
+    fn test_vp_core_supports_mainstream_protocols() {
+        for protocol in ["ss", "ssr", "vmess", "vless", "trojan", "snell", "hysteria2", "tuic", "anytls", "wireguard", "socks5", "http"] {
+            assert!(KernelKind::VpCore.supports_proxy_protocol(protocol), "vp_core should support {protocol}");
+        }
     }
 
     #[test]
@@ -1260,6 +1332,10 @@ Use tags: with_gvisor
             "shoes"
         );
         assert_eq!(
+            KernelKind::VpCore.executable_name_for(KernelPlatform::MacOS),
+            "vpcore"
+        );
+        assert_eq!(
             KernelKind::Mihomo.asset_name_for(KernelPlatform::MacOS, "v1.18.0"),
             "mihomo-darwin-amd64-v1.18.0.gz"
         );
@@ -1274,6 +1350,10 @@ Use tags: with_gvisor
         assert_eq!(
             KernelKind::Shoes.asset_name_for(KernelPlatform::MacOS, "v0.3.3"),
             "shoes-aarch64-apple-darwin.tar.gz"
+        );
+        assert_eq!(
+            KernelKind::VpCore.asset_name_for(KernelPlatform::MacOS, "v1.0.0"),
+            "vpcore-v1.0.0-aarch64-apple-darwin.tar.gz"
         );
     }
 

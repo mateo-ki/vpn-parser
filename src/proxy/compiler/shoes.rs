@@ -334,6 +334,7 @@ pub(crate) fn find_geo_file(name: &str) -> Option<std::path::PathBuf> {
     None
 }
 
+#[allow(dead_code)]
 pub(crate) fn has_geosite_category(code: &str) -> bool {
     if let Some(p) = find_geo_file("geosite.dat") {
         let normalized = crate::geo::normalize_geo_code(code);

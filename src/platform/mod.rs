@@ -939,6 +939,8 @@ pub fn is_proxy_core_name(name_lower: &str) -> bool {
         KernelKind::Xray,
         KernelKind::SingBox,
         KernelKind::Shoes,
+        KernelKind::Meow,
+        KernelKind::VpCore,
     ]
     .iter()
     .any(|kind| kind.directory_name() == stem)
@@ -1848,6 +1850,9 @@ pub fn run_elevated_kernel_supervisor(args: ElevatedKernelArgs) -> Result<()> {
         }
         KernelKind::Meow => {
             command.arg("-d").arg(&args.data_root).arg("-f").arg(&args.config);
+        }
+        KernelKind::VpCore => {
+            command.arg("run").arg("-c").arg(&args.config);
         }
     }
     command

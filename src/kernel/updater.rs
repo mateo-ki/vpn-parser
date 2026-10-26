@@ -1118,6 +1118,39 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
         });
     }
 
+    if kind == KernelKind::VpCore {
+        const VPCORE_TAG: &str = "v1.0.0";
+        let (name, digest, size) = match KernelPlatform::current() {
+            KernelPlatform::Windows => (
+                format!("vpcore-{VPCORE_TAG}-x86_64-pc-windows-msvc.zip"),
+                "sha256:8aa9ca332994572e1617c0202ef7e2c29ce7c3a072cda1611e88aea0647ddba8",
+                3_735_464_u64,
+            ),
+            KernelPlatform::Linux => (
+                format!("vpcore-{VPCORE_TAG}-x86_64-unknown-linux-musl.tar.gz"),
+                "sha256:cbf6b001d12f11051b076cf2895a32a21b66457a249e1273512d0f538efda937",
+                3_704_966_u64,
+            ),
+            KernelPlatform::MacOS => (
+                format!("vpcore-{VPCORE_TAG}-aarch64-apple-darwin.tar.gz"),
+                "sha256:5f1e3d54a23530f859548b19f563a908410947fb16a66e19ae069f9bd4cd1cf6",
+                3_201_746_u64,
+            ),
+        };
+        return Some(GithubRelease {
+            tag_name: VPCORE_TAG.to_string(),
+            assets: vec![GithubAsset {
+                name: name.clone(),
+                browser_download_url: format!(
+                    "https://github.com/mateo-ki/vp_core/releases/download/{VPCORE_TAG}/{name}"
+                ),
+                size,
+                digest: Some(digest.to_string()),
+            }],
+            fallback: true,
+        });
+    }
+
     if kind != KernelKind::Mihomo {
         return None;
     }
@@ -1328,7 +1361,9 @@ fn extract_from_zip(archive: &[u8], kind: KernelKind, target: &Path) -> Result<(
                 file_name.to_ascii_lowercase().as_str(),
                 "geoip.dat" | "geosite.dat"
             );
-        if !is_executable && !is_xray_data {
+        let is_wintun_dll = (kind == KernelKind::VpCore || kind == KernelKind::Meow)
+            && file_name.eq_ignore_ascii_case("wintun.dll");
+        if !is_executable && !is_xray_data && !is_wintun_dll {
             continue;
         }
         let mut bytes = Vec::with_capacity(entry.size() as usize);
