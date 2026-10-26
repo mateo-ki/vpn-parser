@@ -1381,6 +1381,21 @@ pub fn self_heal_stale_system_proxy(mixed_port: u16) -> bool {
             return false;
         }
 
+        // ProxyEnable=1 但 ProxyServer 缺失/为空：浏览器会去连一个不存在的代理地址，
+        // 表现为"所有网页都打不开"。这本身就是坏状态，直接归零自愈，不走下面的端口探测。
+        if snapshot.server.as_deref().map(str::trim).unwrap_or("").is_empty() {
+            crate::startup_log(
+                "检测到 WinINet 残留损坏代理配置 (ProxyEnable=1 但 ProxyServer 缺失)，自动执行注册表自愈...",
+            );
+            let healed = crate::system_proxy::direct_disable_wininet_proxy_atomic();
+            if healed {
+                crate::startup_log("注册表自愈完成，已强制重置 ProxyEnable=0 并广播刷新，网络已恢复直连。");
+            } else {
+                crate::startup_log("警告：注册表自愈未能成功更新注册表。");
+            }
+            return healed;
+        }
+
         let server = match snapshot.server.as_deref().map(str::trim) {
             Some(s) if !s.is_empty() => s,
             _ => return false,

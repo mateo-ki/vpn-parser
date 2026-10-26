@@ -14,6 +14,9 @@ pub mod xray;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod vpcore_repro;
+
 pub use config::*;
 pub use manager::*;
 pub use mihomo::*;
