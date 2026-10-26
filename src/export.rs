@@ -92,6 +92,11 @@ fn node_to_clash_proxy(node: &Node) -> Option<Value> {
         }
         "http" | "https" => {
             set_type(&mut cfg, "http");
+            if protocol == "https" {
+                if let Some(map) = cfg.as_object_mut() {
+                    map.entry("tls").or_insert_with(|| json!(true));
+                }
+            }
             ensure_server_port_name(&mut cfg, node);
             Some(cfg)
         }
