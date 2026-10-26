@@ -2043,7 +2043,12 @@ impl VpnApp {
     }
 
     pub(crate) fn import_from_local_yaml_file(&mut self, path: String, as_source: bool, source_name: String) {
-        let p = std::path::PathBuf::from(path.trim());
+        let clean_path = crate::collector::local_file_path(&path)
+            .unwrap_or_else(|| {
+                let trimmed = path.trim();
+                trimmed.trim_matches('"').trim_matches('\'').to_string()
+            });
+        let p = std::path::PathBuf::from(&clean_path);
         if !p.exists() {
             self.status = format!("找不到指定文件: {}", p.display());
             return;
@@ -2082,7 +2087,7 @@ impl VpnApp {
         } else {
             source_name.trim().to_string()
         };
-        let file_url = format!("file://{}", p.display());
+        let file_url = clean_path.clone();
 
         self.rt.spawn(async move {
             let mut source_id_opt = None;

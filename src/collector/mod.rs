@@ -1054,29 +1054,105 @@ fn url_host(url: &str) -> Option<String> {
         .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
 }
 
-/// 直连 + （仅对 GitHub raw）镜像候选。上次成功的来源排第一位，但不会因此丢掉其它候选。
-/// 本地文件源识别：`file://` 前缀或裸本地路径（盘符 / 斜杠开头）。
-/// 返回可直接 `tokio::fs::read` 的路径。
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h1), Some(h2)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            ) {
+                out.push((h1 * 16 + h2) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// 本地文件源识别：支持 `file://`、裸本地路径（Windows 盘符 / Unix 绝对路径 / ~ 家目录）。
+/// 支持引号剥离、URL 编码字符解码（如 %20）、波浪号展开，返回操作系统可直接读取的真实路径。
 pub fn local_file_path(url: &str) -> Option<String> {
-    let t = url.trim();
-    if let Some(rest) = t.strip_prefix("file://") {
-        // file:///C:/x/y → /C:/x/y（去掉 scheme 后以 / 开头）→ Windows 盘符形式再去一层
-        let rest = if let Some(stripped) = rest.strip_prefix('/') {
+    let mut s = url.trim();
+    // 0. 剥离可能存在的首尾包裹单双引号（从终端或文件管理器复制带空格路径时常见）
+    while (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+        if s.len() >= 2 {
+            s = s[1..s.len() - 1].trim();
+        } else {
+            break;
+        }
+    }
+    if s.is_empty() {
+        return None;
+    }
+
+    // 1. 排除网络协议与非本地链接
+    let s_low = s.to_ascii_lowercase();
+    if s_low.starts_with("http://")
+        || s_low.starts_with("https://")
+        || s_low.starts_with("ftp://")
+        || s_low.starts_with("t.me/")
+        || s_low.starts_with("tg://")
+    {
+        return None;
+    }
+
+    // 2. 解构 file:// 协议与 URL 解码（支持 file:///path, file://localhost/path 以及 %20 等空格）
+    let unescaped = if let Some(mut rest) = s.strip_prefix("file://") {
+        if let Some(after_host) = rest.strip_prefix("localhost") {
+            rest = after_host;
+        }
+        let decoded = percent_decode(rest);
+        // 在 Windows 风格下：file:///C:/path -> /C:/path -> 剥去开头的 /
+        if let Some(stripped) = decoded.strip_prefix('/') {
             if stripped.len() >= 2 && stripped.as_bytes()[1] == b':' {
-                stripped
+                stripped.to_string()
             } else {
-                rest
+                decoded
             }
         } else {
-            rest
-        };
-        return (!rest.is_empty()).then(|| rest.to_string());
+            decoded
+        }
+    } else {
+        s.to_string()
+    };
+
+    // 3. 处理 ~ 家目录扩展（例如 macOS / Linux 常见的 ~/Downloads/clash.yaml）
+    let path_str = if unescaped == "~" || unescaped.starts_with("~/") || unescaped.starts_with("~\\") {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(std::path::PathBuf::from);
+        if let Some(home_path) = home {
+            if unescaped == "~" {
+                home_path.to_string_lossy().to_string()
+            } else {
+                let sub = &unescaped[2..];
+                home_path.join(sub).to_string_lossy().to_string()
+            }
+        } else {
+            unescaped
+        }
+    } else {
+        unescaped
+    };
+
+    // 4. 判定是否为合法的本地文件系统路径
+    let b = path_str.as_bytes();
+    let is_windows_drive = b.len() >= 2 && b[1] == b':' && (b[0] as char).is_ascii_alphabetic();
+    let is_unix_abs = path_str.starts_with('/') && !path_str.starts_with("//");
+    let is_windows_unc = path_str.starts_with('\\');
+    let exists_on_disk = std::path::Path::new(&path_str).is_file();
+
+    if is_windows_drive || is_unix_abs || is_windows_unc || exists_on_disk {
+        Some(path_str)
+    } else {
+        None
     }
-    let looks_local = t.len() >= 3
-        && ((t.as_bytes()[1] == b':' && t.as_bytes()[0].is_ascii_alphabetic())
-            || (t.starts_with('/') && !t.starts_with("//"))
-            || t.starts_with("\\"));
-    looks_local.then(|| t.to_string())
 }
 
 fn fetch_candidates(resolved_url: &str, winner: Option<&str>) -> Vec<FetchCandidate> {

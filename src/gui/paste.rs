@@ -161,6 +161,31 @@ pub fn recognize(text: &str) -> Option<Detected> {
             count: import.rules.len(),
         });
     }
+    // 1.5) 本地文件路径识别（支持 macOS / Linux / Windows 绝对路径、~ 家目录、file:// 链接及引号包裹）
+    if let Some(clean_path) = crate::collector::local_file_path(trimmed) {
+        let p = std::path::Path::new(&clean_path);
+        let file_name = clean_path
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("本地配置")
+            .to_string();
+        let ext = file_name
+            .rsplit('.')
+            .next()
+            .filter(|s| s.len() < file_name.len())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let is_config_ext = ext == "yaml" || ext == "yml" || ext == "txt" || ext == "json" || ext == "conf" || ext == "list";
+        let file_exists = p.is_file();
+
+        if file_exists || is_config_ext {
+            return Some(Detected::Subscription {
+                name: file_name,
+                url: clean_path,
+            });
+        }
+    }
     // 2) 订阅源地址（URL）：仅当不是包含大量规则/节点的纯文本时作为 URL 识别
     if let Some(url) = first_url(trimmed) {
         let nodes = node_link_count(trimmed);
@@ -199,16 +224,20 @@ pub fn recognize(text: &str) -> Option<Detected> {
     })
 }
 
-/// 已经在列表里了吗：只按去掉首尾空白后的地址全等判断（订阅地址带 token，
-/// 少一个参数就是另一个源，不敢做"归一化去重"）。
+/// 已经在列表里了吗：按去掉首尾空白后的地址比对，若为本地文件则按规整后的真实路径比对。
 pub fn is_duplicate(
     url: &str,
     existing: impl IntoIterator<Item = (String, String)>,
 ) -> Option<String> {
     let target = url.trim();
+    let target_clean = crate::collector::local_file_path(target).unwrap_or_else(|| target.to_string());
     existing
         .into_iter()
-        .find(|(_, template)| template.trim() == target)
+        .find(|(_, template)| {
+            let t = template.trim();
+            let t_clean = crate::collector::local_file_path(t).unwrap_or_else(|| t.to_string());
+            t == target || t_clean == target_clean
+        })
         .map(|(name, _)| name)
 }
 
@@ -333,15 +362,28 @@ pub fn describe(outcome: &PasteOutcome) -> (egui::Color32, egui::Color32, String
     use crate::gui::theme;
     match outcome {
         PasteOutcome::Added { name, url, tested } => {
+            let is_local = crate::collector::local_file_path(url).is_some();
             let next = if *tested {
-                "已自动排上：拉这个源 → 只测这一源的节点，结果在源那一行看。"
+                if is_local {
+                    "已自动排上：读取本地文件 → 解析节点并测速，随文件更新自动重载。"
+                } else {
+                    "已自动排上：拉这个源 → 只测这一源的节点，结果在源那一行看。"
+                }
             } else {
-                "「新增订阅源后自动测这一源」的开关是关的，所以只建了源、没测速。"
+                if is_local {
+                    "已添加为本地文件订阅源。可随时在订阅源列表中点击刷新或测速。"
+                } else {
+                    "「新增订阅源后自动测这一源」的开关是关的，所以只建了源、没测速。"
+                }
             };
             (
                 theme::success(),
                 theme::success_bg(),
-                format!("识别成功 · 已加入《{name}》"),
+                if is_local {
+                    format!("识别成功 · 已加入本地文件源《{name}》")
+                } else {
+                    format!("识别成功 · 已加入《{name}》")
+                },
                 format!("{url}\n{next}"),
             )
         }
@@ -586,6 +628,55 @@ mod tests {
             suggested_name("https://WWW.FooBar.COM/sub?x=1"),
             "foobar.com".to_string()
         );
+    }
+
+    #[test]
+    fn recognizes_local_yaml_paths_across_platforms() {
+        // macOS / Unix 绝对路径与引号包裹
+        let mac_res = recognize("/Users/loukas/Downloads/clash.yaml").unwrap();
+        assert_eq!(
+            mac_res,
+            Detected::Subscription {
+                name: "clash.yaml".into(),
+                url: "/Users/loukas/Downloads/clash.yaml".into(),
+            }
+        );
+        let mac_quoted = recognize(r#""/Users/loukas/Downloads/my config.yaml""#).unwrap();
+        assert_eq!(
+            mac_quoted,
+            Detected::Subscription {
+                name: "my config.yaml".into(),
+                url: "/Users/loukas/Downloads/my config.yaml".into(),
+            }
+        );
+        // file:// 协议与 %20 URL 编码
+        let file_url = recognize("file:///Users/loukas/my%20proxy/clash.yml").unwrap();
+        assert_eq!(
+            file_url,
+            Detected::Subscription {
+                name: "clash.yml".into(),
+                url: "/Users/loukas/my proxy/clash.yml".into(),
+            }
+        );
+        // Windows 路径形式
+        let win_res = recognize(r"C:\subs\clash.yaml").unwrap();
+        assert_eq!(
+            win_res,
+            Detected::Subscription {
+                name: "clash.yaml".into(),
+                url: r"C:\subs\clash.yaml".into(),
+            }
+        );
+        // intake 流程：直接生成本地源并提示
+        let intake_res = intake("/Users/loukas/Downloads/clash.yaml", &[], true).unwrap();
+        assert_eq!(
+            intake_res.create,
+            Some(("clash.yaml".into(), "/Users/loukas/Downloads/clash.yaml".into()))
+        );
+        assert!(matches!(intake_res.outcome, PasteOutcome::Added { .. }));
+        let (_, _, title, body) = describe(&intake_res.outcome);
+        assert!(title.contains("本地文件源"));
+        assert!(body.contains("读取本地文件"));
     }
 
     #[test]
