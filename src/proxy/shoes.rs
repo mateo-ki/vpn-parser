@@ -453,10 +453,12 @@ mod tests {
         // 端口列表与端口段各自成为一条 block 规则，动作语义不变
         assert!(yaml_str.contains("destination_port:"));
         assert!(yaml_str.contains("destination_port_range:"));
+        let has_ads = crate::proxy::compiler::shoes::has_geosite_category("category-ads-all");
+        let expected_block_rules = if has_ads { 4 } else { 3 };
         assert_eq!(
             yaml_str.matches("action: block").count(),
-            4,
-            "STUN/TURN 拦截应拆成 keyword + 端口列表 + 端口段三条 block 规则（加上全自动推荐规则中的 category-ads-all 广告拦截共 4 条）:\n{yaml_str}"
+            expected_block_rules,
+            "STUN/TURN 拦截应拆成 keyword + 端口列表 + 端口段三条 block 规则（有 geosite.dat 时加上全自动推荐规则中的 category-ads-all 广告拦截共 4 条，无时为 3 条）:\n{yaml_str}"
         );
     }
 
@@ -501,10 +503,12 @@ mod tests {
             !yaml_str.contains("destination_port"),
             "QUIC 规则不得译成端口拦截:\n{yaml_str}"
         );
+        let has_ads = crate::proxy::compiler::shoes::has_geosite_category("category-ads-all");
+        let expected_block_rules = if has_ads { 1 } else { 0 };
         assert_eq!(
             yaml_str.matches("action: block").count(),
-            1,
-            "QUIC 规则跳过后不应产生端口 block 规则（仅保留全自动推荐分流中的 category-ads-all 广告拦截）:\n{yaml_str}"
+            expected_block_rules,
+            "QUIC 规则跳过后不应产生端口 block 规则（有 geosite.dat 时保留全自动推荐分流中的 category-ads-all 广告拦截）:\n{yaml_str}"
         );
     }
 

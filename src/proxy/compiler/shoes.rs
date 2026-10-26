@@ -306,7 +306,7 @@ impl BackendCompiler for ShoesCompiler {
     }
 }
 
-fn find_geo_file(name: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn find_geo_file(name: &str) -> Option<std::path::PathBuf> {
     let candidate_dirs = [
         crate::geo::mihomo_dir(),
         crate::kernel::managed_kernel_root().join("xray"),
@@ -332,6 +332,15 @@ fn find_geo_file(name: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+pub(crate) fn has_geosite_category(code: &str) -> bool {
+    if let Some(p) = find_geo_file("geosite.dat") {
+        let normalized = crate::geo::normalize_geo_code(code);
+        crate::geo::dat_has_category(&p, normalized)
+    } else {
+        false
+    }
 }
 
 /// 将统一 IR 规则转为 Shoes 规则映射列表。
