@@ -1619,16 +1619,31 @@ impl VpnApp {
                                     KernelPreference::Meow => "Meow",
                                     KernelPreference::VpCore => "VP-Core",
                                 };
-                                // 菜单与按钮同宽：低于 100px（egui 默认）会截断
-                                // "圆点 + 自动选择" 这类选项行，放宽到 92/108
-                                let combo_w = if is_compact { 92.0 } else { 108.0 };
+                                let (display_text, tooltip_hint) = if is_running {
+                                    if let Some(active) = self.proxy_status.kernel {
+                                        if current_pref != KernelPreference::Auto && current_pref.kernel() != Some(active) {
+                                            (
+                                                format!("{combo_label} ↳ {}", active.display_name()),
+                                                format!("内核偏好: {combo_label}\n当前节点因协议或配置限制，已平滑回退至 {} 运行", active.display_name()),
+                                            )
+                                        } else {
+                                            (combo_label.to_string(), "切换代理运行内核（可手动指定或自动选择）".to_string())
+                                        }
+                                    } else {
+                                        (combo_label.to_string(), "切换代理运行内核（可手动指定或自动选择）".to_string())
+                                    }
+                                } else {
+                                    (combo_label.to_string(), "切换代理运行内核（可手动指定或自动选择）".to_string())
+                                };
+                                // 菜单与按钮同宽：若发生回退则显示 ↳ 图标，适当放宽宽度
+                                let combo_w = if is_compact { 92.0 } else { 128.0 };
                                 egui::ComboBox::from_id_salt("dash_status_kernel_dropdown")
                                     .width(combo_w)
                                     // 选项按本主题行距约 350px，超过 egui 菜单默认
                                     // 200px 上限会内部滚动，把第一项"自动选择"卷出可视区
                                     .height(380.0)
                                     .selected_text(
-                                        RichText::new(combo_label)
+                                        RichText::new(&display_text)
                                             .size(12.0)
                                             .strong()
                                             .color(theme::text_primary()),
@@ -1671,7 +1686,7 @@ impl VpnApp {
                                         );
                                     })
                                     .response
-                                    .on_hover_text("切换代理运行内核（可手动指定或自动选择）");
+                                    .on_hover_text(tooltip_hint);
 
                                 if current_pref != prev_pref {
                                     self.proxy_config.kernel_preference = current_pref;

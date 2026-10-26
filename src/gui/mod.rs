@@ -2928,10 +2928,16 @@ impl VpnApp {
                                     "当前节点连通性异常（已自动标记为不可用）：{}",
                                     status.message
                                 ))
-                            } else if mode == ProxyMode::Tun {
-                                Ok("代理已启动，TUN 模式已启用".into())
                             } else {
-                                Ok("代理已启动，系统代理已启用".into())
+                                let k_name = status.kernel.map(|k| k.display_name()).unwrap_or("代理");
+                                let mode_str = if mode == ProxyMode::Tun { "TUN 模式" } else { "系统代理" };
+                                let msg = if status.message.contains("回退") {
+                                    let hint = status.message.split('（').nth(1).and_then(|s| s.strip_suffix('）')).unwrap_or(&status.message);
+                                    format!("{k_name} 已启动，{mode_str}已启用（{hint}）")
+                                } else {
+                                    format!("{k_name} 代理已启动，{mode_str}已启用")
+                                };
+                                Ok(msg)
                             }
                         }
                         Err(error) => {

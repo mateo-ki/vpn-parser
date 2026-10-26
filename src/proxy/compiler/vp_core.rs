@@ -84,11 +84,67 @@ impl BackendCompiler for VpCoreCompiler {
             } else {
                 obj.remove("tun");
             }
+
+            // 过滤与平滑适配 vp_core 不支持的非国家代码 GEOIP 规则（如 GEOIP,google / GEOIP,telegram）
+            if let Some(rules) = obj.get_mut("rules").and_then(|r| r.as_array_mut()) {
+                let mut new_rules = Vec::with_capacity(rules.len());
+                let mut existing_geosites = std::collections::HashSet::new();
+
+                for r in rules.iter() {
+                    if let Some(s) = r.as_str() {
+                        let parts: Vec<&str> = s.split(',').map(str::trim).collect();
+                        if parts.len() >= 3 && parts[0].eq_ignore_ascii_case("GEOSITE") {
+                            existing_geosites.insert(parts[1].to_ascii_lowercase());
+                        }
+                    }
+                }
+
+                for r in rules.drain(..) {
+                    if let Some(s) = r.as_str() {
+                        let parts: Vec<&str> = s.split(',').map(str::trim).collect();
+                        if parts.len() >= 3 && parts[0].eq_ignore_ascii_case("GEOIP") {
+                            let code = parts[1];
+                            if is_valid_vpcore_geoip_code(code) {
+                                new_rules.push(r);
+                            } else {
+                                let cat = code.to_ascii_lowercase();
+                                if !existing_geosites.contains(&cat)
+                                    && super::shoes::has_geosite_category(&cat)
+                                {
+                                    let target = parts[2];
+                                    new_rules.push(serde_json::Value::String(format!(
+                                        "GEOSITE,{cat},{target}"
+                                    )));
+                                    existing_geosites.insert(cat);
+                                } else {
+                                    tracing::warn!(
+                                        code = %code,
+                                        "VP-Core 的 GeoIP 数据库仅支持双字母国家码与 LAN/PRIVATE，已自动过滤/忽略非法规则: {s}"
+                                    );
+                                }
+                            }
+                        } else {
+                            new_rules.push(r);
+                        }
+                    } else {
+                        new_rules.push(r);
+                    }
+                }
+                *rules = new_rules;
+            }
         }
 
         let yaml = serde_yaml::to_string(&config)?;
         Ok(CompiledArtifact::Yaml(yaml))
     }
+}
+
+pub(crate) fn is_valid_vpcore_geoip_code(code: &str) -> bool {
+    let code = code.trim();
+    if code.len() == 2 && code.chars().all(|c| c.is_ascii_alphabetic()) {
+        return true;
+    }
+    code.eq_ignore_ascii_case("LAN") || code.eq_ignore_ascii_case("PRIVATE")
 }
 
 #[cfg(test)]
@@ -170,5 +226,39 @@ mod tests {
         assert!(yaml.contains("enable: true"));
         assert!(yaml.contains("198.18.0.1"));
         assert!(yaml.contains("auto-route: true"));
+    }
+
+    #[test]
+    fn test_vpcore_compiler_filters_invalid_geoip_rules() {
+        assert!(is_valid_vpcore_geoip_code("CN"));
+        assert!(is_valid_vpcore_geoip_code("us"));
+        assert!(is_valid_vpcore_geoip_code("LAN"));
+        assert!(is_valid_vpcore_geoip_code("PRIVATE"));
+        assert!(!is_valid_vpcore_geoip_code("google"));
+        assert!(!is_valid_vpcore_geoip_code("GOOGLE"));
+        assert!(!is_valid_vpcore_geoip_code("telegram"));
+        assert!(!is_valid_vpcore_geoip_code("CN-CIDR"));
+
+        let node = test_node("ss", json!({
+            "cipher": "aes-128-gcm",
+            "password": "pwd"
+        }));
+        let mut options = MihomoConfigOptions::default();
+        options.override_yaml = Some(r#"
+rules:
+  - GEOSITE,google,美国节点
+  - GEOIP,google,美国节点,no-resolve
+  - GEOIP,CN,DIRECT,no-resolve
+"#.into());
+        let plan = crate::proxy::ir::lower_options_to_ir(&options, Some(&node));
+        let artifact = VpCoreCompiler.compile(&plan).expect("compile success");
+        let yaml = match artifact {
+            CompiledArtifact::Yaml(y) => y,
+            _ => panic!("expected Yaml artifact"),
+        };
+
+        assert!(yaml.contains("GEOIP,CN,DIRECT,no-resolve") || yaml.contains("GEOIP,CN,DIRECT"));
+        assert!(!yaml.contains("GEOIP,google"));
+        assert!(yaml.contains("GEOSITE,google"));
     }
 }
