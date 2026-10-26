@@ -58,3 +58,54 @@ fn local_file_path_recognizes_windows_and_unix_forms() {
     assert_eq!(local_file_path("t.me/s/v2node"), None);
     assert_eq!(local_file_path(""), None);
 }
+
+#[tokio::test]
+async fn reads_and_parses_real_local_yaml_file() {
+    let file_path = std::env::temp_dir().join("vpn_parser_test_local_nodes.yaml");
+    let sample_yaml = r#"
+proxies:
+  - name: "香港 01 专线"
+    type: ss
+    server: 1.2.3.4
+    port: 8388
+    cipher: aes-256-gcm
+    password: testpassword
+  - name: "日本 02 专线"
+    type: trojan
+    server: 5.6.7.8
+    port: 443
+    password: trojanpassword
+rules:
+  - DOMAIN-SUFFIX,google.com,PROXY
+"#;
+    std::fs::write(&file_path, sample_yaml).unwrap();
+
+    let path_str = file_path.to_string_lossy().to_string();
+    let clean_path = local_file_path(&path_str).expect("应识别真实磁盘文件");
+    assert!(std::path::Path::new(&clean_path).is_file());
+
+    // 测试带引号
+    let quoted = format!("\"{clean_path}\"");
+    assert_eq!(local_file_path(&quoted).as_deref(), Some(clean_path.as_str()));
+
+    // 读取并解析节点
+    let content = tokio::fs::read_to_string(&clean_path).await.unwrap();
+    let nodes = crate::parser::parse_subscription(&content, Some("local_test_source"));
+    assert_eq!(nodes.len(), 2);
+    let hk = nodes.iter().find(|n| n.name == "香港 01 专线").expect("应包含香港节点");
+    assert_eq!(hk.server, "1.2.3.4");
+    assert_eq!(hk.port, 8388);
+    let jp = nodes.iter().find(|n| n.name == "日本 02 专线").expect("应包含日本节点");
+    assert_eq!(jp.server, "5.6.7.8");
+    assert_eq!(jp.port, 443);
+
+    // 提取自带分流规则
+    let rules = crate::parser::extract_subscription_rules(&content);
+    assert_eq!(rules.len(), 1);
+    assert!(matches!(
+        rules[0].matcher,
+        crate::proxy::RuleMatcher::DomainSuffix(ref domain) if domain == "google.com"
+    ));
+
+    let _ = std::fs::remove_file(&file_path);
+}

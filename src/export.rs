@@ -591,10 +591,13 @@ fn raw_scheme_matches_protocol(raw: &str, protocol: &str) -> bool {
     let lower = raw.to_ascii_lowercase();
     match protocol {
         "shadowsocks" | "ss" => lower.starts_with("ss://"),
-        "shadowsocksr" | "ssr" => lower.starts_with("ssr://"),
+        "shadowsocksr" | "ssr" => lower.starts_with("ssr://") || lower.starts_with("shadowsocksr://"),
         "vmess" => lower.starts_with("vmess://"),
         "vless" => lower.starts_with("vless://"),
         "trojan" => lower.starts_with("trojan://"),
+        "tuic" => lower.starts_with("tuic://"),
+        "wireguard" | "wg" => lower.starts_with("wireguard://") || lower.starts_with("wg://"),
+        "hysteria" => lower.starts_with("hysteria://") && !lower.starts_with("hysteria2://"),
         "hysteria2" | "hy2" => lower.starts_with("hysteria2://") || lower.starts_with("hy2://"),
         "socks5" | "socks" => lower.starts_with("socks5://") || lower.starts_with("socks://"),
         "http" | "https" => lower.starts_with("http://") || lower.starts_with("https://"),
@@ -607,9 +610,14 @@ fn looks_like_share_uri(raw: &str) -> bool {
     let lower = raw.to_ascii_lowercase();
     lower.starts_with("ss://")
         || lower.starts_with("ssr://")
+        || lower.starts_with("shadowsocksr://")
         || lower.starts_with("vmess://")
         || lower.starts_with("vless://")
         || lower.starts_with("trojan://")
+        || lower.starts_with("tuic://")
+        || lower.starts_with("wireguard://")
+        || lower.starts_with("wg://")
+        || lower.starts_with("hysteria://")
         || lower.starts_with("hysteria2://")
         || lower.starts_with("hy2://")
         || lower.starts_with("socks5://")

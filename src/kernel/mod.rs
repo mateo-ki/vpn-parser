@@ -5,6 +5,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::process::Command;
 
+use crate::models::Node;
+
 mod updater;
 
 pub use updater::{
@@ -398,40 +400,206 @@ pub fn select_proxy_kernel(protocol: &str) -> Result<KernelKind> {
     select_proxy_kernel_with(protocol, |kind| find_kernel_executable(kind).is_some())
 }
 
-pub fn select_proxy_kernel_preference(
+/// 检测特定节点或运行模式是否与 Meow 内核存在已知不兼容/致命缺陷（如 SplitHTTP、ECH、Windows TUN 网卡环路）
+pub fn is_node_incompatible_with_meow(node: &Node, has_tun: bool) -> Option<&'static str> {
+    if cfg!(windows) && has_tun {
+        return Some("Windows TUN 模式（Meow 存在虚拟网卡环路缺陷）");
+    }
+    let proto = node.protocol.to_ascii_lowercase();
+    if matches!(proto.as_str(), "wireguard" | "wg" | "tuic" | "ssr" | "shadowsocksr" | "masque") {
+        return Some("WireGuard/TUIC/SSR 协议（Meow 暂不支持）");
+    }
+    if let Some(net) = node.config.get("network").and_then(|v| v.as_str()) {
+        let net_low = net.to_ascii_lowercase();
+        if net_low.contains("xhttp") || net_low.contains("splithttp") {
+            return Some("XHTTP/SplitHTTP 传输层（Meow 暂不支持）");
+        }
+        if net_low == "grpc" {
+            return Some("gRPC 传输层（Meow 暂不支持）");
+        }
+    }
+    let raw_low = node.raw.to_ascii_lowercase();
+    if raw_low.contains("type=xhttp") || raw_low.contains("type=splithttp") {
+        return Some("XHTTP/SplitHTTP 传输层（Meow 暂不支持）");
+    }
+    if raw_low.contains("type=grpc") {
+        return Some("gRPC 传输层（Meow 暂不支持）");
+    }
+    if node.config.get("ech").is_some() || raw_low.contains("ech=") {
+        return Some("Cloudflare ECH 加密握手（Meow 暂不支持）");
+    }
+    None
+}
+
+pub fn select_proxy_kernel_preference_with(
     protocol: &str,
     preference: KernelPreference,
     allow_xray: bool,
+    available: impl Fn(KernelKind) -> bool,
 ) -> Result<KernelKind> {
     if let Some(kind) = preference.kernel() {
         if (kind == KernelKind::Xray || kind == KernelKind::Shoes) && !allow_xray {
+            // 当前内核不支持 TUN 模式，遇到不支持的模式默认退回 Mihomo
+            if available(KernelKind::Mihomo) && KernelKind::Mihomo.supports_proxy_protocol(protocol) {
+                tracing::warn!(kernel = %kind.display_name(), "当前内核不支持 TUN 模式，默认回退到 Mihomo");
+                return Ok(KernelKind::Mihomo);
+            }
             return Err(anyhow::anyhow!("{} 暂不支持 TUN 模式", kind.display_name()));
         }
         if !kind.supports_proxy_protocol(protocol) {
+            // 遇到不支持的协议默认退回 Mihomo
+            if available(KernelKind::Mihomo) && KernelKind::Mihomo.supports_proxy_protocol(protocol) {
+                tracing::warn!(kernel = %kind.display_name(), protocol, "当前内核不支持该协议，默认回退到 Mihomo");
+                return Ok(KernelKind::Mihomo);
+            }
+            if available(KernelKind::SingBox) && KernelKind::SingBox.supports_proxy_protocol(protocol) {
+                tracing::warn!(kernel = %kind.display_name(), protocol, "当前内核不支持该协议，回退到 Sing-box");
+                return Ok(KernelKind::SingBox);
+            }
             return Err(anyhow::anyhow!(
                 "{} 不支持协议: {protocol}",
                 kind.display_name()
             ));
         }
-        if find_kernel_executable(kind).is_none() {
+        if !available(kind) {
+            // 点名要的内核没安装时，如果有 Mihomo 且支持该协议，默认退回 Mihomo
+            if available(KernelKind::Mihomo) && KernelKind::Mihomo.supports_proxy_protocol(protocol) {
+                tracing::warn!(kernel = %kind.display_name(), "未找到该内核可执行文件，默认回退到 Mihomo");
+                return Ok(KernelKind::Mihomo);
+            }
             return Err(anyhow::anyhow!("未找到 {} 可执行文件", kind.display_name()));
         }
         return Ok(kind);
     }
 
-    if let Ok(kind) = select_proxy_kernel(protocol) {
+    if let Ok(kind) = select_proxy_kernel_with(protocol, &available) {
         return Ok(kind);
     }
     if allow_xray {
         for fallback_kind in [KernelKind::Meow, KernelKind::Shoes, KernelKind::Xray] {
-            if fallback_kind.supports_proxy_protocol(protocol)
-                && find_kernel_executable(fallback_kind).is_some()
-            {
+            if fallback_kind.supports_proxy_protocol(protocol) && available(fallback_kind) {
                 return Ok(fallback_kind);
             }
         }
     }
+    // 默认退回 Mihomo
+    if available(KernelKind::Mihomo) && KernelKind::Mihomo.supports_proxy_protocol(protocol) {
+        return Ok(KernelKind::Mihomo);
+    }
     Err(anyhow::anyhow!("没有已安装且支持 {protocol} 的代理内核"))
+}
+
+pub fn select_proxy_kernel_preference(
+    protocol: &str,
+    preference: KernelPreference,
+    allow_xray: bool,
+) -> Result<KernelKind> {
+    select_proxy_kernel_preference_with(protocol, preference, allow_xray, |kind| {
+        find_kernel_executable(kind).is_some()
+    })
+}
+
+pub fn select_proxy_kernel_preference_for_node_with(
+    node: &Node,
+    preference: KernelPreference,
+    allow_xray: bool,
+    has_tun: bool,
+    available: impl Fn(KernelKind) -> bool,
+) -> Result<(KernelKind, Option<String>)> {
+    if let Some(kind) = preference.kernel() {
+        // 1. Meow 特殊缺陷排查（Windows TUN 环路、XHTTP/SplitHTTP、ECH 等）
+        if kind == KernelKind::Meow {
+            if let Some(reason) = is_node_incompatible_with_meow(node, has_tun) {
+                tracing::warn!(reason, "Meow 内核与当前节点/模式不兼容，自动平滑回退至 Mihomo");
+                if available(KernelKind::Mihomo) && KernelKind::Mihomo.supports_proxy_protocol(&node.protocol) {
+                    let notice = format!("检测到{reason}，已默认平滑回退至 Mihomo 运行");
+                    return Ok((KernelKind::Mihomo, Some(notice)));
+                } else if available(KernelKind::SingBox) && KernelKind::SingBox.supports_proxy_protocol(&node.protocol) {
+                    let notice = format!("检测到{reason}，已自动平滑回退至 Sing-box 运行");
+                    return Ok((KernelKind::SingBox, Some(notice)));
+                }
+                return Err(anyhow::anyhow!(
+                    "Meow 暂不支持此配置（{reason}），且未安装可用的回退内核（如 Mihomo）"
+                ));
+            }
+        }
+
+        // 2. 遇到不支持的协议默认退回 Mihomo
+        if !kind.supports_proxy_protocol(&node.protocol) {
+            tracing::warn!(
+                kernel = %kind.display_name(),
+                protocol = %node.protocol,
+                "当前指定内核不支持该协议，默认平滑回退至 Mihomo"
+            );
+            if available(KernelKind::Mihomo) && KernelKind::Mihomo.supports_proxy_protocol(&node.protocol) {
+                let notice = format!(
+                    "{} 不支持 {} 协议，已默认平滑回退至 Mihomo 运行",
+                    kind.display_name(),
+                    node.protocol
+                );
+                return Ok((KernelKind::Mihomo, Some(notice)));
+            } else if available(KernelKind::SingBox) && KernelKind::SingBox.supports_proxy_protocol(&node.protocol) {
+                let notice = format!(
+                    "{} 不支持 {} 协议，已自动平滑回退至 Sing-box 运行",
+                    kind.display_name(),
+                    node.protocol
+                );
+                return Ok((KernelKind::SingBox, Some(notice)));
+            }
+            return Err(anyhow::anyhow!(
+                "{} 不支持协议 {}，且未安装支持该协议的回退内核（如 Mihomo）",
+                kind.display_name(),
+                node.protocol
+            ));
+        }
+
+        // 3. TUN 模式不支持时默认退回 Mihomo
+        if (kind == KernelKind::Xray || kind == KernelKind::Shoes) && has_tun {
+            tracing::warn!(
+                kernel = %kind.display_name(),
+                "当前内核不支持 TUN 模式，默认平滑回退至 Mihomo"
+            );
+            if available(KernelKind::Mihomo) && KernelKind::Mihomo.supports_proxy_protocol(&node.protocol) {
+                let notice = format!(
+                    "{} 暂不支持 TUN 模式，已默认平滑回退至 Mihomo 运行",
+                    kind.display_name()
+                );
+                return Ok((KernelKind::Mihomo, Some(notice)));
+            }
+            return Err(anyhow::anyhow!("{} 暂不支持 TUN 模式", kind.display_name()));
+        }
+    }
+
+    let kind = select_proxy_kernel_preference_with(&node.protocol, preference, allow_xray, &available)?;
+    if kind == KernelKind::Meow {
+        if let Some(reason) = is_node_incompatible_with_meow(node, has_tun) {
+            tracing::warn!(reason, "Meow 内核与当前节点/模式不兼容，自动平滑回退至 Mihomo");
+            for fallback in [KernelKind::Mihomo, KernelKind::SingBox] {
+                if fallback.supports_proxy_protocol(&node.protocol) && available(fallback) {
+                    let notice = format!(
+                        "检测到{reason}，已默认平滑回退至 {} 运行",
+                        fallback.display_name()
+                    );
+                    return Ok((fallback, Some(notice)));
+                }
+            }
+            return Err(anyhow::anyhow!(
+                "Meow 暂不支持此配置（{reason}），且未安装可用的回退内核（如 Mihomo）"
+            ));
+        }
+    }
+    Ok((kind, None))
+}
+
+pub fn select_proxy_kernel_preference_for_node(
+    node: &Node,
+    preference: KernelPreference,
+    allow_xray: bool,
+    has_tun: bool,
+) -> Result<(KernelKind, Option<String>)> {
+    select_proxy_kernel_preference_for_node_with(node, preference, allow_xray, has_tun, |kind| {
+        find_kernel_executable(kind).is_some()
+    })
 }
 
 /// 点「启动代理」之前的预检：返回"需要先去下载哪个内核"，`None` 表示可以直接启动。
@@ -449,9 +617,15 @@ pub fn missing_kernel_for(
 ) -> Option<KernelKind> {
     if let Some(kind) = preference.kernel() {
         // Xray/Shoes 在 TUN 下是"不支持"，不是"没装"，别拿下载框去挡。
-        // Meow 支持 TUN（platform 的提权 runner 会自动配置 tun 网卡 DNS），正常走安装检查。
         if (kind == KernelKind::Xray || kind == KernelKind::Shoes) && !system_mode {
             return None;
+        }
+        // 点名内核不支持该协议时：如果已有已安装内核支持该协议，不弹下载框；否则默认退回引导安装 Mihomo
+        if !kind.supports_proxy_protocol(protocol) {
+            if select_proxy_kernel_with(protocol, &available).is_ok() {
+                return None;
+            }
+            return (!available(KernelKind::Mihomo)).then_some(KernelKind::Mihomo);
         }
         return (!available(kind)).then_some(kind);
     }
@@ -459,6 +633,19 @@ pub fn missing_kernel_for(
         return None;
     }
     preferred_proxy_kernel(protocol).filter(|kind| kind.supports_proxy_protocol(protocol))
+}
+
+pub fn missing_kernel_for_node(
+    node: &Node,
+    preference: KernelPreference,
+    system_mode: bool,
+    has_tun: bool,
+    available: impl Fn(KernelKind) -> bool,
+) -> Option<KernelKind> {
+    if preference == KernelPreference::Meow && is_node_incompatible_with_meow(node, has_tun).is_some() {
+        return (!available(KernelKind::Mihomo)).then_some(KernelKind::Mihomo);
+    }
+    missing_kernel_for(&node.protocol, preference, system_mode, available)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1088,5 +1275,148 @@ Use tags: with_gvisor
             KernelKind::Shoes.asset_name_for(KernelPlatform::MacOS, "v0.3.3"),
             "shoes-aarch64-apple-darwin.tar.gz"
         );
+    }
+
+    #[test]
+    fn test_meow_incompatibility_detection_and_fallback() {
+        let xhttp_node = Node {
+            id: "test-node-xhttp".into(),
+            source_id: None,
+            protocol: "vless".into(),
+            name: "VLESS XHTTP Node".into(),
+            server: "example.com".into(),
+            port: 443,
+            raw: "vless://uuid@example.com:443?type=xhttp#VLESS%20XHTTP".into(),
+            config: serde_json::json!({
+                "network": "xhttp",
+            }),
+            country: None,
+            latency_ms: None,
+            latency_ok: None,
+            download_kbps: None,
+            latency_kernel: None,
+            latency_test_kind: None,
+            latency_tested_at: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        // 1. xhttp should be incompatible with Meow
+        let incomp = is_node_incompatible_with_meow(&xhttp_node, false);
+        assert!(incomp.is_some(), "xhttp should be flagged as incompatible with Meow");
+        assert!(incomp.unwrap().contains("XHTTP"));
+
+        // 2. Fallback to Mihomo if Mihomo is available
+        let available = |k| k == KernelKind::Meow || k == KernelKind::Mihomo;
+        let (selected, notice) = select_proxy_kernel_preference_for_node_with(
+            &xhttp_node,
+            KernelPreference::Meow,
+            true,
+            false,
+            available,
+        )
+        .expect("Should smoothly fallback to Mihomo");
+        assert_eq!(selected, KernelKind::Mihomo);
+        assert!(notice.is_some());
+        assert!(notice.unwrap().contains("Mihomo"));
+
+        // 3. Normal VMess node without xhttp or ECH in System mode should be fine with Meow
+        let normal_node = Node {
+            id: "test-node-ws".into(),
+            source_id: None,
+            protocol: "vmess".into(),
+            name: "VMess WS Node".into(),
+            server: "example.com".into(),
+            port: 443,
+            raw: "vmess://uuid@example.com:443?type=ws".into(),
+            config: serde_json::json!({
+                "network": "ws",
+            }),
+            country: None,
+            latency_ms: None,
+            latency_ok: None,
+            download_kbps: None,
+            latency_kernel: None,
+            latency_test_kind: None,
+            latency_tested_at: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        assert_eq!(is_node_incompatible_with_meow(&normal_node, false), None);
+
+        // 4. Windows TUN mode should be flagged as incompatible due to Wintun loop defect
+        if cfg!(windows) {
+            let tun_incomp = is_node_incompatible_with_meow(&normal_node, true);
+            assert!(tun_incomp.is_some());
+            assert!(tun_incomp.unwrap().contains("TUN"));
+        }
+    }
+
+    #[test]
+    fn test_unsupported_protocol_defaults_to_mihomo() {
+        let available =
+            |k| k == KernelKind::Xray || k == KernelKind::Mihomo || k == KernelKind::Shoes;
+
+        // 1. 用户指定 Xray，但节点为 wireguard（Xray 并不支持），默认退回 Mihomo
+        let wg_node = Node {
+            id: "wg-node".into(),
+            source_id: None,
+            protocol: "wireguard".into(),
+            name: "WireGuard Node".into(),
+            server: "1.2.3.4".into(),
+            port: 51820,
+            raw: "wireguard://...".into(),
+            config: serde_json::json!({}),
+            country: None,
+            latency_ms: None,
+            latency_ok: None,
+            download_kbps: None,
+            latency_kernel: None,
+            latency_test_kind: None,
+            latency_tested_at: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let (res_kernel, notice) = select_proxy_kernel_preference_for_node_with(
+            &wg_node,
+            KernelPreference::Xray,
+            true,
+            false,
+            available,
+        )
+        .expect("遇到不支持的协议默认退回 Mihomo");
+        assert_eq!(res_kernel, KernelKind::Mihomo);
+        assert!(notice.unwrap().contains("Mihomo"));
+
+        // 2. 用户指定 Shoes，但节点为 hysteria2（Shoes 不支持 hysteria2），默认退回 Mihomo
+        let hy2_node = Node {
+            id: "hy2-node".into(),
+            source_id: None,
+            protocol: "hysteria2".into(),
+            name: "Hysteria2 Node".into(),
+            server: "1.2.3.4".into(),
+            port: 443,
+            raw: "hysteria2://...".into(),
+            config: serde_json::json!({}),
+            country: None,
+            latency_ms: None,
+            latency_ok: None,
+            download_kbps: None,
+            latency_kernel: None,
+            latency_test_kind: None,
+            latency_tested_at: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let (shoes_res, shoes_notice) = select_proxy_kernel_preference_for_node_with(
+            &hy2_node,
+            KernelPreference::Shoes,
+            true,
+            false,
+            available,
+        )
+        .expect("遇到不支持的协议默认退回 Mihomo");
+        assert_eq!(shoes_res, KernelKind::Mihomo);
+        assert!(shoes_notice.unwrap().contains("Mihomo"));
     }
 }

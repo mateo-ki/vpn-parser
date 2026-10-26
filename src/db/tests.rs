@@ -221,6 +221,7 @@
                 url_template: "https://example.com/1".into(),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();
@@ -230,6 +231,7 @@
                 url_template: "https://example.com/2".into(),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();
@@ -368,6 +370,7 @@
                 enabled: None,
                 remark: None,
                 push_disabled: Some(true),
+                user_agent: None,
             },
         )
         .await
@@ -397,6 +400,7 @@
                 enabled: None,
                 remark: None,
                 push_disabled: Some(false),
+                user_agent: None,
             },
         )
         .await
@@ -701,6 +705,7 @@
                 url_template: "https://example.com/s1".into(),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();
@@ -711,6 +716,7 @@
                 url_template: "https://example.com/s2".into(),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();
@@ -721,6 +727,7 @@
                 url_template: "https://example.com/s3".into(),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();
@@ -732,6 +739,7 @@
                 url_template: "https://example.com/s4".into(),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();
@@ -1445,4 +1453,122 @@
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(format!("{}-wal", path.display()));
         let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[tokio::test]
+    async fn source_rules_and_groups_persist_and_survive_reopen() {
+        let path = std::env::temp_dir().join(format!("vpn-parser-source-rules-{}.db", Uuid::new_v4()));
+        let db = Database::connect(path.to_str().unwrap()).await.unwrap();
+
+        let source = db
+            .create_source(CreateSource {
+                name: "测试订阅带规则".into(),
+                url_template: "https://example.com/sub".into(),
+                enabled: true,
+                remark: None,
+                user_agent: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(source.rules_yaml.is_none());
+        assert!(source.groups_yaml.is_none());
+
+        let rules = "- DOMAIN,example.com,DIRECT\n- MATCH,PROXY";
+        let groups = "- name: PROXY\n  type: select\n  proxies: [DIRECT]";
+
+        db.update_source_rules_and_groups(&source.id, Some(rules), Some(groups))
+            .await
+            .unwrap();
+
+        let loaded = db.get_source(&source.id).await.unwrap().expect("source exists");
+        assert_eq!(loaded.rules_yaml.as_deref(), Some(rules));
+        assert_eq!(loaded.groups_yaml.as_deref(), Some(groups));
+
+        let list = db.list_sources().await.unwrap();
+        let in_list = list.iter().find(|s| s.id == source.id).unwrap();
+        assert_eq!(in_list.rules_yaml.as_deref(), Some(rules));
+        assert_eq!(in_list.groups_yaml.as_deref(), Some(groups));
+
+        drop(db);
+        let reopened = Database::connect(path.to_str().unwrap()).await.unwrap();
+        let reloaded = reopened.get_source(&source.id).await.unwrap().expect("reopened source");
+        assert_eq!(reloaded.rules_yaml.as_deref(), Some(rules));
+        assert_eq!(reloaded.groups_yaml.as_deref(), Some(groups));
+
+        drop(reopened);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    #[tokio::test]
+    async fn source_user_agent_persists_and_updates() {
+        let path = std::env::temp_dir().join(format!("vpn-parser-source-ua-{}.db", Uuid::new_v4()));
+        let db = Database::connect(path.to_str().unwrap()).await.unwrap();
+
+        // 1. Create with custom user_agent
+        let source = db
+            .create_source(CreateSource {
+                name: "测试自定义UA".into(),
+                url_template: "https://example.com/sub".into(),
+                enabled: true,
+                remark: None,
+                user_agent: Some("clash-verge/v1.7.7".into()),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(source.user_agent.as_deref(), Some("clash-verge/v1.7.7"));
+
+        let loaded = db.get_source(&source.id).await.unwrap().expect("source exists");
+        assert_eq!(loaded.user_agent.as_deref(), Some("clash-verge/v1.7.7"));
+
+        // 2. Update to a new UA
+        let updated = db
+            .update_source(
+                &source.id,
+                crate::models::UpdateSource {
+                    name: None,
+                    url_template: None,
+                    enabled: None,
+                    remark: None,
+                    push_disabled: None,
+                    user_agent: Some("sing-box/1.9.0".into()),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.user_agent.as_deref(), Some("sing-box/1.9.0"));
+
+        let reloaded = db.get_source(&source.id).await.unwrap().expect("source exists");
+        assert_eq!(reloaded.user_agent.as_deref(), Some("sing-box/1.9.0"));
+
+        // 3. Clear user_agent with empty string
+        let cleared = db
+            .update_source(
+                &source.id,
+                crate::models::UpdateSource {
+                    name: None,
+                    url_template: None,
+                    enabled: None,
+                    remark: None,
+                    push_disabled: None,
+                    user_agent: Some("".into()),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(cleared.user_agent, None);
+
+        // 4. Survive reconnect
+        drop(db);
+        let reopened = Database::connect(path.to_str().unwrap()).await.unwrap();
+        let from_reopened = reopened.get_source(&source.id).await.unwrap().expect("source exists");
+        assert_eq!(from_reopened.user_agent, None);
+
+        drop(reopened);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
     }

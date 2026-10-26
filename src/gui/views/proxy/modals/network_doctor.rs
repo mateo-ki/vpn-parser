@@ -110,7 +110,7 @@ pub async fn perform_network_diagnosis(
             .filter(|item| {
                 item.server_addresses
                     .iter()
-                    .any(|a| a == "127.0.0.1" || a == "::1" || (!is_running && a == "198.18.0.2"))
+                    .any(|a| a == "127.0.0.1" || a == "::1" || (!is_running && (a == "198.18.0.1" || a == "198.18.0.2")))
             })
             .collect();
 

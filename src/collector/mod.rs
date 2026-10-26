@@ -278,16 +278,17 @@ impl Collector {
             let parse_started = Instant::now();
             let source_id = source.id.clone();
             let parse_permit = PARSE_LIMIT.clone().acquire_owned().await;
-            let (nodes, extracted_rules) = match tokio::task::spawn_blocking(move || {
+            let (nodes, extracted_rules, raw_rules_yaml, raw_groups_yaml) = match tokio::task::spawn_blocking(move || {
                 let _permit = parse_permit;
                 let body = String::from_utf8_lossy(&body);
+                let (rules_yaml, groups_yaml) = crate::parser::extract_subscription_rules_and_groups(&body);
                 let rules = crate::parser::extract_subscription_rules(&body);
                 let nodes = parse_subscription(&body, Some(&source_id));
-                (nodes, rules)
+                (nodes, rules, rules_yaml, groups_yaml)
             })
             .await
             {
-                Ok(pair) => pair,
+                Ok(tuple) => tuple,
                 Err(error) => {
                     let message = format!("parse task failed: {error}");
                     self.mark_source_fetched(&source.id, &message, 0).await;
@@ -338,6 +339,14 @@ impl Collector {
                             etag.as_deref(),
                             last_modified.as_deref(),
                             Some(&content_sha256),
+                        )
+                        .await;
+                    let _ = self
+                        .db
+                        .update_source_rules_and_groups(
+                            &source.id,
+                            raw_rules_yaml.as_deref(),
+                            raw_groups_yaml.as_deref(),
                         )
                         .await;
                     FetchResult {
@@ -478,6 +487,13 @@ impl Collector {
                 .map_err(|_| "主机并发闸已关闭".to_string())?
         };
         let mut request = self.client.get(&candidate.url).timeout(budget);
+        let user_agent = source
+            .user_agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|ua| !ua.is_empty())
+            .unwrap_or("clash.meta");
+        request = request.header(reqwest::header::USER_AGENT, user_agent);
         // 条件请求只对直连有意义：镜像的 ETag 语义不跟随上游。
         if !candidate.mirror && source.last_resolved_url.as_deref() == Some(candidate.url.as_str())
         {
@@ -721,6 +737,7 @@ impl Collector {
                         url_template: format!("{raw_base}/{}/{}/raw", gist.user, gist.id),
                         enabled: true,
                         remark: Some("gist 自动发现".into()),
+                        user_agent: None,
                     })
                     .await
                 {
@@ -1354,6 +1371,7 @@ mod tests {
                 url_template: format!("http://{address}/subscription"),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();
@@ -1421,6 +1439,7 @@ mod tests {
                 url_template: format!("http://{address}/subscription"),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();
@@ -1468,6 +1487,7 @@ mod tests {
                 url_template: format!("http://{address}/subscription"),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();
@@ -1531,6 +1551,7 @@ mod tests {
                 url_template: format!("http://{address}/subscription"),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();
@@ -1634,6 +1655,7 @@ mod tests {
                 url_template: format!("http://{slow_address}/subscription"),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();
@@ -1775,6 +1797,7 @@ mod tests {
             url_template: format!("https://gist.githubusercontent.com/u_existing/{id_a}/raw"),
             enabled: true,
             remark: None,
+            user_agent: None,
         })
         .await
         .unwrap();
@@ -1898,6 +1921,7 @@ mod tests {
                 url_template: format!("http://{address}/{index}"),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();
@@ -1968,6 +1992,7 @@ mod tests {
                 url_template: format!("http://{address}/subscription"),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();
@@ -2005,6 +2030,7 @@ mod tests {
                 url_template: format!("http://{address}/subscription"),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();
@@ -2016,6 +2042,78 @@ mod tests {
 
         assert!(second.success);
         assert!(second.message.contains("content unchanged"));
+        server.abort();
+        drop(collector);
+        drop(db);
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
+    async fn collector_sends_custom_or_default_user_agent() {
+        use std::sync::Mutex;
+        let received_uas = Arc::new(Mutex::new(Vec::<String>::new()));
+        let uas_handle = received_uas.clone();
+
+        let app = Router::new().route(
+            "/sub",
+            get(move |headers: axum::http::HeaderMap| {
+                let uas = uas_handle.clone();
+                async move {
+                    let ua = headers
+                        .get(axum::http::header::USER_AGENT)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+                    uas.lock().unwrap().push(ua);
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .body(Body::from("ss://YWVzLTEyOC1nY206cGFzcw==@1.2.3.4:443#node"))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = bind_test_listener().await;
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let db_path = std::env::temp_dir().join(format!("vpn-parser-ua-{}.db", Uuid::new_v4()));
+        let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
+        let tracker = TaskTracker::default();
+        let collector = Collector::new(db.clone(), tracker).unwrap();
+
+        // 1. Without UA configured -> should default to "clash.meta"
+        let default_src = db
+            .create_source(CreateSource {
+                name: "default_ua".into(),
+                url_template: format!("http://{address}/sub"),
+                enabled: true,
+                remark: None,
+                user_agent: None,
+            })
+            .await
+            .unwrap();
+        let res1 = collector.fetch_source(&default_src).await;
+        assert!(res1.success);
+
+        // 2. With custom UA configured -> should send custom UA
+        let custom_src = db
+            .create_source(CreateSource {
+                name: "custom_ua".into(),
+                url_template: format!("http://{address}/sub"),
+                enabled: true,
+                remark: None,
+                user_agent: Some("clash-verge/v1.7.7".into()),
+            })
+            .await
+            .unwrap();
+        let res2 = collector.fetch_source(&custom_src).await;
+        assert!(res2.success);
+
+        let captured = received_uas.lock().unwrap().clone();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[0], "clash.meta");
+        assert_eq!(captured[1], "clash-verge/v1.7.7");
+
         server.abort();
         drop(collector);
         drop(db);

@@ -6,15 +6,15 @@
     </linearGradient>
   </defs>
 
-  <!-- Deep Obsidian Squircle Base - Maximized to edges for bold taskbar/tray presence -->
-  <rect x="2" y="2" width="252" height="252" rx="56" fill="url(#bgGrad)"/>
-  <rect x="2" y="2" width="252" height="252" rx="56" fill="none" stroke="#2e323d" stroke-width="2"/>
+  <!-- Deep Obsidian Squircle Base - Standard Windows Desktop Proportion (204x204 with 26px padding) -->
+  <rect x="26" y="26" width="204" height="204" rx="45" fill="url(#bgGrad)"/>
+  <rect x="26" y="26" width="204" height="204" rx="45" fill="none" stroke="#2e323d" stroke-width="2"/>
 
   <!-- Minimalist Precision White "V" Lettermark -->
-  <path d="M 52,66 L 128,198 L 204,66 L 168,66 L 128,138 L 88,66 Z"
+  <path d="M 66.5,77.8 L 128,184.7 L 189.5,77.8 L 160.4,77.8 L 128,136.1 L 95.6,77.8 Z"
         fill="#ffffff"
         stroke="#ffffff"
-        stroke-width="5"
+        stroke-width="4"
         stroke-linejoin="round"
         stroke-linecap="round"/>
 </svg>

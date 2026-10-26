@@ -757,6 +757,7 @@ vless://uuid-uuid-uuid@203.0.113.7:443?security=tls#DE-9<br/>
                 url_template: "@v2node".into(),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();
@@ -804,6 +805,7 @@ vless://uuid-uuid-uuid@203.0.113.7:443?security=tls#DE-9<br/>
                 url_template: "https://t.me/s/v2node".into(),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap();

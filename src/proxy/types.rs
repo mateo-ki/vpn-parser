@@ -132,6 +132,15 @@ pub struct MihomoConfigOptions {
     /// 用户自定义配置覆写（YAML 或 脚本扩展片段）
     #[serde(default)]
     pub override_yaml: Option<String>,
+    /// 选中的订阅规则模板源 ID（RoutingMode::Subscription 时生效）
+    #[serde(default)]
+    pub subscription_rules_source_id: Option<String>,
+    /// 运行时注入的订阅分流规则 YAML 文本（启动前动态加载，不落盘）
+    #[serde(default, skip)]
+    pub subscription_rules_yaml: Option<String>,
+    /// 运行时注入的订阅策略组 YAML 文本（启动前动态加载，不落盘）
+    #[serde(default, skip)]
+    pub subscription_groups_yaml: Option<String>,
     /// 一节点一端口多端口转发规则列表
     #[serde(default)]
     pub port_mappings: Vec<PortMapping>,
@@ -179,6 +188,9 @@ impl Default for MihomoConfigOptions {
             url_test_nodes: Vec::new(),
             smart_routing: false,
             override_yaml: None,
+            subscription_rules_source_id: None,
+            subscription_rules_yaml: None,
+            subscription_groups_yaml: None,
             port_mappings: Vec::new(),
             port_mapping_nodes: Vec::new(),
             client_fingerprint: None,
@@ -192,13 +204,23 @@ impl Default for MihomoConfigOptions {
 
 impl MihomoConfigOptions {
     /// 判断当前配置是否会激活 GeoSite / GeoIP 分流数据库。
-    /// 包含：隐私防追踪广告过滤、自定义规则、国内直连/GFW预设、或覆写片段中的 GEOSITE/GEOIP 规则。
+    /// 包含：隐私防追踪广告过滤、自定义规则、国内直连/GFW预设、订阅规则模式、或覆写片段中的 GEOSITE/GEOIP 规则。
     pub fn uses_geo(&self) -> bool {
         self.block_trackers
             || self.rules.iter().any(TrafficRule::uses_geo)
-            || matches!(self.routing_mode, RoutingMode::ChinaDirect | RoutingMode::GfwList)
+            || matches!(
+                self.routing_mode,
+                RoutingMode::Rule
+                    | RoutingMode::ChinaDirect
+                    | RoutingMode::GfwList
+                    | RoutingMode::Subscription
+            )
             || self
                 .override_yaml
+                .as_deref()
+                .is_some_and(|y| y.contains("GEOSITE") || y.contains("GEOIP"))
+            || self
+                .subscription_rules_yaml
                 .as_deref()
                 .is_some_and(|y| y.contains("GEOSITE") || y.contains("GEOIP"))
     }

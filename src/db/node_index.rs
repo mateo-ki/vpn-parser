@@ -428,6 +428,7 @@ mod tests {
                 url_template: "https://a.example/sub".into(),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap()
@@ -438,6 +439,7 @@ mod tests {
                 url_template: "https://b.example/sub".into(),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap()
@@ -589,6 +591,7 @@ mod tests {
                     url_template: format!("https://s{s}.example.com/sub"),
                     enabled: true,
                     remark: None,
+                    user_agent: None,
                 })
                 .await
                 .unwrap()

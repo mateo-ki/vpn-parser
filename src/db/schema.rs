@@ -89,8 +89,11 @@ impl Database {
                 content_sha256 TEXT,
                 fail_streak INTEGER NOT NULL DEFAULT 0,
                 last_fetch_host TEXT,
-                push_disabled INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
+	                push_disabled INTEGER NOT NULL DEFAULT 0,
+	                rules_yaml TEXT,
+	                groups_yaml TEXT,
+	                user_agent TEXT,
+	                created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )"#,
         )
@@ -170,6 +173,8 @@ impl Database {
         self.ensure_column("sources", "last_modified", "TEXT")
             .await?;
         self.ensure_column("sources", "content_sha256", "TEXT")
+            .await?;
+        self.ensure_column("sources", "user_agent", "TEXT")
             .await?;
         self.ensure_column("nodes", "latency_kernel", "TEXT")
             .await?;
@@ -301,6 +306,10 @@ impl Database {
             .await?;
         self.ensure_column("settings", "console_tabs", "TEXT NOT NULL DEFAULT 'all'")
             .await?;
+
+        // 订阅源持久化存储原始分流规则与策略组
+        self.ensure_column("sources", "rules_yaml", "TEXT").await?;
+        self.ensure_column("sources", "groups_yaml", "TEXT").await?;
 
         self.migrate_legacy_nodes().await?;
 

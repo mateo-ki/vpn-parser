@@ -588,24 +588,58 @@ mod policy_group_filter_tests {
     }
 
     #[test]
+    fn test_regional_groups_matching() {
+        let hk = sample_node("香港 01 专线", Some("HK"), "1.1.1.1");
+        let jp = sample_node("东京 02 节点", Some("JP"), "2.2.2.2");
+        let sg = sample_node("新加坡 03", Some("SG"), "3.3.3.3");
+        let us = sample_node("美国洛杉矶 04", Some("US"), "4.4.4.4");
+
+        assert!(node_matches_group(&hk, "香港节点", &[]));
+        assert!(!node_matches_group(&jp, "香港节点", &[]));
+
+        assert!(node_matches_group(&jp, "日本节点", &[]));
+        assert!(!node_matches_group(&hk, "日本节点", &[]));
+
+        assert!(node_matches_group(&sg, "新加坡节点", &[]));
+        assert!(!node_matches_group(&us, "新加坡节点", &[]));
+
+        assert!(node_matches_group(&us, "美国节点", &[]));
+        assert!(!node_matches_group(&hk, "美国节点", &[]));
+
+        assert!(node_matches_group(&hk, "国际流媒体", &[]));
+        assert!(node_matches_group(&jp, "国际流媒体", &[]));
+        assert!(node_matches_group(&sg, "Telegram", &[]));
+    }
+
+    #[test]
     fn test_the_pill_bar_defaults_to_all_only() {
         use super::visible_group_names;
 
         // 什么都没配：整条胶囊只有「全部」。
-        assert_eq!(visible_group_names(false, None, &[]), vec!["全部".to_string()]);
+        assert_eq!(visible_group_names(false, None, None, &[]), vec!["全部".to_string()]);
 
         // 反向判据：内置的「普通代理」按节点匹配能命中每一个节点，
         // 但配置里没有它就不该出现 —— 否则这条改动等于没做。
         let any_node = sample_node("任意节点", Some("HK"), "1.2.3.4");
         assert!(node_matches_group(&any_node, "普通代理", &[]));
-        assert!(!visible_group_names(false, None, &[])
+        assert!(!visible_group_names(false, None, None, &[])
             .iter()
             .any(|name| name == "普通代理"));
 
-        // 打开内置智能策略组 ⇒ 四组都出现。
-        let smart = visible_group_names(true, None, &[]);
-        assert_eq!(smart.len(), 5);
-        for name in ["AI分组", "美国节点", "多线并发下载", "普通代理"] {
+        // 打开内置智能策略组 ⇒ 全部内置组都出现。
+        let smart = visible_group_names(true, None, None, &[]);
+        assert_eq!(smart.len(), 10);
+        for name in [
+            "AI分组",
+            "国际流媒体",
+            "Telegram",
+            "香港节点",
+            "日本节点",
+            "新加坡节点",
+            "美国节点",
+            "多线并发下载",
+            "普通代理",
+        ] {
             assert!(smart.iter().any(|shown| shown == name), "{name} 该在");
         }
 
@@ -615,14 +649,14 @@ mod policy_group_filter_tests {
             kernel_group("空分组", "select", &[]),
             kernel_group("GLOBAL", "select", &["a"]),
         ];
-        let shown = visible_group_names(false, None, &kernel);
+        let shown = visible_group_names(false, None, None, &kernel);
         assert!(shown.iter().any(|name| name == "我的分组"));
         assert!(!shown.iter().any(|name| name == "空分组"));
         assert!(!shown.iter().any(|name| name == "GLOBAL"));
 
         // 内核真上报了内置组的名字（比如覆写里自己定义的），关着 smart_routing 也要显示。
         let reported = vec![kernel_group("普通代理", "select", &["a"])];
-        assert!(visible_group_names(false, None, &reported)
+        assert!(visible_group_names(false, None, None, &reported)
             .iter()
             .any(|name| name == "普通代理"));
     }
@@ -644,9 +678,14 @@ mod policy_group_filter_tests {
         // 坏 YAML 不许带崩界面：按"没有覆写组"处理。
         assert!(override_group_names(Some("proxy-groups: [:::")).is_empty());
 
-        assert!(visible_group_names(false, Some(document), &[])
+        assert!(visible_group_names(false, Some(document), None, &[])
             .iter()
             .any(|name| name == "我的分组"));
+
+        let sub_doc = "proxy-groups:\n  - name: 订阅自带策略组\n    type: select\n";
+        assert!(visible_group_names(false, None, Some(sub_doc), &[])
+            .iter()
+            .any(|name| name == "订阅自带策略组"));
     }
 }
 

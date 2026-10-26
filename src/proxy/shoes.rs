@@ -455,8 +455,8 @@ mod tests {
         assert!(yaml_str.contains("destination_port_range:"));
         assert_eq!(
             yaml_str.matches("action: block").count(),
-            3,
-            "STUN/TURN 拦截应拆成 keyword + 端口列表 + 端口段三条 block 规则:\n{yaml_str}"
+            4,
+            "STUN/TURN 拦截应拆成 keyword + 端口列表 + 端口段三条 block 规则（加上全自动推荐规则中的 category-ads-all 广告拦截共 4 条）:\n{yaml_str}"
         );
     }
 
@@ -503,8 +503,8 @@ mod tests {
         );
         assert_eq!(
             yaml_str.matches("action: block").count(),
-            0,
-            "QUIC 规则跳过后不应产生任何 block 规则:\n{yaml_str}"
+            1,
+            "QUIC 规则跳过后不应产生端口 block 规则（仅保留全自动推荐分流中的 category-ads-all 广告拦截）:\n{yaml_str}"
         );
     }
 

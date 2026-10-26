@@ -1,6 +1,6 @@
 [package]
 name = "vpn-parser"
-version = "1.13.1"
+version = "1.14.0"
 edition = "2021"
 description = "VPN/proxy subscription collector with desktop GUI and HTTP API"
 license = "MIT"
@@ -44,10 +44,11 @@ flate2 = "1"
 tar = "0.4"
 arboard = { version = "3", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+rfd = { version = "0.17.2", optional = true }
 
 [features]
 default = ["gui"]
-gui = ["dep:eframe", "dep:egui", "dep:arboard", "dep:image", "dep:wgpu"]
+gui = ["dep:eframe", "dep:egui", "dep:arboard", "dep:image", "dep:wgpu", "dep:rfd"]
 
 [[example]]
 name = "park_probe"

@@ -527,7 +527,22 @@ impl VpnApp {
                 let name_field = ui.text_edit_singleline(&mut self.form_name);
                 crate::gui::widgets::note_text_field(ui, &name_field);
             });
-            ui.label("订阅链接或本地文件路径");
+            ui.horizontal(|ui| {
+                ui.label("订阅链接或本地文件路径");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(icons::button_with_icon(
+                            Icon::Folder,
+                            "选择本地文件",
+                            theme::accent(),
+                        ))
+                        .on_hover_text("浏览并选择本地配置文件（.yaml, .yml, .txt, .json, .conf 等）")
+                        .clicked()
+                    {
+                        self.pick_local_file_for_source();
+                    }
+                });
+            });
             let url_field = ui.add(
                 egui::TextEdit::multiline(&mut self.form_url)
                     .desired_width(f32::INFINITY)
@@ -570,6 +585,90 @@ impl VpnApp {
                 let remark_field = ui.text_edit_singleline(&mut self.form_remark);
                 crate::gui::widgets::note_text_field(ui, &remark_field);
             });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("User-Agent").strong());
+                let current_ua = self.form_user_agent.trim();
+                let display_title = match current_ua {
+                    "" | "clash.meta" => "clash.meta (推荐 · 协议最全)",
+                    "clash-verge/v1.7.7" => "clash-verge (Clash Verge)",
+                    "ClashforWindows/0.20.39" => "ClashforWindows (CFW)",
+                    "sing-box/1.9.0" => "sing-box (Sing-box)",
+                    "v2rayN/6.42" => "v2rayN (v2rayN)",
+                    "vpn-parser/1.0" => "vpn-parser/1.0 (原生默认)",
+                    _ => "自定义 UA",
+                };
+                egui::ComboBox::from_id_salt("source_ua_presets")
+                    .selected_text(display_title)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(
+                                self.form_user_agent == "clash.meta" || self.form_user_agent.is_empty(),
+                                "clash.meta (推荐 · 协议最全)",
+                            )
+                            .clicked()
+                        {
+                            self.form_user_agent = "clash.meta".to_string();
+                        }
+                        if ui
+                            .selectable_label(
+                                self.form_user_agent == "clash-verge/v1.7.7",
+                                "clash-verge/v1.7.7 (Clash Verge)",
+                            )
+                            .clicked()
+                        {
+                            self.form_user_agent = "clash-verge/v1.7.7".to_string();
+                        }
+                        if ui
+                            .selectable_label(
+                                self.form_user_agent == "ClashforWindows/0.20.39",
+                                "ClashforWindows/0.20.39 (CFW)",
+                            )
+                            .clicked()
+                        {
+                            self.form_user_agent = "ClashforWindows/0.20.39".to_string();
+                        }
+                        if ui
+                            .selectable_label(
+                                self.form_user_agent == "sing-box/1.9.0",
+                                "sing-box/1.9.0 (Sing-box)",
+                            )
+                            .clicked()
+                        {
+                            self.form_user_agent = "sing-box/1.9.0".to_string();
+                        }
+                        if ui
+                            .selectable_label(
+                                self.form_user_agent == "v2rayN/6.42",
+                                "v2rayN/6.42 (v2rayN)",
+                            )
+                            .clicked()
+                        {
+                            self.form_user_agent = "v2rayN/6.42".to_string();
+                        }
+                        if ui
+                            .selectable_label(
+                                self.form_user_agent == "vpn-parser/1.0",
+                                "vpn-parser/1.0 (原生默认)",
+                            )
+                            .clicked()
+                        {
+                            self.form_user_agent = "vpn-parser/1.0".to_string();
+                        }
+                    });
+            });
+            let ua_field = ui.add(
+                egui::TextEdit::singleline(&mut self.form_user_agent)
+                    .hint_text("默认 clash.meta，留空或手动输入自定义 UA")
+                    .desired_width(f32::INFINITY),
+            );
+            crate::gui::widgets::note_text_field(ui, &ua_field);
+            ui.label(
+                RichText::new("许多机场与转换面板根据 User-Agent 决定返回哪些格式与协议的节点，默认 clash.meta 兼容性最佳。")
+                    .small()
+                    .color(theme::muted()),
+            );
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
                 if ui.add(primary_btn("保存")).clicked() {
                     self.save_source_form();

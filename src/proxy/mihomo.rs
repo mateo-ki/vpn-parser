@@ -9,76 +9,8 @@ use crate::proxy::types::{AutoRoutingStrategy, MihomoConfigOptions, ProxyMode};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
-/// 智能分流策略组内置的预置规则集
-pub const SMART_ROUTING_PREPEND_RULES: &[&str] = &[
-    "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
-    "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve",
-    "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
-    "IP-CIDR6,fc00::/7,DIRECT,no-resolve",
-    "IP-CIDR6,fe80::/10,DIRECT,no-resolve",
-    "DST-PORT,22,DIRECT",
-    // AI 视频服务
-    "DOMAIN-SUFFIX,runwayml.com,AI分组",
-    "DOMAIN-KEYWORD,runwayml,AI分组",
-    "DOMAIN-SUFFIX,runway.com,AI分组",
-    "DOMAIN-SUFFIX,muse.ai,AI分组",
-    // Google & YouTube 走美国节点
-    "DOMAIN,gemini.google.com,美国节点",
-    "DOMAIN-SUFFIX,google.com,美国节点",
-    "DOMAIN-SUFFIX,google.com.hk,美国节点",
-    "DOMAIN-SUFFIX,google.co.jp,美国节点",
-    "DOMAIN-SUFFIX,google.dev,美国节点",
-    "DOMAIN-SUFFIX,gstatic.com,美国节点",
-    "DOMAIN-SUFFIX,googleapis.com,美国节点",
-    "DOMAIN-SUFFIX,googleusercontent.com,美国节点",
-    "DOMAIN-SUFFIX,youtube.com,美国节点",
-    "DOMAIN-SUFFIX,youtu.be,美国节点",
-    "DOMAIN-SUFFIX,ytimg.com,美国节点",
-    "DOMAIN-SUFFIX,googlevideo.com,美国节点",
-    "GEOSITE,google,美国节点",
-    "GEOSITE,youtube,美国节点",
-    "GEOIP,google,美国节点,no-resolve",
-    // 主流 AI 服务
-    "DOMAIN-SUFFIX,openai.com,AI分组",
-    "DOMAIN-SUFFIX,chatgpt.com,AI分组",
-    "DOMAIN-SUFFIX,oaistatic.com,AI分组",
-    "DOMAIN-SUFFIX,oaiusercontent.com,AI分组",
-    "DOMAIN-SUFFIX,anthropic.com,AI分组",
-    "DOMAIN-SUFFIX,claude.ai,AI分组",
-    "DOMAIN-SUFFIX,claudeusercontent.com,AI分组",
-    "DOMAIN-SUFFIX,x.com,AI分组",
-    "DOMAIN-SUFFIX,grok.com,AI分组",
-    "DOMAIN-SUFFIX,perplexity.ai,AI分组",
-    "DOMAIN-SUFFIX,poe.com,AI分组",
-    "DOMAIN-SUFFIX,character.ai,AI分组",
-    "DOMAIN-SUFFIX,stability.ai,AI分组",
-    "DOMAIN-SUFFIX,huggingface.co,AI分组",
-    "DOMAIN-SUFFIX,replicate.com,AI分组",
-    "DOMAIN-SUFFIX,ai.com,AI分组",
-    "DOMAIN-SUFFIX,midjourney.com,美国节点",
-    "DOMAIN-SUFFIX,capcut.com,美国节点",
-    // 国内直连
-    "DOMAIN-SUFFIX,bing.com,DIRECT",
-    "DOMAIN-SUFFIX,feishu.cn,DIRECT",
-    // 系统连通性探测直连（防 Windows NCSI 挂起）与 OCSP/CRL 证书吊销检查直连
-    "DOMAIN-SUFFIX,msftconnecttest.com,DIRECT",
-    "DOMAIN-SUFFIX,msftncsi.com,DIRECT",
-    "DOMAIN-SUFFIX,digicert.com,DIRECT",
-    "DOMAIN-SUFFIX,sectigo.com,DIRECT",
-    "DOMAIN-SUFFIX,globalsign.com,DIRECT",
-    "DOMAIN-SUFFIX,letsencrypt.org,DIRECT",
-    "DOMAIN-SUFFIX,lencr.org,DIRECT",
-    "PROCESS-NAME,steam.exe,DIRECT",
-    "PROCESS-NAME,BaiduNetdisk.exe,DIRECT",
-    "PROCESS-NAME,QQ.exe,DIRECT",
-    "PROCESS-NAME,Weixin.exe,DIRECT",
-    // 下载器多线并发
-    "PROCESS-NAME,fdm.exe,多线并发下载",
-    "PROCESS-NAME,PikPak.exe,多线并发下载",
-    "PROCESS-NAME,IDMan.exe,多线并发下载",
-    "PROCESS-NAME,Motrix.exe,多线并发下载",
-    "PROCESS-NAME,Thunder.exe,多线并发下载",
-];
+/// 智能分流策略组内置的预置规则集（与编译器保持完全同步）
+pub use crate::proxy::compiler::mihomo::SMART_ROUTING_PREPEND_RULES;
 
 /// 内核内自动选路用的两个组名。
 pub const URL_TEST_GROUP: &str = "自动选择";
@@ -109,10 +41,15 @@ fn build_mihomo_config_legacy(node: &Node, options: MihomoConfigOptions) -> Resu
         .ok_or_else(|| anyhow!("Mihomo 代理配置缺少名称"))?;
 
     let selected_rules = match options.routing_mode {
-        RoutingMode::Rule => optimize_traffic_rules(&options.rules),
+        RoutingMode::Rule => {
+            let mut combined = options.rules.clone();
+            combined.extend(recommended_traffic_rules());
+            optimize_traffic_rules(&combined)
+        }
         RoutingMode::ChinaDirect => recommended_traffic_rules(),
         RoutingMode::GfwList => gfwlist_traffic_rules(),
         RoutingMode::Global | RoutingMode::Direct => Vec::new(),
+        RoutingMode::Subscription => options.rules.clone(),
     };
     // 境内 DoH 污染出的国内 IP 会让 GEOIP,CN 误判直连，先按域名定性（仅 mihomo）。
     let mut selected_rules = selected_rules;
@@ -256,7 +193,7 @@ fn build_mihomo_config_legacy(node: &Node, options: MihomoConfigOptions) -> Resu
     }
 
     let default_target = match options.routing_mode {
-        RoutingMode::Rule | RoutingMode::ChinaDirect | RoutingMode::Global => "PROXY",
+        RoutingMode::Rule | RoutingMode::ChinaDirect | RoutingMode::Global | RoutingMode::Subscription => "PROXY",
         RoutingMode::GfwList | RoutingMode::Direct => "DIRECT",
     };
     let match_target = if url_test_active && default_target == "PROXY" {
@@ -413,7 +350,7 @@ fn build_mihomo_config_legacy(node: &Node, options: MihomoConfigOptions) -> Resu
     }
 
     let mut final_rules: Vec<String> = Vec::new();
-    if options.smart_routing && matches!(options.routing_mode, RoutingMode::Rule | RoutingMode::ChinaDirect) {
+    if options.smart_routing && matches!(options.routing_mode, RoutingMode::Rule | RoutingMode::ChinaDirect | RoutingMode::Subscription) {
         for r in SMART_ROUTING_PREPEND_RULES {
             final_rules.push(r.to_string());
         }

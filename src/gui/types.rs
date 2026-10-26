@@ -343,6 +343,10 @@ pub enum BgMsg {
     RuleHits(Vec<crate::db::telemetry::RuleHitRow>),
     /// 所有源最近的拉取历史（一次全取，界面自己按 source_id 分桶）。
     FetchHistory(Vec<(String, crate::db::telemetry::FetchHistoryRow)>),
+    /// 本地文件选择回调：新建/编辑订阅源中选取本地文件路径。
+    LocalFileSelectedForSource(String),
+    /// 本地文件选择回调：节点池导入本地 YAML 时选取本地文件路径。
+    LocalFileSelectedForNodeImport(String),
     Status(String),
     GistDiscoveryDone(Result<String, String>),
     FetchOneDone {

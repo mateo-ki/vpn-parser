@@ -15,7 +15,7 @@ impl Database {
             r#"SELECT id, name, url_template, enabled, remark, last_fetch_at,
                       last_status, last_node_count, last_resolved_url, last_etag,
                       last_modified, content_sha256, fail_streak, last_fetch_host,
-                      push_disabled, created_at, updated_at
+                      push_disabled, rules_yaml, groups_yaml, user_agent, created_at, updated_at
                FROM sources
                ORDER BY created_at DESC"#,
         )
@@ -29,7 +29,7 @@ impl Database {
             r#"SELECT id, name, url_template, enabled, remark, last_fetch_at,
                       last_status, last_node_count, last_resolved_url, last_etag,
                       last_modified, content_sha256, fail_streak, last_fetch_host,
-                      push_disabled, created_at, updated_at
+                      push_disabled, rules_yaml, groups_yaml, user_agent, created_at, updated_at
                FROM sources
                WHERE id = ?"#,
         )
@@ -41,6 +41,10 @@ impl Database {
 
     pub async fn create_source(&self, input: CreateSource) -> Result<Source> {
         let now = Utc::now();
+        let user_agent = input
+            .user_agent
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         let source = Source {
             id: Uuid::new_v4().to_string(),
             name: input.name,
@@ -57,20 +61,24 @@ impl Database {
             fail_streak: 0,
             last_fetch_host: None,
             push_disabled: false,
+            rules_yaml: None,
+            groups_yaml: None,
+            user_agent,
             created_at: now,
             updated_at: now,
         };
         sqlx::query(
             r#"INSERT INTO sources
-               (id, name, url_template, enabled, remark, last_fetch_at, last_status,
+               (id, name, url_template, enabled, remark, user_agent, last_fetch_at, last_status,
                 last_node_count, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, NULL, NULL, 0, ?, ?)"#,
+               VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?, ?)"#,
         )
         .bind(&source.id)
         .bind(&source.name)
         .bind(&source.url_template)
         .bind(source.enabled as i64)
         .bind(&source.remark)
+        .bind(&source.user_agent)
         .bind(source.created_at.to_rfc3339())
         .bind(source.updated_at.to_rfc3339())
         .execute(&self.pool)
@@ -98,10 +106,18 @@ impl Database {
         if let Some(push_disabled) = input.push_disabled {
             source.push_disabled = push_disabled;
         }
+        if let Some(ua) = input.user_agent {
+            let trimmed = ua.trim().to_string();
+            source.user_agent = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            };
+        }
         source.updated_at = Utc::now();
         sqlx::query(
             r#"UPDATE sources SET name=?, url_template=?, enabled=?, remark=?, push_disabled=?,
-                      updated_at=?
+                      user_agent=?, updated_at=?
                WHERE id=?"#,
         )
         .bind(&source.name)
@@ -109,6 +125,7 @@ impl Database {
         .bind(source.enabled as i64)
         .bind(&source.remark)
         .bind(source.push_disabled as i64)
+        .bind(&source.user_agent)
         .bind(source.updated_at.to_rfc3339())
         .bind(id)
         .execute(&self.pool)
@@ -272,6 +289,24 @@ impl Database {
         Ok(())
     }
 
+    pub async fn update_source_rules_and_groups(
+        &self,
+        id: &str,
+        rules_yaml: Option<&str>,
+        groups_yaml: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"UPDATE sources SET rules_yaml = ?, groups_yaml = ?, updated_at = ? WHERE id = ?"#,
+        )
+        .bind(rules_yaml)
+        .bind(groups_yaml)
+        .bind(Utc::now().to_rfc3339())
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// 分析所有订阅源之间的重合度与同质化水平
     pub async fn analyze_source_homogeneity(&self) -> Result<Vec<SourceHomogeneityReport>> {
         let sources = self.list_sources().await?;
@@ -408,6 +443,7 @@ impl Database {
                             enabled: Some(false),
                             remark: None,
                             push_disabled: None,
+                            user_agent: None,
                         },
                     )
                     .await?;
@@ -441,6 +477,9 @@ pub(crate) fn row_to_source(r: sqlx::sqlite::SqliteRow) -> Source {
         fail_streak: r.try_get("fail_streak").ok().flatten().unwrap_or(0),
         last_fetch_host: r.try_get("last_fetch_host").ok().flatten(),
         push_disabled: r.try_get::<i64, _>("push_disabled").unwrap_or(0) != 0,
+        rules_yaml: r.try_get("rules_yaml").ok().flatten(),
+        groups_yaml: r.try_get("groups_yaml").ok().flatten(),
+        user_agent: r.try_get("user_agent").ok().flatten(),
         created_at: super::parse_dt(r.get::<String, _>("created_at").as_str()),
         updated_at: super::parse_dt(r.get::<String, _>("updated_at").as_str()),
     }

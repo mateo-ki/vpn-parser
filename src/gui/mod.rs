@@ -2,7 +2,7 @@ use crate::collector::Collector;
 use crate::db::Database;
 use crate::kernel::{
     find_kernel_executable, missing_kernel_for, KernelInfo, KernelKind, KernelManager,
-    KernelReleaseInfo, KernelUpdateProgress,
+    KernelPreference, KernelReleaseInfo, KernelUpdateProgress,
 };
 use crate::gui::view_models::nodes_vm::NodeCardAction;
 use crate::models::{
@@ -12,7 +12,7 @@ use crate::models::{
 use crate::platform;
 use crate::proxy::{
     is_node_connectivity_failure, optimize_traffic_rules, MihomoConfigOptions, ProxyManager,
-    ProxyMode, ProxyRuntimeStatus, ProxyState, RuleAction,
+    ProxyMode, ProxyRuntimeStatus, ProxyState, RoutingMode, RuleAction,
 };
 use crate::speedtest::{SpeedTestOptions, SpeedTester, SpeedtestIntensity};
 use crate::tasks::TaskTracker;
@@ -193,6 +193,7 @@ pub struct VpnApp {
     pub(crate) form_url: String,
     pub(crate) form_enabled: bool,
     pub(crate) form_remark: String,
+    pub(crate) form_user_agent: String,
     pub(crate) show_source_form: bool,
     /// Ctrl+V 全局粘贴的识别结果，Some 就弹框（弹框自己负责清空这条）。
     pub(crate) paste_outcome: Option<crate::gui::paste::PasteOutcome>,
@@ -596,6 +597,7 @@ impl VpnApp {
             form_url: String::new(),
             form_enabled: true,
             form_remark: String::new(),
+            form_user_agent: String::new(),
             show_source_form: false,
             paste_outcome: None,
             diag_trace: None,
@@ -1100,6 +1102,7 @@ impl VpnApp {
         self.form_url.clear();
         self.form_enabled = true;
         self.form_remark.clear();
+        self.form_user_agent = "clash.meta".to_string();
         self.show_source_form = true;
     }
 
@@ -1109,7 +1112,45 @@ impl VpnApp {
         self.form_url = source.url_template.clone();
         self.form_enabled = source.enabled;
         self.form_remark = source.remark.clone().unwrap_or_default();
+        self.form_user_agent = source.user_agent.clone().unwrap_or_else(|| "clash.meta".to_string());
         self.show_source_form = true;
+    }
+
+    /// 打开系统原生文件选择对话框选取本地配置文件（用于新建/编辑订阅源）
+    pub(crate) fn pick_local_file_for_source(&self) {
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            let file = rfd::AsyncFileDialog::new()
+                .set_title("选择本地订阅或配置文件")
+                .add_filter(
+                    "配置文件 (*.yaml, *.yml, *.txt, *.json, *.conf)",
+                    &["yaml", "yml", "txt", "json", "conf"],
+                )
+                .add_filter("全部文件 (*.*)", &["*"])
+                .pick_file()
+                .await;
+            if let Some(handle) = file {
+                let path = handle.path().to_string_lossy().to_string();
+                let _ = tx.send(BgMsg::LocalFileSelectedForSource(path));
+            }
+        });
+    }
+
+    /// 打开系统原生文件选择对话框选取本地 YAML 文件（用于节点池导入）
+    pub(crate) fn pick_local_file_for_node_import(&self) {
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            let file = rfd::AsyncFileDialog::new()
+                .set_title("选择本地 Clash YAML 文件")
+                .add_filter("YAML 配置文件 (*.yaml, *.yml)", &["yaml", "yml"])
+                .add_filter("全部文件 (*.*)", &["*"])
+                .pick_file()
+                .await;
+            if let Some(handle) = file {
+                let path = handle.path().to_string_lossy().to_string();
+                let _ = tx.send(BgMsg::LocalFileSelectedForNodeImport(path));
+            }
+        });
     }
 
     pub(crate) fn save_source_form(&mut self) {
@@ -1124,6 +1165,7 @@ impl VpnApp {
         let url = self.form_url.trim().to_string();
         let enabled = self.form_enabled;
         let remark = nonempty_opt(&self.form_remark);
+        let user_agent = nonempty_opt(&self.form_user_agent);
         self.busy = true;
         self.show_source_form = false;
         self.rt.spawn(async move {
@@ -1136,6 +1178,7 @@ impl VpnApp {
                         enabled: Some(enabled),
                         remark,
                         push_disabled: None,
+                        user_agent: Some(user_agent.unwrap_or_default()),
                     },
                 )
                 .await
@@ -1147,6 +1190,7 @@ impl VpnApp {
                     url_template: url,
                     enabled,
                     remark,
+                    user_agent,
                 })
                 .await
                 .map(|source| {
@@ -1185,6 +1229,7 @@ impl VpnApp {
                     url_template: openrung_url.into(),
                     enabled: true,
                     remark: Some("OpenRung Relay Network 官方中继 (VLESS+REALITY+Vision)".into()),
+                    user_agent: None,
                 })
                 .await
             {
@@ -1225,6 +1270,7 @@ impl VpnApp {
                         url_template: warp_url.into(),
                         enabled: true,
                         remark: Some("Cloudflare WARP 官方原生 MASQUE 节点池（免第三方仓库）".into()),
+                        user_agent: None,
                     })
                     .await
                 {
@@ -1357,6 +1403,7 @@ impl VpnApp {
                         enabled: Some(enabled),
                         remark: None,
                         push_disabled: None,
+                        user_agent: None,
                     },
                 )
                 .await
@@ -1394,6 +1441,7 @@ impl VpnApp {
                         enabled: None,
                         remark: None,
                         push_disabled: Some(push_disabled),
+                        user_agent: None,
                     },
                 )
                 .await
@@ -1421,6 +1469,7 @@ impl VpnApp {
                 url_template: source.url_template.clone(),
                 enabled: source.enabled,
                 remark: source.remark.clone(),
+                user_agent: source.user_agent.clone(),
             })
             .collect();
         match serde_json::to_string_pretty(&sources)
@@ -2097,9 +2146,20 @@ impl VpnApp {
                     url_template: file_url,
                     enabled: true,
                     remark: Some("从本地 YAML 配置文件导入".to_string()),
+                    user_agent: None,
                 };
                 match db.create_source(create_src).await {
                     Ok(created) => {
+                        let (rules_yaml, groups_yaml) = crate::parser::extract_subscription_rules_and_groups(&content);
+                        if rules_yaml.is_some() || groups_yaml.is_some() {
+                            let _ = db
+                                .update_source_rules_and_groups(
+                                    &created.id,
+                                    rules_yaml.as_deref(),
+                                    groups_yaml.as_deref(),
+                                )
+                                .await;
+                        }
                         source_id_opt = Some(created.id);
                     }
                     Err(e) => {
@@ -2506,11 +2566,33 @@ impl VpnApp {
         self.proxy_config = config;
     }
 
+    /// 在启动代理或重载配置前，补全瞬态字段（例如选中的订阅规则/策略组 YAML）
+    pub(crate) fn prepare_proxy_config_options(&self) -> MihomoConfigOptions {
+        let mut options = self.proxy_config.clone();
+        if options.routing_mode == RoutingMode::Subscription {
+            if let Some(ref sid) = options.subscription_rules_source_id {
+                if let Some(src) = self.sources.iter().find(|s| &s.id == sid) {
+                    options.subscription_rules_yaml = src.rules_yaml.clone();
+                    options.subscription_groups_yaml = src.groups_yaml.clone();
+                }
+            }
+        }
+        options
+    }
+
+    pub(crate) fn active_subscription_groups_yaml(&self) -> Option<String> {
+        if self.proxy_config.routing_mode != RoutingMode::Subscription {
+            return None;
+        }
+        let sid = self.proxy_config.subscription_rules_source_id.as_deref()?;
+        self.sources.iter().find(|s| s.id == sid).and_then(|s| s.groups_yaml.clone())
+    }
+
     pub(crate) fn save_proxy_config(&mut self) {
         self.proxy_config.rules = optimize_traffic_rules(&self.proxy_config.rules);
         let manager = self.proxy_manager.clone();
         let db = self.db.clone();
-        let options = self.proxy_config.clone();
+        let options = self.prepare_proxy_config_options();
         let tx = self.tx.clone();
         self.proxy_busy = true;
         self.status = "正在保存分流配置并应用...".into();
@@ -2544,6 +2626,15 @@ impl VpnApp {
                 .chain(self.nodes.iter())
                 .find(|summary| summary.id == id)
         })?;
+        if self.proxy_config.kernel_preference == KernelPreference::Meow {
+            let is_tun = self.proxy_config.mode.has_tun();
+            let proto = node.protocol.to_ascii_lowercase();
+            let is_incomp = (cfg!(windows) && is_tun)
+                || matches!(proto.as_str(), "wireguard" | "wg" | "tuic" | "ssr" | "shadowsocksr" | "masque");
+            if is_incomp && find_kernel_executable(KernelKind::Mihomo).is_none() {
+                return Some(KernelKind::Mihomo);
+            }
+        }
         missing_kernel_for(
             &node.protocol,
             self.proxy_config.kernel_preference,
@@ -2768,7 +2859,7 @@ impl VpnApp {
         let db = self.db.clone();
         let manager = self.proxy_manager.clone();
         let mode = self.proxy_config.mode;
-        let options = self.proxy_config.clone();
+        let options = self.prepare_proxy_config_options();
         let candidate_blacklist = self.router.blacklisted(std::time::Instant::now());
         let tx = self.tx.clone();
         let starting_msg = "正在启动代理...".to_string();
@@ -5012,37 +5103,64 @@ mod tests {
         let handles = resize_handle_rects(screen);
         let dirs: Vec<Dir> = handles.iter().map(|(_, dir, _)| *dir).collect();
 
-        // 缩放手仍然齐全：四条边 + 三个角，只少了右上角。
-        for want in [
-            Dir::West,
-            Dir::East,
-            Dir::North,
-            Dir::South,
-            Dir::NorthWest,
-            Dir::SouthWest,
-            Dir::SouthEast,
-        ] {
-            assert!(dirs.contains(&want), "缩手感区少了 {want:?}");
-        }
-        assert!(
-            !dirs.contains(&Dir::NorthEast),
-            "右上角必须让给标题栏的 ✕，不然鼠标一放上去就变斜向拉伸箭头"
-        );
+        #[cfg(target_os = "macos")]
+        {
+            // macOS: 必须避开左上角红黄绿控制按钮，不能有 NorthWest 角
+            assert!(
+                !dirs.contains(&Dir::NorthWest),
+                "macOS 左上角必须避开红黄绿交通灯，不然点击关闭与最小化会被缩放手吃掉"
+            );
+            assert!(dirs.contains(&Dir::NorthEast), "macOS 右上角无按钮，应保留 NorthEast");
 
-        // 关键一条：任何一块都不能和右上角三个按钮的格子有正面积交集。
-        for index in 0..3 {
-            let cell = Rect::from_min_max(
-                egui::pos2(screen.max.x - (index as f32 + 1.0) * TITLE_BAR_BTN_W, 0.0),
-                egui::pos2(screen.max.x - index as f32 * TITLE_BAR_BTN_W, TITLE_BAR_H),
+            let lights_area = Rect::from_min_max(
+                egui::pos2(0.0, 0.0),
+                egui::pos2(80.0, TITLE_BAR_H),
             );
             for (rect, dir, _) in &handles {
-                let overlap = rect.intersect(cell);
+                let overlap = rect.intersect(lights_area);
                 assert!(
                     !overlap.is_positive(),
-                    "{dir:?} 压住了按钮 #{index}：{} ∩ {} = {overlap:?}",
+                    "{dir:?} 压住了 macOS 交通灯区域：{} ∩ {} = {overlap:?}",
                     rect,
-                    cell
+                    lights_area
                 );
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // 缩放手仍然齐全：四条边 + 三个角，只少了右上角。
+            for want in [
+                Dir::West,
+                Dir::East,
+                Dir::North,
+                Dir::South,
+                Dir::NorthWest,
+                Dir::SouthWest,
+                Dir::SouthEast,
+            ] {
+                assert!(dirs.contains(&want), "缩手感区少了 {want:?}");
+            }
+            assert!(
+                !dirs.contains(&Dir::NorthEast),
+                "右上角必须让给标题栏的 ✕，不然鼠标一放上去就变斜向拉伸箭头"
+            );
+
+            // 关键一条：任何一块都不能和右上角三个按钮的格子有正面积交集。
+            for index in 0..3 {
+                let cell = Rect::from_min_max(
+                    egui::pos2(screen.max.x - (index as f32 + 1.0) * TITLE_BAR_BTN_W, 0.0),
+                    egui::pos2(screen.max.x - index as f32 * TITLE_BAR_BTN_W, TITLE_BAR_H),
+                );
+                for (rect, dir, _) in &handles {
+                    let overlap = rect.intersect(cell);
+                    assert!(
+                        !overlap.is_positive(),
+                        "{dir:?} 压住了按钮 #{index}：{} ∩ {} = {overlap:?}",
+                        rect,
+                        cell
+                    );
+                }
             }
         }
     }

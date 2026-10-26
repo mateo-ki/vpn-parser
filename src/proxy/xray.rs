@@ -460,7 +460,13 @@ mod tests {
         tokio::fs::write(&path, serde_json::to_vec_pretty(&config).unwrap())
             .await
             .unwrap();
-        let output = Command::new(binary)
+        let mut cmd = Command::new(binary);
+        let geo_dir = crate::geo::mihomo_dir();
+        if geo_dir.exists() {
+            cmd.env("XRAY_LOCATION_ASSET", &geo_dir);
+            cmd.current_dir(&geo_dir);
+        }
+        let output = cmd
             .arg("run")
             .arg("-test")
             .arg("-c")

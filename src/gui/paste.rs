@@ -376,6 +376,11 @@ pub fn describe(outcome: &PasteOutcome) -> (egui::Color32, egui::Color32, String
                     "「新增订阅源后自动测这一源」的开关是关的，所以只建了源、没测速。"
                 }
             };
+            let ua_line = if is_local {
+                String::new()
+            } else {
+                "\n请求标识: User-Agent: clash.meta (默认兼容)".to_string()
+            };
             (
                 theme::success(),
                 theme::success_bg(),
@@ -384,7 +389,7 @@ pub fn describe(outcome: &PasteOutcome) -> (egui::Color32, egui::Color32, String
                 } else {
                     format!("识别成功 · 已加入《{name}》")
                 },
-                format!("{url}\n{next}"),
+                format!("{url}{ua_line}\n{next}"),
             )
         }
         PasteOutcome::Duplicate { name } => (

@@ -103,14 +103,27 @@ impl VpnApp {
                                     .range(1..=u16::MAX),
                             );
                             ui.checkbox(&mut self.proxy_config.allow_lan, "允许局域网");
-                            ui.checkbox(
+                            let term_cb = ui.checkbox(
                                 &mut self.proxy_config.terminal_proxy,
-                                "终端代理（写入 HTTP_PROXY / HTTPS_PROXY，Git·curl·npm·pip 才认）",
-                            )
-                            .on_hover_text(
-                                "启动代理时把变量写进 HKCU\\Environment，停止时清除；只清我们自己写的值，\n\
-                                 你原有的代理变量不会被碰。新开的终端立即生效，已开着的终端要重开。",
+                                "终端代理（写入环境变量并自动同步 Git 全局代理）",
+                            ).on_hover_text(
+                                "把变量写进 HKCU\\Environment 并自动配置 Git 全局代理，停止时清除；\n\
+                                 只清我们自己写的值，你原有的代理变量不会被碰。新开终端立即生效。",
                             );
+                            if term_cb.changed() {
+                                let new_state = self.proxy_config.terminal_proxy;
+                                self.save_proxy_config();
+                                let port = self.proxy_status.mixed_port;
+                                if self.proxy_status.local_proxy_active() {
+                                    if new_state {
+                                        let _ = crate::system_proxy::terminal::enable(port);
+                                        self.status = format!("终端代理已即时开启 (端口 {port})，已同步 Git 代理");
+                                    } else {
+                                        let _ = crate::system_proxy::terminal::disable();
+                                        self.status = "终端代理已即时关闭，已还原 Git 代理".into();
+                                    }
+                                }
+                            }
                         });
 
                         if self.proxy_config.mode == ProxyMode::Tun {

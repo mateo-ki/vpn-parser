@@ -58,7 +58,7 @@ impl VpnApp {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if ui
                                     .checkbox(&mut self.proxy_config.smart_routing, "启用内置智能策略组")
-                                    .on_hover_text("自动创建 AI分组、美国节点、多线并发下载、普通代理 策略组并注入优先级规则")
+                                    .on_hover_text("自动创建 AI分组、国际流媒体、Telegram、地区测速组（香港/日本/新加坡/美国）与多线并发下载策略组")
                                     .changed()
                                 {
                                     self.save_proxy_config();
@@ -71,9 +71,9 @@ impl VpnApp {
                         // 4 路由拓扑晶体微卡片
                         let routes = [
                             ("🤖 AI 分组", "专线原生 IP", "ChatGPT · Claude · Grok", theme::accent()),
-                            ("🇺🇸 美国专线", "URL-Test 选优", "Google · YouTube · 选优", theme::accent_strong()),
-                            ("⚡ 并发加速", "Load-Balance", "多路并发 · 迅雷 · 网盘下载", theme::accent_strong()),
-                            ("🇨🇳 国内直连", "DIRECT 放行", "微信 · 淘宝 · B站 (0消耗)", theme::text_secondary()),
+                            ("🎬 国际流媒体", "低延迟解锁", "YouTube · Netflix · Disney+", theme::accent_strong()),
+                            ("🌏 地区自动选优", "URL-Test", "香港 · 日本 · 新加坡 · 美国", theme::accent_strong()),
+                            ("⚡ 并发加速", "Load-Balance", "多路并发 · 迅雷 · 网盘下载", theme::text_secondary()),
                         ];
 
                         let render_route_card = |ui: &mut Ui, (title, badge, desc, col): &(&str, &str, &str, egui::Color32)| {
@@ -167,8 +167,11 @@ impl VpnApp {
                                         ui.horizontal(|ui| {
                                             let group_icon = match group.name.as_str() {
                                                 "AI分组" => Icon::Lightning,
-                                                "美国节点" => Icon::Globe,
+                                                "国际流媒体" => Icon::Play,
+                                                "Telegram" => Icon::Chat,
+                                                "香港节点" | "日本节点" | "新加坡节点" | "美国节点" | "台湾节点" => Icon::Globe,
                                                 "多线并发下载" => Icon::ArrowDown,
+                                                "普通代理" => Icon::Rocket,
                                                 _ => Icon::Radar,
                                             };
                                             icon_label(ui, group_icon, 14.0, theme::accent());
@@ -444,6 +447,34 @@ fn node_matches_group_depth(
 
     // 针对内置知名策略组做精准语义过滤
     match group_name {
+        "香港节点" | "HK" => {
+            return country == "HK"
+                || lower_name.contains("hk")
+                || lower_name.contains("hong")
+                || node.name.contains("港");
+        }
+        "日本节点" | "JP" => {
+            return country == "JP"
+                || lower_name.contains("jp")
+                || lower_name.contains("japan")
+                || lower_name.contains("tokyo")
+                || lower_name.contains("osaka")
+                || node.name.contains("日");
+        }
+        "新加坡节点" | "SG" => {
+            return country == "SG"
+                || lower_name.contains("sg")
+                || lower_name.contains("singapore")
+                || node.name.contains("新")
+                || node.name.contains("狮城");
+        }
+        "台湾节点" | "TW" => {
+            return country == "TW"
+                || lower_name.contains("tw")
+                || lower_name.contains("taiwan")
+                || node.name.contains("台")
+                || node.name.contains("湾");
+        }
         "美国节点" | "US" => {
             return (country == "US"
                 || lower_name.contains("us")
@@ -459,6 +490,18 @@ fn node_matches_group_depth(
                 || lower_name.contains("claude")
                 || lower_name.contains("grok")
                 || country == "US";
+        }
+        "国际流媒体" | "流媒体" => {
+            return matches!(country.as_str(), "HK" | "JP" | "SG" | "TW" | "US")
+                || lower_name.contains("netflix")
+                || lower_name.contains("youtube")
+                || lower_name.contains("disney")
+                || lower_name.contains("spotify");
+        }
+        "Telegram" | "TG" => {
+            return matches!(country.as_str(), "SG" | "HK" | "JP" | "US")
+                || lower_name.contains("telegram")
+                || lower_name.contains("tg");
         }
         "多线并发下载" | "下载" | "普通代理" => {
             return true;
@@ -492,7 +535,17 @@ fn node_matches_group_depth(
 
 /// 内置智能策略组的名字。它们**只有**在 `smart_routing` 开着时才会被写进生成的配置
 /// （`proxy` 侧那几处 `if options.smart_routing`），所以胶囊条也照这个判在不在。
-const SMART_ROUTING_GROUPS: [&str; 4] = ["AI分组", "美国节点", "多线并发下载", "普通代理"];
+const SMART_ROUTING_GROUPS: [&str; 9] = [
+    "AI分组",
+    "国际流媒体",
+    "Telegram",
+    "香港节点",
+    "日本节点",
+    "新加坡节点",
+    "美国节点",
+    "多线并发下载",
+    "普通代理",
+];
 
 /// 自定义覆写 YAML 里真的定义了哪些组。两种写法都认（整份文档带 `proxy-groups:`，
 /// 或者直接给一个组数组 —— 与 `proxy` 侧应用覆写时的分叉一致）。解析不动就当没有。
@@ -525,10 +578,16 @@ pub(crate) fn override_group_names(override_yaml: Option<&str>) -> Vec<String> {
 pub(crate) fn visible_group_names(
     smart_routing: bool,
     override_yaml: Option<&str>,
+    sub_groups_yaml: Option<&str>,
     kernel_groups: &[KernelGroup],
 ) -> Vec<String> {
     let mut names: Vec<String> = vec!["全部".to_string()];
-    let defined = override_group_names(override_yaml);
+    let mut defined = override_group_names(override_yaml);
+    for g in override_group_names(sub_groups_yaml) {
+        if !defined.contains(&g) {
+            defined.push(g);
+        }
+    }
     let reported = |name: &str| {
         kernel_groups
             .iter()

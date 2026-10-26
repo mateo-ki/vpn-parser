@@ -1584,6 +1584,7 @@ mod tests {
                 url_template: "https://example.com/sub".into(),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap()
@@ -1665,6 +1666,7 @@ mod tests {
                 url_template: "https://example.com/hk".into(),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap()
@@ -1676,6 +1678,7 @@ mod tests {
                 url_template: "https://example.com/us".into(),
                 enabled: true,
                 remark: None,
+                user_agent: None,
             })
             .await
             .unwrap()

@@ -548,20 +548,39 @@ fn main() -> Result<()> {
         ) = gui_handles.clone();
         // 窗口大小配置已移除（2026-10-24）：固定中屏 1280x800
         let (window_w, window_h) = (1280.0, 800.0);
+        let mut viewport = egui::ViewportBuilder::default()
+            // Linux / Wayland 下合成器按 app_id 关联 .desktop 与图标
+            .with_app_id("vpn-parser")
+            .with_inner_size([window_w, window_h])
+            .with_min_inner_size([820.0, 520.0])
+            .with_title("VPN Parser")
+            .with_icon(app_icon.clone())
+            .with_visible(true)
+            .with_active(!diag::enabled());
+
+        #[cfg(target_os = "macos")]
+        {
+            // macOS 下如果直接使用 with_decorations(false)，AppKit 会将窗口标记为 NSWindowStyleMaskBorderless（无 Titled 掩码），
+            // 导致 Cocoa 拒绝响应 miniaturize:，点击黄色按钮无法最小化到 Dock。
+            // 现代 Mac 做法：保留 decorations(true) 以获得完整的 Titled/Closable/Miniaturizable 掩码，
+            // 同时隐藏原生标题与原生按钮，并开启 fullsize_content_view，由自定义标题栏呈现无缝界面。
+            viewport = viewport
+                .with_decorations(true)
+                .with_title_shown(false)
+                .with_titlebar_buttons_shown(false)
+                .with_titlebar_shown(false)
+                .with_fullsize_content_view(true);
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // 系统标题栏去掉，换成 gui::VpnApp::ui_title_bar 自绘的一条
+            // （最小化 / 最大化 / 关闭 + 拖动 + 8 向缩放手）。
+            viewport = viewport.with_decorations(false);
+        }
+
         let options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                // Linux / Wayland 下合成器按 app_id 关联 .desktop 与图标
-                .with_app_id("vpn-parser")
-                // 系统标题栏去掉，换成 gui::VpnApp::ui_title_bar 自绘的一条
-                // （最小化 / 最大化 / 关闭 + 拖动 + 8 向缩放手）。
-                .with_decorations(false)
-                // 窗口默认尺寸按数据库持久化设置：小屏 1024x680 / 中屏 1280x800 / 大屏 1440x880
-                .with_inner_size([window_w, window_h])
-                .with_min_inner_size([820.0, 520.0])
-                .with_title("VPN Parser")
-                .with_icon(app_icon.clone())
-                .with_visible(true)
-                .with_active(!diag::enabled()),
+            viewport,
             centered: true,
             persist_window: false,
             renderer,

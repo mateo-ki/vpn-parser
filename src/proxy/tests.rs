@@ -4,9 +4,9 @@ use crate::kernel::KernelKind;
 use crate::models::Node;
 use crate::proxy::adapter::kernel_adapter;
 use crate::proxy::compiler::{
-    BackendCompiler, CompiledArtifact, ShoesCompiler, SingBoxCompiler, XrayCompiler,
+    BackendCompiler, CompiledArtifact, MihomoCompiler, ShoesCompiler, SingBoxCompiler, XrayCompiler,
 };
-use crate::proxy::ir::{lower_options_to_ir, IRAction, IRMatcher};
+use crate::proxy::ir::{lower_options_to_ir, IRAction, IRMatcher, RuleSource};
 use crate::proxy::mihomo::{URL_TEST_INTERVAL_SECS, URL_TEST_TIMEOUT_MS, URL_TEST_TOLERANCE_MS};
 use crate::proxy_probe::PROXY_CONNECTIVITY_TEST_URL;
 use crate::system_proxy::{SystemProxyControl, SystemProxySnapshot};
@@ -285,9 +285,13 @@ use std::time::Duration;
         assert_eq!(config["external-controller"], "127.0.0.1:9090");
         assert_eq!(config["proxies"].as_array().unwrap().len(), 1);
         assert_eq!(config["proxy-groups"][0]["name"], "PROXY");
-        // 没有用户规则时，只剩镜像钉直连 + 兜底 MATCH。
+        // 智能规则（全自动版本）：即使没有配置任何用户自定义规则，也自动集成完整的推荐分流（国内直连、广告拦截、局域网放行）
         let rules = config["rules"].as_array().unwrap();
-        assert_eq!(rules.len(), crate::geo::MIRROR_DIRECT_HOSTS.len() + 1);
+        assert!(rules.iter().any(|r| r == "GEOSITE,cn,DIRECT"));
+        assert!(rules.iter().any(|r| r == "GEOIP,CN,DIRECT,no-resolve"));
+        for host in crate::geo::MIRROR_DIRECT_HOSTS {
+            assert!(rules.iter().any(|r| r == &format!("DOMAIN-SUFFIX,{host},DIRECT")));
+        }
         assert_eq!(rules.last().unwrap(), "MATCH,PROXY");
     }
 
@@ -320,6 +324,64 @@ use std::time::Duration;
         assert_eq!(rules[14], "GEOSITE,youtube,PROXY");
         assert_eq!(rules[15], "GEOIP,CN,DIRECT,no-resolve");
         assert_eq!(rules.last().unwrap(), "MATCH,PROXY");
+    }
+
+    #[test]
+    fn rule_mode_acts_as_fully_automatic_with_user_exceptions_prioritized() {
+        let sample = node(
+            "vless",
+            json!({"server": "1.2.3.4", "port": 443, "uuid": "u1", "network": "ws", "security": "tls"}),
+        );
+
+        // 场景 1：用户无任何自定义规则时，Rule 模式自动应用全套推荐分流
+        let options_empty = MihomoConfigOptions {
+            routing_mode: RoutingMode::Rule,
+            rules: Vec::new(),
+            ..MihomoConfigOptions::default()
+        };
+        let plan_empty = lower_options_to_ir(&options_empty, Some(&sample));
+        assert!(plan_empty.rules.iter().any(|r| {
+            r.action == IRAction::Direct && r.matchers.contains(&IRMatcher::GeoSite("cn".into()))
+        }));
+        assert!(plan_empty.rules.iter().any(|r| {
+            r.action == IRAction::Direct && r.matchers.contains(&IRMatcher::GeoIp("CN".into()))
+        }));
+        assert!(plan_empty.rules.iter().any(|r| {
+            r.action == IRAction::Reject && r.matchers.contains(&IRMatcher::GeoSite("category-ads-all".into()))
+        }));
+
+        // 场景 2：用户配置了自定义例外规则时，自定义规则排在最前作为高优先级，推荐规则在后兜底
+        let options_custom = MihomoConfigOptions {
+            routing_mode: RoutingMode::Rule,
+            rules: vec![
+                TrafficRule {
+                    matcher: RuleMatcher::DomainSuffix("company-intranet.com".into()),
+                    action: RuleAction::Direct,
+                },
+                TrafficRule {
+                    matcher: RuleMatcher::Domain("special-proxy-service.cn".into()),
+                    action: RuleAction::Proxy,
+                },
+            ],
+            ..MihomoConfigOptions::default()
+        };
+        let plan_custom = lower_options_to_ir(&options_custom, Some(&sample));
+        // 首两条必须是用户的例外规则，且 source 标记为 User
+        assert_eq!(plan_custom.rules[0].action, IRAction::Direct);
+        assert_eq!(plan_custom.rules[0].matchers, vec![IRMatcher::DomainSuffix("company-intranet.com".into())]);
+        assert_eq!(plan_custom.rules[0].source, crate::proxy::ir::RuleSource::User);
+
+        assert!(matches!(plan_custom.rules[1].action, IRAction::Proxy(_)));
+        assert_eq!(plan_custom.rules[1].matchers, vec![IRMatcher::Domain("special-proxy-service.cn".into())]);
+        assert_eq!(plan_custom.rules[1].source, crate::proxy::ir::RuleSource::User);
+
+        // 其后紧随自动追加的 Preset 规则
+        let has_cn_direct = plan_custom.rules.iter().skip(2).any(|r| {
+            r.action == IRAction::Direct
+                && r.matchers.contains(&IRMatcher::GeoSite("cn".into()))
+                && r.source == crate::proxy::ir::RuleSource::Preset
+        });
+        assert!(has_cn_direct, "用户例外规则之后必须自动包含 GeoSite CN 国内直连规则");
     }
 
     #[test]
@@ -449,6 +511,93 @@ use std::time::Duration;
             config["rules"].as_array().unwrap().last().unwrap(),
             &Value::String("MATCH,PROXY".into())
         );
+    }
+
+    #[test]
+    fn smart_routing_creates_regional_and_scenario_groups_and_nested_proxy() {
+        let mut hk = node(
+            "vless",
+            json!({"server": "1.1.1.1", "port": 443, "uuid": "u1", "network": "ws", "security": "tls"}),
+        );
+        hk.name = "香港 01 专线".into();
+        hk.country = Some("HK".into());
+
+        let mut jp = node(
+            "vless",
+            json!({"server": "2.2.2.2", "port": 443, "uuid": "u2", "network": "ws", "security": "tls"}),
+        );
+        jp.name = "东京 02 优质".into();
+        jp.country = Some("JP".into());
+
+        let mut sg = node(
+            "vless",
+            json!({"server": "3.3.3.3", "port": 443, "uuid": "u3", "network": "ws", "security": "tls"}),
+        );
+        sg.name = "新加坡 03 极速".into();
+        sg.country = Some("SG".into());
+
+        let mut us = node(
+            "vless",
+            json!({"server": "4.4.4.4", "port": 443, "uuid": "u4", "network": "ws", "security": "tls"}),
+        );
+        us.name = "美国洛杉矶 05".into();
+        us.country = Some("US".into());
+
+        let mut options = MihomoConfigOptions {
+            routing_mode: RoutingMode::Rule,
+            smart_routing: true,
+            url_test: true,
+            ..MihomoConfigOptions::default()
+        };
+        options.url_test_nodes = crate::export::nodes_to_clash_proxies(&[
+            jp.clone(),
+            sg.clone(),
+            us.clone(),
+        ]);
+
+        let config = build_mihomo_config(&hk, options).unwrap();
+        let groups = config["proxy-groups"].as_array().unwrap();
+        let group_names: Vec<&str> = groups
+            .iter()
+            .map(|g| g["name"].as_str().unwrap_or_default())
+            .collect();
+
+        // 顶层与场景策略组
+        assert!(group_names.contains(&"PROXY"));
+        assert!(group_names.contains(&"AI分组"));
+        assert!(group_names.contains(&"国际流媒体"));
+        assert!(group_names.contains(&"Telegram"));
+        assert!(group_names.contains(&"多线并发下载"));
+
+        // 地区自动测速选优组（根据多订阅节点自动划分生成）
+        assert!(group_names.contains(&"香港节点"));
+        assert!(group_names.contains(&"日本节点"));
+        assert!(group_names.contains(&"新加坡节点"));
+        assert!(group_names.contains(&"美国节点"));
+        assert!(group_names.contains(&"普通代理"));
+        assert!(group_names.contains(&URL_TEST_GROUP));
+        assert!(group_names.contains(&FINAL_GROUP));
+
+        // 验证 PROXY 总控组包含地区选优组与自动选择
+        let proxy_group = groups.iter().find(|g| g["name"] == "PROXY").unwrap();
+        let proxy_members: Vec<&str> = proxy_group["proxies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap())
+            .collect();
+        assert_eq!(proxy_members[0], URL_TEST_GROUP);
+        assert!(proxy_members.contains(&"香港节点"));
+        assert!(proxy_members.contains(&"日本节点"));
+        assert!(proxy_members.contains(&"新加坡节点"));
+        assert!(proxy_members.contains(&"美国节点"));
+        assert!(proxy_members.contains(&"DIRECT"));
+
+        // 验证规则自动映射：YouTube/Netflix 导向 国际流媒体，Telegram 导向 Telegram，OpenAI 导向 AI分组
+        let rules = config["rules"].as_array().unwrap();
+        assert!(rules.iter().any(|r| r.as_str().unwrap().contains("GEOSITE,youtube,国际流媒体")));
+        assert!(rules.iter().any(|r| r.as_str().unwrap().contains("GEOSITE,telegram,Telegram")));
+        assert!(rules.iter().any(|r| r.as_str().unwrap().contains("DOMAIN-SUFFIX,openai.com,AI分组")));
     }
 
     #[test]
@@ -593,8 +742,8 @@ use std::time::Duration;
             config["rules"][4],
             "AND,((NETWORK,udp),(DST-PORT,443)),REJECT"
         );
-        for (i, host) in crate::geo::MIRROR_DIRECT_HOSTS.iter().enumerate() {
-            assert_eq!(config["rules"][5 + i], format!("DOMAIN-SUFFIX,{host},DIRECT"));
+        for host in crate::geo::MIRROR_DIRECT_HOSTS {
+            assert!(config["rules"].as_array().unwrap().iter().any(|r| r == &format!("DOMAIN-SUFFIX,{host},DIRECT")));
         }
         assert_eq!(config["rules"].as_array().unwrap().last().unwrap(), "MATCH,PROXY");
     }
@@ -1311,5 +1460,107 @@ rules:
                     && r.get("outboundTag") == Some(&json!("proxy"))
             }),
             "Xray 应成功转译 keyword:custom-proxy 代理规则"
+        );
+    }
+
+    #[test]
+    fn test_subscription_routing_mode_lowers_rules_and_default_action() {
+        let n = node(
+            "ss",
+            json!({
+                "server": "1.2.3.4",
+                "port": 8388,
+                "cipher": "aes-128-gcm",
+                "password": "pass"
+            }),
+        );
+        let mut options = MihomoConfigOptions::default();
+        options.routing_mode = RoutingMode::Subscription;
+        options.rules = vec![TrafficRule {
+            matcher: RuleMatcher::Domain("custom-user-override.com".into()),
+            action: RuleAction::Direct,
+        }];
+        options.subscription_rules_yaml = Some(r#"
+rules:
+  - "DOMAIN-SUFFIX,sub-openai.com,AI分组"
+  - "GEOSITE,youtube,国际流媒体"
+  - "GEOIP,CN,DIRECT"
+  - "MATCH,漏网之鱼"
+"#.into());
+
+        let plan = lower_options_to_ir(&options, Some(&n));
+
+        // 1. 验证用户自定义规则置顶
+        assert_eq!(
+            plan.rules[0].matchers,
+            vec![IRMatcher::Domain("custom-user-override.com".into())]
+        );
+        assert_eq!(plan.rules[0].action, IRAction::Direct);
+        assert_eq!(plan.rules[0].source, RuleSource::User);
+
+        // 2. 验证订阅自带规则成功下调，且目标策略组保留
+        assert!(plan.rules.iter().any(|r| {
+            r.matchers == vec![IRMatcher::DomainSuffix("sub-openai.com".into())]
+                && r.action == IRAction::Proxy(Some("AI分组".into()))
+        }));
+        assert!(plan.rules.iter().any(|r| {
+            r.matchers == vec![IRMatcher::GeoSite("youtube".into())]
+                && r.action == IRAction::Proxy(Some("国际流媒体".into()))
+        }));
+
+        // 3. 验证 MATCH,漏网之鱼 被解析为兜底动作
+        assert_eq!(plan.default_action, IRAction::Proxy(Some("漏网之鱼".into())));
+    }
+
+    #[test]
+    fn test_subscription_routing_mode_mihomo_compiler_groups_and_rules() {
+        let n = node(
+            "ss",
+            json!({
+                "server": "1.2.3.4",
+                "port": 8388,
+                "cipher": "aes-128-gcm",
+                "password": "pass"
+            }),
+        );
+        let mut options = MihomoConfigOptions::default();
+        options.routing_mode = RoutingMode::Subscription;
+        options.subscription_rules_yaml = Some(r#"
+rules:
+  - "DOMAIN-SUFFIX,netflix.com,国际流媒体"
+  - "MATCH,漏网之鱼"
+"#.into());
+        options.subscription_groups_yaml = Some(r#"
+proxy-groups:
+  - name: "国际流媒体"
+    type: select
+    proxies: ["香港 01", "DIRECT"]
+  - name: "漏网之鱼"
+    type: select
+    proxies: ["PROXY", "DIRECT"]
+"#.into());
+
+        let plan = lower_options_to_ir(&options, Some(&n));
+        let artifact = MihomoCompiler::new().compile(&plan).expect("Mihomo 编译应成功");
+        let json = artifact.as_json_value().expect("Mihomo artifact as json");
+
+        let groups = json["proxy-groups"].as_array().expect("proxy-groups");
+        let group_names: Vec<&str> = groups
+            .iter()
+            .filter_map(|g| g.get("name").and_then(|v| v.as_str()))
+            .collect();
+
+        // 验证生成的配置包含订阅策略组与正确的分流目标
+        assert!(group_names.contains(&"国际流媒体"), "生成的配置必须包含国际流媒体组");
+        assert!(group_names.contains(&"漏网之鱼"), "生成的配置必须包含漏网之鱼组");
+
+        let rules = json["rules"].as_array().expect("rules");
+        assert!(
+            rules.iter().any(|r| r.as_str() == Some("DOMAIN-SUFFIX,netflix.com,国际流媒体")),
+            "分流规则应准确命中订阅策略组"
+        );
+        assert!(
+            rules.iter().any(|r| r.as_str() == Some("MATCH,漏网之鱼")),
+            "MATCH 规则应正确命中漏网之鱼组"
         );
     }

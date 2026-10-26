@@ -26,7 +26,26 @@ pub const SMART_ROUTING_PREPEND_RULES: &[&str] = &[
     "DOMAIN-KEYWORD,runwayml,AI分组",
     "DOMAIN-SUFFIX,runway.com,AI分组",
     "DOMAIN-SUFFIX,muse.ai,AI分组",
-    // Google & YouTube 走美国节点
+    // 国际流媒体
+    "GEOSITE,youtube,国际流媒体",
+    "GEOSITE,netflix,国际流媒体",
+    "GEOSITE,disney,国际流媒体",
+    "GEOSITE,spotify,国际流媒体",
+    "DOMAIN-SUFFIX,youtube.com,国际流媒体",
+    "DOMAIN-SUFFIX,youtu.be,国际流媒体",
+    "DOMAIN-SUFFIX,ytimg.com,国际流媒体",
+    "DOMAIN-SUFFIX,googlevideo.com,国际流媒体",
+    "DOMAIN-SUFFIX,netflix.com,国际流媒体",
+    "DOMAIN-SUFFIX,nflxvideo.net,国际流媒体",
+    "DOMAIN-SUFFIX,disneyplus.com,国际流媒体",
+    "DOMAIN-SUFFIX,spotify.com,国际流媒体",
+    // Telegram 即时通讯
+    "GEOSITE,telegram,Telegram",
+    "GEOIP,telegram,Telegram,no-resolve",
+    "DOMAIN-SUFFIX,t.me,Telegram",
+    "DOMAIN-SUFFIX,telegram.org,Telegram",
+    "DOMAIN-SUFFIX,telegram.me,Telegram",
+    // Google & 其它美国服务
     "DOMAIN,gemini.google.com,美国节点",
     "DOMAIN-SUFFIX,google.com,美国节点",
     "DOMAIN-SUFFIX,google.com.hk,美国节点",
@@ -35,12 +54,7 @@ pub const SMART_ROUTING_PREPEND_RULES: &[&str] = &[
     "DOMAIN-SUFFIX,gstatic.com,美国节点",
     "DOMAIN-SUFFIX,googleapis.com,美国节点",
     "DOMAIN-SUFFIX,googleusercontent.com,美国节点",
-    "DOMAIN-SUFFIX,youtube.com,美国节点",
-    "DOMAIN-SUFFIX,youtu.be,美国节点",
-    "DOMAIN-SUFFIX,ytimg.com,美国节点",
-    "DOMAIN-SUFFIX,googlevideo.com,美国节点",
     "GEOSITE,google,美国节点",
-    "GEOSITE,youtube,美国节点",
     "GEOIP,google,美国节点,no-resolve",
     // 主流 AI 服务
     "DOMAIN-SUFFIX,openai.com,AI分组",
@@ -83,6 +97,74 @@ pub const SMART_ROUTING_PREPEND_RULES: &[&str] = &[
     "PROCESS-NAME,Motrix.exe,多线并发下载",
     "PROCESS-NAME,Thunder.exe,多线并发下载",
 ];
+
+/// 辅助根据节点名称或地区推断所属常见区域代码 (HK, JP, SG, US, TW)
+fn classify_regional_candidate(name: &str) -> Option<&'static str> {
+    if let Some(code) = crate::parser::guess_country(name) {
+        match code.as_str() {
+            "HK" => return Some("HK"),
+            "JP" => return Some("JP"),
+            "SG" => return Some("SG"),
+            "US" => return Some("US"),
+            "TW" => return Some("TW"),
+            _ => {}
+        }
+    }
+    let lower = name.to_lowercase();
+    if lower.contains("港") || lower.contains("hk") || lower.contains("hong") {
+        Some("HK")
+    } else if lower.contains("日")
+        || lower.contains("jp")
+        || lower.contains("japan")
+        || lower.contains("tokyo")
+        || lower.contains("osaka")
+        || name.contains("东京")
+        || name.contains("東京")
+        || name.contains("大阪")
+    {
+        Some("JP")
+    } else if lower.contains("新")
+        || lower.contains("sg")
+        || lower.contains("singapore")
+        || lower.contains("狮城")
+        || lower.contains("獅城")
+    {
+        Some("SG")
+    } else if lower.contains("美")
+        || lower.contains("us")
+        || lower.contains("usa")
+        || lower.contains("america")
+        || lower.contains("united states")
+        || lower.contains("los angeles")
+        || lower.contains("san jose")
+        || lower.contains("seattle")
+        || lower.contains("chicago")
+        || lower.contains("dallas")
+        || lower.contains("new york")
+        || lower.contains("virginia")
+        || lower.contains("washington")
+        || name.contains("洛杉矶")
+        || name.contains("旧金山")
+        || name.contains("西雅图")
+        || name.contains("芝加哥")
+        || name.contains("达拉斯")
+        || name.contains("纽约")
+        || name.contains("硅谷")
+    {
+        Some("US")
+    } else if lower.contains("台")
+        || lower.contains("tw")
+        || lower.contains("taiwan")
+        || name.contains("台北")
+        || name.contains("臺北")
+        || name.contains("台湾")
+        || name.contains("臺灣")
+    {
+        Some("TW")
+    } else {
+        None
+    }
+}
 
 pub struct MihomoCompiler {
     capabilities: CompilerCapabilities,
@@ -286,29 +368,28 @@ impl BackendCompiler for MihomoCompiler {
 
         // 策略组构建
         let mut smart_groups: Vec<Value> = Vec::new();
+        let mut regional_group_names: Vec<String> = Vec::new();
+
         if plan.outbounds.smart_routing {
+            let mut hk_candidates: Vec<String> = Vec::new();
+            let mut jp_candidates: Vec<String> = Vec::new();
+            let mut sg_candidates: Vec<String> = Vec::new();
             let mut us_candidates: Vec<String> = Vec::new();
+            let mut tw_candidates: Vec<String> = Vec::new();
             let mut download_candidates: Vec<String> = Vec::new();
+
             for name in &candidate_names {
                 let lower = name.to_lowercase();
                 let is_warp = lower.contains("warp");
-                if (lower.contains("美")
-                    || lower.contains("us")
-                    || lower.contains("usa")
-                    || lower.contains("america")
-                    || lower.contains("united states")
-                    || lower.contains("los angeles")
-                    || lower.contains("san jose")
-                    || lower.contains("seattle")
-                    || lower.contains("chicago")
-                    || lower.contains("dallas")
-                    || lower.contains("new york")
-                    || lower.contains("virginia")
-                    || lower.contains("washington"))
-                    && !is_warp
-                {
-                    us_candidates.push(name.clone());
+                match classify_regional_candidate(name) {
+                    Some("HK") => hk_candidates.push(name.clone()),
+                    Some("JP") => jp_candidates.push(name.clone()),
+                    Some("SG") => sg_candidates.push(name.clone()),
+                    Some("US") if !is_warp => us_candidates.push(name.clone()),
+                    Some("TW") => tw_candidates.push(name.clone()),
+                    _ => {}
                 }
+
                 let is_high_multiplier = lower.contains("2x")
                     || lower.contains("3x")
                     || lower.contains("5x")
@@ -318,6 +399,7 @@ impl BackendCompiler for MihomoCompiler {
                     download_candidates.push(name.clone());
                 }
             }
+
             if us_candidates.is_empty() {
                 let non_warp: Vec<String> = candidate_names
                     .iter()
@@ -340,36 +422,148 @@ impl BackendCompiler for MihomoCompiler {
                 };
             }
 
+            let probe_url = "http://www.gstatic.com/generate_204";
+
+            // 1. 业务场景策略组
+            let mut ai_proxies = vec!["美国节点".to_string()];
+            if !sg_candidates.is_empty() {
+                ai_proxies.push("新加坡节点".to_string());
+            }
+            if !jp_candidates.is_empty() {
+                ai_proxies.push("日本节点".to_string());
+            }
+            if !tw_candidates.is_empty() {
+                ai_proxies.push("台湾节点".to_string());
+            }
+            ai_proxies.push("普通代理".to_string());
+            smart_groups.push(json!({
+                "name": "AI分组",
+                "type": "select",
+                "proxies": ai_proxies,
+            }));
+
+            let mut stream_proxies = Vec::new();
+            if !hk_candidates.is_empty() {
+                stream_proxies.push("香港节点".to_string());
+            }
+            if !sg_candidates.is_empty() {
+                stream_proxies.push("新加坡节点".to_string());
+            }
+            if !jp_candidates.is_empty() {
+                stream_proxies.push("日本节点".to_string());
+            }
+            if !tw_candidates.is_empty() {
+                stream_proxies.push("台湾节点".to_string());
+            }
+            stream_proxies.push("美国节点".to_string());
+            stream_proxies.push("普通代理".to_string());
+            smart_groups.push(json!({
+                "name": "国际流媒体",
+                "type": "select",
+                "proxies": stream_proxies,
+            }));
+
+            let mut tg_proxies = Vec::new();
+            if !sg_candidates.is_empty() {
+                tg_proxies.push("新加坡节点".to_string());
+            }
+            if !hk_candidates.is_empty() {
+                tg_proxies.push("香港节点".to_string());
+            }
+            if !jp_candidates.is_empty() {
+                tg_proxies.push("日本节点".to_string());
+            }
+            tg_proxies.push("美国节点".to_string());
+            tg_proxies.push("普通代理".to_string());
+            smart_groups.push(json!({
+                "name": "Telegram",
+                "type": "select",
+                "proxies": tg_proxies,
+            }));
+
             smart_groups.push(json!({
                 "name": "多线并发下载",
                 "type": "load-balance",
                 "strategy": "round-robin",
-                "url": "http://www.gstatic.com/generate_204",
+                "url": probe_url,
                 "interval": 300,
                 "timeout": 2000,
                 "lazy": true,
                 "proxies": download_candidates,
             }));
+
+            // 2. 地区自动测速选优组（按多订阅节点池实际包含的地区动态创建）
+            if !hk_candidates.is_empty() {
+                regional_group_names.push("香港节点".to_string());
+                smart_groups.push(json!({
+                    "name": "香港节点",
+                    "type": "url-test",
+                    "url": probe_url,
+                    "interval": 300,
+                    "tolerance": 50,
+                    "timeout": 2000,
+                    "lazy": true,
+                    "proxies": hk_candidates,
+                }));
+            }
+            if !jp_candidates.is_empty() {
+                regional_group_names.push("日本节点".to_string());
+                smart_groups.push(json!({
+                    "name": "日本节点",
+                    "type": "url-test",
+                    "url": probe_url,
+                    "interval": 300,
+                    "tolerance": 50,
+                    "timeout": 2000,
+                    "lazy": true,
+                    "proxies": jp_candidates,
+                }));
+            }
+            if !sg_candidates.is_empty() {
+                regional_group_names.push("新加坡节点".to_string());
+                smart_groups.push(json!({
+                    "name": "新加坡节点",
+                    "type": "url-test",
+                    "url": probe_url,
+                    "interval": 300,
+                    "tolerance": 50,
+                    "timeout": 2000,
+                    "lazy": true,
+                    "proxies": sg_candidates,
+                }));
+            }
+            regional_group_names.push("美国节点".to_string());
             smart_groups.push(json!({
                 "name": "美国节点",
                 "type": "url-test",
-                "url": "http://www.gstatic.com/generate_204",
+                "url": probe_url,
                 "interval": 300,
+                "tolerance": 50,
                 "timeout": 2000,
                 "lazy": true,
                 "proxies": us_candidates,
             }));
-            let mut normal_proxies = vec!["美国节点".to_string()];
+            if !tw_candidates.is_empty() {
+                regional_group_names.push("台湾节点".to_string());
+                smart_groups.push(json!({
+                    "name": "台湾节点",
+                    "type": "url-test",
+                    "url": probe_url,
+                    "interval": 300,
+                    "tolerance": 50,
+                    "timeout": 2000,
+                    "lazy": true,
+                    "proxies": tw_candidates,
+                }));
+            }
+
+            // 3. 普通代理
+            let mut normal_proxies = regional_group_names.clone();
             normal_proxies.extend(candidate_names.iter().cloned());
             smart_groups.push(json!({
                 "name": "普通代理",
                 "type": "select",
                 "proxies": normal_proxies,
-            }));
-            smart_groups.push(json!({
-                "name": "AI分组",
-                "type": "select",
-                "proxies": ["美国节点", "普通代理"],
             }));
         }
 
@@ -401,6 +595,14 @@ impl BackendCompiler for MihomoCompiler {
                 }
             }
             let mut proxy_members = vec![URL_TEST_GROUP.to_owned()];
+            if plan.outbounds.smart_routing {
+                for r_name in &regional_group_names {
+                    if !proxy_members.contains(r_name) {
+                        proxy_members.push(r_name.clone());
+                    }
+                }
+                proxy_members.push("DIRECT".to_string());
+            }
             proxy_members.extend(candidate_names.iter().cloned());
             vec![
                 json!({ "name": "PROXY", "type": "select", "proxies": proxy_members }),
@@ -412,7 +614,13 @@ impl BackendCompiler for MihomoCompiler {
                 }),
             ]
         } else {
-            vec![json!({ "name": "PROXY", "type": "select", "proxies": candidate_names })]
+            let mut proxy_members = Vec::new();
+            if plan.outbounds.smart_routing {
+                proxy_members.extend(regional_group_names.iter().cloned());
+                proxy_members.push("DIRECT".to_string());
+            }
+            proxy_members.extend(candidate_names.iter().cloned());
+            vec![json!({ "name": "PROXY", "type": "select", "proxies": proxy_members })]
         };
 
         if plan.outbounds.smart_routing {
@@ -423,6 +631,110 @@ impl BackendCompiler for MihomoCompiler {
             final_groups.extend(smart_groups);
             final_groups.extend(proxy_groups);
             proxy_groups = final_groups;
+        }
+
+        // 订阅源原生策略组注入
+        if let Some(ref sub_groups_text) = plan.outbounds.subscription_groups_yaml {
+            if !sub_groups_text.trim().is_empty() {
+                if let Ok(sub_groups_val) = serde_yaml::from_str::<Value>(sub_groups_text) {
+                    let user_groups: Option<Vec<Value>> = if let Some(arr) = sub_groups_val.get("proxy-groups").and_then(Value::as_array) {
+                        Some(arr.clone())
+                    } else if let Some(arr) = sub_groups_val.as_array() {
+                        Some(arr.clone())
+                    } else {
+                        None
+                    };
+
+                    if let Some(groups) = user_groups {
+                        let sub_group_names: Vec<String> = groups
+                            .iter()
+                            .filter_map(|g| g.get("name").and_then(Value::as_str).map(String::from))
+                            .collect();
+                        for mut g in groups {
+                            if let Some(g_obj) = g.as_object_mut() {
+                                let g_name = g_obj
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_string();
+                                let filter_regex = g_obj
+                                    .get("filter")
+                                    .and_then(Value::as_str)
+                                    .and_then(|pat| regex::Regex::new(pat).ok());
+                                let exclude_regex = g_obj
+                                    .get("exclude-filter")
+                                    .and_then(Value::as_str)
+                                    .and_then(|pat| regex::Regex::new(pat).ok());
+
+                                if filter_regex.is_some() || exclude_regex.is_some() {
+                                    let mut matched_proxies = Vec::new();
+                                    for c_name in &candidate_names {
+                                        if let Some(ref f) = filter_regex {
+                                            if !f.is_match(c_name) {
+                                                continue;
+                                            }
+                                        }
+                                        if let Some(ref ef) = exclude_regex {
+                                            if ef.is_match(c_name) {
+                                                continue;
+                                            }
+                                        }
+                                        matched_proxies.push(c_name.clone());
+                                    }
+                                    if matched_proxies.is_empty() {
+                                        if candidate_names.is_empty() {
+                                            matched_proxies.push("DIRECT".to_string());
+                                        } else {
+                                            matched_proxies = candidate_names.clone();
+                                        }
+                                    }
+                                    g_obj.insert("proxies".to_string(), json!(matched_proxies));
+                                } else {
+                                    // 检查原 proxies 成员，保留依然存在于 candidate_names、其他策略组名、或 DIRECT/REJECT 中的成员
+                                    let mut effective_proxies = Vec::new();
+                                    if let Some(arr) = g_obj.get("proxies").and_then(Value::as_array) {
+                                        for p in arr {
+                                            if let Some(s) = p.as_str() {
+                                                if candidate_names.contains(&s.to_string())
+                                                    || sub_group_names.iter().any(|gn| gn == s)
+                                                    || matches!(s, "DIRECT" | "REJECT" | "PASS" | "GLOBAL")
+                                                {
+                                                    effective_proxies.push(s.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
+                                    // 如果原订阅中的代理名在当前聚合节点池中没有同名节点，按地区或全量智能注水，避免空策略组
+                                    if !effective_proxies.iter().any(|p| candidate_names.contains(p)) {
+                                        let region_match = if let Some(reg) = classify_regional_candidate(&g_name) {
+                                            candidate_names
+                                                .iter()
+                                                .filter(|n| classify_regional_candidate(n) == Some(reg))
+                                                .cloned()
+                                                .collect::<Vec<_>>()
+                                        } else {
+                                            Vec::new()
+                                        };
+                                        if !region_match.is_empty() {
+                                            effective_proxies.extend(region_match);
+                                        } else if !candidate_names.is_empty() {
+                                            effective_proxies.extend(candidate_names.iter().cloned());
+                                        } else {
+                                            effective_proxies.push("DIRECT".to_string());
+                                        }
+                                    }
+                                    g_obj.insert("proxies".to_string(), json!(effective_proxies));
+                                }
+
+                                proxy_groups.retain(|existing| {
+                                    existing.get("name").and_then(Value::as_str) != Some(&g_name)
+                                });
+                                proxy_groups.push(g);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // 规则编译

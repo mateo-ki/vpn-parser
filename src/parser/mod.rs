@@ -4,7 +4,9 @@ pub mod openrung;
 mod uri;
 pub mod warp_masque;
 
-pub use clash::{extract_clash_rules, parse_clash_yaml};
+pub use clash::{
+    extract_clash_groups_yaml, extract_clash_rules, extract_clash_rules_yaml, parse_clash_yaml,
+};
 pub use common::{
     decode_maybe_base64, expand_url_template, extract_uris, normalize_subscription_text,
 };
@@ -42,6 +44,35 @@ pub fn extract_subscription_rules(content: &str) -> Vec<crate::proxy::TrafficRul
         }
     }
     Vec::new()
+}
+
+/// Extract raw rules and proxy-groups YAML from subscription content (plain or base64).
+pub fn extract_subscription_rules_and_groups(
+    content: &str,
+) -> (Option<String>, Option<String>) {
+    let content = normalize_subscription_text(content);
+    let content = content.trim();
+    if content.is_empty() {
+        return (None, None);
+    }
+    if looks_like_clash(content) {
+        let rules = extract_clash_rules_yaml(content);
+        let groups = extract_clash_groups_yaml(content);
+        if rules.is_some() || groups.is_some() {
+            return (rules, groups);
+        }
+    }
+    if let Some(decoded) = decode_maybe_base64(content) {
+        let decoded = normalize_subscription_text(&decoded);
+        if looks_like_clash(&decoded) {
+            let rules = extract_clash_rules_yaml(&decoded);
+            let groups = extract_clash_groups_yaml(&decoded);
+            if rules.is_some() || groups.is_some() {
+                return (rules, groups);
+            }
+        }
+    }
+    (None, None)
 }
 
 /// Parse free-form subscription body into nodes.
@@ -352,26 +383,42 @@ pub fn guess_country(name: &str) -> Option<String> {
     // Chinese region keywords (UTF-8).
     let zh = name;
     let zh_map = [
-        ("\u{9999}\u{6e2f}", "HK"),
-        ("\u{53f0}\u{6e7e}", "TW"),
-        ("\u{53f0}\u{7063}", "TW"),
-        ("\u{65e5}\u{672c}", "JP"),
-        ("\u{65b0}\u{52a0}\u{5761}", "SG"),
-        ("\u{7f8e}\u{56fd}", "US"),
-        ("\u{7f8e}\u{570b}", "US"),
-        ("\u{97e9}\u{56fd}", "KR"),
-        ("\u{97d3}\u{570b}", "KR"),
-        ("\u{82f1}\u{56fd}", "GB"),
-        ("\u{82f1}\u{570b}", "GB"),
-        ("\u{5fb7}\u{56fd}", "DE"),
-        ("\u{6cd5}\u{56fd}", "FR"),
-        ("\u{52a0}\u{62ff}\u{5927}", "CA"),
-        ("\u{6fb3}\u{6d32}", "AU"),
-        ("\u{6fb3}\u{5927}\u{5229}\u{4e9a}", "AU"),
-        ("\u{4fc4}\u{7f57}\u{65af}", "RU"),
-        ("\u{5370}\u{5ea6}", "IN"),
-        ("\u{571f}\u{8033}\u{5176}", "TR"),
-        ("\u{8377}\u{5170}", "NL"),
+        ("\u{9999}\u{6e2f}", "HK"), // 香港
+        ("\u{53f0}\u{6e7e}", "TW"), // 台湾
+        ("\u{53f0}\u{7063}", "TW"), // 臺灣
+        ("\u{53f0}\u{5317}", "TW"), // 台北
+        ("\u{81fa}\u{5317}", "TW"), // 臺北
+        ("\u{65e5}\u{672c}", "JP"), // 日本
+        ("\u{4e1c}\u{4eac}", "JP"), // 东京
+        ("\u{6771}\u{4eac}", "JP"), // 東京
+        ("\u{5927}\u{962a}", "JP"), // 大阪
+        ("\u{65b0}\u{52a0}\u{5761}", "SG"), // 新加坡
+        ("\u{72ee}\u{57ce}", "SG"), // 狮城
+        ("\u{7345}\u{57ce}", "SG"), // 獅城
+        ("\u{7f8e}\u{56fd}", "US"), // 美国
+        ("\u{7f8e}\u{570b}", "US"), // 美國
+        ("\u{6d1b}\u{6749}\u{77f6}", "US"), // 洛杉矶
+        ("\u{7ebd}\u{7ea6}", "US"), // 纽约
+        ("\u{7d10}\u{7d04}", "US"), // 紐約
+        ("\u{65e7}\u{91d1}\u{5c71}", "US"), // 旧金山
+        ("\u{897f}\u{96c5}\u{56fe}", "US"), // 西雅图
+        ("\u{7845}\u{8c37}", "US"), // 硅谷
+        ("\u{97e9}\u{56fd}", "KR"), // 韩国
+        ("\u{97d3}\u{570b}", "KR"), // 韓國
+        ("\u{9996}\u{5c14}", "KR"), // 首尔
+        ("\u{82f1}\u{56fd}", "GB"), // 英国
+        ("\u{82f1}\u{570b}", "GB"), // 英國
+        ("\u{4f26}\u{6566}", "GB"), // 伦敦
+        ("\u{5fb7}\u{56fd}", "DE"), // 德国
+        ("\u{6cd5}\u{56fd}", "FR"), // 法国
+        ("\u{52a0}\u{62ff}\u{5927}", "CA"), // 加拿大
+        ("\u{6fb3}\u{6d32}", "AU"), // 澳洲
+        ("\u{6fb3}\u{5927}\u{5229}\u{4e9a}", "AU"), // 澳大利亚
+        ("\u{6089}\u{5c3c}", "AU"), // 悉尼
+        ("\u{4fc4}\u{7f57}\u{65af}", "RU"), // 俄罗斯
+        ("\u{5370}\u{5ea6}", "IN"), // 印度
+        ("\u{571f}\u{8033}\u{5176}", "TR"), // 土耳其
+        ("\u{8377}\u{5170}", "NL"), // 荷兰
     ];
     for (k, v) in zh_map {
         if zh.contains(k) {
@@ -395,7 +442,7 @@ static RE_DOMAIN: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 static RE_SCHEME: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)\b(?:vless|vmess|trojan|ss|ssr|hysteria2?|tuic|socks5?)://\S*").unwrap()
+    Regex::new(r"(?i)\b(?:vless|vmess|trojan|ss|ssr|hysteria2?|tuic|wireguard|wg|socks5?)://\S*").unwrap()
 });
 static RE_BRACKETS: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\[[^\]]*(?:tg|群|官网|关注|推广|发布|频道|订阅|购买|永久|最新|防封|免翻|剩余|到期|流量)[^\]]*\]|【[^】]*(?:tg|群|官网|关注|推广|发布|频道|订阅|购买|永久|最新|防封|免翻|剩余|到期|流量)[^】]*】|\([^\)]*(?:tg|群|官网|关注|推广|发布|频道|订阅|购买|永久|最新|防封|免翻|剩余|到期|流量)[^\)]*\)").unwrap()
@@ -658,5 +705,36 @@ mod tests {
         }
         assert!(parsed > 7000, "raw parse too low: {parsed}");
         assert!(nodes.len() > 3500, "deduped too low: {}", nodes.len());
+    }
+
+    #[test]
+    fn test_extract_subscription_rules_and_groups() {
+        let clash_text = r#"
+port: 7890
+proxy-groups:
+  - name: "HK-Auto"
+    type: url-test
+    proxies: ["HK 01"]
+rules:
+  - "DOMAIN,example.com,DIRECT"
+proxies:
+  - name: "HK 01"
+    type: ss
+    server: 1.1.1.1
+    port: 443
+    cipher: aes-256-gcm
+    password: pass
+"#;
+        let (rules, groups) = extract_subscription_rules_and_groups(clash_text);
+        assert!(rules.is_some());
+        assert!(rules.unwrap().contains("DOMAIN,example.com,DIRECT"));
+        assert!(groups.is_some());
+        assert!(groups.unwrap().contains("HK-Auto"));
+
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(clash_text.as_bytes());
+        let (b64_rules, b64_groups) = extract_subscription_rules_and_groups(&b64);
+        assert!(b64_rules.is_some());
+        assert!(b64_groups.is_some());
     }
 }

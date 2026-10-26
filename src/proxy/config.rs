@@ -17,6 +17,7 @@ pub enum RoutingMode {
     GfwList,
     Global,
     Direct,
+    Subscription,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

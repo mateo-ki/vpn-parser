@@ -84,6 +84,30 @@ pub fn extract_clash_rules(content: &str) -> Vec<crate::proxy::TrafficRule> {
     crate::proxy::optimize_traffic_rules(&rules)
 }
 
+/// 从 Clash YAML 中提取原生分流规则的 YAML 文本（rules: [...] 块）
+pub fn extract_clash_rules_yaml(content: &str) -> Option<String> {
+    let root = serde_yaml::from_str::<serde_yaml::Value>(content).ok()?;
+    let rules = root.get("rules")?;
+    if let Some(arr) = rules.as_sequence() {
+        if !arr.is_empty() {
+            return serde_yaml::to_string(rules).ok();
+        }
+    }
+    None
+}
+
+/// 从 Clash YAML 中提取原生策略组的 YAML 文本（proxy-groups: [...] 块）
+pub fn extract_clash_groups_yaml(content: &str) -> Option<String> {
+    let root = serde_yaml::from_str::<serde_yaml::Value>(content).ok()?;
+    let groups = root.get("proxy-groups").or_else(|| root.get("Proxy Group"))?;
+    if let Some(arr) = groups.as_sequence() {
+        if !arr.is_empty() {
+            return serde_yaml::to_string(groups).ok();
+        }
+    }
+    None
+}
+
 fn proxy_to_node(item: &Value, source_id: Option<&str>) -> Option<Node> {
     let obj = item.as_object()?;
     let ty = obj
@@ -235,5 +259,44 @@ rules:
         assert_eq!(rules[2].action, RuleAction::Proxy);
         assert_eq!(rules[3].matcher, RuleMatcher::GeoSite("google".into()));
         assert_eq!(rules[3].action, RuleAction::Proxy);
+    }
+
+    #[test]
+    fn extracts_clash_rules_yaml_and_groups_yaml_accurately() {
+        let yaml = r#"
+port: 7890
+proxy-groups:
+  - name: "🚀 节点选择"
+    type: select
+    proxies: ["自动选择", "香港 01"]
+  - name: "自动选择"
+    type: url-test
+    url: "http://www.gstatic.com/generate_204"
+    interval: 300
+    proxies: ["香港 01"]
+rules:
+  - "DOMAIN-SUFFIX,google.com,🚀 节点选择"
+  - "GEOIP,CN,DIRECT"
+  - "MATCH,🚀 节点选择"
+proxies:
+  - name: "香港 01"
+    type: ss
+    server: 1.1.1.1
+    port: 443
+    cipher: aes-256-gcm
+    password: pass
+"#;
+        let rules_yaml = extract_clash_rules_yaml(yaml).expect("should extract rules_yaml");
+        assert!(rules_yaml.contains("DOMAIN-SUFFIX,google.com,🚀 节点选择"));
+        assert!(rules_yaml.contains("GEOIP,CN,DIRECT"));
+
+        let groups_yaml = extract_clash_groups_yaml(yaml).expect("should extract groups_yaml");
+        assert!(groups_yaml.contains("🚀 节点选择"));
+        assert!(groups_yaml.contains("自动选择"));
+
+        // When missing, returns None
+        let empty_yaml = "port: 7890\nproxies: []";
+        assert!(extract_clash_rules_yaml(empty_yaml).is_none());
+        assert!(extract_clash_groups_yaml(empty_yaml).is_none());
     }
 }

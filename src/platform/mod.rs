@@ -1442,6 +1442,7 @@ Get-DnsClientServerAddress -ErrorAction SilentlyContinue |
 Where-Object {
     $_.ServerAddresses -contains '127.0.0.1' -or
     $_.ServerAddresses -contains '::1' -or
+    $_.ServerAddresses -contains '198.18.0.1' -or
     $_.ServerAddresses -contains '198.18.0.2'
 } |
 ForEach-Object {
@@ -1498,6 +1499,7 @@ foreach ($fam in 'IPv4','IPv6') {
     Where-Object {
         $_.ServerAddresses -contains '127.0.0.1' -or
         $_.ServerAddresses -contains '::1' -or
+        $_.ServerAddresses -contains '198.18.0.1' -or
         $_.ServerAddresses -contains '198.18.0.2'
     } |
     ForEach-Object {
@@ -1552,10 +1554,10 @@ pub fn self_heal_stale_dns() -> bool {
         let has_stale = stale.iter().any(|item| {
             item.server_addresses
                 .iter()
-                .any(|a| a == "127.0.0.1" || a == "::1")
+                .any(|a| a == "127.0.0.1" || a == "::1" || a == "198.18.0.1" || a == "198.18.0.2")
         });
         if has_stale {
-            crate::startup_log("检测到网卡残留死回环 DNS 设置 (127.0.0.1 或 ::1)，自动执行 DNS 自愈恢复...");
+            crate::startup_log("检测到网卡残留死回环/Fake-IP DNS 设置 (127.0.0.1 / ::1 / 198.18.0.1 / 198.18.0.2)，自动执行 DNS 自愈恢复...");
             match restore_all_stale_loopback_dns() {
                 Ok(count) => {
                     crate::startup_log(&format!(

@@ -8,12 +8,12 @@ use regex::Regex;
 
 static URI_RE: Lazy<Regex> = Lazy::new(|| {
     // Match common proxy share links in free text.
-    Regex::new(r"(?i)\b((?:ss|vmess|vless|trojan|hysteria2|hy2|wireguard|wg|socks5|socks|http|https|masque)://[^\s<>'\]\)]+)")
+    Regex::new(r"(?i)\b((?:ss|ssr|shadowsocksr|vmess|vless|trojan|tuic|hysteria|hysteria2|hy2|wireguard|wg|socks5|socks|http|https|masque)://[^\s<>'\]\)]+)")
         .expect("uri regex")
 });
 
 static LINE_URI_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^(ss|vmess|vless|trojan|hysteria2|hy2|wireguard|wg|socks5|socks|masque)://\S+")
+    Regex::new(r"(?i)^(ss|ssr|shadowsocksr|vmess|vless|trojan|tuic|hysteria|hysteria2|hy2|wireguard|wg|socks5|socks|masque)://\S+")
         .expect("line uri regex")
 });
 

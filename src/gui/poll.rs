@@ -335,6 +335,28 @@ impl VpnApp {
                             }
                         }
                         BgMsg::RuleHits(rows) => self.rule_hits_today = rows,
+                        BgMsg::LocalFileSelectedForSource(path) => {
+                            self.form_url = path.clone();
+                            if self.form_name.trim().is_empty() {
+                                let filename = path
+                                    .rsplit(['/', '\\'])
+                                    .next()
+                                    .unwrap_or("本地文件源")
+                                    .to_string();
+                                self.form_name = filename;
+                            }
+                        }
+                        BgMsg::LocalFileSelectedForNodeImport(path) => {
+                            self.import_yaml_path = path.clone();
+                            if self.import_yaml_source_name.trim().is_empty() {
+                                let filename = path
+                                    .rsplit(['/', '\\'])
+                                    .next()
+                                    .unwrap_or("本地配置")
+                                    .to_string();
+                                self.import_yaml_source_name = filename;
+                            }
+                        }
                         BgMsg::FetchHistory(rows) => {
                             let mut buckets: std::collections::HashMap<
                                 String,

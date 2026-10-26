@@ -1887,8 +1887,19 @@ impl VpnApp {
                     dash_bottom_proxy_item(ui, item_w, card_h, icon, icon_col, title, sub, |ui| {
                         let resp = dash_switch(ui, terminal_on);
                         if resp.clicked() {
-                            self.proxy_config.terminal_proxy = !terminal_on;
+                            let new_state = !terminal_on;
+                            self.proxy_config.terminal_proxy = new_state;
                             self.save_proxy_config();
+                            let port = self.proxy_status.mixed_port;
+                            if running {
+                                if new_state {
+                                    let _ = crate::system_proxy::terminal::enable(port);
+                                    self.status = format!("终端代理已即时开启 (端口 {port})，已自动同步 Git 代理");
+                                } else {
+                                    let _ = crate::system_proxy::terminal::disable();
+                                    self.status = "终端代理已即时关闭，已还原 Git 代理".into();
+                                }
+                            }
                         }
                     });
                 }
@@ -2219,6 +2230,7 @@ impl VpnApp {
             match mode {
                 RoutingMode::Rule => "规则",
                 RoutingMode::ChinaDirect | RoutingMode::GfwList => "规则",
+                RoutingMode::Subscription => "订阅规则",
                 RoutingMode::Global => "全局",
                 RoutingMode::Direct => "直连",
             }
@@ -2295,9 +2307,11 @@ impl VpnApp {
 
     /// 策略组：2x2 网格，显示每个组当前节点的真实实测延迟。
     fn dash_groups_card(&mut self, ui: &mut Ui, w: f32, h: f32) {
+        let sub_groups = self.active_subscription_groups_yaml();
         let visible_names = visible_group_names(
             self.proxy_config.smart_routing,
             self.proxy_config.override_yaml.as_deref(),
+            sub_groups.as_deref(),
             &self.kernel_groups,
         );
         if !visible_names.iter().any(|name| name == &self.proxy_selected_group) {

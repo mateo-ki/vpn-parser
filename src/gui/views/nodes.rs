@@ -606,9 +606,19 @@ impl VpnApp {
             ui.horizontal(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.import_yaml_path)
-                        .desired_width(ui.available_width() - 36.0)
+                        .desired_width(ui.available_width() - 68.0)
                         .hint_text(&tr_path_hint),
                 );
+                if ui
+                    .add(crate::gui::icons::icon_btn_square(
+                        crate::gui::icons::Icon::Folder,
+                        12.0,
+                    ))
+                    .on_hover_text(self.tr("浏览并选择本地文件"))
+                    .clicked()
+                {
+                    self.pick_local_file_for_node_import();
+                }
                 if ui
                     .add(crate::gui::icons::icon_btn_square(
                         crate::gui::icons::Icon::Trash,

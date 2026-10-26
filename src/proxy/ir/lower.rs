@@ -83,6 +83,8 @@ pub fn lower_options_to_ir(options: &MihomoConfigOptions, primary_node: Option<&
         url_test_nodes: options.url_test_nodes.clone(),
         smart_routing: options.smart_routing,
         override_yaml: options.override_yaml.clone(),
+        subscription_rules_yaml: options.subscription_rules_yaml.clone(),
+        subscription_groups_yaml: options.subscription_groups_yaml.clone(),
         port_mapping_nodes: options.port_mapping_nodes.clone(),
         client_fingerprint: options.client_fingerprint.clone(),
         udp_port_hopping: options.udp_port_hopping,
@@ -178,30 +180,68 @@ pub fn lower_options_to_ir(options: &MihomoConfigOptions, primary_node: Option<&
     let override_rules = parse_override_rules_to_ir(options.override_yaml.as_deref());
     rules.extend(override_rules);
 
-    // 4.4 场景预设与用户自定义分流规则
-    let user_traffic_rules = match options.routing_mode {
-        RoutingMode::Rule => optimize_traffic_rules(&options.rules),
-        RoutingMode::ChinaDirect => recommended_traffic_rules(),
-        RoutingMode::GfwList => gfwlist_traffic_rules(),
-        RoutingMode::Global | RoutingMode::Direct => Vec::new(),
+    // 4.4 场景预设与用户自定义分流规则（全自动智能分流：用户自定义规则排在最前作为高优先级例外，随后自动跟进完整的权威基础分流集：局域网放行、广告拦截、GeoSite CN 国内直连、GeoIP CN 国内直连）
+    let (user_traffic_rules, user_rules_count) = match options.routing_mode {
+        RoutingMode::Rule => {
+            let user_count = options.rules.len();
+            let mut combined = options.rules.clone();
+            combined.extend(recommended_traffic_rules());
+            (optimize_traffic_rules(&combined), user_count)
+        }
+        RoutingMode::ChinaDirect => (recommended_traffic_rules(), 0),
+        RoutingMode::GfwList => (gfwlist_traffic_rules(), 0),
+        RoutingMode::Global | RoutingMode::Direct => (Vec::new(), 0),
+        RoutingMode::Subscription => {
+            let user_count = options.rules.len();
+            (options.rules.clone(), user_count)
+        }
     };
 
-    for tr in user_traffic_rules {
+    for (idx, tr) in user_traffic_rules.into_iter().enumerate() {
         let (matcher, no_resolve) = convert_matcher(&tr.matcher);
         let action = match tr.action {
             RuleAction::Direct => IRAction::Direct,
             RuleAction::Proxy => IRAction::Proxy(None),
             RuleAction::Reject => IRAction::Reject,
         };
+        let source = if idx < user_rules_count {
+            RuleSource::User
+        } else {
+            RuleSource::Preset
+        };
         rules.push(IRRule {
             matchers: vec![matcher],
             action,
             no_resolve,
-            source: match options.routing_mode {
-                RoutingMode::Rule => RuleSource::User,
-                _ => RuleSource::Preset,
-            },
+            source,
         });
+    }
+
+    // 4.4.5 订阅规则模式 (RoutingMode::Subscription)：注入所选订阅源的原生分流规则
+    if options.routing_mode == RoutingMode::Subscription {
+        let sub_rules = parse_clash_rules_yaml_to_ir(
+            options.subscription_rules_yaml.as_deref(),
+            RuleSource::Preset,
+        );
+        if !sub_rules.is_empty() {
+            rules.extend(sub_rules);
+        } else {
+            // 如果订阅未提供有效规则或暂未加载，优雅回退到推荐智能规则作为安全兜底
+            for tr in recommended_traffic_rules() {
+                let (matcher, no_resolve) = convert_matcher(&tr.matcher);
+                let action = match tr.action {
+                    RuleAction::Direct => IRAction::Direct,
+                    RuleAction::Proxy => IRAction::Proxy(None),
+                    RuleAction::Reject => IRAction::Reject,
+                };
+                rules.push(IRRule {
+                    matchers: vec![matcher],
+                    action,
+                    no_resolve,
+                    source: RuleSource::Preset,
+                });
+            }
+        }
     }
 
     // 4.5 内核下载 Geo 数据的直连放行规则（避免握手超时）
@@ -218,6 +258,43 @@ pub fn lower_options_to_ir(options: &MihomoConfigOptions, primary_node: Option<&
     let default_action = match options.routing_mode {
         RoutingMode::Rule | RoutingMode::ChinaDirect | RoutingMode::Global => IRAction::Proxy(None),
         RoutingMode::GfwList | RoutingMode::Direct => IRAction::Direct,
+        RoutingMode::Subscription => {
+            if let Some(ref text) = options.subscription_rules_yaml {
+                if let Ok(val) = serde_yaml::from_str::<serde_json::Value>(text) {
+                    let items = val
+                        .get("rules")
+                        .and_then(serde_json::Value::as_array)
+                        .or_else(|| val.as_array());
+                    if let Some(arr) = items {
+                        let match_line = arr
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .find(|l| l.to_ascii_uppercase().starts_with("MATCH,"));
+                        if let Some(l) = match_line {
+                            let parts: Vec<&str> = l.split(',').map(str::trim).collect();
+                            if parts.len() >= 2 {
+                                match parts[1].to_ascii_uppercase().as_str() {
+                                    "DIRECT" => IRAction::Direct,
+                                    "REJECT" => IRAction::Reject,
+                                    "PROXY" => IRAction::Proxy(None),
+                                    other => IRAction::Proxy(Some(other.to_string())),
+                                }
+                            } else {
+                                IRAction::Proxy(None)
+                            }
+                        } else {
+                            IRAction::Proxy(None)
+                        }
+                    } else {
+                        IRAction::Proxy(None)
+                    }
+                } else {
+                    IRAction::Proxy(None)
+                }
+            } else {
+                IRAction::Proxy(None)
+            }
+        }
     };
 
     RoutingPlan {
@@ -256,10 +333,10 @@ fn convert_matcher(matcher: &RuleMatcher) -> (IRMatcher, bool) {
     }
 }
 
-/// 解析用户自定义 YAML 覆写中的 rules 列表，将其降阶转译为统一的 IRRule，
-/// 赋能非 Mihomo 内核（如 Sing-box、Shoes、Xray）也能无缝识别与执行自定义 Clash 分流规则。
-pub fn parse_override_rules_to_ir(override_yaml: Option<&str>) -> Vec<IRRule> {
-    let Some(text) = override_yaml.map(str::trim).filter(|s| !s.is_empty()) else {
+/// 解析 YAML（覆写或订阅源）中的 rules 列表，将其降阶转译为统一的 IRRule，
+/// 赋能非 Mihomo 内核（如 Sing-box、Shoes、Xray）也能无缝识别与执行 Clash 分流规则。
+pub fn parse_clash_rules_yaml_to_ir(rules_yaml: Option<&str>, source: RuleSource) -> Vec<IRRule> {
+    let Some(text) = rules_yaml.map(str::trim).filter(|s| !s.is_empty()) else {
         return Vec::new();
     };
 
@@ -267,7 +344,11 @@ pub fn parse_override_rules_to_ir(override_yaml: Option<&str>) -> Vec<IRRule> {
         return Vec::new();
     };
 
-    let Some(raw_rules) = val.get("rules").and_then(serde_json::Value::as_array) else {
+    let raw_rules = if let Some(arr) = val.get("rules").and_then(serde_json::Value::as_array) {
+        arr
+    } else if let Some(arr) = val.as_array() {
+        arr
+    } else {
         return Vec::new();
     };
 
@@ -329,9 +410,13 @@ pub fn parse_override_rules_to_ir(override_yaml: Option<&str>) -> Vec<IRRule> {
             matchers: vec![matcher],
             action,
             no_resolve: no_resolve || matches!(matcher_type.as_str(), "GEOIP"),
-            source: RuleSource::Override,
+            source,
         });
     }
 
     rules
+}
+
+pub fn parse_override_rules_to_ir(override_yaml: Option<&str>) -> Vec<IRRule> {
+    parse_clash_rules_yaml_to_ir(override_yaml, RuleSource::Override)
 }

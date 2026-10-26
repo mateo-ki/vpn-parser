@@ -96,6 +96,8 @@ pub struct OutboundPlan {
     pub url_test_nodes: Vec<serde_json::Value>,
     pub smart_routing: bool,
     pub override_yaml: Option<String>,
+    pub subscription_rules_yaml: Option<String>,
+    pub subscription_groups_yaml: Option<String>,
     pub port_mapping_nodes: Vec<(u16, String, serde_json::Value)>,
     pub client_fingerprint: Option<String>,
     pub udp_port_hopping: bool,

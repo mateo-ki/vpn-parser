@@ -29,9 +29,11 @@ impl VpnApp {
         }
 
         // 默认只挂「全部」；其余组只有配置里真的有它才出现
+        let sub_groups = self.active_subscription_groups_yaml();
         let visible_names = visible_group_names(
             self.proxy_config.smart_routing,
             self.proxy_config.override_yaml.as_deref(),
+            sub_groups.as_deref(),
             &self.kernel_groups,
         );
         if !visible_names.iter().any(|name| name == &self.proxy_selected_group) {

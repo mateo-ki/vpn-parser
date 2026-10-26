@@ -694,6 +694,7 @@ mod tests {
             url_template: "https://example.invalid/sub".into(),
             enabled: true,
             remark: None,
+            user_agent: None,
         })
         .await
         .unwrap();

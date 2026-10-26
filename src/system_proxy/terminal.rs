@@ -6,7 +6,14 @@
 
 use anyhow::{anyhow, Result};
 
-pub const PROXY_VARS: [&str; 3] = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"];
+pub const PROXY_VARS: [&str; 6] = [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+];
 pub const NO_PROXY_VAR: &str = "NO_PROXY";
 /// 本地与内网一律不走代理，否则局域网打印/开发服务器会被绕进隧道。
 pub const NO_PROXY_VALUE: &str = "localhost;127.0.0.1;::1;<local>;192.168.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*";
@@ -174,6 +181,15 @@ pub fn enable(port: u16) -> Result<TerminalProxyReport> {
         }
     }
     broadcast_environment_change();
+
+    // 自动同步 Git 全局代理，确保已有终端和各类 IDE 插件内的 Git 操作立即可用
+    let _ = hidden_command("git")
+        .args(["config", "--global", "http.proxy", &server])
+        .output();
+    let _ = hidden_command("git")
+        .args(["config", "--global", "https.proxy", &server])
+        .output();
+
     Ok(report)
 }
 
@@ -208,6 +224,31 @@ pub fn disable() -> Result<TerminalProxyReport> {
         }
     }
     broadcast_environment_change();
+
+    // 还原 Git 全局代理（仅清除指向我方 127.0.0.1 的配置）
+    if let Ok(output) = hidden_command("git")
+        .args(["config", "--global", "--get", "http.proxy"])
+        .output()
+    {
+        let current = String::from_utf8_lossy(&output.stdout);
+        if is_ours(&current) {
+            let _ = hidden_command("git")
+                .args(["config", "--global", "--unset", "http.proxy"])
+                .output();
+        }
+    }
+    if let Ok(output) = hidden_command("git")
+        .args(["config", "--global", "--get", "https.proxy"])
+        .output()
+    {
+        let current = String::from_utf8_lossy(&output.stdout);
+        if is_ours(&current) {
+            let _ = hidden_command("git")
+                .args(["config", "--global", "--unset", "https.proxy"])
+                .output();
+        }
+    }
+
     Ok(report)
 }
 

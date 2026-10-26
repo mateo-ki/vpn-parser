@@ -34,6 +34,15 @@ pub struct Source {
     /// 该源的节点不参与“推送可用节点”（源本身仍照常拉取和测速）。
     #[serde(default)]
     pub push_disabled: bool,
+    /// 订阅源自带的原生分流规则（rules 块 YAML 文本）
+    #[serde(default)]
+    pub rules_yaml: Option<String>,
+    /// 订阅源自带的原生策略组（proxy-groups 块 YAML 文本）
+    #[serde(default)]
+    pub groups_yaml: Option<String>,
+    /// 自定义 User-Agent 请求头（如 clash.meta / clash-verge / v2rayN 等，留空则默认采用 clash.meta）
+    #[serde(default)]
+    pub user_agent: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -58,6 +67,9 @@ impl Source {
             fail_streak: 0,
             last_fetch_host: None,
             push_disabled: false,
+            rules_yaml: None,
+            groups_yaml: None,
+            user_agent: None,
             created_at: now,
             updated_at: now,
         }
@@ -71,6 +83,8 @@ pub struct CreateSource {
     #[serde(default = "default_true")]
     pub enabled: bool,
     pub remark: Option<String>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -82,6 +96,8 @@ pub struct UpdateSource {
     /// 设为 Some 时切换该源是否参与“推送可用节点”。
     #[serde(default)]
     pub push_disabled: Option<bool>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 fn default_true() -> bool {

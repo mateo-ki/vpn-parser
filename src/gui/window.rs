@@ -479,10 +479,10 @@ impl VpnApp {
 pub(crate) const TITLE_BAR_H: f32 = 34.0;
 pub(crate) const TITLE_BAR_BTN_W: f32 = 46.0;
 
-/// 无边框窗口外圈该铺哪几块缩手感区。**没有 NorthEast 角**，而且左右两条从标题栏
-/// 下沿才开始：这层盖在 `Order::Foreground`，以前右上角那块 30×30 正好整个压在 ✕ 上，
-/// 鼠标一放到关闭键就变成斜向拉伸箭头，点下去还可能被 `BeginResize` 吃掉。
-/// 代价只是右上角不能斜向拉伸 —— 右边、下面、左上角照常。
+/// 无边框窗口外圈该铺哪几块缩手感区。
+/// 注意必须避开标题栏控制按钮：
+/// - macOS 按钮在左上角 (0..72px)，绝不能有 NorthWest 角手，顶边必须在 80px 之后开始；
+/// - Windows / Linux 按钮在右上角，绝不能有 NorthEast 角手，顶边在按钮区之前停下。
 pub(crate) fn resize_handle_rects(
     screen: egui::Rect,
 ) -> Vec<(egui::Rect, egui::ResizeDirection, egui::CursorIcon)> {
@@ -491,58 +491,127 @@ pub(crate) fn resize_handle_rects(
     let (min, max) = (screen.min, screen.max);
     let corner = EDGE * 5.0;
     let side_top = min.y + TITLE_BAR_H;
-    // 顶边条在按钮区之前停下（多留 8px，斜着进按钮区边缘也不算被盖住）。
-    let north_stop = max.x - TITLE_BAR_BTN_W * 3.0 - 8.0;
-    vec![
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(min.x, side_top),
-                egui::pos2(min.x + EDGE, max.y - corner),
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 红黄绿交通灯在左上角 (0..72px)：
+        // 1. 去掉 NorthWest 角手（避免 30x30 遮罩盖死关闭与最小化按钮）；
+        // 2. North 顶边条从 80px 后开始；
+        // 3. 右上角 NorthEast 保留正常缩放。
+        let mac_lights_stop = min.x + 80.0;
+        vec![
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(min.x, side_top),
+                    egui::pos2(min.x + EDGE, max.y - corner),
+                ),
+                Dir::West,
+                Cursor::ResizeHorizontal,
             ),
-            Dir::West,
-            Cursor::ResizeHorizontal,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(max.x - EDGE, side_top),
-                egui::pos2(max.x, max.y - corner),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(max.x - EDGE, side_top),
+                    egui::pos2(max.x, max.y - corner),
+                ),
+                Dir::East,
+                Cursor::ResizeHorizontal,
             ),
-            Dir::East,
-            Cursor::ResizeHorizontal,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(min.x + corner, min.y),
-                egui::pos2(north_stop, min.y + EDGE),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(mac_lights_stop, min.y),
+                    egui::pos2(max.x - corner, min.y + EDGE),
+                ),
+                Dir::North,
+                Cursor::ResizeVertical,
             ),
-            Dir::North,
-            Cursor::ResizeVertical,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(min.x + corner, max.y - EDGE),
-                egui::pos2(max.x - corner, max.y),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(min.x + corner, max.y - EDGE),
+                    egui::pos2(max.x - corner, max.y),
+                ),
+                Dir::South,
+                Cursor::ResizeVertical,
             ),
-            Dir::South,
-            Cursor::ResizeVertical,
-        ),
-        (
-            egui::Rect::from_min_max(min, egui::pos2(min.x + corner, min.y + corner)),
-            Dir::NorthWest,
-            Cursor::ResizeNwSe,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(min.x, max.y - corner),
-                egui::pos2(min.x + corner, max.y),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(max.x - corner, min.y),
+                    egui::pos2(max.x, min.y + corner),
+                ),
+                Dir::NorthEast,
+                Cursor::ResizeNeSw,
             ),
-            Dir::SouthWest,
-            Cursor::ResizeNeSw,
-        ),
-        (
-            egui::Rect::from_min_max(egui::pos2(max.x - corner, max.y - corner), max),
-            Dir::SouthEast,
-            Cursor::ResizeNwSe,
-        ),
-    ]
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(min.x, max.y - corner),
+                    egui::pos2(min.x + corner, max.y),
+                ),
+                Dir::SouthWest,
+                Cursor::ResizeNeSw,
+            ),
+            (
+                egui::Rect::from_min_max(egui::pos2(max.x - corner, max.y - corner), max),
+                Dir::SouthEast,
+                Cursor::ResizeNwSe,
+            ),
+        ]
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Windows / Linux 最小化/最大化/关闭按钮在右上角：
+        // 顶边条在按钮区之前停下，无 NorthEast 角。
+        let north_stop = max.x - TITLE_BAR_BTN_W * 3.0 - 8.0;
+        vec![
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(min.x, side_top),
+                    egui::pos2(min.x + EDGE, max.y - corner),
+                ),
+                Dir::West,
+                Cursor::ResizeHorizontal,
+            ),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(max.x - EDGE, side_top),
+                    egui::pos2(max.x, max.y - corner),
+                ),
+                Dir::East,
+                Cursor::ResizeHorizontal,
+            ),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(min.x + corner, min.y),
+                    egui::pos2(north_stop, min.y + EDGE),
+                ),
+                Dir::North,
+                Cursor::ResizeVertical,
+            ),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(min.x + corner, max.y - EDGE),
+                    egui::pos2(max.x - corner, max.y),
+                ),
+                Dir::South,
+                Cursor::ResizeVertical,
+            ),
+            (
+                egui::Rect::from_min_max(min, egui::pos2(min.x + corner, min.y + corner)),
+                Dir::NorthWest,
+                Cursor::ResizeNwSe,
+            ),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(min.x, max.y - corner),
+                    egui::pos2(min.x + corner, max.y),
+                ),
+                Dir::SouthWest,
+                Cursor::ResizeNeSw,
+            ),
+            (
+                egui::Rect::from_min_max(egui::pos2(max.x - corner, max.y - corner), max),
+                Dir::SouthEast,
+                Cursor::ResizeNwSe,
+            ),
+        ]
+    }
 }

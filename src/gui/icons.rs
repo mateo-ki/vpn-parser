@@ -42,6 +42,8 @@ pub enum Icon {
     /// 侧栏「展开 / 收起菜单」那颗：圆角外框 + 竖栏 + 箭头。
     SidebarExpand,
     SidebarCollapse,
+    /// 文件夹 / 本地文件浏览
+    Folder,
 }
 
 pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -1015,6 +1017,28 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
             closed_pts.extend(inner_pts.into_iter().rev());
             painter.add(egui::epaint::PathShape::closed_line(closed_pts, fine_stroke));
         }
+        Icon::Folder => {
+            // 现代精致文件夹：顶部标签页 + 文件夹主体
+            let half_w = s * 0.38;
+            let half_h = s * 0.28;
+            let body_top = center.y - half_h + s * 0.12;
+            let body = Rect::from_min_max(
+                Pos2::new(center.x - half_w, body_top),
+                Pos2::new(center.x + half_w, center.y + half_h),
+            );
+            // 浅透底色填充主体增加质感
+            painter.rect_filled(body, CornerRadius::same(2), color.gamma_multiply(0.12));
+            painter.rect_stroke(body, CornerRadius::same(2), stroke, StrokeKind::Inside);
+
+            // 顶部小标签（从左边向上突起一个小梯形）
+            let tab_x0 = center.x - half_w;
+            let tab_x1 = center.x - s * 0.08;
+            let tab_x2 = center.x - s * 0.02;
+            let tab_y = center.y - half_h;
+            painter.line_segment([Pos2::new(tab_x0, body_top), Pos2::new(tab_x0, tab_y)], stroke);
+            painter.line_segment([Pos2::new(tab_x0, tab_y), Pos2::new(tab_x1, tab_y)], stroke);
+            painter.line_segment([Pos2::new(tab_x1, tab_y), Pos2::new(tab_x2, body_top)], stroke);
+        }
     }
 }
 
@@ -1304,6 +1328,7 @@ mod tests {
                 Icon::Moon,
                 Icon::SidebarExpand,
                 Icon::SidebarCollapse,
+                Icon::Folder,
             ] {
                 let before = ctx.graphics_mut(|g| g.entry(layer).all_entries().len());
                 draw_icon(

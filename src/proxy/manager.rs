@@ -1,6 +1,6 @@
 use crate::kernel::{
-    find_kernel_executable, managed_kernel_root, select_proxy_kernel_preference, KernelKind,
-    KernelPreference,
+    find_kernel_executable, managed_kernel_root, select_proxy_kernel_preference_for_node,
+    KernelKind, KernelPreference,
 };
 use crate::models::Node;
 use crate::proxy::adapter::kernel_adapter;
@@ -438,22 +438,24 @@ impl ProxyManager {
         self.connect(node, None).await
     }
 
-    pub async fn connect(
-        &self,
-        node: &Node,
+    pub fn connect<'a>(
+        &'a self,
+        node: &'a Node,
         kernel_override: Option<KernelPreference>,
-    ) -> Result<()> {
-        let _operation = self.operation.lock().await;
-        let running = matches!(
-            self.runtime.lock().await.status.state,
-            ProxyState::Running | ProxyState::Degraded
-        );
-        if running {
-            self.restart_inner(node, kernel_override).await
-        } else {
-            self.start_inner_with_preference(node, None, kernel_override)
-                .await
-        }
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let _operation = self.operation.lock().await;
+            let running = matches!(
+                self.runtime.lock().await.status.state,
+                ProxyState::Running | ProxyState::Degraded
+            );
+            if running {
+                self.restart_inner(node, kernel_override).await
+            } else {
+                self.start_inner_with_preference(node, None, kernel_override)
+                    .await
+            }
+        })
     }
 
     async fn start_inner_with_preference(
@@ -464,12 +466,13 @@ impl ProxyManager {
     ) -> Result<()> {
         let options = self.runtime.lock().await.options.clone();
         let preference = kernel_override.unwrap_or(options.kernel_preference);
-        let kernel = match select_proxy_kernel_preference(
-            &node.protocol,
+        let (kernel, fallback_notice) = match select_proxy_kernel_preference_for_node(
+            node,
             preference,
             options.mode.has_system(),
+            options.mode.has_tun(),
         ) {
-            Ok(kernel) => kernel,
+            Ok(res) => res,
             Err(error) => {
                 self.set_failed(error.to_string()).await;
                 return Err(error);
@@ -481,7 +484,12 @@ impl ProxyManager {
             return Err(anyhow!(message));
         };
         self.start_with_path_inner(node, kernel, &path, preserved_system_proxy_snapshot)
-            .await
+            .await?;
+        if let Some(notice) = fallback_notice {
+            let mut rt = self.runtime.lock().await;
+            rt.status.message = format!("{}（{}）", rt.status.message, notice);
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -882,6 +890,13 @@ impl ProxyManager {
             );
         }
 
+        if runtime.options.terminal_proxy && (!runtime.options.mode.has_system() || !self.system_proxy.supported()) {
+            let port = runtime.options.mixed_port;
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::system_proxy::terminal::enable(port)
+            }).await;
+        }
+
         let elapsed_ms = startup_started.elapsed().as_millis() as u64;
         runtime.status.state = ProxyState::Running;
         // 这个字段的意思是"本地 mixed 端口已经就绪"（刚 spawn 就置真的那几处是同一个意思），
@@ -903,6 +918,8 @@ impl ProxyManager {
             let mixed_port = runtime.options.mixed_port;
             let kernel_name = kernel.display_name().to_string();
             let log_path = work_dir.log_path().to_path_buf();
+            let manager_clone = self.clone();
+            let current_node = node.clone();
             tokio::spawn(async move {
                 // 等待内核加载并与远程服务器建立初始连接
                 tokio::time::sleep(Duration::from_millis(250)).await;
@@ -921,6 +938,23 @@ impl ProxyManager {
                             return;
                         }
                     }
+
+                    // 如果当前是 Meow 发生连通性超时，触发自动熔断保护，平滑切换到工业级 Mihomo 接管
+                    if kernel == KernelKind::Meow && find_kernel_executable(KernelKind::Mihomo).is_some() {
+                        tracing::warn!(
+                            kernel = %kernel_name,
+                            %error,
+                            "Meow 内核网络连接全部超时，触发熔断保护，自动平滑切换至 Mihomo"
+                        );
+                        if let Ok(()) = manager_clone.connect(&current_node, Some(KernelPreference::Mihomo)).await {
+                            let mut rt = runtime_clone.lock().await;
+                            if rt.status.state == ProxyState::Running {
+                                rt.status.message = "Meow 连通超时，已自动触发熔断切换至 Mihomo 接管网络".to_string();
+                            }
+                            return;
+                        }
+                    }
+
                     let mut rt = runtime_clone.lock().await;
                     if rt.status.state == ProxyState::Running && rt.options.mixed_port == mixed_port {
                         let message = if detail.trim().is_empty() {
@@ -1006,6 +1040,7 @@ impl ProxyManager {
             }
         }
         let preserved_snapshot = if restore_proxy {
+            let had_snapshot = snapshot.is_some();
             if let Some(snapshot) = snapshot {
                 if let Err(error) = restore_system_proxy(
                     self.system_proxy.clone(),
@@ -1020,6 +1055,9 @@ impl ProxyManager {
             #[cfg(windows)]
             {
                 let _ = crate::platform::restore_all_stale_loopback_dns();
+            }
+            if !had_snapshot && options.terminal_proxy {
+                let _ = tokio::task::spawn_blocking(crate::system_proxy::terminal::disable).await;
             }
             None
         } else {

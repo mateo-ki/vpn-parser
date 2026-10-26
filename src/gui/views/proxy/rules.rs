@@ -229,7 +229,10 @@ impl VpnApp {
 
     pub(crate) fn ui_proxy_rules_config(&mut self, ui: &mut Ui) {
         let editable = !self.proxy_busy;
-        let show_custom_rules = self.proxy_config.routing_mode == RoutingMode::Rule;
+        let show_custom_rules = matches!(
+            self.proxy_config.routing_mode,
+            RoutingMode::Rule | RoutingMode::Subscription
+        );
         let mut save_mode_clicked = false;
         let mut save_clicked = false;
         let mut add_rule = false;
@@ -255,7 +258,12 @@ impl VpnApp {
                             ui.selectable_value(
                                 &mut self.proxy_config.routing_mode,
                                 RoutingMode::Rule,
-                                "自定义规则",
+                                "智能规则（全自动·推荐）",
+                            );
+                            ui.selectable_value(
+                                &mut self.proxy_config.routing_mode,
+                                RoutingMode::Subscription,
+                                "订阅规则（选用订阅）",
                             );
                             ui.selectable_value(
                                 &mut self.proxy_config.routing_mode,
@@ -291,6 +299,111 @@ impl VpnApp {
                         ui.label(RichText::new("正在处理配置中...").color(theme::muted()));
                     }
                 });
+
+                if self.proxy_config.routing_mode == RoutingMode::Subscription {
+                    ui.add_space(8.0);
+                    card_frame().show(ui, |ui| {
+                        ui.label(RichText::new("订阅分流规则与策略组模板选用").strong());
+                        ui.label(
+                            RichText::new("选用某个已有订阅的原生分流规则和策略组架构，节点动态注入当前全部聚合健康节点：")
+                                .small()
+                                .color(theme::muted()),
+                        );
+                        ui.add_space(6.0);
+
+                        let valid_sources: Vec<(String, String, usize, bool, Option<String>, Option<String>)> = self
+                            .sources
+                            .iter()
+                            .filter(|s| s.rules_yaml.is_some() || s.groups_yaml.is_some())
+                            .map(|s| {
+                                (
+                                    s.id.clone(),
+                                    s.name.clone(),
+                                    s.rules_yaml.as_deref().map(|y| y.lines().count()).unwrap_or(0),
+                                    s.groups_yaml.is_some(),
+                                    s.rules_yaml.clone(),
+                                    s.groups_yaml.clone(),
+                                )
+                            })
+                            .collect();
+
+                        if valid_sources.is_empty() {
+                            ui.label(
+                                RichText::new("⚠️ 当前暂无包含分流规则/策略组的订阅源。拉取或导入 Clash YAML 订阅后即可在此选用。")
+                                    .color(theme::warning())
+                                    .small(),
+                            );
+                        } else {
+                            let mut current_id = self
+                                .proxy_config
+                                .subscription_rules_source_id
+                                .clone()
+                                .unwrap_or_default();
+                            if !valid_sources.iter().any(|(id, _, _, _, _, _)| id == &current_id) {
+                                current_id = valid_sources[0].0.clone();
+                                self.proxy_config.subscription_rules_source_id = Some(current_id.clone());
+                            }
+
+                            let current_name = valid_sources
+                                .iter()
+                                .find(|(id, _, _, _, _, _)| id == &current_id)
+                                .map(|(_, name, _, _, _, _)| name.as_str())
+                                .unwrap_or("未选择");
+
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("当前选用模板：").strong());
+                                let mut selected_changed = false;
+                                egui::ComboBox::from_id_salt("subscription_rules_source_combo")
+                                    .selected_text(current_name)
+                                    .width(320.0)
+                                    .show_ui(ui, |ui| {
+                                        for (s_id, s_name, rule_lines, has_groups, _, _) in &valid_sources {
+                                            let info = match (*rule_lines > 0, *has_groups) {
+                                                (true, true) => format!(" ({rule_lines} 条规则 · 包含策略组)"),
+                                                (true, false) => format!(" ({rule_lines} 条规则)"),
+                                                (false, true) => " (包含策略组)".to_string(),
+                                                (false, false) => String::new(),
+                                            };
+                                            let display = format!("{s_name}{info}");
+                                            if ui.selectable_value(&mut current_id, s_id.clone(), display).clicked() {
+                                                selected_changed = true;
+                                            }
+                                        }
+                                    });
+                                if selected_changed {
+                                    self.proxy_config.subscription_rules_source_id = Some(current_id.clone());
+                                    self.save_proxy_config();
+                                }
+                            });
+
+                            if let Some((_, _, _, _, ref r_yaml, ref g_yaml)) = valid_sources.iter().find(|(id, _, _, _, _, _)| id == &current_id) {
+                                ui.add_space(4.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("模板详情:").small().color(theme::muted()));
+                                    if let Some(ref r) = r_yaml {
+                                        let count = r.lines().count();
+                                        ui.label(
+                                            RichText::new(format!("{count} 条分流规则"))
+                                                .small()
+                                                .color(theme::accent()),
+                                        );
+                                    }
+                                    if let Some(ref g) = g_yaml {
+                                        let groups = crate::gui::views::proxy::groups::override_group_names(Some(g));
+                                        if !groups.is_empty() {
+                                            ui.label(
+                                                RichText::new(format!("{} 个策略组: {}", groups.len(), groups.join(", ")))
+                                                    .small()
+                                                    .color(theme::accent()),
+                                            );
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    });
+                }
+
                 ui.add_space(8.0);
                 card_frame().show(ui, |ui| {
                     // 描述与按钮分两行：横向并排时长描述会把按钮顶出可视区。
@@ -339,11 +452,11 @@ impl VpnApp {
                 card_frame().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         icon_label(ui, Icon::Lightbulb, 15.0, theme::accent());
-                        ui.label(RichText::new("常用场景分流预设（一键添加至规则列表）").strong());
+                        ui.label(RichText::new("常用场景分流预设（一键添加至例外规则）").strong());
                     });
                     ui.label(
                         RichText::new(
-                            "点击对应场景可一键合并预设分流规则，并在保存后自动热重载生效",
+                            "智能规则已内置全自动分流，点击对应场景可一键添加个性化定制规则并自动热重载生效",
                         )
                         .small()
                         .color(theme::muted()),
@@ -466,14 +579,14 @@ impl VpnApp {
                 // 「保存规则」一起挤出可视区。标题上带条数，收起时也知道里面有多少东西。
                 let rule_count = self.proxy_config.rules.len();
                 egui::CollapsingHeader::new(fold_title(&format!(
-                    "自定义规则 · {rule_count} 条"
+                    "自定义例外规则 · {rule_count} 条（全自动分流已在后台生效）"
                 )))
                 .id_salt("custom_rules_section")
                 .show_background(false)
                 .show(ui, |ui| {
                     card_frame().show(ui, |ui| {
                     ui.label(
-                        RichText::new("从上到下匹配，未命中流量默认走代理")
+                        RichText::new("内置全自动分流引擎已接管国内直连与海外代理，开箱即用无需手动维护。如有特定私有域名需特殊处理，可在此添加高优先级例外规则。")
                             .small()
                             .color(theme::muted()),
                     );
