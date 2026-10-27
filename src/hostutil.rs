@@ -149,6 +149,14 @@ fn is_public_ip(ip: IpAddr) -> bool {
             if o[0] == 100 && (64..=127).contains(&o[1]) {
                 return false;
             }
+            // 192.0.0.0/24 IETF protocol assignments
+            if o[0] == 192 && o[1] == 0 && o[2] == 0 {
+                return false;
+            }
+            // 198.18.0.0/15 Network benchmark / fake-ip
+            if o[0] == 198 && (o[1] == 18 || o[1] == 19) {
+                return false;
+            }
             // 224.0.0.0/4 multicast + 240.0.0.0/4 reserved
             if o[0] >= 224 {
                 return false;
@@ -170,6 +178,16 @@ fn is_public_ip(ip: IpAddr) -> bool {
             }
             true
         }
+    }
+}
+
+/// 判断 CIDR 字符串是否为私有 / 环回 / 链路本地 / 预留网段（域名解析对其默认启用 no-resolve）。
+pub fn is_private_cidr(cidr: &str) -> bool {
+    let ip_str = cidr.split_once('/').map(|(ip, _)| ip).unwrap_or(cidr).trim();
+    if let Ok(ip) = ip_str.parse::<IpAddr>() {
+        !is_public_ip(ip)
+    } else {
+        false
     }
 }
 
@@ -203,5 +221,21 @@ mod tests {
         assert!(is_decoy_website_host("trt.fastlynew.hosting-ip.com"));
         assert!(!is_quality_export_host("themeforest.net"));
         assert!(is_quality_export_host("cf.090227.xyz"));
+    }
+
+    #[test]
+    fn test_is_private_cidr() {
+        assert!(is_private_cidr("10.0.0.0/8"));
+        assert!(is_private_cidr("127.0.0.1/32"));
+        assert!(is_private_cidr("172.16.0.0/12"));
+        assert!(is_private_cidr("192.168.1.0/24"));
+        assert!(is_private_cidr("169.254.0.0/16"));
+        assert!(is_private_cidr("100.64.0.0/10"));
+        assert!(is_private_cidr("198.18.0.0/15"));
+        assert!(is_private_cidr("fc00::/7"));
+        assert!(is_private_cidr("fe80::/10"));
+        assert!(is_private_cidr("::1/128"));
+        assert!(!is_private_cidr("8.8.8.8/32"));
+        assert!(!is_private_cidr("1.1.1.1"));
     }
 }

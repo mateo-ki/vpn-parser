@@ -313,7 +313,10 @@ fn convert_matcher(matcher: &RuleMatcher) -> (IRMatcher, bool) {
         RuleMatcher::DomainKeyword(k) => (IRMatcher::DomainKeyword(k.clone()), false),
         RuleMatcher::GeoSite(s) => (IRMatcher::GeoSite(s.clone()), false),
         RuleMatcher::GeoIp(country) => (IRMatcher::GeoIp(country.clone()), true),
-        RuleMatcher::IpCidr(cidr) => (IRMatcher::IpCidr(cidr.clone()), false),
+        RuleMatcher::IpCidr(cidr) => {
+            let no_res = crate::hostutil::is_private_cidr(cidr);
+            (IRMatcher::IpCidr(cidr.clone()), no_res)
+        }
         RuleMatcher::DestinationPort(p) => {
             if let Some((start, end)) = p.split_once('-').or_else(|| p.split_once(':')) {
                 if let (Ok(s), Ok(e)) = (start.trim().parse::<u16>(), end.trim().parse::<u16>()) {
@@ -409,7 +412,10 @@ pub fn parse_clash_rules_yaml_to_ir(rules_yaml: Option<&str>, source: RuleSource
         rules.push(IRRule {
             matchers: vec![matcher],
             action,
-            no_resolve: no_resolve || matches!(matcher_type.as_str(), "GEOIP"),
+            no_resolve: no_resolve
+                || matches!(matcher_type.as_str(), "GEOIP")
+                || (matches!(matcher_type.as_str(), "IP-CIDR" | "IP-CIDR6")
+                    && (no_resolve || crate::hostutil::is_private_cidr(target))),
             source,
         });
     }

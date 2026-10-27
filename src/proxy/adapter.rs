@@ -463,7 +463,9 @@ impl KernelAdapter for VpCoreAdapter {
         command
             .arg("run")
             .arg("-c")
-            .arg(work_dir.config_path());
+            .arg(work_dir.config_path())
+            .arg("-D")
+            .arg(work_dir.data_root());
     }
 
     fn validation_args(&self, work_dir: &ProxyWorkDir) -> Option<Vec<std::ffi::OsString>> {
@@ -471,6 +473,8 @@ impl KernelAdapter for VpCoreAdapter {
             "validate".into(),
             "-c".into(),
             work_dir.config_path().as_os_str().to_owned(),
+            "-D".into(),
+            work_dir.data_root().as_os_str().to_owned(),
         ])
     }
 

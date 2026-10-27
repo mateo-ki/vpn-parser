@@ -782,7 +782,14 @@ impl BackendCompiler for MihomoCompiler {
                     IRMatcher::DomainSuffix(d) => format!("DOMAIN-SUFFIX,{d},{target}"),
                     IRMatcher::DomainKeyword(k) => format!("DOMAIN-KEYWORD,{k},{target}"),
                     IRMatcher::DomainRegex(r) => format!("DOMAIN-REGEX,{r},{target}"),
-                    IRMatcher::IpCidr(c) => format!("IP-CIDR,{c},{target}"),
+                    IRMatcher::IpCidr(c) => {
+                        let prefix = if c.contains(':') { "IP-CIDR6" } else { "IP-CIDR" };
+                        if ir_rule.no_resolve || crate::hostutil::is_private_cidr(c) {
+                            format!("{prefix},{c},{target},no-resolve")
+                        } else {
+                            format!("{prefix},{c},{target}")
+                        }
+                    }
                     IRMatcher::Port(p) => format!("DST-PORT,{p},{target}"),
                     IRMatcher::PortRange(s, e) => format!("DST-PORT,{s}-{e},{target}"),
                     IRMatcher::GeoSite(s) => {
