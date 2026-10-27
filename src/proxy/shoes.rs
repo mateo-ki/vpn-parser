@@ -181,8 +181,14 @@ async fn probe_batch(
                     YamlValue::String("type".into()),
                     YamlValue::String("mixed".into()),
                 );
-                proto.insert(YamlValue::String("udp_enabled".into()), YamlValue::Bool(true));
-                server.insert(YamlValue::String("protocol".into()), YamlValue::Mapping(proto));
+                proto.insert(
+                    YamlValue::String("udp_enabled".into()),
+                    YamlValue::Bool(true),
+                );
+                server.insert(
+                    YamlValue::String("protocol".into()),
+                    YamlValue::Mapping(proto),
+                );
 
                 let mut rule = Mapping::new();
                 rule.insert(
@@ -221,8 +227,7 @@ async fn probe_batch(
     let ready_port = valid_ports[0];
     drop(reservations);
 
-    let directory =
-        std::env::temp_dir().join(format!("vpn-parser-shoes-probe-{}", Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!("vpn-parser-shoes-probe-{}", Uuid::new_v4()));
     tokio::fs::create_dir_all(&directory).await?;
     let config_path = directory.join("config.yaml");
     let log_path = directory.join("shoes.log");
@@ -304,8 +309,7 @@ async fn probe_batch(
                                 _ => {
                                     match client.get(PROXY_CONNECTIVITY_FALLBACK_URL).send().await {
                                         Ok(resp)
-                                            if resp.status()
-                                                == reqwest::StatusCode::NO_CONTENT =>
+                                            if resp.status() == reqwest::StatusCode::NO_CONTENT =>
                                         {
                                             Ok("Cloudflare")
                                         }
@@ -437,7 +441,7 @@ mod tests {
     /// 多谓词规则（WebRTC 防泄露的端口列表 + 端口段）必须拆成多条平铺规则，
     /// 禁止生成 `masks: {any: [...]}` —— Shoes 0.3.4 的 any + no_resolve 组合
     /// 会毒化匹配管线：其后所有未命中域名规则的域名被静默 Block，
-    /// 浏览器表现为 ERR_EMPTY_RESPONSE（pool.983698.xyz 复现过的那个 bug）。
+    /// 浏览器表现为 ERR_EMPTY_RESPONSE（真实订阅节点复现过的那个 bug）。
     #[test]
     fn multi_predicate_rules_are_split_not_any_wrapped() {
         let n = node("ss", json!({"cipher":"aes-128-gcm","password":"p"}));
@@ -488,7 +492,7 @@ mod tests {
 
     /// QUIC 拦截的语义是"仅拦 UDP 443"。Shoes 的 masks 没有 TCP/UDP 维度，
     /// 若误译成裸 `destination_port: 443`，所有未命中前置域名规则的普通 HTTPS
-    /// 都会被静默 Block（pool.983698.xyz 报 ERR_EMPTY_RESPONSE 的根因）。
+    /// 都会被静默 Block（真实订阅节点报 ERR_EMPTY_RESPONSE 的根因）。
     #[test]
     fn quic_rule_is_skipped_not_translated_to_tcp_port_block() {
         let n = node("ss", json!({"cipher":"aes-128-gcm","password":"p"}));
@@ -519,20 +523,20 @@ mod tests {
             json!({
                 "client-fingerprint": "chrome",
                 "flow": "xtls-rprx-vision",
-                "name": "🇺🇸US²_3",
+                "name": "Reality-Test-Node",
                 "network": "tcp",
                 "port": 8443,
                 "reality-opts": {
-                    "public-key": "Ha1kOu8LGfb6tK9wwrB_5UYrvjHFT_QwjvIuqM-q2go",
-                    "short-id": "40555f988c33e341"
+                    "public-key": "lZHSg66b68Go2h_hrs3_sc3GrL4ahI09IuKHgib7iKk",
+                    "short-id": "dba06da450fc7c49"
                 },
-                "server": "143.246.60.129",
-                "servername": "gateway.icloud.com",
+                "server": "203.0.113.10",
+                "servername": "reality.example.com",
                 "skip-cert-verify": true,
                 "tfo": true,
                 "tls": true,
                 "type": "vless",
-                "uuid": "25284f5f-1dc4-42b8-bee1-f4a5144ee064"
+                "uuid": "aaaaaaaa-bbbb-4ccc-8ddd-000000000010"
             }),
         );
         let options = MihomoConfigOptions {
@@ -545,9 +549,9 @@ mod tests {
         let yaml_str = serde_yaml::to_string(&val).expect("serializable to yaml");
         println!("=== GENERATED SHOES REALITY YAML ===\n{yaml_str}\n============================");
         assert!(yaml_str.contains("type: reality"));
-        assert!(yaml_str.contains("public_key: Ha1kOu8LGfb6tK9wwrB_5UYrvjHFT_QwjvIuqM-q2go"));
-        assert!(yaml_str.contains("short_id: 40555f988c33e341"));
-        assert!(yaml_str.contains("sni_hostname: gateway.icloud.com"));
+        assert!(yaml_str.contains("public_key: lZHSg66b68Go2h_hrs3_sc3GrL4ahI09IuKHgib7iKk"));
+        assert!(yaml_str.contains("short_id: dba06da450fc7c49"));
+        assert!(yaml_str.contains("sni_hostname: reality.example.com"));
         assert!(yaml_str.contains("vision: true"));
     }
 
@@ -564,15 +568,16 @@ mod tests {
                 "pbk": "",
                 "port": 443,
                 "security": "tls",
-                "server": "95.182.101.185",
+                "server": "203.0.113.20",
                 "sid": "",
                 "sni": "example.com",
                 "type": "vless",
-                "uuid": "2561db48-c4d2-4b36-808a-db5093797aeb"
+                "uuid": "aaaaaaaa-bbbb-4ccc-8ddd-000000000020"
             }),
         );
         let options = MihomoConfigOptions::default();
-        let val = build_shoes_config(&n, options).expect("valid config with empty pbk should not fail as reality");
+        let val = build_shoes_config(&n, options)
+            .expect("valid config with empty pbk should not fail as reality");
         let yaml_str = serde_yaml::to_string(&val).unwrap();
         assert!(yaml_str.contains("type: tls"));
         assert!(!yaml_str.contains("type: reality"));
@@ -603,17 +608,20 @@ mod meow_tests {
 
     #[test]
     fn builds_meow_config_from_mihomo_shape_without_geo_fields() {
-        let n = node("vless", json!({
-            "type": "vless",
-            "name": "meow节点",
-            "server": "saas.sin.fan",
-            "port": 443,
-            "uuid": "2561db48-c4d2-4b36-808a-db5093797aeb",
-            "tls": true,
-            "servername": "next-a64.pages.dev",
-            "network": "ws",
-            "ws-opts": {"path": "/x?ed=2048", "headers": {"Host": "next-a64.pages.dev"}}
-        }));
+        let n = node(
+            "vless",
+            json!({
+                "type": "vless",
+                "name": "meow节点",
+                "server": "ws.example.com",
+                "port": 443,
+                "uuid": "aaaaaaaa-bbbb-4ccc-8ddd-000000000030",
+                "tls": true,
+                "servername": "cdn.example.com",
+                "network": "ws",
+                "ws-opts": {"path": "/x?ed=2048", "headers": {"Host": "cdn.example.com"}}
+            }),
+        );
         let mut options = meow_options();
         options.routing_mode = RoutingMode::ChinaDirect;
         let val = crate::proxy::compiler::MeowCompiler
@@ -641,7 +649,10 @@ mod meow_tests {
             .as_json_value()
             .expect("json artifact");
         let yaml_str = serde_yaml::to_string(&val).unwrap();
-        assert!(yaml_str.contains("device: meow"), "tun 段应钉住网卡名:\n{yaml_str}");
+        assert!(
+            yaml_str.contains("device: meow"),
+            "tun 段应钉住网卡名:\n{yaml_str}"
+        );
         assert!(yaml_str.contains("dns-hijack"));
         // TUN 硬性要求 fake-ip（meow docs/tun.md）
         assert!(yaml_str.contains("enhanced-mode: fake-ip"));
@@ -668,7 +679,10 @@ mod meow_tests {
             .expect("json artifact");
         let yaml_str = serde_yaml::to_string(&val).unwrap();
         // LAN→private 别名在 mihomo 编译主体里生效，meow 继承
-        assert!(yaml_str.contains("GEOIP,private"), "LAN 应映射为 private:\n{yaml_str}");
+        assert!(
+            yaml_str.contains("GEOIP,private"),
+            "LAN 应映射为 private:\n{yaml_str}"
+        );
         // 不应出现裸 443 端口拦截（那是 shoes 编译器已修的坑，meow 走 mihomo 语义不存在）
         assert!(!yaml_str.contains("DST-PORT,443,REJECT"));
     }
@@ -694,17 +708,20 @@ mod meow_real_kernel_tests {
         }
         let meow_exe = p;
 
-        let n = node("vless", json!({
-            "type": "vless",
-            "name": "meow节点",
-            "server": "saas.sin.fan",
-            "port": 443,
-            "uuid": "2561db48-c4d2-4b36-808a-db5093797aeb",
-            "tls": true,
-            "servername": "next-a64.pages.dev",
-            "network": "ws",
-            "ws-opts": {"path": "/x?ed=2048", "headers": {"Host": "next-a64.pages.dev"}}
-        }));
+        let n = node(
+            "vless",
+            json!({
+                "type": "vless",
+                "name": "meow节点",
+                "server": "ws.example.com",
+                "port": 443,
+                "uuid": "aaaaaaaa-bbbb-4ccc-8ddd-000000000030",
+                "tls": true,
+                "servername": "cdn.example.com",
+                "network": "ws",
+                "ws-opts": {"path": "/x?ed=2048", "headers": {"Host": "cdn.example.com"}}
+            }),
+        );
         let mut options = MihomoConfigOptions::default();
         options.mixed_port = 19991;
         options.controller_port = 19091;

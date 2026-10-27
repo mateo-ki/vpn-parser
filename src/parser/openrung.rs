@@ -136,30 +136,30 @@ mod tests {
                 {
                     "id": "relay_f8346d22d10637f8dc02deee9a101e40",
                     "label": "nimble-comet",
-                    "public_host": "2.28.194.230",
+                    "public_host": "203.0.113.11",
                     "public_port": 443,
                     "city": "Nuremberg",
                     "country": "Germany",
                     "country_code": "DE",
                     "protocol": "vless-reality-vision",
-                    "client_id": "f553f56e-6761-498d-bbca-7d52cbe1a506",
-                    "reality_public_key": "FV-POqs97XN7sz6EdA8adVkbZK9Ra9hrcdhabFlRTxA",
-                    "short_id": "d6b8bf7803b410ed",
+                    "client_id": "aaaaaaaa-bbbb-4ccc-8ddd-000000000101",
+                    "reality_public_key": "lZHSg66b68Go2h_hrs3_sc3GrL4ahI09IuKHgib7iKk",
+                    "short_id": "dba06da450fc7c49",
                     "server_name": "www.cloudflare.com",
                     "flow": "xtls-rprx-vision"
                 },
                 {
                     "id": "relay_552a664d4d564ba58d8f76d6c50ec3a0",
                     "label": "vivid-clover",
-                    "public_host": "13.196.120.83",
+                    "public_host": "198.51.100.83",
                     "public_port": 443,
                     "city": "Tokyo",
                     "country": "Japan",
                     "country_code": "JP",
                     "protocol": "vless-reality-vision",
-                    "client_id": "856721aa-ee23-44fc-b941-20d7ade092d5",
-                    "reality_public_key": "Y_OP0xSjtbdWIavGSTtN-MNYr8ciahzLrBWbo5ZhJ3g",
-                    "short_id": "9e22ca503cba229d",
+                    "client_id": "aaaaaaaa-bbbb-4ccc-8ddd-000000000102",
+                    "reality_public_key": "ZHqpbCdEAaZqnpSyTyT3OAO-efydk50uCZIK4etpHZY",
+                    "short_id": "147ba4bbe7fe9a8b",
                     "server_name": "www.cloudflare.com",
                     "flow": "xtls-rprx-vision"
                 }
@@ -169,7 +169,7 @@ mod tests {
         let nodes = parse_openrung_json(sample, Some("src_openrung")).expect("should parse");
         assert_eq!(nodes.len(), 2);
         assert_eq!(nodes[0].protocol, "vless");
-        assert_eq!(nodes[0].server, "2.28.194.230");
+        assert_eq!(nodes[0].server, "203.0.113.11");
         assert_eq!(nodes[0].port, 443);
         assert_eq!(nodes[0].country.as_deref(), Some("DE"));
         assert!(nodes[0].name.contains("nimble-comet"));

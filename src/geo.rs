@@ -190,122 +190,71 @@ pub async fn ensure_meow_home_geo(home: &Path, proxy_url: Option<&str>) -> Resul
 }
 
 /// vp_core 内核目录的 geo 准备：
-/// 1. 确保 mihomo 目录的 geosite.dat 就绪，并复制到 vpcore 目录；
-/// 2. 检查 Country.mmdb：如果已有（或 meow 目录有）直接复用；否则从高速镜像下载；
-/// 文件已就位（大小达标）时跳过，幂等。
+/// 纯粹维护在 vpcore 自身目录，不跨内核目录复用。
+/// 检查自身目录的 geosite.dat 与 geoip 库（geoip.dat / Country.mmdb / geoip.metadb）；
+/// 若自身缺少则直接从镜像下载到 vpcore 自身目录。文件已就位（大小达标）时跳过，幂等。
 pub async fn ensure_vpcore_geo(home: &Path, proxy_url: Option<&str>) -> Result<String> {
     std::fs::create_dir_all(home)?;
-    let mut report = Vec::new();
 
-    // 1. mihomo 目录的 dat 先备好
-    let mihomo = mihomo_dir();
-    if !geo_ready(&mihomo) {
-        provision(&mihomo, proxy_url, false).await?;
+    let has_geosite = (home.join("geosite.dat").exists()
+        && std::fs::metadata(home.join("geosite.dat"))
+            .map(|m| m.len() >= MIN_GEOSITE_BYTES)
+            .unwrap_or(false))
+        || (home.join("GeoSite.dat").exists()
+            && std::fs::metadata(home.join("GeoSite.dat"))
+                .map(|m| m.len() >= MIN_GEOSITE_BYTES)
+                .unwrap_or(false));
+
+    let has_geoip = (home.join("geoip.dat").exists()
+        && std::fs::metadata(home.join("geoip.dat"))
+            .map(|m| m.len() >= MIN_GEOIP_BYTES)
+            .unwrap_or(false))
+        || (home.join("GeoIP.dat").exists()
+            && std::fs::metadata(home.join("GeoIP.dat"))
+                .map(|m| m.len() >= MIN_GEOIP_BYTES)
+                .unwrap_or(false))
+        || (home.join("Country.mmdb").exists()
+            && std::fs::metadata(home.join("Country.mmdb"))
+                .map(|m| m.len() >= MIN_MMDB_BYTES)
+                .unwrap_or(false))
+        || home.join("geoip.metadb").exists();
+
+    let mut needed = Vec::new();
+    if !has_geosite {
+        needed.push("geosite.dat");
+    }
+    if !has_geoip {
+        needed.push("geoip.dat");
     }
 
-    // 2. 将 geosite.dat 拷贝进 vpcore 目录
-    let geosite_name = "geosite.dat";
-    let dst_geosite = home.join(geosite_name);
-    let src_candidates = [
-        mihomo.join(geosite_name),
-        mihomo.join("GeoSite.dat"),
-    ];
-    if let Some(src) = src_candidates.iter().find(|p| p.exists()) {
-        let needs_copy = std::fs::metadata(&dst_geosite)
-            .and_then(|m_dst| std::fs::metadata(src).map(|m_src| m_dst.len() != m_src.len()))
-            .unwrap_or(true);
-        if needs_copy {
-            std::fs::copy(src, &dst_geosite)?;
-            report.push("geosite.dat 已同步至 vpcore 目录".into());
-        }
+    if needed.is_empty() {
+        return Ok("VP-Core 自有分流数据库已就绪".into());
     }
 
-    // 3. 检查 Country.mmdb：优先从 meow 目录复用
-    let mmdb = home.join("Country.mmdb");
-    let mmdb_ok = std::fs::metadata(&mmdb)
-        .map(|m| m.len() >= MIN_MMDB_BYTES)
-        .unwrap_or(false);
-    if !mmdb_ok {
-        let meow_mmdb = crate::kernel::managed_kernel_root().join("meow").join("Country.mmdb");
-        if std::fs::metadata(&meow_mmdb).map(|m| m.len() >= MIN_MMDB_BYTES).unwrap_or(false) {
-            std::fs::copy(&meow_mmdb, &mmdb)?;
-            report.push("Country.mmdb 已从 meow 目录复用".into());
-        } else {
-            const MMDB_UPSTREAMS: [&str; 4] = [
-                "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/",
-                "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/",
-                "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/",
-                "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/",
-            ];
-            let mmdb_task = async {
-                let mut builder = Client::builder()
-                    .user_agent("vpn-parser geo-updater")
-                    .connect_timeout(Duration::from_secs(6))
-                    .timeout(Duration::from_secs(20));
-                if let Some(proxy_url) = proxy_url {
-                    builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
-                }
-                let client = builder.build()?;
-                let mut failures = Vec::new();
-                for upstream in MMDB_UPSTREAMS {
-                    let url = format!("{upstream}Country.mmdb");
-                    match download_into(&client, &url, &mmdb, "Country.mmdb").await {
-                        Ok(bytes) => return Ok(bytes),
-                        Err(error) => failures.push(format!("{}: {error}", host_of(&url))),
-                    }
-                }
-                Err(anyhow!("{}", failures.join("；")))
-            };
-            match tokio::time::timeout(Duration::from_secs(25), mmdb_task).await {
-                Ok(Ok(bytes)) => {
-                    report.push(format!("Country.mmdb 就绪 {}", human_mb(bytes)));
-                }
-                Ok(Err(error)) => {
-                    return Err(anyhow!("VP-Core 的 Country.mmdb 下载失败：{error}"));
-                }
-                Err(_) => {
-                    return Err(anyhow!("VP-Core 的 Country.mmdb 下载超时（25s）"));
-                }
-            }
-        }
-    } else {
-        report.push("Country.mmdb 已就绪".into());
-    }
-
-    Ok(report.join("，"))
+    // 自身缺少时直接下载所需库到 vpcore 自身目录
+    provision_files(home, &needed, proxy_url, false).await
 }
 
 /// 将 vpcore 所需的分流数据库硬链接（或复制）到目标临时工作目录（供 vpcore run -c 启动时直接相对加载）。
+/// 纯粹从 vpcore 自身目录读取，不跨内核目录复用。
 pub fn populate_vpcore_work_dir(vpcore_home: &Path, work_dir_root: &Path) {
-    let files = ["geosite.dat", "Country.mmdb", "geoip.metadb", "wintun.dll"];
+    let files = [
+        "geosite.dat",
+        "GeoSite.dat",
+        "geoip.dat",
+        "GeoIP.dat",
+        "Country.mmdb",
+        "geoip.metadb",
+        "wintun.dll",
+    ];
     for name in files {
         let src = vpcore_home.join(name);
-        let src = if src.exists() {
-            Some(src)
-        } else if name == "Country.mmdb" {
-            let meow_src = crate::kernel::managed_kernel_root().join("meow").join("Country.mmdb");
-            if meow_src.exists() {
-                Some(meow_src)
-            } else {
-                None
-            }
-        } else if name == "geosite.dat" {
-            let mihomo_src = mihomo_dir().join("geosite.dat");
-            if mihomo_src.exists() {
-                Some(mihomo_src)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        if let Some(src_path) = src {
+        if src.exists() {
             let dst = work_dir_root.join(name);
             if !dst.exists() {
                 // 优先硬链接（0 耗时 0 空间），跨磁盘失败则回退为拷贝
-                if std::fs::hard_link(&src_path, &dst).is_err() {
-                    let _ = std::fs::copy(&src_path, &dst);
+                if std::fs::hard_link(&src, &dst).is_err() {
+                    let _ = std::fs::copy(&src, &dst);
                 }
             }
         }
@@ -334,6 +283,16 @@ fn validate_geo_body(name: &str, bytes: &[u8]) -> Result<u64> {
 
 /// 缺什么补什么；返回一句给人看的报告。`force = true` 时两个库全部重下。
 pub async fn provision(dir: &Path, proxy_url: Option<&str>, force: bool) -> Result<String> {
+    provision_files(dir, &GEO_FILES, proxy_url, force).await
+}
+
+/// 按需下载指定列表的 geo 库文件到目标目录；`force = true` 时忽略已有大小强制重下。
+pub async fn provision_files(
+    dir: &Path,
+    names: &[&str],
+    proxy_url: Option<&str>,
+    force: bool,
+) -> Result<String> {
     std::fs::create_dir_all(dir)?;
     let mut builder = Client::builder()
         .user_agent("vpn-parser geo-updater")
@@ -345,7 +304,7 @@ pub async fn provision(dir: &Path, proxy_url: Option<&str>, force: bool) -> Resu
     let client = builder.build()?;
 
     let mut report = Vec::new();
-    for name in GEO_FILES {
+    for &name in names {
         let target = dir.join(name);
         let min_len = min_bytes_for_file(name);
         let existing = std::fs::metadata(&target).ok().map(|meta| meta.len());
@@ -591,5 +550,20 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&work);
+    }
+
+    #[tokio::test]
+    async fn test_ensure_vpcore_geo_when_files_ready() {
+        let home = std::env::temp_dir().join(format!("vpn-parser-vpcore-geo-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+
+        // 模拟已存在足额大小的 geosite.dat 和 geoip.dat
+        std::fs::write(home.join("geosite.dat"), vec![0x0a; MIN_GEOSITE_BYTES as usize]).unwrap();
+        std::fs::write(home.join("geoip.dat"), vec![0x0a; MIN_GEOIP_BYTES as usize]).unwrap();
+
+        let report = ensure_vpcore_geo(&home, None).await.unwrap();
+        assert_eq!(report, "VP-Core 自有分流数据库已就绪");
+
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

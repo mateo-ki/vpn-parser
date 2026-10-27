@@ -667,11 +667,12 @@ mod tests {
             ),
         ];
         let (prepared, results) = prepare_proxies(&nodes);
-        assert_eq!(prepared.len(), 2);
+        // mieru 现已受支持（vp-core / mihomo ≥1.18.7），三个节点均可进入探测
+        assert_eq!(prepared.len(), 3);
         assert_eq!(prepared[0].id, "vless-id");
         assert!(results[0].is_none());
         assert!(results[1].is_none());
-        assert!(results[2].as_ref().unwrap().message.contains("暂不支持"));
+        assert!(results[2].is_none());
     }
     #[tokio::test]
     async fn isolates_invalid_proxy_without_rejecting_valid_batch_members() {

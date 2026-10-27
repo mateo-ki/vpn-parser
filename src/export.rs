@@ -110,6 +110,11 @@ fn node_to_clash_proxy(node: &Node) -> Option<Value> {
             ensure_server_port_name(&mut cfg, node);
             Some(cfg)
         }
+        "mieru" => {
+            set_type(&mut cfg, "mieru");
+            ensure_server_port_name(&mut cfg, node);
+            Some(cfg)
+        }
         "wireguard" | "wg" => {
             set_type(&mut cfg, "wireguard");
             ensure_server_port_name(&mut cfg, node);
@@ -596,7 +601,9 @@ fn raw_scheme_matches_protocol(raw: &str, protocol: &str) -> bool {
     let lower = raw.to_ascii_lowercase();
     match protocol {
         "shadowsocks" | "ss" => lower.starts_with("ss://"),
-        "shadowsocksr" | "ssr" => lower.starts_with("ssr://") || lower.starts_with("shadowsocksr://"),
+        "shadowsocksr" | "ssr" => {
+            lower.starts_with("ssr://") || lower.starts_with("shadowsocksr://")
+        }
         "vmess" => lower.starts_with("vmess://"),
         "vless" => lower.starts_with("vless://"),
         "trojan" => lower.starts_with("trojan://"),

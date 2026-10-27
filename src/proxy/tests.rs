@@ -766,14 +766,35 @@ use std::time::Duration;
 
     #[test]
     fn rejects_node_unsupported_by_mihomo_export() {
+        // ssh 无 Clash 转换路径，必须被拒启（sing-box 才支持 ssh 出站）
         let selected = node(
-            "mieru",
-            json!({"server": "1.2.3.4", "port": 443, "password": "secret"}),
+            "ssh",
+            json!({"server": "1.2.3.4", "port": 22, "username": "root", "private-key": "k"}),
         );
 
         let error = build_mihomo_config(&selected, MihomoConfigOptions::default()).unwrap_err();
 
         assert!(error.to_string().contains("不支持"));
+    }
+
+    #[test]
+    fn exports_mieru_node_with_username_and_password() {
+        // mihomo ≥1.18.7 支持 mieru（username+password）
+        let selected = node(
+            "mieru",
+            json!({
+                "server": "1.2.3.4",
+                "port": 443,
+                "username": "alice",
+                "password": "secret"
+            }),
+        );
+
+        let config = build_mihomo_config(&selected, MihomoConfigOptions::default()).unwrap();
+        let proxies = config.get("proxies").and_then(|p| p.as_array()).unwrap();
+        let proxy = proxies.first().unwrap();
+        assert_eq!(proxy.get("type").and_then(|v| v.as_str()), Some("mieru"));
+        assert_eq!(proxy.get("username").and_then(|v| v.as_str()), Some("alice"));
     }
 
     #[tokio::test]
