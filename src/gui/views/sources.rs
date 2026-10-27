@@ -356,6 +356,47 @@ impl VpnApp {
                                             .small()
                                             .color(theme::muted()),
                                     );
+                                    if let Some(total) = s.total_bytes {
+                                        let upload = s.upload_bytes.unwrap_or(0);
+                                        let download = s.download_bytes.unwrap_or(0);
+                                        let used = upload + download;
+                                        let remaining = total.saturating_sub(used);
+                                        let pct = if total > 0 {
+                                            ((used as f64 / total as f64) * 100.0).clamp(0.0, 100.0)
+                                        } else {
+                                            0.0
+                                        };
+                                        ui.horizontal(|ui| {
+                                            ui.label(RichText::new("剩余:").small().color(theme::muted()));
+                                            ui.label(
+                                                RichText::new(crate::gui::widgets::format_bytes(remaining))
+                                                    .small()
+                                                    .strong()
+                                                    .color(if pct > 90.0 {
+                                                        theme::danger()
+                                                    } else if pct > 75.0 {
+                                                        theme::warning()
+                                                    } else {
+                                                        theme::accent_strong()
+                                                    }),
+                                            );
+                                            ui.label(
+                                                RichText::new(format!("/ 共 {}", crate::gui::widgets::format_bytes(total)))
+                                                    .small()
+                                                    .color(theme::muted()),
+                                            );
+                                        });
+                                        if let Some(exp) = s.expire_at {
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "到期: {}",
+                                                    exp.with_timezone(&chrono::Local).format("%Y-%m-%d")
+                                                ))
+                                                .small()
+                                                .color(theme::muted()),
+                                            );
+                                        }
+                                    }
                                     render_fetch_ticks(ui, self.fetch_history.get(&s.id));
                                 });
                                 ui.vertical(|ui| {

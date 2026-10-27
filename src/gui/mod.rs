@@ -3097,6 +3097,7 @@ impl VpnApp {
             }
         }
         let client = reqwest::Client::builder()
+            .no_proxy()
             .timeout(std::time::Duration::from_secs(5)) // 兜底，具体请求各自覆盖
             .build()
             .ok()?;
@@ -3271,7 +3272,10 @@ impl VpnApp {
         let encoded_group = percent_encoding::utf8_percent_encode(&group, percent_encoding::NON_ALPHANUMERIC).to_string();
         self.status = format!("正在让内核切换 {group} → {target}...");
         self.rt.spawn(async move {
-            let client = reqwest::Client::new();
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap_or_default();
             let url = format!("http://127.0.0.1:{port}/proxies/{encoded_group}");
             let response_res = crate::proxy::with_controller_auth(client.put(&url), &secret)
                 .json(&serde_json::json!({ "name": target }))

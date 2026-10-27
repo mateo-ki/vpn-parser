@@ -238,6 +238,12 @@ async fn probe_batch(
     let stderr = log.try_clone()?;
     let mut command = Command::new(binary);
     command
+        .env_remove("HTTP_PROXY")
+        .env_remove("http_proxy")
+        .env_remove("HTTPS_PROXY")
+        .env_remove("https_proxy")
+        .env_remove("ALL_PROXY")
+        .env_remove("all_proxy")
         .arg("--no-reload")
         .arg(&config_path)
         .kill_on_drop(true)

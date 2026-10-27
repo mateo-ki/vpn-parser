@@ -88,6 +88,36 @@ struct FetchCandidate {
     mirror: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SubscriptionUserinfo {
+    pub upload: Option<u64>,
+    pub download: Option<u64>,
+    pub total: Option<u64>,
+    pub expire: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+pub fn parse_subscription_userinfo(header: &str) -> SubscriptionUserinfo {
+    let mut info = SubscriptionUserinfo::default();
+    for part in header.split(';') {
+        if let Some((k, v)) = part.trim().split_once('=') {
+            let k = k.trim().to_ascii_lowercase();
+            let v = v.trim();
+            match k.as_str() {
+                "upload" => info.upload = v.parse().ok(),
+                "download" => info.download = v.parse().ok(),
+                "total" => info.total = v.parse().ok(),
+                "expire" => {
+                    if let Ok(ts) = v.parse::<i64>() {
+                        info.expire = chrono::DateTime::from_timestamp(ts, 0);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    info
+}
+
 /// 一次成功下载的结果（还没解析/入库）。
 struct Downloaded {
     body: Vec<u8>,
@@ -96,6 +126,7 @@ struct Downloaded {
     last_modified: Option<String>,
     /// 走了哪个镜像；None 表示直连。
     via: Option<String>,
+    userinfo: Option<SubscriptionUserinfo>,
 }
 
 #[derive(Clone)]
@@ -243,7 +274,20 @@ impl Collector {
                 etag,
                 last_modified,
                 via,
+                userinfo,
             } = downloaded;
+            if let Some(ui) = userinfo {
+                let _ = self
+                    .db
+                    .update_source_userinfo(
+                        &source.id,
+                        ui.upload,
+                        ui.download,
+                        ui.total,
+                        ui.expire,
+                    )
+                    .await;
+            }
             let via_note = match via.as_deref() {
                 Some(host) => format!("（经 {host} 加速，未与直连比对）"),
                 None => String::new(),
@@ -399,6 +443,7 @@ impl Collector {
             etag: None,
             last_modified,
             via: None,
+            userinfo: None,
         }))
     }
 
@@ -547,6 +592,12 @@ impl Collector {
             .get(LAST_MODIFIED)
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
+        let userinfo = response
+            .headers()
+            .get("subscription-userinfo")
+            .or_else(|| response.headers().get("Subscription-Userinfo"))
+            .and_then(|value| value.to_str().ok())
+            .map(parse_subscription_userinfo);
         let body = match self
             .read_source_body(&mut response, task_id, &source.id, Instant::now())
             .await
@@ -570,6 +621,7 @@ impl Collector {
             etag,
             last_modified,
             via: candidate.mirror.then(|| candidate.host.clone()),
+            userinfo,
         }))
     }
 
@@ -1300,6 +1352,16 @@ mod tests {
     use std::time::Instant;
     use tokio::net::TcpListener;
     use uuid::Uuid;
+
+    #[test]
+    fn test_parse_subscription_userinfo() {
+        let header = "upload=1073741824; download=2147483648; total=107374182400; expire=1700000000";
+        let info = parse_subscription_userinfo(header);
+        assert_eq!(info.upload, Some(1073741824));
+        assert_eq!(info.download, Some(2147483648));
+        assert_eq!(info.total, Some(107374182400));
+        assert!(info.expire.is_some());
+    }
 
     #[test]
     fn rejects_declared_source_body_over_limit() {

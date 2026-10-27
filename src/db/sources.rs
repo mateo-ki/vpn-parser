@@ -15,7 +15,9 @@ impl Database {
             r#"SELECT id, name, url_template, enabled, remark, last_fetch_at,
                       last_status, last_node_count, last_resolved_url, last_etag,
                       last_modified, content_sha256, fail_streak, last_fetch_host,
-                      push_disabled, rules_yaml, groups_yaml, user_agent, created_at, updated_at
+                      push_disabled, rules_yaml, groups_yaml, user_agent,
+                      upload_bytes, download_bytes, total_bytes, expire_at,
+                      created_at, updated_at
                FROM sources
                ORDER BY created_at DESC"#,
         )
@@ -29,7 +31,9 @@ impl Database {
             r#"SELECT id, name, url_template, enabled, remark, last_fetch_at,
                       last_status, last_node_count, last_resolved_url, last_etag,
                       last_modified, content_sha256, fail_streak, last_fetch_host,
-                      push_disabled, rules_yaml, groups_yaml, user_agent, created_at, updated_at
+                      push_disabled, rules_yaml, groups_yaml, user_agent,
+                      upload_bytes, download_bytes, total_bytes, expire_at,
+                      created_at, updated_at
                FROM sources
                WHERE id = ?"#,
         )
@@ -64,6 +68,10 @@ impl Database {
             rules_yaml: None,
             groups_yaml: None,
             user_agent,
+            upload_bytes: None,
+            download_bytes: None,
+            total_bytes: None,
+            expire_at: None,
             created_at: now,
             updated_at: now,
         };
@@ -480,7 +488,42 @@ pub(crate) fn row_to_source(r: sqlx::sqlite::SqliteRow) -> Source {
         rules_yaml: r.try_get("rules_yaml").ok().flatten(),
         groups_yaml: r.try_get("groups_yaml").ok().flatten(),
         user_agent: r.try_get("user_agent").ok().flatten(),
+        upload_bytes: r.try_get::<i64, _>("upload_bytes").ok().map(|v| v as u64),
+        download_bytes: r.try_get::<i64, _>("download_bytes").ok().map(|v| v as u64),
+        total_bytes: r.try_get::<i64, _>("total_bytes").ok().map(|v| v as u64),
+        expire_at: r
+            .try_get::<Option<String>, _>("expire_at")
+            .ok()
+            .flatten()
+            .map(|s| super::parse_dt(&s)),
         created_at: super::parse_dt(r.get::<String, _>("created_at").as_str()),
         updated_at: super::parse_dt(r.get::<String, _>("updated_at").as_str()),
+    }
+}
+
+impl Database {
+    pub async fn update_source_userinfo(
+        &self,
+        id: &str,
+        upload: Option<u64>,
+        download: Option<u64>,
+        total: Option<u64>,
+        expire: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()> {
+        let expire_str = expire.map(|dt| dt.to_rfc3339());
+        sqlx::query(
+            r#"UPDATE sources
+               SET upload_bytes = ?, download_bytes = ?, total_bytes = ?, expire_at = ?, updated_at = ?
+               WHERE id = ?"#,
+        )
+        .bind(upload.map(|v| v as i64))
+        .bind(download.map(|v| v as i64))
+        .bind(total.map(|v| v as i64))
+        .bind(expire_str)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }

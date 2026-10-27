@@ -176,6 +176,14 @@ impl Database {
             .await?;
         self.ensure_column("sources", "user_agent", "TEXT")
             .await?;
+        self.ensure_column("sources", "upload_bytes", "INTEGER DEFAULT NULL")
+            .await?;
+        self.ensure_column("sources", "download_bytes", "INTEGER DEFAULT NULL")
+            .await?;
+        self.ensure_column("sources", "total_bytes", "INTEGER DEFAULT NULL")
+            .await?;
+        self.ensure_column("sources", "expire_at", "TEXT DEFAULT NULL")
+            .await?;
         self.ensure_column("nodes", "latency_kernel", "TEXT")
             .await?;
         self.ensure_column("nodes", "latency_test_kind", "TEXT")

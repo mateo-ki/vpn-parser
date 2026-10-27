@@ -43,6 +43,15 @@ pub struct Source {
     /// 自定义 User-Agent 请求头（如 clash.meta / clash-verge / v2rayN 等，留空则默认采用 clash.meta）
     #[serde(default)]
     pub user_agent: Option<String>,
+    /// 订阅源流量与到期信息（通过 Subscription-Userinfo 请求头解析）
+    #[serde(default)]
+    pub upload_bytes: Option<u64>,
+    #[serde(default)]
+    pub download_bytes: Option<u64>,
+    #[serde(default)]
+    pub total_bytes: Option<u64>,
+    #[serde(default)]
+    pub expire_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -70,6 +79,10 @@ impl Source {
             rules_yaml: None,
             groups_yaml: None,
             user_agent: None,
+            upload_bytes: None,
+            download_bytes: None,
+            total_bytes: None,
+            expire_at: None,
             created_at: now,
             updated_at: now,
         }

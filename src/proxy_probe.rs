@@ -191,6 +191,12 @@ async fn verify_nodes_with_mihomo_path(
 
     let mut command = Command::new(mihomo);
     command
+        .env_remove("HTTP_PROXY")
+        .env_remove("http_proxy")
+        .env_remove("HTTPS_PROXY")
+        .env_remove("https_proxy")
+        .env_remove("ALL_PROXY")
+        .env_remove("all_proxy")
         .arg("-d")
         .arg(&work_dir)
         .arg("-f")
@@ -225,6 +231,7 @@ async fn verify_nodes_with_mihomo_path(
     }
 
     let client = reqwest::Client::builder()
+        .no_proxy()
         .connect_timeout(Duration::from_secs(2))
         .timeout(timeout + Duration::from_secs(2))
         .build()?;
@@ -498,6 +505,12 @@ async fn validate_proxy_batch(
     tokio::fs::write(&path, serde_yaml::to_string(&config)?).await?;
     let mut command = Command::new(mihomo);
     command
+        .env_remove("HTTP_PROXY")
+        .env_remove("http_proxy")
+        .env_remove("HTTPS_PROXY")
+        .env_remove("https_proxy")
+        .env_remove("ALL_PROXY")
+        .env_remove("all_proxy")
         .arg("-t")
         .arg("-d")
         .arg(work_dir)
