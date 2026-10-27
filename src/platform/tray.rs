@@ -338,11 +338,12 @@ fn run_tray_loop(
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-        DispatchMessageW, GetCursorPos, GetMessageW, LoadIconW, PostMessageW, PostQuitMessage,
-        RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu,
-        TranslateMessage, IDI_APPLICATION, MF_SEPARATOR, MF_STRING, MSG, TPM_RETURNCMD,
-        TPM_RIGHTBUTTON, WM_CLOSE, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP,
-        WM_USER, WNDCLASSW, WS_OVERLAPPED,
+        DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, HICON, IMAGE_ICON,
+        LoadIconW, LoadImageW, LR_DEFAULTCOLOR, LR_SHARED, PostMessageW, PostQuitMessage,
+        RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SM_CXSMICON, SM_CYSMICON,
+        TrackPopupMenu, TranslateMessage, IDI_APPLICATION, MF_SEPARATOR, MF_STRING, MSG,
+        TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_CLOSE, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
+        WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPED,
     };
 
     const WM_TRAY_CALLBACK: u32 = WM_USER + 100;
@@ -626,11 +627,25 @@ fn run_tray_loop(
     });
 
     let h_icon = unsafe {
-        let icon = LoadIconW(h_instance, 1 as _);
+        let cx = GetSystemMetrics(SM_CXSMICON);
+        let cy = GetSystemMetrics(SM_CYSMICON);
+        let icon = LoadImageW(
+            h_instance,
+            1 as _,
+            IMAGE_ICON,
+            cx,
+            cy,
+            LR_DEFAULTCOLOR | LR_SHARED,
+        );
         if icon.is_null() {
-            LoadIconW(std::ptr::null_mut(), IDI_APPLICATION)
+            let fallback = LoadIconW(h_instance, 1 as _);
+            if fallback.is_null() {
+                LoadIconW(std::ptr::null_mut(), IDI_APPLICATION)
+            } else {
+                fallback
+            }
         } else {
-            icon
+            icon as HICON
         }
     };
 
