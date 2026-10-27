@@ -2377,6 +2377,12 @@ impl VpnApp {
         let manager = self.proxy_manager.clone();
         let tx = self.tx.clone();
         let url_test = self.proxy_config.url_test;
+        let has_override_groups = self
+            .proxy_config
+            .override_yaml
+            .as_deref()
+            .map(|t| t.contains("proxy-groups:") || t.contains("proxy-groups :"))
+            .unwrap_or(false);
         let url_test_size = self.proxy_config.url_test_size;
         let port_mappings = self.proxy_config.port_mappings.clone();
         let candidate_blacklist = self.router.blacklisted(std::time::Instant::now());
@@ -2390,6 +2396,7 @@ impl VpnApp {
                         &manager,
                         &node,
                         url_test,
+                        has_override_groups,
                         url_test_size,
                         &candidate_blacklist,
                     )
@@ -2415,17 +2422,18 @@ impl VpnApp {
         });
     }
 
-    /// url-test 打开时，把测速前 N 名注入本次要生成的配置（启动/切换前都要刷新，
+    /// url-test 打开或自定义覆写包含 proxy-groups 时，把测速前 N 名注入本次要生成的配置（启动/切换前都要刷新，
     /// 候选是随测速结果变的）。
     async fn prime_url_test_candidates(
         db: &Database,
         manager: &ProxyManager,
         node: &Node,
         url_test: bool,
+        has_override_groups: bool,
         size: u16,
         blacklist: &[String],
     ) {
-        if !url_test {
+        if !url_test && !has_override_groups {
             return;
         }
         // 多取几条，扣掉被断路器拉黑的之后仍然凑够 N 个。
@@ -2872,11 +2880,17 @@ impl VpnApp {
         self.rt.spawn(async move {
             let result = match db.get_node(&node_id).await {
                 Ok(Some(node)) => {
+                    let has_override_groups = options
+                        .override_yaml
+                        .as_deref()
+                        .map(|t| t.contains("proxy-groups:") || t.contains("proxy-groups :"))
+                        .unwrap_or(false);
                     Self::prime_url_test_candidates(
                         &db,
                         &manager,
                         &node,
                         options.url_test,
+                        has_override_groups,
                         options.url_test_size,
                         &candidate_blacklist,
                     )

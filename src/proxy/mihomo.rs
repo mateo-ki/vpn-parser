@@ -63,7 +63,12 @@ fn build_mihomo_config_legacy(node: &Node, options: MihomoConfigOptions) -> Resu
     let mut candidate_proxies = vec![proxy.clone()];
     let mut used_names: std::collections::HashSet<String> =
         std::collections::HashSet::from([proxy_name.to_owned()]);
-    if options.url_test {
+    let has_override_groups = if let Some(ref override_text) = options.override_yaml {
+        override_text.contains("proxy-groups:") || override_text.contains("proxy-groups :")
+    } else {
+        false
+    };
+    if options.url_test || has_override_groups {
         let limit = options.url_test_size.max(2) as usize;
         for candidate in &options.url_test_nodes {
             if candidate_proxies.len() >= limit {

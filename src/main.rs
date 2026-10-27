@@ -399,6 +399,11 @@ fn main() -> Result<()> {
     } else {
         rt.block_on(db.get_proxy_config())?
     };
+    let has_override_groups = proxy_options
+        .override_yaml
+        .as_deref()
+        .map(|t| t.contains("proxy-groups:") || t.contains("proxy-groups :"))
+        .unwrap_or(false);
     let (startup_url_test, startup_url_test_size) =
         (proxy_options.url_test, proxy_options.url_test_size);
     let proxy_manager = ProxyManager::new(proxy_options);
@@ -409,7 +414,7 @@ fn main() -> Result<()> {
                 Some(node) => {
                     // 命令行直启也要注入 url-test 候选：候选不填，配置会静默退化成
                     // 单节点 PROXY 组，看起来"自动选路没生效"。
-                    if startup_url_test {
+                    if startup_url_test || has_override_groups {
                         match db
                             .top_verified_nodes(startup_url_test_size as usize, Some(&node.id))
                             .await

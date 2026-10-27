@@ -219,7 +219,12 @@ impl BackendCompiler for MihomoCompiler {
         // 候选代理节点构建与防撞名
         let mut candidate_proxies = vec![proxy.clone()];
         let mut used_names: HashSet<String> = HashSet::from([proxy_name.to_owned()]);
-        if plan.outbounds.url_test {
+        let has_override_groups = if let Some(ref override_text) = plan.outbounds.override_yaml {
+            override_text.contains("proxy-groups:") || override_text.contains("proxy-groups :")
+        } else {
+            false
+        };
+        if plan.outbounds.url_test || has_override_groups {
             let limit = plan.outbounds.url_test_size.max(2) as usize;
             for candidate in &plan.outbounds.url_test_nodes {
                 if candidate_proxies.len() >= limit {
