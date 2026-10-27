@@ -264,6 +264,13 @@ fn build_stream_settings(cfg: &Map<String, Value>, client_fingerprint: Option<&s
     let network = string(cfg, &["network", "type"]).unwrap_or("tcp");
     let security = string(cfg, &["security"])
         .filter(|value| matches!(*value, "tls" | "reality"))
+        .or_else(|| {
+            if bool_val(cfg, &["tls"]).unwrap_or(false) {
+                Some("tls")
+            } else {
+                None
+            }
+        })
         .unwrap_or("none");
     let mut stream = json!({"network": network, "security": security});
     if network == "ws" {
@@ -279,9 +286,20 @@ fn build_stream_settings(cfg: &Map<String, Value>, client_fingerprint: Option<&s
     }
     let fp = client_fingerprint.or_else(|| string(cfg, &["client-fingerprint", "fingerprint", "fp"]));
     if security == "tls" {
+        let allow_insecure = bool_val(
+            cfg,
+            &[
+                "skip-cert-verify",
+                "skip_cert_verify",
+                "allowInsecure",
+                "allow_insecure",
+                "insecure",
+            ],
+        )
+        .unwrap_or(false);
         let mut tls = json!({
             "serverName": string(cfg, &["sni", "servername", "server-name"]).unwrap_or(""),
-            "allowInsecure": false
+            "allowInsecure": allow_insecure
         });
         if let Some(fp_str) = fp {
             tls["fingerprint"] = json!(fp_str);
@@ -311,4 +329,17 @@ fn string<'a>(cfg: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a str> {
 fn number(cfg: &Map<String, Value>, keys: &[&str]) -> Option<u64> {
     keys.iter()
         .find_map(|key| cfg.get(*key).and_then(Value::as_u64))
+}
+
+fn bool_val(cfg: &Map<String, Value>, keys: &[&str]) -> Option<bool> {
+    keys.iter().find_map(|key| match cfg.get(*key)? {
+        Value::Bool(b) => Some(*b),
+        Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" => Some(true),
+            "false" | "0" => Some(false),
+            _ => None,
+        },
+        Value::Number(n) => Some(n.as_i64() == Some(1)),
+        _ => None,
+    })
 }

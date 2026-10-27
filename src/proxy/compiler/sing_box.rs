@@ -408,10 +408,21 @@ fn tls_config(node: &Node, client_fingerprint: Option<&str>) -> Value {
     let server_name = string_value(&node.config, &["sni", "server_name"])
         .filter(|value| !value.is_empty())
         .unwrap_or(&node.server);
+    let insecure = bool_value(
+        &node.config,
+        &[
+            "skip-cert-verify",
+            "skip_cert_verify",
+            "insecure",
+            "allowInsecure",
+            "allow_insecure",
+        ],
+    )
+    .unwrap_or(false);
     let mut tls = Map::new();
     tls.insert("enabled".into(), json!(true));
     tls.insert("server_name".into(), json!(server_name));
-    tls.insert("insecure".into(), json!(false));
+    tls.insert("insecure".into(), json!(insecure));
     if let Some(alpn) = node.config.get("alpn").and_then(Value::as_array) {
         tls.insert("alpn".into(), Value::Array(alpn.clone()));
     }
@@ -476,6 +487,19 @@ fn number_value(config: &Value, keys: &[&str]) -> Option<u64> {
     keys.iter().find_map(|key| match config.get(*key)? {
         Value::Number(num) => num.as_u64(),
         Value::String(text) => text.trim().parse::<u64>().ok(),
+        _ => None,
+    })
+}
+
+fn bool_value(config: &Value, keys: &[&str]) -> Option<bool> {
+    keys.iter().find_map(|key| match config.get(*key)? {
+        Value::Bool(b) => Some(*b),
+        Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" => Some(true),
+            "false" | "0" => Some(false),
+            _ => None,
+        },
+        Value::Number(n) => Some(n.as_i64() == Some(1)),
         _ => None,
     })
 }

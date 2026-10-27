@@ -1590,3 +1590,45 @@ proxy-groups:
             "MATCH 规则应正确命中漏网之鱼组"
         );
     }
+
+    #[test]
+    fn test_skip_cert_verify_propagates_to_sing_box_and_xray() {
+        let hy2_node = node(
+            "hysteria2",
+            json!({
+                "server": "example.com",
+                "port": 20000,
+                "password": "secret_password",
+                "sni": "www.bing.com",
+                "skip-cert-verify": true
+            }),
+        );
+        let options = MihomoConfigOptions::default();
+        let plan = lower_options_to_ir(&options, Some(&hy2_node));
+
+        // 1. Sing-box 编译应包含 "insecure": true
+        let sing_box_art = SingBoxCompiler::new().compile(&plan).expect("Sing-box 编译应成功");
+        let sing_box_json = sing_box_art.as_json_value().expect("sing-box json");
+        let outbounds = sing_box_json["outbounds"].as_array().expect("outbounds array");
+        let proxy_ob = outbounds.iter().find(|o| o.get("tag") == Some(&json!("proxy"))).expect("proxy outbound");
+        assert_eq!(proxy_ob["tls"]["insecure"], json!(true), "Sing-box 必须正确识别 skip-cert-verify: true");
+
+        // 2. Xray 编译应包含 "allowInsecure": true
+        let vless_node = node(
+            "vless",
+            json!({
+                "server": "example.com",
+                "port": 443,
+                "uuid": "00000000-0000-0000-0000-000000000000",
+                "tls": true,
+                "sni": "example.com",
+                "skip-cert-verify": true
+            }),
+        );
+        let plan_vless = lower_options_to_ir(&options, Some(&vless_node));
+        let xray_art = XrayCompiler::new().compile(&plan_vless).expect("Xray 编译应成功");
+        let xray_json = xray_art.as_json_value().expect("xray json");
+        let xray_outbounds = xray_json["outbounds"].as_array().expect("xray outbounds");
+        let xray_proxy = xray_outbounds.iter().find(|o| o.get("tag") == Some(&json!("proxy"))).expect("proxy outbound");
+        assert_eq!(xray_proxy["streamSettings"]["tlsSettings"]["allowInsecure"], json!(true), "Xray 必须正确识别 skip-cert-verify: true");
+    }
