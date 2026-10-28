@@ -134,7 +134,10 @@ impl BackendCompiler for VpCoreCompiler {
                 }
                 // 清洗 nameserver-policy：剥离大陆直连无法访问的海外 DoH 规则（1.1.1.1/8.8.8.8），
                 // 避免每个海外域名的首次本地 DNS 解析直接挂起 3 秒超时后降级
-                if let Some(nsp) = dns.get_mut("nameserver-policy").and_then(|p| p.as_object_mut()) {
+                if let Some(nsp) = dns
+                    .get_mut("nameserver-policy")
+                    .and_then(|p| p.as_object_mut())
+                {
                     nsp.remove("geosite:geolocation-!cn");
                 }
                 // 扩充 nameserver 上游并补 UDP 双雄：单一上游可能给出整轮被污染/失效的答案
@@ -248,7 +251,7 @@ fn vpcore_supports_proxy(p: &serde_json::Value) -> bool {
         .and_then(|v| v.as_str())
         .unwrap_or("tcp")
         .trim();
-    matches!(net, "" | "tcp" | "ws" | "grpc" | "http")
+    matches!(net, "" | "tcp" | "ws" | "grpc" | "http" | "udp")
 }
 
 #[cfg(test)]
@@ -442,6 +445,10 @@ rules:
         assert!(ok(json!({"type": "vmess", "network": "http"})));
         assert!(ok(json!({"type": "ss"})));
         assert!(ok(json!({"type": "trojan", "network": "grpc"})));
+        assert!(ok(json!({"type": "hysteria2"})));
+        assert!(ok(json!({"type": "hysteria2", "network": "udp"})));
+        assert!(ok(json!({"type": "tuic", "network": "udp"})));
+        assert!(ok(json!({"type": "wireguard", "network": "udp"})));
         assert!(!ok(json!({"type": "vless", "network": "xhttp"})));
         assert!(!ok(json!({"type": "vless", "network": "httpupgrade"})));
         assert!(!ok(json!({"type": "vless", "network": "h2"})));
