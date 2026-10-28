@@ -2,7 +2,7 @@ use crate::gui::icons::{icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::widgets::{
     card_frame, danger_btn, dns_mode_label,
-    format_bytes, primary_btn, section_title, tun_stack_label,
+    format_bytes, primary_btn, tun_stack_label,
 };
 use crate::gui::VpnApp;
 use crate::kernel::{KernelKind, KernelPreference};
@@ -14,7 +14,7 @@ use std::sync::atomic::Ordering;
 
 impl VpnApp {
     pub(crate) fn ui_proxy_network(&mut self, ui: &mut Ui) {
-        section_title(ui, "DNS / TUN", "配置接管模式、监听端口与 DNS");
+        ui.set_width(ui.available_width());
         let editable = !self.proxy_busy && self.proxy_status.config_editable();
         let mut save_clicked = false;
 
@@ -22,7 +22,9 @@ impl VpnApp {
             .id_salt("proxy_network_dns_tun_scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 card_frame().show(ui, |ui| {
+                    ui.set_width(ui.available_width());
                     ui.add_enabled_ui(editable, |ui| {
                         ui.horizontal(|ui| {
                             icon_label(ui, Icon::Plug, 14.0, theme::accent());
@@ -208,8 +210,9 @@ impl VpnApp {
                             };
                             ui.horizontal(|ui| {
                                 ui.label(format!("DNS {}", index + 1));
+                                let edit_w = (ui.available_width() - 32.0).clamp(160.0, 420.0);
                                 let ns_field = ui.add_sized(
-                                    [420.0, 24.0],
+                                    [edit_w, 24.0],
                                     egui::TextEdit::singleline(nameserver).hint_text(hint),
                                 );
                                 crate::gui::widgets::note_text_field(ui, &ns_field);
@@ -231,16 +234,13 @@ impl VpnApp {
     }
 
     pub(crate) fn ui_proxy_kernels(&mut self, ui: &mut Ui) {
-        section_title(
-            ui,
-            "代理内核",
-            "应用独立下载、校验、备份和更新，不依赖 v2rayN",
-        );
+        ui.set_width(ui.available_width());
 
         egui::ScrollArea::vertical()
             .id_salt("proxy_kernels_scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("存储目录 data/kernels · 来源为官方 GitHub Release")
@@ -687,13 +687,18 @@ impl VpnApp {
     }
 
     pub(crate) fn ui_proxy_logs(&mut self, ui: &mut Ui) {
+        ui.set_width(ui.available_width());
         let kernel_name = self
             .proxy_status
             .kernel
             .map(KernelKind::display_name)
             .unwrap_or("代理内核");
         ui.horizontal(|ui| {
-            section_title(ui, "运行日志", &format!("{kernel_name} 最近输出"));
+            ui.label(
+                RichText::new(format!("{kernel_name} 最近输出"))
+                    .small()
+                    .color(theme::muted()),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("刷新日志").clicked() {
                     self.reload_proxy_logs();

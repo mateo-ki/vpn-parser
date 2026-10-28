@@ -7,7 +7,7 @@ use crate::gui::widgets::{
 };
 use crate::gui::VpnApp;
 use crate::proxy::{DnsEnhancedMode, ProxyState};
-use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
+use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui, Vec2};
 
 impl VpnApp {
     /// 独立的"活跃连接"标签页（抽屉内全宽展示：Tab + 工具栏 + 概览 + 表格）。
@@ -106,7 +106,7 @@ impl VpnApp {
                 ui.set_width(ui.available_width());
                 match self.connections_tab {
             ConnectionsTab::List => {
-                // 1. 工具栏：筛选 + 统计 + 批量断开
+                // 1. 工具栏：筛选 + 统计 + 批量断开（两端对齐充实 100% 宽度）
                 ui.horizontal_wrapped(|ui| {
                     ui.label("筛选");
                     let conn_filter_field = ui.add(
@@ -120,14 +120,15 @@ impl VpnApp {
                     }
                     ui.separator();
                     ui.label(format!("当前活跃连接: {} 条", self.active_connections.len()));
-                    ui.separator();
-                    if ui
-                        .add_enabled(!self.active_connections.is_empty(), danger_btn("断开全部连接"))
-                        .on_hover_text("向内核发送指令关闭所有活动的网络连接")
-                        .clicked()
-                    {
-                        close_all = true;
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add_enabled(!self.active_connections.is_empty(), danger_btn("断开全部连接"))
+                            .on_hover_text("向内核发送指令关闭所有活动的网络连接")
+                            .clicked()
+                        {
+                            close_all = true;
+                        }
+                    });
                 });
 
                 ui.add_space(8.0);
@@ -226,19 +227,50 @@ impl VpnApp {
                 } else {
                     panel_frame().show(ui, |ui| {
                         ui.set_width(ui.available_width());
+                        let grid_w = ui.available_width();
+                        let proc_w = (grid_w * 0.16).clamp(100.0, 180.0);
+                        let rule_w = (grid_w * 0.12).clamp(70.0, 130.0);
+                        let other_cols_w = 44.0 + proc_w + rule_w + 80.0 + 85.0 + 50.0 + (6.0 * 12.0);
+                        let dest_w = (grid_w - other_cols_w).max(220.0);
+
                         egui::ScrollArea::horizontal()
                             .id_salt("active_connections_hscroll")
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
+                                ui.set_min_width(grid_w);
                                 egui::Grid::new("active_connections_grid")
                                     .striped(true)
-                                    .min_col_width(60.0)
+                                    .min_col_width(44.0)
                                     .spacing([12.0, 7.0])
                                     .show(ui, |ui| {
                                         header_cell(ui, "网络");
-                                        header_cell(ui, "进程");
-                                        header_cell(ui, "目标地址");
-                                        header_cell(ui, "分流规则");
+                                        ui.allocate_ui_with_layout(
+                                            Vec2::new(proc_w, 20.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                ui.set_min_width(proc_w);
+                                                ui.set_max_width(proc_w);
+                                                header_cell(ui, "进程");
+                                            },
+                                        );
+                                        ui.allocate_ui_with_layout(
+                                            Vec2::new(dest_w, 20.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                ui.set_min_width(dest_w);
+                                                ui.set_max_width(dest_w);
+                                                header_cell(ui, "目标地址");
+                                            },
+                                        );
+                                        ui.allocate_ui_with_layout(
+                                            Vec2::new(rule_w, 20.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                ui.set_min_width(rule_w);
+                                                ui.set_max_width(rule_w);
+                                                header_cell(ui, "分流规则");
+                                            },
+                                        );
                                         header_cell(ui, "上传流量");
                                         header_cell(ui, "下载流量");
                                         header_cell(ui, "操作");
@@ -261,31 +293,47 @@ impl VpnApp {
                                                 });
 
                                             // 2. 进程胶囊
-                                            Frame::NONE
-                                                .fill(theme::sidebar())
-                                                .corner_radius(CornerRadius::same(6))
-                                                .inner_margin(Margin::symmetric(6, 2))
-                                                .show(ui, |ui| {
-                                                    ui.horizontal(|ui| {
-                                                        icon_label(ui, Icon::Terminal, 10.0, theme::muted());
-                                                        ui.label(RichText::new(&c.process).strong().small().color(theme::text_primary()));
-                                                    });
-                                                });
+                                            ui.allocate_ui_with_layout(
+                                                Vec2::new(proc_w, 20.0),
+                                                egui::Layout::left_to_right(egui::Align::Center),
+                                                |ui| {
+                                                    ui.set_min_width(proc_w);
+                                                    ui.set_max_width(proc_w);
+                                                    Frame::NONE
+                                                        .fill(theme::sidebar())
+                                                        .corner_radius(CornerRadius::same(6))
+                                                        .inner_margin(Margin::symmetric(6, 2))
+                                                        .show(ui, |ui| {
+                                                            ui.horizontal(|ui| {
+                                                                icon_label(ui, Icon::Terminal, 10.0, theme::muted());
+                                                                ui.add(egui::Label::new(RichText::new(&c.process).strong().small().color(theme::text_primary())).truncate())
+                                                                    .on_hover_text(&c.process);
+                                                            });
+                                                        });
+                                                },
+                                            );
 
-                                            // 3. 目标地址（长域名智能截断，悬浮查看完整地址与目标 IP）
+                                            // 3. 目标地址（长域名自适应展开，悬浮查看完整地址与目标 IP）
                                             let full_target = if !c.host.is_empty() {
                                                 format!("{} ({})", c.host, c.destination)
                                             } else {
                                                 c.destination.clone()
                                             };
-                                            let display_target = if full_target.chars().count() > 42 {
-                                                let t: String = full_target.chars().take(40).collect();
-                                                format!("{}...", t)
-                                            } else {
-                                                full_target.clone()
-                                            };
-                                            ui.label(RichText::new(display_target).small().color(theme::text_primary()))
-                                                .on_hover_text(format!("{}\n目标: {}", full_target, c.destination));
+                                            ui.allocate_ui_with_layout(
+                                                Vec2::new(dest_w, 20.0),
+                                                egui::Layout::left_to_right(egui::Align::Center),
+                                                |ui| {
+                                                    ui.set_min_width(dest_w);
+                                                    ui.set_max_width(dest_w);
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            RichText::new(&full_target).small().color(theme::text_primary()),
+                                                        )
+                                                        .truncate(),
+                                                    )
+                                                    .on_hover_text(format!("{}\n目标: {}", full_target, c.destination));
+                                                },
+                                            );
 
                                             // 4. 分流规则微标
                                             let is_direct = c.target.eq_ignore_ascii_case("direct") || c.rule.contains("DIRECT");
@@ -294,20 +342,22 @@ impl VpnApp {
                                             } else {
                                                 (theme::accent_bg(), theme::accent_strong())
                                             };
-                                            Frame::NONE
-                                                .fill(rule_fill)
-                                                .corner_radius(CornerRadius::same(6))
-                                                .inner_margin(Margin::symmetric(6, 2))
-                                                .show(ui, |ui| {
-                                                    let rule_display = if c.rule.chars().count() > 24 {
-                                                        let t: String = c.rule.chars().take(22).collect();
-                                                        format!("{}...", t)
-                                                    } else {
-                                                        c.rule.clone()
-                                                    };
-                                                    ui.label(RichText::new(rule_display).small().strong().color(rule_color))
-                                                        .on_hover_text(&c.rule);
-                                                });
+                                            ui.allocate_ui_with_layout(
+                                                Vec2::new(rule_w, 20.0),
+                                                egui::Layout::left_to_right(egui::Align::Center),
+                                                |ui| {
+                                                    ui.set_min_width(rule_w);
+                                                    ui.set_max_width(rule_w);
+                                                    Frame::NONE
+                                                        .fill(rule_fill)
+                                                        .corner_radius(CornerRadius::same(6))
+                                                        .inner_margin(Margin::symmetric(6, 2))
+                                                        .show(ui, |ui| {
+                                                            ui.add(egui::Label::new(RichText::new(&c.rule).small().strong().color(rule_color)).truncate())
+                                                                .on_hover_text(&c.rule);
+                                                        });
+                                                },
+                                            );
 
                                             // 5. 上传
                                             ui.label(
@@ -404,16 +454,29 @@ impl VpnApp {
                 } else {
                     panel_frame().show(ui, |ui| {
                         ui.set_width(ui.available_width());
+                        let p_grid_w = ui.available_width();
+                        let p_other_w = 85.0 + 110.0 + 85.0 + 85.0 + 90.0 + 75.0 + (6.0 * 14.0);
+                        let p_name_w = (p_grid_w - p_other_w).max(160.0);
+
                         egui::ScrollArea::horizontal()
                             .id_salt("process_connections_hscroll")
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
+                                ui.set_min_width(p_grid_w);
                                 egui::Grid::new("process_connections_grid")
                                     .striped(true)
                                     .min_col_width(70.0)
                                     .spacing([14.0, 8.0])
                                     .show(ui, |ui| {
-                                        header_cell(ui, "进程");
+                                        ui.allocate_ui_with_layout(
+                                            Vec2::new(p_name_w, 20.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                ui.set_min_width(p_name_w);
+                                                ui.set_max_width(p_name_w);
+                                                header_cell(ui, "进程");
+                                            },
+                                        );
                                         header_cell(ui, "活跃连接数");
                                         header_cell(ui, "分流分布");
                                         header_cell(ui, "上行流量");
@@ -431,17 +494,26 @@ impl VpnApp {
                                             let prx_count = p.5;
                                             let proc_traffic = upload + download;
 
-                                            // 1. 进程名称
-                                            Frame::NONE
-                                                .fill(theme::sidebar())
-                                                .corner_radius(CornerRadius::same(6))
-                                                .inner_margin(Margin::symmetric(8, 4))
-                                                .show(ui, |ui| {
-                                                    ui.horizontal(|ui| {
-                                                        icon_label(ui, Icon::Terminal, 11.0, theme::accent());
-                                                        ui.label(RichText::new(proc_name).strong().color(theme::text_primary()));
-                                                    });
-                                                });
+                                            // 1. 进程名称（自适应展开，超出智能截断）
+                                            ui.allocate_ui_with_layout(
+                                                Vec2::new(p_name_w, 20.0),
+                                                egui::Layout::left_to_right(egui::Align::Center),
+                                                |ui| {
+                                                    ui.set_min_width(p_name_w);
+                                                    ui.set_max_width(p_name_w);
+                                                    Frame::NONE
+                                                        .fill(theme::sidebar())
+                                                        .corner_radius(CornerRadius::same(6))
+                                                        .inner_margin(Margin::symmetric(8, 4))
+                                                        .show(ui, |ui| {
+                                                            ui.horizontal(|ui| {
+                                                                icon_label(ui, Icon::Terminal, 11.0, theme::accent());
+                                                                ui.add(egui::Label::new(RichText::new(proc_name).strong().color(theme::text_primary())).truncate())
+                                                                    .on_hover_text(proc_name);
+                                                            });
+                                                        });
+                                                },
+                                            );
 
                                             // 2. 活跃连接数
                                             ui.label(RichText::new(format!("{conn_count} 条")).strong().color(theme::text_primary()));
@@ -481,7 +553,7 @@ impl VpnApp {
                 }
             }
             ConnectionsTab::Dns => {
-                // 1. 工具栏：筛选 + 统计 + 清空
+                // 1. 工具栏：筛选 + 统计 + 清空（两端对齐充实 100% 宽度）
                 ui.horizontal_wrapped(|ui| {
                     ui.label("筛选记录");
                     let dns_filter_field = ui.add(
@@ -495,10 +567,11 @@ impl VpnApp {
                     }
                     ui.separator();
                     ui.label(format!("已记录 DNS 轨迹: {} 条", self.dns_records.len()));
-                    ui.separator();
-                    if ui.button("清空全部记录").clicked() {
-                        self.dns_records.clear();
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("清空全部记录").clicked() {
+                            self.dns_records.clear();
+                        }
+                    });
                 });
 
                 ui.add_space(8.0);
@@ -560,21 +633,62 @@ impl VpnApp {
                 } else {
                     panel_frame().show(ui, |ui| {
                         ui.set_width(ui.available_width());
+                        let dns_grid_w = ui.available_width();
+                        let dns_proc_w = (dns_grid_w * 0.14).clamp(100.0, 160.0);
+                        let dns_rule_w = (dns_grid_w * 0.12).clamp(70.0, 120.0);
+                        let dns_other_w = 75.0 + dns_proc_w + 44.0 + dns_rule_w + 50.0 + (6.0 * 12.0);
+                        let dns_remaining = (dns_grid_w - dns_other_w).max(320.0);
+                        let dns_host_w = (dns_remaining * 0.55).max(170.0);
+                        let dns_ip_w = (dns_remaining * 0.45).max(140.0);
+
                         egui::ScrollArea::horizontal()
                             .id_salt("dns_records_hscroll")
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
+                                ui.set_min_width(dns_grid_w);
                                 egui::Grid::new("dns_records_grid")
                                     .striped(true)
-                                    .min_col_width(60.0)
+                                    .min_col_width(44.0)
                                     .spacing([12.0, 7.0])
                                     .show(ui, |ui| {
                                         header_cell(ui, "时间");
-                                        header_cell(ui, "查询域名");
-                                        header_cell(ui, "解析目标 IP");
-                                        header_cell(ui, "发起进程");
+                                        ui.allocate_ui_with_layout(
+                                            Vec2::new(dns_host_w, 20.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                ui.set_min_width(dns_host_w);
+                                                ui.set_max_width(dns_host_w);
+                                                header_cell(ui, "查询域名");
+                                            },
+                                        );
+                                        ui.allocate_ui_with_layout(
+                                            Vec2::new(dns_ip_w, 20.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                ui.set_min_width(dns_ip_w);
+                                                ui.set_max_width(dns_ip_w);
+                                                header_cell(ui, "解析目标 IP");
+                                            },
+                                        );
+                                        ui.allocate_ui_with_layout(
+                                            Vec2::new(dns_proc_w, 20.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                ui.set_min_width(dns_proc_w);
+                                                ui.set_max_width(dns_proc_w);
+                                                header_cell(ui, "发起进程");
+                                            },
+                                        );
                                         header_cell(ui, "网络");
-                                        header_cell(ui, "分流动作");
+                                        ui.allocate_ui_with_layout(
+                                            Vec2::new(dns_rule_w, 20.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                ui.set_min_width(dns_rule_w);
+                                                ui.set_max_width(dns_rule_w);
+                                                header_cell(ui, "分流动作");
+                                            },
+                                        );
                                         header_cell(ui, "操作");
                                         ui.end_row();
 
@@ -582,37 +696,60 @@ impl VpnApp {
                                             // 1. 时间
                                             ui.label(RichText::new(&r.time_str).small().monospace().color(theme::muted()));
 
-                                            // 2. 域名（长域名截断）
-                                            let host_display = if r.host.chars().count() > 36 {
-                                                let t: String = r.host.chars().take(34).collect();
-                                                format!("{}...", t)
-                                            } else {
-                                                r.host.clone()
-                                            };
-                                            ui.label(RichText::new(host_display).strong().small().color(theme::text_primary()))
-                                                .on_hover_text(&r.host);
+                                            // 2. 域名（自适应铺满展开）
+                                            ui.allocate_ui_with_layout(
+                                                Vec2::new(dns_host_w, 20.0),
+                                                egui::Layout::left_to_right(egui::Align::Center),
+                                                |ui| {
+                                                    ui.set_min_width(dns_host_w);
+                                                    ui.set_max_width(dns_host_w);
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            RichText::new(&r.host).strong().small().color(theme::text_primary()),
+                                                        )
+                                                        .truncate(),
+                                                    )
+                                                    .on_hover_text(&r.host);
+                                                },
+                                            );
 
-                                            // 3. 解析目标（长 IP 列表截断）
-                                            let ip_display = if r.ip.chars().count() > 30 {
-                                                let t: String = r.ip.chars().take(28).collect();
-                                                format!("{}...", t)
-                                            } else {
-                                                r.ip.clone()
-                                            };
-                                            ui.label(RichText::new(ip_display).small().monospace().color(theme::text_secondary()))
-                                                .on_hover_text(&r.ip);
+                                            // 3. 解析目标 IP（自适应铺满展开）
+                                            ui.allocate_ui_with_layout(
+                                                Vec2::new(dns_ip_w, 20.0),
+                                                egui::Layout::left_to_right(egui::Align::Center),
+                                                |ui| {
+                                                    ui.set_min_width(dns_ip_w);
+                                                    ui.set_max_width(dns_ip_w);
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            RichText::new(&r.ip).small().monospace().color(theme::text_secondary()),
+                                                        )
+                                                        .truncate(),
+                                                    )
+                                                    .on_hover_text(&r.ip);
+                                                },
+                                            );
 
                                             // 4. 发起进程
-                                            Frame::NONE
-                                                .fill(theme::sidebar())
-                                                .corner_radius(CornerRadius::same(6))
-                                                .inner_margin(Margin::symmetric(6, 2))
-                                                .show(ui, |ui| {
-                                                    ui.horizontal(|ui| {
-                                                        icon_label(ui, Icon::Terminal, 9.0, theme::muted());
-                                                        ui.label(RichText::new(&r.process).small().color(theme::text_primary()));
-                                                    });
-                                                });
+                                            ui.allocate_ui_with_layout(
+                                                Vec2::new(dns_proc_w, 20.0),
+                                                egui::Layout::left_to_right(egui::Align::Center),
+                                                |ui| {
+                                                    ui.set_min_width(dns_proc_w);
+                                                    ui.set_max_width(dns_proc_w);
+                                                    Frame::NONE
+                                                        .fill(theme::sidebar())
+                                                        .corner_radius(CornerRadius::same(6))
+                                                        .inner_margin(Margin::symmetric(6, 2))
+                                                        .show(ui, |ui| {
+                                                            ui.horizontal(|ui| {
+                                                                icon_label(ui, Icon::Terminal, 9.0, theme::muted());
+                                                                ui.add(egui::Label::new(RichText::new(&r.process).small().color(theme::text_primary())).truncate())
+                                                                    .on_hover_text(&r.process);
+                                                            });
+                                                        });
+                                                },
+                                            );
 
                                             // 5. 协议
                                             let (net_fill, net_color) = if r.network == "UDP" {
@@ -635,13 +772,22 @@ impl VpnApp {
                                             } else {
                                                 (theme::accent_bg(), theme::accent_strong())
                                             };
-                                            Frame::NONE
-                                                .fill(rule_fill)
-                                                .corner_radius(CornerRadius::same(6))
-                                                .inner_margin(Margin::symmetric(6, 2))
-                                                .show(ui, |ui| {
-                                                    ui.label(RichText::new(&r.rule).small().strong().color(rule_color));
-                                                });
+                                            ui.allocate_ui_with_layout(
+                                                Vec2::new(dns_rule_w, 20.0),
+                                                egui::Layout::left_to_right(egui::Align::Center),
+                                                |ui| {
+                                                    ui.set_min_width(dns_rule_w);
+                                                    ui.set_max_width(dns_rule_w);
+                                                    Frame::NONE
+                                                        .fill(rule_fill)
+                                                        .corner_radius(CornerRadius::same(6))
+                                                        .inner_margin(Margin::symmetric(6, 2))
+                                                        .show(ui, |ui| {
+                                                            ui.add(egui::Label::new(RichText::new(&r.rule).small().strong().color(rule_color)).truncate())
+                                                                .on_hover_text(&r.rule);
+                                                        });
+                                                },
+                                            );
 
                                             // 7. 复制
                                             ui.horizontal(|ui| {

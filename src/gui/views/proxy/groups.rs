@@ -5,7 +5,7 @@ use crate::gui::types::{
     GroupsTab, KernelGroup,
 };
 use crate::gui::widgets::{
-    card_frame, primary_btn, section_title,
+    card_frame, primary_btn,
 };
 use crate::gui::VpnApp;
 use crate::models::NodeSummary;
@@ -14,7 +14,7 @@ use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
 
 impl VpnApp {
     pub(crate) fn ui_proxy_groups(&mut self, ui: &mut Ui) {
-        section_title(ui, self.tr("分流策略组"), "场景调度 · 延迟选优 · 故障转移 · 负载均衡");
+        ui.set_width(ui.available_width());
 
         ui.horizontal(|ui| {
             if ui

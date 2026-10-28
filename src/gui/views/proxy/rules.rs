@@ -31,11 +31,7 @@ pub(crate) enum RulesHeaderAction {
 
 impl VpnApp {
     pub(crate) fn ui_proxy_rules(&mut self, ui: &mut Ui) {
-        section_title(
-            ui,
-            self.tr("分流规则"),
-            "域名匹配 · IP 分流 · 端口过滤 · 规则集与命中统计",
-        );
+        ui.set_width(ui.available_width());
 
         // 两个闭包都要动 self，所以 tab 状态先取副本、动作先记成枚举，出框后再落地。
         let mut tab = self.rules_tab;

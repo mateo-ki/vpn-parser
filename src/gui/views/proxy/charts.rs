@@ -834,10 +834,6 @@ impl VpnApp {
             egui::pos2(0.0, title_bar_h),
             egui::pos2(screen.width(), safe_max_y),
         );
-        let drawer_rect = egui::Rect::from_min_max(
-            egui::pos2(screen.width() - width, title_bar_h),
-            egui::pos2(screen.width(), safe_max_y),
-        );
 
         // 遮罩：半透明 + 点击任意处关闭（仅覆盖标题栏与状态栏之间的内容区，不遮挡主窗口标题栏拖拽与状态栏控制按钮）
         egui::Area::new(egui::Id::new(("group_drawer_backdrop", group.name.clone())))
@@ -880,7 +876,11 @@ impl VpnApp {
                     .stroke(Stroke::new(1.0_f32, apple_stroke())),
             )
             .show(&ctx, |ui| {
-                ui.set_clip_rect(drawer_rect);
+                let safe_rect = egui::Rect::from_min_max(
+                    egui::pos2(0.0, title_bar_h),
+                    egui::pos2(screen.width(), safe_max_y),
+                );
+                ui.set_clip_rect(ui.clip_rect().intersect(safe_rect));
                 ui.set_min_size(Vec2::new(width, content_h));
                 ui.set_max_size(Vec2::new(width, content_h));
                 ui.vertical(|ui| {
@@ -1453,11 +1453,11 @@ impl VpnApp {
         // 抽屉宽度根据内容自适应：优雅贴边，宽度适中不遮挡大屏
         let width = match drawer {
             DashboardDrawer::Connections => (screen.width() * 0.72).clamp(760.0, 1400.0),
-            DashboardDrawer::Rules => (screen.width() * 0.70).clamp(560.0, 1400.0),
-            DashboardDrawer::Groups => (screen.width() * 0.70).clamp(560.0, 1400.0),
-            DashboardDrawer::Logs => (screen.width() * 0.50).clamp(480.0, 640.0),
-            DashboardDrawer::Network => (screen.width() * 0.44).clamp(440.0, 560.0),
-            DashboardDrawer::Kernels => (screen.width() * 0.52).clamp(520.0, 720.0),
+            DashboardDrawer::Rules => (screen.width() * 0.70).clamp(580.0, 1400.0),
+            DashboardDrawer::Groups => (screen.width() * 0.70).clamp(580.0, 1400.0),
+            DashboardDrawer::Logs => (screen.width() * 0.50).clamp(500.0, 800.0),
+            DashboardDrawer::Network => (screen.width() * 0.50).clamp(540.0, 780.0),
+            DashboardDrawer::Kernels => (screen.width() * 0.52).clamp(520.0, 780.0),
         }.min(screen.width() - 40.0);
 
         let mut close = false;
@@ -1478,10 +1478,6 @@ impl VpnApp {
         let content_h = (safe_max_y - title_bar_h).max(100.0);
         let backdrop_rect = egui::Rect::from_min_max(
             egui::pos2(0.0, title_bar_h),
-            egui::pos2(screen.width(), safe_max_y),
-        );
-        let drawer_rect = egui::Rect::from_min_max(
-            egui::pos2(screen.width() - width, title_bar_h),
             egui::pos2(screen.width(), safe_max_y),
         );
 
@@ -1535,7 +1531,11 @@ impl VpnApp {
                     .stroke(Stroke::new(1.0_f32, apple_stroke())),
             )
             .show(&ctx, |ui| {
-                ui.set_clip_rect(drawer_rect);
+                let safe_rect = egui::Rect::from_min_max(
+                    egui::pos2(0.0, title_bar_h),
+                    egui::pos2(screen.width(), safe_max_y),
+                );
+                ui.set_clip_rect(ui.clip_rect().intersect(safe_rect));
                 ui.set_min_size(Vec2::new(width, content_h));
                 ui.set_max_size(Vec2::new(width, content_h));
                 ui.vertical(|ui| {
@@ -1619,10 +1619,12 @@ impl VpnApp {
 
                     // 内容区严格铺满剩余内容区域（空列表也保持完整抽屉高度，内容超长时内部滚动，严防溢出遮盖状态栏）
                     ui.add_space(4.0);
+                    let pad_x = 16.0;
+                    let avail_body_w = (ui.available_width() - pad_x * 2.0).max(100.0);
                     let avail_body_h = (ui.available_height() - 2.0).max(50.0);
                     let body_rect = egui::Rect::from_min_size(
-                        ui.cursor().min,
-                        Vec2::new(ui.available_width(), avail_body_h),
+                        egui::pos2(ui.cursor().min.x + pad_x, ui.cursor().min.y),
+                        Vec2::new(avail_body_w, avail_body_h),
                     );
                     ui.allocate_ui_at_rect(body_rect, |ui| {
                         ui.set_clip_rect(body_rect);
