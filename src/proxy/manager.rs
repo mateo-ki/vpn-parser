@@ -1353,7 +1353,7 @@ pub async fn wait_for_port(child: &mut ProxyChild, port: u16, timeout: Duration)
         {
             return true;
         }
-        tokio::time::sleep(Duration::from_millis(15)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
     false
 }
@@ -1438,8 +1438,6 @@ pub async fn ensure_port_available(port: u16) -> Result<()> {
             Err(error) => {
                 last_err = Some(error);
                 if attempt == 0 {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(60)).await;
-                } else if attempt == 1 {
                     #[cfg(not(test))]
                     {
                         let cleaned = crate::platform::kill_orphan_proxy_cores();
@@ -1447,9 +1445,11 @@ pub async fn ensure_port_available(port: u16) -> Result<()> {
                             tracing::info!("清理了 {cleaned} 个残留代理内核进程以释放端口 {port}");
                         }
                     }
-                    tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
+                } else if attempt == 1 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                 } else if attempt == 2 {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(75)).await;
                 }
             }
         }
