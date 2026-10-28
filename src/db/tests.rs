@@ -25,6 +25,25 @@
     }
 
     #[tokio::test]
+    async fn persists_custom_mixed_port_including_7890() {
+        let path =
+            std::env::temp_dir().join(format!("vpn-parser-proxy-port-{}.db", Uuid::new_v4()));
+        let db = Database::connect(path.to_str().unwrap()).await.unwrap();
+        let mut config = crate::proxy::MihomoConfigOptions::default();
+        config.mixed_port = 7890;
+
+        db.update_proxy_config(&config).await.unwrap();
+
+        let loaded = db.get_proxy_config().await.unwrap();
+        assert_eq!(loaded.mixed_port, 7890);
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[tokio::test]
     async fn reads_settings_while_exclusive_writer_is_active() {
         let path = std::env::temp_dir().join(format!("vpn-parser-wal-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();

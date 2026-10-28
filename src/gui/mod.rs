@@ -467,6 +467,20 @@ impl VpnApp {
         let _rt_guard = rt.enter();
         let (tx, rx) = mpsc::channel();
         let api_addr = api_controller.listen_addr().to_string();
+        let initial_proxy_config = rt.block_on(proxy_manager.config());
+        let initial_custom_rules = if !initial_proxy_config.rules.is_empty() {
+            crate::proxy::rule_io::export_lines(&initial_proxy_config.rules)
+                .map(|lines| {
+                    lines
+                        .into_iter()
+                        .map(|l| format!("- {l}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         let mut app = Self {
             rt,
             db,
@@ -474,11 +488,8 @@ impl VpnApp {
             speedtester,
             tasks,
             kernel_manager,
-            proxy_status: ProxyRuntimeStatus::stopped(MihomoConfigOptions::default()),
-            proxy_config: MihomoConfigOptions {
-                smart_routing: true,
-                ..MihomoConfigOptions::default()
-            },
+            proxy_status: ProxyRuntimeStatus::stopped(initial_proxy_config.clone()),
+            proxy_config: initial_proxy_config,
             proxy_manager,
             api_controller,
             api_addr,
@@ -597,7 +608,7 @@ impl VpnApp {
             new_rule_kind: RuleDraftKind::DomainSuffix,
             new_rule_value: String::new(),
             new_rule_action: RuleAction::Proxy,
-            custom_rules_text: String::new(),
+            custom_rules_text: initial_custom_rules,
             show_recommended_rules_confirm: false,
             show_clear_sources_confirm: false,
             show_gist_config_modal: false,

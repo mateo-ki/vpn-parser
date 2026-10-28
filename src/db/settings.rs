@@ -15,11 +15,7 @@ impl Database {
         }
         let mut config: MihomoConfigOptions =
             serde_json::from_str(&json).context("解析已保存的代理配置失败")?;
-        let mut migrated = config.dns.migrate_legacy_defaults();
-        if config.mixed_port == 7890 {
-            config.mixed_port = 9980;
-            migrated = true;
-        }
+        let migrated = config.dns.migrate_legacy_defaults();
         if migrated {
             self.update_proxy_config(&config).await?;
         }
