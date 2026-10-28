@@ -32,15 +32,29 @@ pub fn working_set_mb() -> f32 {
     imp::working_set_mb()
 }
 
+pub fn sample_pid(pid: u32) -> Option<RawSample> {
+    imp::sample_pid(pid)
+}
+
+pub fn working_set_mb_pid(pid: u32) -> f32 {
+    imp::working_set_mb_pid(pid)
+}
+
+/// 修剪工作集（向操作系统归还未使用的物理内存页）
+pub fn trim_working_set() {
+    imp::trim_working_set();
+}
+
 #[cfg(windows)]
 mod imp {
     use super::RawSample;
-    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::Foundation::{CloseHandle, FALSE, FILETIME};
     use windows_sys::Win32::System::ProcessStatus::{
         K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
     };
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, GetProcessIoCounters, GetProcessTimes, IO_COUNTERS,
+        GetCurrentProcess, GetProcessIoCounters, GetProcessTimes, OpenProcess,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ, IO_COUNTERS,
     };
 
     fn filetime_u64(t: FILETIME) -> u64 {
@@ -74,6 +88,49 @@ mod imp {
             return 0.0;
         }
         pmc.WorkingSetSize as f32 / (1024.0 * 1024.0)
+    }
+
+    pub fn sample_pid(pid: u32) -> Option<RawSample> {
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, pid) };
+        if handle.is_null() {
+            return None;
+        }
+        let zero = FILETIME { dwHighDateTime: 0, dwLowDateTime: 0 };
+        let (mut creation, mut exit, mut kernel, mut user) = (zero, zero, zero, zero);
+        let times_ok = unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) } != 0;
+        let mut io: IO_COUNTERS = unsafe { std::mem::zeroed() };
+        let io_ok = unsafe { GetProcessIoCounters(handle, &mut io) } != 0;
+        unsafe { CloseHandle(handle) };
+        if !times_ok {
+            return None;
+        }
+        Some(RawSample {
+            cpu_100ns: filetime_u64(kernel) + filetime_u64(user),
+            read_bytes: if io_ok { io.ReadTransferCount } else { 0 },
+            write_bytes: if io_ok { io.WriteTransferCount } else { 0 },
+        })
+    }
+
+    pub fn working_set_mb_pid(pid: u32) -> f32 {
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, pid) };
+        if handle.is_null() {
+            return 0.0;
+        }
+        let mut pmc: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
+        pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        let ok = unsafe { K32GetProcessMemoryInfo(handle, &mut pmc, pmc.cb) } != 0;
+        unsafe { CloseHandle(handle) };
+        if !ok {
+            return 0.0;
+        }
+        pmc.WorkingSetSize as f32 / (1024.0 * 1024.0)
+    }
+
+    pub fn trim_working_set() {
+        let handle = unsafe { GetCurrentProcess() };
+        unsafe {
+            windows_sys::Win32::System::ProcessStatus::K32EmptyWorkingSet(handle);
+        }
     }
 }
 
@@ -122,6 +179,16 @@ mod imp {
         }
         0.0
     }
+
+    pub fn sample_pid(_pid: u32) -> Option<RawSample> {
+        None
+    }
+
+    pub fn working_set_mb_pid(_pid: u32) -> f32 {
+        0.0
+    }
+
+    pub fn trim_working_set() {}
 }
 
 #[cfg(not(any(windows, unix)))]
@@ -133,6 +200,13 @@ mod imp {
     pub fn working_set_mb() -> f32 {
         0.0
     }
+    pub fn sample_pid(_pid: u32) -> Option<RawSample> {
+        None
+    }
+    pub fn working_set_mb_pid(_pid: u32) -> f32 {
+        0.0
+    }
+    pub fn trim_working_set() {}
 }
 
 #[cfg(test)]

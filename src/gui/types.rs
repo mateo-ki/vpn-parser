@@ -187,6 +187,16 @@ pub struct DnsRecord {
     pub time_str: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardDrawer {
+    Network,     // DNS / TUN
+    Logs,        // 运行日志
+    Rules,       // 分流规则
+    Kernels,     // 内核管理
+    Groups,      // 分流策略组
+    Connections, // 活跃连接
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ProxySortBy {
     Latency,
@@ -212,6 +222,7 @@ pub struct ProxyView {
     pub rows: Vec<ProxyViewRow>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum RuleDraftKind {
     Domain,
@@ -228,6 +239,7 @@ pub enum RuleDraftKind {
     Quic,
 }
 
+#[allow(dead_code)]
 impl RuleDraftKind {
     pub const ALL: [Self; 12] = [
         Self::Domain,
@@ -377,6 +389,7 @@ pub enum BgMsg {
     ProxyStatus(ProxyRuntimeStatus),
     ProxyConfig(Result<MihomoConfigOptions, String>),
     ProxyConfigSaved(Result<MihomoConfigOptions, String>),
+    ProxyConfigQuietSaved(Result<MihomoConfigOptions, String>),
     ProxyLog(Result<String, String>),
     ProxyOp(Result<String, String>),
     ApiServerStatus(Result<String, String>),

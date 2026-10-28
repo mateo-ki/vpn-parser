@@ -179,26 +179,37 @@ pub fn sanitize_node_name(name: &str) -> String {
 }
 
 pub fn latency_text(n: &NodeSummary) -> RichText {
+    let green = Color32::from_rgb(52, 199, 89);
+    let yellow = Color32::from_rgb(255, 149, 0);
+    let red = Color32::from_rgb(255, 59, 48);
+
     match (n.latency_ok, n.latency_test_kind.as_deref()) {
         (Some(true), Some(GOOGLE_PROXY_TEST_KIND)) => {
             let ms = n.latency_ms.unwrap_or(0);
-            let color = if ms < 300 {
-                theme::accent()
-            } else if ms < 800 {
-                theme::text_secondary()
+            let color = if ms <= 700 {
+                green
+            } else if ms < 1500 {
+                yellow
             } else {
-                theme::muted()
+                red
             };
             RichText::new(format!("{ms} ms")).color(color)
         }
         (Some(false), Some(GOOGLE_PROXY_TEST_KIND)) => {
-            RichText::new("超时").color(theme::muted())
+            RichText::new("超时").color(red)
         }
         (Some(true), _) => {
             let ms = n.latency_ms.unwrap_or(0);
-            RichText::new(format!("{ms} ms (TCP)")).color(theme::text_secondary())
+            let color = if ms <= 700 {
+                green
+            } else if ms < 1500 {
+                yellow
+            } else {
+                red
+            };
+            RichText::new(format!("{ms} ms (TCP)")).color(color)
         }
-        (Some(false), _) => RichText::new("TCP 失败").color(theme::muted()),
+        (Some(false), _) => RichText::new("TCP 失败").color(red),
         (None, _) => RichText::new("未测速").color(theme::muted()),
     }
 }
@@ -253,6 +264,7 @@ pub fn dns_mode_label(mode: DnsEnhancedMode) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub fn rule_action_label(action: RuleAction) -> &'static str {
     match action {
         RuleAction::Direct => "直连",
@@ -261,6 +273,7 @@ pub fn rule_action_label(action: RuleAction) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub fn rule_matcher_label(matcher: &RuleMatcher) -> String {
     match matcher {
         RuleMatcher::Domain(value) => format!("DOMAIN · {value}"),

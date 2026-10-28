@@ -16,6 +16,7 @@ impl VpnApp {
 
         egui::Window::new(RichText::new("选择转发目标节点").strong())
             .open(&mut open)
+            .order(egui::Order::Tooltip)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .collapsible(false)
             .resizable(false)

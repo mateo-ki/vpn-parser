@@ -15,8 +15,22 @@ impl VpnApp {
         let mut apply = false;
         // `Window::open` 已经借走了 `open`，闭包里只能记一笔，出框之后再关。
         let mut cancel = false;
+
+        // 半透明遮罩：Order::Tooltip 确保压在抽屉 (Foreground) 之上
+        let screen = ctx.screen_rect();
+        egui::Area::new(egui::Id::new("rule_import_modal_backdrop"))
+            .order(egui::Order::Tooltip)
+            .show(ctx, |ui| {
+                ui.set_width(screen.width());
+                ui.set_height(screen.height());
+                ui.painter()
+                    .rect_filled(screen, 0.0, Color32::from_black_alpha(100));
+            });
+
         egui::Window::new("导入分流规则")
             .id(egui::Id::new("vpn-parser:rule-import"))
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .order(egui::Order::Tooltip)
             .default_width(680.0)
             .collapsible(false)
             .open(&mut open)
@@ -200,6 +214,13 @@ impl VpnApp {
             "导入完成：新增 {added} 条，跳过重复 {duplicates} 条，规则表现共 {} 条",
             self.proxy_config.rules.len()
         );
+        if let Ok(lines) = crate::proxy::rule_io::export_lines(&self.proxy_config.rules) {
+            self.custom_rules_text = lines
+                .into_iter()
+                .map(|l| format!("- {l}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
         self.show_rule_import = false;
         self.rule_import_text.clear();
         self.rule_import_preview = None;
@@ -231,6 +252,13 @@ impl VpnApp {
         match modal.inner {
             Some(true) => {
                 self.proxy_config.rules = recommended_traffic_rules();
+                if let Ok(lines) = crate::proxy::rule_io::export_lines(&self.proxy_config.rules) {
+                    self.custom_rules_text = lines
+                        .into_iter()
+                        .map(|l| format!("- {l}"))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                }
                 self.show_recommended_rules_confirm = false;
                 self.save_proxy_config();
             }
@@ -273,8 +301,9 @@ pub fn ui_rule_import_help_window(ctx: &egui::Context) -> (RuleHelpMsg, egui::Re
     // `Window::open` 借走了 `open`，闭包里只记一笔，出框之后再合。
     let shown = egui::Window::new("导入格式示范")
         .id(egui::Id::new("vpn-parser:rule-import-help"))
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .order(egui::Order::Tooltip)
         .default_width(width)
-        .default_pos(screen.min + Vec2::new(48.0, 32.0))
         .collapsible(false)
         .open(&mut open)
         .show(ctx, |ui| {

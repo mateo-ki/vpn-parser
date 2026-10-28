@@ -146,35 +146,6 @@ impl VpnApp {
                 auto_save = true;
             }
 
-            ui.add_space(10.0);
-            ui.separator();
-            ui.add_space(8.0);
-
-            ui.label(RichText::new(self.tr("控制台标签页显示 (Console Tabs)")).strong());
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new("勾选/选中的标签页会在控制台顶部导航中显示，未选中的将被精简隐藏（至少保留 1 个）。")
-                    .small()
-                    .color(theme::muted()),
-            );
-            ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| {
-                for panel in crate::gui::types::ProxyPanel::ALL {
-                    let is_visible = self.is_proxy_panel_visible(panel);
-                    let prefix = if is_visible { "✓ " } else { "+ " };
-                    let chip_label = format!("{}{}", prefix, self.tr(panel.title()));
-                    let tip = if is_visible {
-                        "已在控制台显示，点击隐藏此 Tab"
-                    } else {
-                        "已隐藏，点击在控制台显示此 Tab"
-                    };
-                    if ui.selectable_label(is_visible, chip_label).on_hover_text(tip).clicked() {
-                        self.toggle_proxy_panel_visibility(panel);
-                        auto_save = true;
-                    }
-                }
-            });
-
             ui.add_space(12.0);
             ui.separator();
             ui.add_space(8.0);

@@ -1,7 +1,7 @@
 use crate::gui::theme;
 use crate::gui::widgets::primary_btn;
 use crate::gui::VpnApp;
-use eframe::egui::{self, CornerRadius, RichText, Sense, Stroke, Vec2};
+use eframe::egui::{self, Color32, CornerRadius, RichText, Sense, Stroke, Vec2};
 
 impl VpnApp {
     pub(crate) fn ui_kernel_dialog(&mut self, ctx: &egui::Context) {
@@ -19,10 +19,21 @@ impl VpnApp {
         const PAD: f32 = 11.0;
         const DOT_W: f32 = 22.0;
 
+        // 半透明遮罩：Order::Tooltip 确保压在抽屉 (Foreground) 之上
+        let screen = ctx.screen_rect();
+        egui::Area::new(egui::Id::new("kernel_dialog_backdrop"))
+            .fixed_pos(screen.min)
+            .order(egui::Order::Tooltip)
+            .show(ctx, |ui| {
+                ui.painter()
+                    .rect_filled(screen, 0.0, Color32::from_black_alpha(110));
+            });
+
         egui::Window::new(format!("下载内核 · {}", kind.display_name()))
             .id(egui::Id::new("kernel-download-dialog"))
             .collapsible(false)
             .resizable(false)
+            .order(egui::Order::Tooltip)
             .default_width(SOURCE_W)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {

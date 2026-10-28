@@ -316,14 +316,14 @@ mod formatter_tests {
     #[test]
     fn format_connection_rule_normalizes_shoes_and_mihomo_rules() {
         // 1. Shoes GeoSite 规则
-        let shoes_geosite = r#"local-mixed (root): {"path":"D:/software/VPN Parser/data/kernels/mihomo/geosite.dat","format":"geosite_dat","code":"cn"}"#;
+        let shoes_geosite = r#"local-mixed (root): {"path":"data/kernels/mihomo/geosite.dat","format":"geosite_dat","code":"cn"}"#;
         assert_eq!(
             format_connection_rule(Some("Shoes"), Some(shoes_geosite)),
             "GEOSITE(cn)"
         );
 
         // 2. Shoes GeoIp 规则
-        let shoes_geoip = r#"local-mixed (root): {"path":"D:/software/VPN Parser/data/kernels/mihomo/geoip.dat","format":"geoip_dat","code":"cn"}"#;
+        let shoes_geoip = r#"local-mixed (root): {"path":"data/kernels/mihomo/geoip.dat","format":"geoip_dat","code":"cn"}"#;
         assert_eq!(
             format_connection_rule(Some("Shoes"), Some(shoes_geoip)),
             "GEOIP(cn)"

@@ -37,7 +37,12 @@ pub struct ProxyWorkDir {
 
 impl ProxyWorkDir {
     pub async fn create(kernel: KernelKind) -> Result<Self> {
-        let root = std::env::temp_dir().join(format!("vpn-parser-proxy-{}", Uuid::new_v4()));
+        let base_dir = crate::data_root().join("run");
+        let root = if tokio::fs::create_dir_all(&base_dir).await.is_ok() {
+            base_dir.join(format!("proxy-{}", Uuid::new_v4()))
+        } else {
+            std::env::temp_dir().join(format!("vpn-parser-proxy-{}", Uuid::new_v4()))
+        };
         tokio::fs::create_dir_all(&root).await?;
         let data_root = match kernel {
             KernelKind::Mihomo | KernelKind::Meow | KernelKind::VpCore => {
@@ -442,6 +447,28 @@ impl ProxyManager {
         self.connect(node, None).await
     }
 
+    pub async fn start_with_options(&self, node: &Node, options: MihomoConfigOptions) -> Result<()> {
+        options.validate()?;
+        let _operation = self.operation.lock().await;
+        {
+            let mut runtime = self.runtime.lock().await;
+            runtime.apply_options(options.clone());
+            runtime.status.mode = options.mode;
+            runtime.status.mixed_port = options.mixed_port;
+            runtime.status.controller_port = options.controller_port;
+            runtime.status.controller_secret = options.controller_secret.clone();
+        }
+        let running = matches!(
+            self.runtime.lock().await.status.state,
+            ProxyState::Running | ProxyState::Degraded
+        );
+        if running {
+            self.restart_inner(node, Some(options.kernel_preference)).await
+        } else {
+            self.start_inner_with_preference(node, None, Some(options.kernel_preference)).await
+        }
+    }
+
     pub fn connect<'a>(
         &'a self,
         node: &'a Node,
@@ -699,6 +726,7 @@ impl ProxyManager {
                 Ok(child) => {
                     if let Some(pid) = child.id() {
                         crate::platform::assign_child_process_id(pid);
+                        runtime.status.kernel_pid = Some(pid);
                     }
                     ProxyChild::Standard(child)
                 }
@@ -744,6 +772,13 @@ impl ProxyManager {
                     .rev()
                     .find(|l| {
                         let lower = l.to_lowercase();
+                        if lower.contains("[warning]")
+                            || lower.contains("[info]")
+                            || lower.contains("level=warn")
+                            || lower.contains("level=info")
+                        {
+                            return false;
+                        }
                         lower.contains("level=fatal")
                             || lower.contains("level=error")
                             || lower.contains("fatal:")

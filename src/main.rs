@@ -1,5 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod api;
 mod app_update;
 mod collector;
@@ -70,6 +73,10 @@ struct Cli {
     /// 当成未知选项，提权实例在写日志之前就 exit(2)。
     #[arg(long, hide = true, allow_hyphen_values = true)]
     elevated_proxy_config: Option<String>,
+
+    /// 提权交接配置文件路径（推荐：解决超长规则列表导致 Windows 命令行 32KB 限制溢出崩溃）
+    #[arg(long, hide = true)]
+    elevated_proxy_config_file: Option<std::path::PathBuf>,
 
     #[arg(long, hide = true)]
     start_proxy_node: Option<String>,
@@ -243,7 +250,7 @@ fn main() -> Result<()> {
         .or_else(|| std::env::var("VPN_PARSER_API_TOKEN").ok())
         .filter(|token| !token.trim().is_empty())
         .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
-    let elevated_handoff = cli.elevated_proxy_config.is_some();
+    let elevated_handoff = cli.elevated_proxy_config.is_some() || cli.elevated_proxy_config_file.is_some();
     let _single_instance = if diag {
         // 诊断壳不抢互斥量，也不唤醒/杀死任何别的实例：这台机器上用户实例可能正在跑。
         startup_log("DIAG: 跳过单实例互斥量与重复实例清理");
@@ -332,13 +339,23 @@ fn main() -> Result<()> {
     }
     let rt = Arc::new(Runtime::new()?);
     let _rt_guard = rt.enter();
-    let handoff_proxy_options = match cli.elevated_proxy_config.as_deref() {
-        Some(encoded) => {
-            let options = crate::proxy::decode_elevated_proxy_config(encoded)?;
-            options.validate()?;
-            Some(options)
+    let handoff_proxy_options = if let Some(config_file) = cli.elevated_proxy_config_file.as_deref() {
+        match crate::proxy::read_elevated_proxy_config_file(config_file) {
+            Ok(options) => {
+                options.validate()?;
+                Some(options)
+            }
+            Err(error) => {
+                startup_log(&format!("读取提权交接配置文件失败: {error}"));
+                return Err(error);
+            }
         }
-        None => None,
+    } else if let Some(encoded) = cli.elevated_proxy_config.as_deref() {
+        let options = crate::proxy::decode_elevated_proxy_config(encoded)?;
+        options.validate()?;
+        Some(options)
+    } else {
+        None
     };
     if elevated_handoff {
         std::thread::sleep(std::time::Duration::from_millis(750));
@@ -592,7 +609,7 @@ fn main() -> Result<()> {
             renderer,
             ..Default::default()
         };
-        let options = if diag::enabled() {
+        let options = if diag::enabled() && std::env::var_os("VPN_PARSER_DIAG_ONSCREEN").is_none() {
             // 诊断壳摆到屏幕外、也不抢焦点：验收要靠 PrintWindow 抓图和 PostMessage
             // 合成点击，都不需要它出现在用户眼前或抢走键盘。
             startup_log("DIAG: 窗口移到屏幕外且不激活，避免打扰当前桌面");
@@ -637,24 +654,48 @@ fn main() -> Result<()> {
     #[cfg(feature = "gui")]
     {
         startup_log("Entering GUI startup block");
-        // VPN_PARSER_RENDERER=wgpu 可强制首选后端，方便在无 OpenGL 的机器上复现/验证。
-        let preferred = std::env::var("VPN_PARSER_RENDERER")
-            .ok()
-            .filter(|v| v.eq_ignore_ascii_case("wgpu"))
-            .map(|_| {
+        // Windows 平台默认首选 Wgpu（DirectX 12 硬件加速），
+        // 彻底规避 Intel 核显 OpenGL 驱动（igxelpgicd64.dll）的 0xc0000005 访问越界闪退；
+        // 非 Windows 平台默认首选 Glow。仍支持 VPN_PARSER_RENDERER 环境变量覆盖。
+        let preferred = if cfg!(target_os = "windows") {
+            let use_glow = std::env::var("VPN_PARSER_RENDERER")
+                .map(|v| v.eq_ignore_ascii_case("glow"))
+                .unwrap_or(false);
+            if use_glow {
+                (
+                    eframe::Renderer::Glow,
+                    "glow",
+                    eframe::Renderer::Wgpu,
+                    "wgpu",
+                )
+            } else {
                 (
                     eframe::Renderer::Wgpu,
                     "wgpu",
                     eframe::Renderer::Glow,
                     "glow",
                 )
-            })
-            .unwrap_or((
-                eframe::Renderer::Glow,
-                "glow",
-                eframe::Renderer::Wgpu,
-                "wgpu",
-            ));
+            }
+        } else {
+            let use_wgpu = std::env::var("VPN_PARSER_RENDERER")
+                .map(|v| v.eq_ignore_ascii_case("wgpu"))
+                .unwrap_or(false);
+            if use_wgpu {
+                (
+                    eframe::Renderer::Wgpu,
+                    "wgpu",
+                    eframe::Renderer::Glow,
+                    "glow",
+                )
+            } else {
+                (
+                    eframe::Renderer::Glow,
+                    "glow",
+                    eframe::Renderer::Wgpu,
+                    "wgpu",
+                )
+            }
+        };
         let mut gui_res = run_gui(preferred.1, preferred.0);
         startup_log(&format!("{} run_native result: {gui_res:?}", preferred.1));
         if gui_res.is_err() {
@@ -899,10 +940,13 @@ fn setup_chinese_fonts(ctx: &egui::Context) {
             info!(path = %path.display(), font = %font_name, "loaded CJK font for GUI");
 
             let data = std::sync::Arc::new(egui::FontData::from_owned(bytes));
-            // 以前这里按字体名钉死一个 `-0.18`，且只认 "pingfang" —— 而 mac 上第一个能读到的
-            // 通常是 Hiragino Sans GB，那段等于从来没跑过（用户 2026-10-20：mac 按钮的字偏上）。
-            // 改成装载时拿真正会用到的那份字体量一次再补，Windows 量到 0.00pt 就原样不动。
-            let raw_offset = ink_offset(&font_name, &data);
+            // Windows 下微软雅黑/宋体/黑体字形垂直居中极为标准（实测 0.00pt 偏差）。
+            // ink_offset 会新建独立 egui::Context 进行字形栅格化排版，Windows 下跳过可规避额外分配数十兆显存/内存峰值。
+            let raw_offset = if cfg!(windows) {
+                0.0
+            } else {
+                ink_offset(&font_name, &data)
+            };
             let factor = ink_calibration_factor(raw_offset);
             let font_data = if factor == 0.0 {
                 data
@@ -977,6 +1021,31 @@ mod tests {
         assert_eq!(
             cli.elevated_proxy_config.as_deref(),
             Some("eyJtb2RlIjoidHVuIn0")
+        );
+    }
+
+    /// 提权交接使用配置文件时命令行更短，且能正确解析路径。
+    #[test]
+    fn elevated_handoff_command_line_parses_with_config_file() {
+        let current = ["--start-proxy-node", "old-node"]
+            .map(String::from)
+            .to_vec();
+        let extra = [
+            "--elevated-proxy-config-file".to_string(),
+            "D:\\data\\run\\elevated.json".to_string(),
+            "--start-proxy-node".to_string(),
+            "new-node".to_string(),
+        ];
+        let assembled = crate::platform::elevated_arguments(&current, &extra);
+        let mut argv = vec!["vpn-parser".to_string()];
+        argv.extend(assembled);
+        let parsed = Cli::try_parse_from(&argv);
+        assert!(parsed.is_ok(), "解析失败: {:?}", parsed.err());
+        let cli = parsed.unwrap();
+        assert_eq!(cli.start_proxy_node.as_deref(), Some("new-node"));
+        assert_eq!(
+            cli.elevated_proxy_config_file.as_deref(),
+            Some(std::path::Path::new("D:\\data\\run\\elevated.json"))
         );
     }
 

@@ -78,6 +78,7 @@ pub fn render_node_health_bar(
 }
 
 /// 订阅测通率微进度条
+#[allow(dead_code)]
 pub fn render_mini_progress_bar(ui: &mut Ui, current: i64, total: i64) {
     let width = 42.0;
     let height = 5.0;

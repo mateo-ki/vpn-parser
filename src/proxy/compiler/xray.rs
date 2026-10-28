@@ -130,12 +130,8 @@ impl BackendCompiler for XrayCompiler {
                         rule_obj.insert("port".into(), json!(format!("{s}-{e}")));
                     }
                     IRMatcher::ProcessName(name) => {
-                        if ir_rule.source == crate::proxy::ir::RuleSource::Override {
-                            tracing::warn!("Xray 不支持 YAML 覆写中的进程名分流规则: {name}，已自动跳过");
-                            continue;
-                        } else {
-                            return Err(anyhow!("Xray 暂不支持进程名分流规则: {name}"));
-                        }
+                        tracing::warn!("Xray 不支持进程名分流规则: {name}，已自动跳过该规则");
+                        continue;
                     }
                     IRMatcher::Network(proto) => {
                         rule_obj.insert("network".into(), json!(match proto {
@@ -275,10 +271,13 @@ fn build_stream_settings(cfg: &Map<String, Value>, client_fingerprint: Option<&s
     let mut stream = json!({"network": network, "security": security});
     if network == "ws" {
         let host = string(cfg, &["host"]);
-        stream["wsSettings"] = json!({
+        let mut ws = json!({
             "path": string(cfg, &["path"]).unwrap_or("/"),
-            "headers": host.map(|value| json!({"Host": value})).unwrap_or_else(|| json!({}))
         });
+        if let Some(host_val) = host {
+            ws["host"] = json!(host_val);
+        }
+        stream["wsSettings"] = ws;
     } else if network == "grpc" {
         stream["grpcSettings"] = json!({
             "serviceName": string(cfg, &["serviceName", "service-name"]).unwrap_or("")

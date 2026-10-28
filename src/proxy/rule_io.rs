@@ -297,15 +297,23 @@ fn rule_from_object(map: &serde_json::Map<String, Value>) -> Option<String> {
     Some(format!("{kind},{payload},{target}"))
 }
 
-/// 去掉包裹的引号、尾逗号、`//` 注释与首尾空白。
+/// 去掉包裹的引号、尾逗号、YAML 列表项 `- ` 前缀、`//` / `#` 注释与首尾空白。
 fn clean_line(raw: &str) -> String {
     let mut line = raw.trim();
     if line.starts_with("//") || line.starts_with('#') {
         return String::new();
     }
-    // 注释也可能跟在规则后面：`"DOMAIN,x,PROXY", // 说明`
+    // 注释也可能跟在规则后面：`"DOMAIN,x,PROXY", // 说明` 或 `# 说明`
     if let Some((head, _)) = line.split_once("//") {
         line = head.trim_end();
+    }
+    if let Some((head, _)) = line.split_once('#') {
+        line = head.trim_end();
+    }
+    line = line.trim();
+    // 兼容 YAML 列表项前缀 `- ` 或 `-`
+    if let Some(rest) = line.strip_prefix('-') {
+        line = rest.trim();
     }
     line = line.trim_end_matches(',').trim();
     if line.len() >= 2
@@ -522,6 +530,27 @@ mod tests {
                 "IP-CIDR,172.16.0.0/12,DIRECT",
                 "DOMAIN,localhost,DIRECT",
                 "DST-PORT,22,DIRECT"
+            ]
+        );
+        assert!(import.unparsed.is_empty(), "{:?}", import.unparsed);
+    }
+
+    /// YAML 列表项破折号前缀与 # 注释写法解析验证
+    #[test]
+    fn imports_yaml_list_lines_with_dash_and_hash_comments() {
+        let text = "# 自定义规则列表\n\
+                    - DOMAIN-SUFFIX,openai.com,PROXY # AI 服务\n\
+                    - 'DOMAIN-KEYWORD,google,PROXY'\n\
+                    - PROCESS-NAME,IDMan.exe,DIRECT\n\
+                    - GEOSITE,category-ads-all,REJECT\n";
+        let import = parse_rules_text(text);
+        assert_eq!(
+            kinds(&import.rules),
+            vec![
+                "DOMAIN-SUFFIX,openai.com,PROXY",
+                "DOMAIN-KEYWORD,google,PROXY",
+                "PROCESS-NAME,IDMan.exe,DIRECT",
+                "GEOSITE,category-ads-all,REJECT"
             ]
         );
         assert!(import.unparsed.is_empty(), "{:?}", import.unparsed);

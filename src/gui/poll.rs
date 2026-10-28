@@ -37,12 +37,17 @@ impl VpnApp {
         }
     }
 
-    /// 性能采样：每 500ms 差分一次本软件的 CPU / 内存 / 磁盘占用，供性能卡显示。
+    /// 性能采样：每 500ms 差分一次本软件与内核的 CPU / 内存 / 磁盘占用，供性能卡显示。
     fn update_perf_stats(&mut self) {
         if self.last_perf_sample.elapsed() < std::time::Duration::from_millis(500) {
             return;
         }
         let now = std::time::Instant::now();
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get() as f32)
+            .unwrap_or(1.0);
+
+        // 1. 本软件进程采样
         let sample = crate::gui::perf::raw_sample();
         let mem_mb = crate::gui::perf::working_set_mb();
         let mut cpu = self.perf_stats.cpu_percent;
@@ -50,10 +55,6 @@ impl VpnApp {
         if let (Some(prev), Some(cur)) = (self.perf_prev, sample) {
             let dt = now.duration_since(prev.0).as_secs_f32();
             if dt > 0.05 {
-                // 除以全部逻辑核心数：100% = 满载所有核心（单核口径看着太夸张）
-                let cores = std::thread::available_parallelism()
-                    .map(|n| n.get() as f32)
-                    .unwrap_or(1.0);
                 let cpu_s = (cur.cpu_100ns.saturating_sub(prev.1)) as f32 / 10_000_000.0;
                 cpu = (cpu_s / dt * 100.0 / cores).clamp(0.0, 100.0);
                 let bytes = (cur.read_bytes.saturating_sub(prev.2)
@@ -67,6 +68,34 @@ impl VpnApp {
             mem_mb,
             disk_mbps: disk,
         };
+
+        // 2. 内核进程采样（若内核正在运行）
+        if let Some(pid) = self.proxy_status.kernel_pid {
+            let k_sample = crate::gui::perf::sample_pid(pid);
+            let k_mem = crate::gui::perf::working_set_mb_pid(pid);
+            let mut k_cpu = self.kernel_perf_stats.cpu_percent;
+            let mut k_disk = self.kernel_perf_stats.disk_mbps;
+            if let (Some(prev), Some(cur)) = (self.kernel_perf_prev, k_sample) {
+                let dt = now.duration_since(prev.0).as_secs_f32();
+                if dt > 0.05 {
+                    let cpu_s = (cur.cpu_100ns.saturating_sub(prev.1)) as f32 / 10_000_000.0;
+                    k_cpu = (cpu_s / dt * 100.0 / cores).clamp(0.0, 100.0);
+                    let bytes = (cur.read_bytes.saturating_sub(prev.2)
+                        + cur.write_bytes.saturating_sub(prev.3)) as f32;
+                    k_disk = (bytes / dt / (1024.0 * 1024.0)).max(0.0);
+                }
+            }
+            self.kernel_perf_prev = k_sample.map(|s| (now, s.cpu_100ns, s.read_bytes, s.write_bytes));
+            self.kernel_perf_stats = crate::gui::perf::PerfSample {
+                cpu_percent: k_cpu,
+                mem_mb: k_mem,
+                disk_mbps: k_disk,
+            };
+        } else {
+            self.kernel_perf_prev = None;
+            self.kernel_perf_stats = crate::gui::perf::PerfSample::default();
+        }
+
         self.last_perf_sample = now;
     }
 
@@ -757,6 +786,11 @@ impl VpnApp {
                                 }
                             }
                             self.reload_proxy();
+                        }
+                        BgMsg::ProxyConfigQuietSaved(result) => {
+                            if let Err(error) = result {
+                                self.status = format!("保存代理配置失败: {error}");
+                            }
                         }
                         BgMsg::ProxyLog(Ok(log)) => self.proxy_log = log,
                         BgMsg::ProxyLog(Err(error)) => {

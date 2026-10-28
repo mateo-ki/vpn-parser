@@ -433,8 +433,26 @@ fn node_matches_group_depth(
     if depth > 4 {
         return false;
     }
-    if group_name == "全部" || group_name == "PROXY" {
+    if group_name == "全部" || group_name == "PROXY" || group_name.eq_ignore_ascii_case("all") {
         return true;
+    }
+
+    // 1. 若内核正在运行且上报了该策略组成员列表：优先按真实内核成员匹配（最权威真实）
+    if let Some(group) = kernel_groups.iter().find(|g| g.name == group_name) {
+        if !group.members.is_empty() {
+            if group.members.iter().any(|m| m == &node.name || m == &node.server) {
+                return true;
+            }
+            // 嵌套策略组展开（例如 AI分组 的 members 包含 "美国节点"）
+            let sub_matched = group.members.iter().any(|m| {
+                if m != group_name && m != "DIRECT" && m != "REJECT" && m != "PROXY" && m != "PASS" {
+                    node_matches_group_depth(node, m, kernel_groups, depth + 1)
+                } else {
+                    false
+                }
+            });
+            return sub_matched;
+        }
     }
 
     let country = node
@@ -445,7 +463,7 @@ fn node_matches_group_depth(
         .to_ascii_uppercase();
     let lower_name = node.name.to_lowercase();
 
-    // 针对内置知名策略组做精准语义过滤
+    // 2. 针对内置知名策略组做精准语义过滤（无内核明确成员时的智能推断）
     match group_name {
         "香港节点" | "HK" => {
             return country == "HK"
@@ -482,6 +500,25 @@ fn node_matches_group_depth(
                 || node.name.contains("美"))
                 && !lower_name.contains("warp");
         }
+        "韩国节点" | "KR" => {
+            return country == "KR"
+                || lower_name.contains("kr")
+                || lower_name.contains("korea")
+                || node.name.contains("韩");
+        }
+        "英国节点" | "GB" | "UK" => {
+            return country == "GB"
+                || country == "UK"
+                || lower_name.contains("gb")
+                || lower_name.contains("uk")
+                || node.name.contains("英");
+        }
+        "德国节点" | "DE" => {
+            return country == "DE"
+                || lower_name.contains("de")
+                || lower_name.contains("germany")
+                || node.name.contains("德");
+        }
         "AI分组" | "AI" => {
             return matches!(country.as_str(), "US" | "JP" | "SG" | "TW" | "KR" | "GB" | "DE")
                 || lower_name.contains("ai")
@@ -507,26 +544,6 @@ fn node_matches_group_depth(
             return true;
         }
         _ => {}
-    }
-
-    // 1. 若内核正在运行且上报了该策略组成员列表：优先按真实内核成员匹配
-    if let Some(group) = kernel_groups.iter().find(|g| g.name == group_name) {
-        if !group.members.is_empty() {
-            if group.members.iter().any(|m| m == &node.name || m == &node.server) {
-                return true;
-            }
-            // 嵌套策略组展开（例如 AI分组 的 members 包含 "美国节点"）
-            let sub_matched = group.members.iter().any(|m| {
-                if m != group_name && m != "DIRECT" && m != "REJECT" && m != "PROXY" {
-                    node_matches_group_depth(node, m, kernel_groups, depth + 1)
-                } else {
-                    false
-                }
-            });
-            if sub_matched {
-                return true;
-            }
-        }
     }
 
     let lower_group = group_name.to_lowercase();

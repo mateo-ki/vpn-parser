@@ -1,6 +1,6 @@
 [package]
 name = "vpn-parser"
-version = "1.14.0"
+version = "1.15.0"
 edition = "2021"
 description = "VPN/proxy subscription collector with desktop GUI and HTTP API"
 license = "MIT"
@@ -45,6 +45,7 @@ tar = "0.4"
 arboard = { version = "3", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 rfd = { version = "0.17.2", optional = true }
+mimalloc = { version = "0.1", default-features = false }
 
 [features]
 default = ["gui"]

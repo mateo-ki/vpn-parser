@@ -25,11 +25,20 @@ impl KernelValidator {
             return Ok(());
         };
 
-        let temp_dir = std::env::temp_dir().join(format!(
-            "vpn-parser-val-{}-{}",
-            kernel.directory_name(),
-            Uuid::new_v4()
-        ));
+        let base_dir = crate::data_root().join("run");
+        let temp_dir = if std::fs::create_dir_all(&base_dir).is_ok() {
+            base_dir.join(format!(
+                "val-{}-{}",
+                kernel.directory_name(),
+                Uuid::new_v4()
+            ))
+        } else {
+            std::env::temp_dir().join(format!(
+                "vpn-parser-val-{}-{}",
+                kernel.directory_name(),
+                Uuid::new_v4()
+            ))
+        };
         std::fs::create_dir_all(&temp_dir)?;
 
         let config_file_name = match kernel {

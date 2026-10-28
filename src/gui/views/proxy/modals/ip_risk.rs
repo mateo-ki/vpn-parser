@@ -18,6 +18,7 @@ impl VpnApp {
 
         egui::Window::new(RichText::new("IP 检测 · 归属与风控画像").strong())
             .open(&mut open)
+            .order(egui::Order::Tooltip)
             .collapsible(false)
             .resizable(false)
             .default_width(430.0)

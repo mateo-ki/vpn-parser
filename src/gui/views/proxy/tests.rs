@@ -281,7 +281,8 @@ mod rules_row_probe_tests {
                         // 只并按钮自己的矩形：min_rect 会把同一行里先画的东西也算进来。
                         let a = ui.button("导出 JSON").rect;
                         let c = ui.button("导入规则").rect;
-                        let added = a.union(c);
+                        let d = ui.button("一键更新 Geo 规则").rect;
+                        let added = a.union(c).union(d);
                         group = if !group.is_finite() {
                             added
                         } else {
@@ -576,6 +577,33 @@ mod policy_group_filter_tests {
 
         // 环形嵌套不应陷入无限循环或栈溢出
         assert!(!node_matches_group(&n1, "GroupLoopA", &kg));
+    }
+
+    #[test]
+    fn test_kernel_groups_priority_over_semantic_rules() {
+        // 当内核正在运行并上报了明确的成员列表时，应优先且严格按内核成员匹配，
+        // 杜绝其他仅命中关键词或地区的节点被误加入。
+        let hk_member = sample_node("香港精品01", Some("HK"), "1.1.1.1");
+        let hk_non_member = sample_node("香港其他节点", Some("HK"), "2.2.2.2");
+        let us_ai_member = sample_node("美国AI专线", Some("US"), "3.3.3.3");
+        let us_normal = sample_node("美国普通节点", Some("US"), "4.4.4.4");
+
+        let kg = vec![
+            kernel_group("香港节点", "select", &["香港精品01"]),
+            kernel_group("AI分组", "select", &["美国AI专线"]),
+        ];
+
+        // 香港节点：只有明确配置在内核策略组里的成员匹配
+        assert!(node_matches_group(&hk_member, "香港节点", &kg));
+        assert!(!node_matches_group(&hk_non_member, "香港节点", &kg));
+
+        // AI分组：只有美国AI专线匹配，普通美国节点不应匹配
+        assert!(node_matches_group(&us_ai_member, "AI分组", &kg));
+        assert!(!node_matches_group(&us_normal, "AI分组", &kg));
+
+        // 若内核未上报（如代理未启动，kg 为空），则安全回退到语义推断规则
+        assert!(node_matches_group(&hk_non_member, "香港节点", &[]));
+        assert!(node_matches_group(&us_normal, "AI分组", &[]));
     }
 
     fn kernel_group(name: &str, kind: &str, members: &[&str]) -> KernelGroup {

@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use crate::kernel::{KernelKind, KernelPreference};
 use crate::proxy::config::{DnsConfig, RoutingMode, TrafficRule, TunConfig};
 use anyhow::{anyhow, Result};
@@ -267,6 +268,8 @@ pub struct ProxyRuntimeStatus {
     pub local_proxy_ready: bool,
     pub system_proxy_enabled: bool,
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub kernel_pid: Option<u32>,
 }
 
 impl ProxyRuntimeStatus {
@@ -283,6 +286,7 @@ impl ProxyRuntimeStatus {
             local_proxy_ready: false,
             system_proxy_enabled: false,
             last_error: None,
+            kernel_pid: None,
         }
     }
 
@@ -304,11 +308,39 @@ impl ProxyRuntimeStatus {
     }
 }
 
+/// 提权交接（TUN 模式）通过临时文件安全落盘传递配置。
+/// 避免因包含海量分流规则/自定义配置（可达 1MB+）时直接拼入 Windows 命令行触发 32KB 缓冲区溢出，
+/// 导致 ShellExecuteW 报 0x5 (ERROR_ACCESS_DENIED) 且无法弹出 UAC 授权窗口。
+pub fn write_elevated_proxy_config_file(options: &MihomoConfigOptions) -> Result<PathBuf> {
+    let run_dir = crate::data_root().join("run");
+    let base = if std::fs::create_dir_all(&run_dir).is_ok() {
+        run_dir
+    } else {
+        std::env::temp_dir()
+    };
+    let target = base.join(format!("vpn-parser-elevated-{}.json", uuid::Uuid::new_v4()));
+    let json = serde_json::to_vec_pretty(options)?;
+    std::fs::write(&target, json)?;
+    Ok(target)
+}
+
+/// 读取并立即安全清理提权交接配置文件。
+pub fn read_elevated_proxy_config_file(path: &Path) -> Result<MihomoConfigOptions> {
+    let bytes = std::fs::read(path)
+        .map_err(|error| anyhow!("读取提权代理配置文件失败: {error}"))?;
+    // 读取完毕后立即删除，避免临时配置文件留在磁盘上
+    let _ = std::fs::remove_file(path);
+    let options: MihomoConfigOptions = serde_json::from_slice(&bytes)
+        .map_err(|error| anyhow!("解析提权代理配置文件失败: {error}"))?;
+    Ok(options)
+}
+
 /// 提权交接（TUN 模式）的配置载体：`--elevated-proxy-config` 的值就是它的 base64（URL-safe、无填充）。
 ///
 /// 编解码放在同一处，是为了让"非提权实例发出去的那一份"和"提权实例读回来的那一份"共用一份实现。
 /// 之前只有读的那一侧（`main.rs` 里手写 decode），而生产端和调用端从来没有人写 —— 于是 TUN 模式
 /// 点「启动代理」只会走到内核那句"需要管理员权限"（2026-10-22 用户报）。
+#[allow(dead_code)]
 pub fn encode_elevated_proxy_config(options: &MihomoConfigOptions) -> Result<String> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     Ok(URL_SAFE_NO_PAD.encode(serde_json::to_vec(options)?))
@@ -330,6 +362,22 @@ mod elevated_handoff_tests {
     };
 
     /// 交接配置必须能原样读回来 —— 编解码是同一份实现，但这条钉的是"字段没漏、没被 serde 改名"。
+    #[test]
+    fn elevated_config_round_trips_through_temporary_file() {
+        let mut source = MihomoConfigOptions::default();
+        source.mode = ProxyMode::Tun;
+        source.url_test = true;
+        source.url_test_size = 8;
+        source.override_yaml = Some("rules:\n  - DOMAIN-SUFFIX,google.com,DIRECT".to_string());
+
+        let file_path = super::write_elevated_proxy_config_file(&source).expect("写配置临时文件失败");
+        assert!(file_path.exists(), "临时配置文件必须真实存在");
+
+        let back = super::read_elevated_proxy_config_file(&file_path).expect("读配置临时文件失败");
+        assert_eq!(back, source, "通过文件交接后配置变了");
+        assert!(!file_path.exists(), "读取后临时配置文件应当被自动删除");
+    }
+
     #[test]
     fn elevated_config_round_trips_through_the_command_line() {
         let mut source = MihomoConfigOptions::default();

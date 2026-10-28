@@ -150,7 +150,7 @@ impl DnsConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuleAction {
     Direct,
@@ -184,7 +184,7 @@ impl NetworkProtocol {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum RuleMatcher {
     Domain(String),
@@ -208,6 +208,18 @@ pub struct TrafficRule {
 
 /// 保留用户规则顺序，只移除完全重复项，避免多个内核重复匹配同一条规则。
 pub fn optimize_traffic_rules(rules: &[TrafficRule]) -> Vec<TrafficRule> {
+    if rules.len() > 600 {
+        // 大规模规则使用快速去重，杜绝 O(N^2) 导致 UI 冻结
+        let mut seen = std::collections::HashSet::with_capacity(rules.len());
+        let mut out = Vec::with_capacity(rules.len());
+        for rule in rules {
+            let key = (&rule.matcher, &rule.action);
+            if seen.insert(key) {
+                out.push(rule.clone());
+            }
+        }
+        return out;
+    }
     let mut optimized: Vec<TrafficRule> = Vec::with_capacity(rules.len());
     for rule in rules {
         // 完全重复，或被前面同动作的规则覆盖（域名后缀包含、或已被某个 GEOSITE 分类
@@ -223,6 +235,14 @@ pub fn optimize_traffic_rules(rules: &[TrafficRule]) -> Vec<TrafficRule> {
     optimized
 }
 
+#[inline]
+fn is_subdomain(child: &str, parent: &str) -> bool {
+    child == parent
+        || (child.ends_with(parent)
+            && child.len() > parent.len()
+            && child.as_bytes()[child.len() - parent.len() - 1] == b'.')
+}
+
 /// `earlier` 是否已经覆盖 `later`（mihomo 从上到下匹配，先命中的规则生效）。
 fn shadows(earlier: &TrafficRule, later: &TrafficRule) -> bool {
     use RuleMatcher::*;
@@ -231,8 +251,8 @@ fn shadows(earlier: &TrafficRule, later: &TrafficRule) -> bool {
         | (DomainKeyword(a), DomainKeyword(b))
         | (GeoSite(a), GeoSite(b))
         | (IpCidr(a), IpCidr(b)) => a == b,
-        (DomainSuffix(a), DomainSuffix(b)) => b == a || b.ends_with(&format!(".{a}")),
-        (DomainSuffix(a), Domain(b)) => b == a || b.ends_with(&format!(".{a}")),
+        (DomainSuffix(a), DomainSuffix(b)) => is_subdomain(b, a),
+        (DomainSuffix(a), Domain(b)) => is_subdomain(b, a),
         (DomainKeyword(a), Domain(b)) | (DomainKeyword(a), DomainSuffix(b)) => b.contains(a),
         (GeoIp(a), GeoIp(b)) => a.eq_ignore_ascii_case(b),
         (DestinationPort(a), DestinationPort(b)) => a == b,

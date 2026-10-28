@@ -7,7 +7,7 @@
 A high-performance, modern cross-platform proxy tool built with Rust and egui: collects subscriptions, parses nodes, drives proxy cores (Mihomo / sing-box / Xray), and performs real-world reachability and latency benchmarking.
 
 <p align="center">
-  <img src="docs/images/dashboard-v173.png" alt="VPN Parser Dashboard" width="100%">
+  <img src="docs/images/dashboard.png" alt="VPN Parser Dashboard" width="100%">
 </p>
 
 - **Windows**: Modern installer (Inno Setup) + one-click system proxy integration + TUN virtual adapter mode (with elevated privileges)
@@ -90,12 +90,12 @@ VPN Parser natively supports OpenWrt router environments (x86_64 soft routers an
 
 ## Disclaimer
 
-- This project is an MIT-licensed technical tool. It parses subscriptions, manages nodes and invokes third-party proxy kernels on your own machine; it does not provide any node, line or acceleration service — every node you use comes from a subscription you added yourself.
-- You must comply with the laws and regulations of your region and must not use this project for any unlawful purpose. You bear the consequences of your own use; the authors and distributors accept no liability.
-- There is no analytics or reporting module: subscription URLs, the node database, routing rules, speedtest and switch history live only in the local `data/` directory, and the uninstaller does not delete them.
-- Every network request on the default path only pulls data in: fetching your subscriptions, detecting the egress IP, checking and downloading updates, fetching kernels and the GeoIP/GeoSite rule databases, plus the public DNS used for routing probes.
-- Two features send information out, and both require an explicit user action: publishing nodes to your own web backend (uploads the nodes that passed your speedtests) and the IP-risk lookup (sends that IP to ipinfo.io, ip-api.com and ipwho.is).
-- Kernels such as mihomo / sing-box / xray and the Geo rule databases are third-party projects distributed under their own licenses; their behaviour and reliability are upstream's responsibility. Latency and throughput shown in the UI are local measurements of that moment and say nothing about future performance.
+1. **Purpose & Compliance**: This project is an open-source technical client tool licensed under the MIT License, developed exclusively for educational purposes, network protocol research, and network benchmarking. Users must strictly comply with local laws and regulations. Using this software for any unlawful or malicious activities is strictly prohibited. Users bear all legal liabilities and consequences; authors, contributors, and distributors assume no liability whatsoever.
+2. **No Proxy Service Provided**: This project does not provide, host, distribute, or resell any proxy nodes, network routing, VPN services, or cross-border network acceleration. All nodes, subscriptions, and rules utilized within the application are strictly collected, imported, and configured by the users themselves.
+3. **Zero Telemetry & Local Privacy**: This project adheres strictly to a zero-telemetry policy. There are no tracking, analytics, reporting, or profiling modules in the codebase. All configurations, node records, routing rules, and benchmark logs reside exclusively on the user's local disk (`data/` directory) and are never uploaded to any remote servers. The uninstaller does not forcefully delete local user databases.
+4. **Transparent Network Activity**: In standard operation, network activity is strictly limited to inbound data retrieval: fetching user-specified subscriptions, detecting the public egress IP, checking and downloading application updates from official repositories, downloading proxy kernels and GeoIP/GeoSite rule databases, and performing DNS resolution for routing health checks.
+5. **Explicit User-Initiated Outbound Data**: Beyond default inbound operations, data is only transmitted externally upon explicit manual user interaction: ① Publishing verified nodes to a user-configured self-hosted Web backend; ② Explicitly requesting an IP risk & geolocation inspection (which queries third-party providers ipinfo.io, ip-api.com, and ipwho.is).
+6. **Third-Party Kernels & Rules**: Third-party proxy engines (VP-Core, Mihomo, sing-box, Xray, Meow, Shoes, etc.) and Geo databases are standalone open-source projects maintained by their respective upstreams under their own licenses. Displayed latencies, throughput speeds, and health metrics represent point-in-time local benchmark measurements and do not constitute a guarantee of future stability, availability, or performance.
 
 ## License
 

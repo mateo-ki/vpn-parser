@@ -75,6 +75,10 @@ pub struct VpnApp {
     pub(crate) status: String,
     /// 上一帧量到的"状态栏右侧动作组"宽度。状态文本照它让位，长日志才不会压到按钮上面。
     pub(crate) status_actions_width: f32,
+    /// 测量到的底部状态栏实际高度（用于让右侧抽屉严格限制在内容区域内，不遮挡状态栏）
+    pub(crate) status_bar_height: f32,
+    /// 测量到的底部状态栏顶部 Y 坐标（用于让右侧抽屉底边精准停在状态栏上边沿，严禁遮挡状态栏）
+    pub(crate) status_bar_top_y: f32,
     pub(crate) busy: bool,
     pub(crate) proxy_busy: bool,
     /// 上一次写进 startup.log 的代理状态 + 它开始的时间 + 卡住告警是否已发过。
@@ -152,9 +156,14 @@ pub struct VpnApp {
     pub(crate) proxy_sort_by: ProxySortBy,
     pub(crate) proxy_search: String,
     pub(crate) proxy_region_filter: String,
+    #[allow(dead_code)]
     pub(crate) new_rule_kind: RuleDraftKind,
+    #[allow(dead_code)]
     pub(crate) new_rule_value: String,
+    #[allow(dead_code)]
     pub(crate) new_rule_action: RuleAction,
+    /// 自定义例外规则多行文本编辑器中的内容
+    pub(crate) custom_rules_text: String,
     pub(crate) show_recommended_rules_confirm: bool,
     pub(crate) show_clear_sources_confirm: bool,
     pub(crate) show_gist_config_modal: bool,
@@ -274,10 +283,15 @@ pub struct VpnApp {
     /// 上一帧性能原始采样（墙钟、CPU 累计时间、磁盘读写计数），差分算 CPU%/磁盘速率。
     pub(crate) perf_prev: Option<(std::time::Instant, u64, u64, u64)>,
     pub(crate) perf_stats: perf::PerfSample,
+    pub(crate) kernel_perf_prev: Option<(std::time::Instant, u64, u64, u64)>,
+    pub(crate) kernel_perf_stats: perf::PerfSample,
     pub(crate) last_perf_sample: std::time::Instant,
+    pub(crate) last_mem_trim: std::time::Instant,
     /// 控制器轮询共享 Client：reqwest 的 Client 克隆廉价（内部 Arc 连接池），
     /// 以前每次轮询各自新建 = 每秒对本地控制器重开一条 TCP。键是端口，内核换端口才重建。
     pub(crate) controller_client: Option<(u16, reqwest::Client)>,
+    /// 仪表盘全局右侧滑出抽屉：展示 DNS/TUN、日志、规则、内核、策略组、连接等。
+    pub(crate) dashboard_drawer: Option<DashboardDrawer>,
     /// 服务卡探测共享 Client：键是 (是否经代理, 混合端口)，状态变化才重建。
     pub(crate) service_check_client: Option<(bool, u16, reqwest::Client)>,
     /// 仪表盘策略组抽屉：当前展开的组名（None = 收起）。
@@ -481,6 +495,8 @@ impl VpnApp {
             proxy_panel: ProxyPanel::Charts,
             status: "就绪".into(),
             status_actions_width: 0.0,
+            status_bar_height: 32.0,
+            status_bar_top_y: 0.0,
             busy: false,
             proxy_busy: false,
             last_proxy_state_log: None,
@@ -495,7 +511,19 @@ impl VpnApp {
             last_lan_ip_check: std::time::Instant::now() - std::time::Duration::from_secs(61),
             perf_prev: None,
             perf_stats: perf::PerfSample::default(),
+            kernel_perf_prev: None,
+            kernel_perf_stats: perf::PerfSample::default(),
             last_perf_sample: std::time::Instant::now(),
+            last_mem_trim: std::time::Instant::now(),
+            dashboard_drawer: crate::diag::starting_drawer().and_then(|d| match d.as_str() {
+                "kernels" => Some(DashboardDrawer::Kernels),
+                "network" => Some(DashboardDrawer::Network),
+                "logs" => Some(DashboardDrawer::Logs),
+                "rules" => Some(DashboardDrawer::Rules),
+                "groups" => Some(DashboardDrawer::Groups),
+                "connections" => Some(DashboardDrawer::Connections),
+                _ => None,
+            }),
             group_drawer: None,
             group_drawer_filter: String::new(),
             group_drawer_region: "all".into(),
@@ -569,6 +597,7 @@ impl VpnApp {
             new_rule_kind: RuleDraftKind::DomainSuffix,
             new_rule_value: String::new(),
             new_rule_action: RuleAction::Proxy,
+            custom_rules_text: String::new(),
             show_recommended_rules_confirm: false,
             show_clear_sources_confirm: false,
             show_gist_config_modal: false,
@@ -2572,6 +2601,17 @@ impl VpnApp {
 
     /// 代理配置进 UI 状态的唯一入口。
     fn set_proxy_config(&mut self, config: MihomoConfigOptions) {
+        if self.custom_rules_text.trim().is_empty() && !config.rules.is_empty() {
+            self.custom_rules_text = crate::proxy::rule_io::export_lines(&config.rules)
+                .map(|lines| {
+                    lines
+                        .into_iter()
+                        .map(|l| format!("- {l}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+        }
         self.proxy_config = config;
     }
 
@@ -2579,9 +2619,15 @@ impl VpnApp {
     pub(crate) fn prepare_proxy_config_options(&self) -> MihomoConfigOptions {
         let mut options = self.proxy_config.clone();
         if options.routing_mode == RoutingMode::Subscription {
-            if let Some(ref sid) = options.subscription_rules_source_id {
+            if !self.custom_rules_text.trim().is_empty() {
+                options.subscription_rules_yaml = Some(self.custom_rules_text.clone());
+            } else if let Some(ref sid) = options.subscription_rules_source_id {
                 if let Some(src) = self.sources.iter().find(|s| &s.id == sid) {
                     options.subscription_rules_yaml = src.rules_yaml.clone();
+                }
+            }
+            if let Some(ref sid) = options.subscription_rules_source_id {
+                if let Some(src) = self.sources.iter().find(|s| &s.id == sid) {
                     options.subscription_groups_yaml = src.groups_yaml.clone();
                 }
             }
@@ -2619,6 +2665,25 @@ impl VpnApp {
                 Err(error) => Err(error.to_string()),
             };
             let _ = tx.send(BgMsg::ProxyConfigSaved(result));
+        });
+    }
+
+    /// 静默更新并持久化代理配置（不设置全局 proxy_busy 阻断 UI，也不强行全量重查日志），适用于分流模式切换、内核偏好更改等高频操作
+    pub(crate) fn save_proxy_config_quiet(&mut self) {
+        let manager = self.proxy_manager.clone();
+        let db = self.db.clone();
+        let options = self.prepare_proxy_config_options();
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            Self::prime_port_mapping_candidates(&db, &manager, &options.port_mappings).await;
+            let result = match manager.reload_config(options.clone()).await {
+                Ok(_) => match db.update_proxy_config(&options).await {
+                    Ok(()) => Ok(options),
+                    Err(error) => Err(error.to_string()),
+                },
+                Err(error) => Err(error.to_string()),
+            };
+            let _ = tx.send(BgMsg::ProxyConfigQuietSaved(result));
         });
     }
 
@@ -2858,6 +2923,20 @@ impl VpnApp {
                 return;
             }
         }
+        // 0. 特权与模式前置检查：如果指定内核根本不支持 TUN 模式（如 Shoes 或 Xray），
+        // 绝不要发起 UAC 提权重启，直接明确拦截提示用户切回系统代理或改选支持 TUN 的内核。
+        if self.proxy_config.mode.has_tun() {
+            if let Some(kind) = self.proxy_config.kernel_preference.kernel() {
+                if kind == KernelKind::Shoes || kind == KernelKind::Xray {
+                    self.status = format!(
+                        "{} 不支持 TUN 虚拟网卡模式，请将出站模式切换为「系统代理」，或改选 Mihomo / VP-Core / Sing-box / Meow 内核运行 TUN 模式",
+                        kind.display_name()
+                    );
+                    return;
+                }
+            }
+        }
+
         // Windows 的 TUN 要管理员权限：本进程（非提权）起不了内核，只能把配置交给一个
         // runas 起来的提权实例，然后自己退掉释放单实例互斥量 —— 提权实例那边最多等 3 秒接管。
         // 以前这里只把状态文案改成"正在请求管理员权限…"就照样往下调 manager.start()，
@@ -2901,21 +2980,12 @@ impl VpnApp {
                         &options.port_mappings,
                     )
                     .await;
-                    let previous = manager.config().await;
-                    let operation = match manager.update_config(options.clone()).await {
-                        Ok(()) => {
-                            let db_clone = db.clone();
-                            let opt_clone = options.clone();
-                            tokio::spawn(async move {
-                                let _ = db_clone.update_proxy_config(&opt_clone).await;
-                            });
-                            manager.start(&node).await
-                        }
-                        Err(error) => {
-                            let _ = manager.update_config(previous).await;
-                            Err(error)
-                        }
-                    };
+                    let db_clone = db.clone();
+                    let opt_clone = options.clone();
+                    tokio::spawn(async move {
+                        let _ = db_clone.update_proxy_config(&opt_clone).await;
+                    });
+                    let operation = manager.start_with_options(&node, options).await;
                     match operation {
                         Ok(()) => {
                             let status = manager.status().await;
@@ -3008,13 +3078,16 @@ impl VpnApp {
 
     /// 组装交给提权实例的命令行参数。单独抽出来是因为这条链拼错（flag 重复、配置编不出来）时，
     /// 提权实例会在写下第一行日志之前就死掉 —— 只有纯函数能被测试钉住。
+    /// 采用文件交接（--elevated-proxy-config-file）替代直接将海量分流规则编码后放入命令行，
+    /// 避免突破 Windows 命令行 32KB 限制引发 ShellExecuteW 返回 0x5。
     fn tun_handoff_arguments(
         options: &crate::proxy::MihomoConfigOptions,
         node_id: &str,
     ) -> anyhow::Result<Vec<String>> {
+        let config_file = crate::proxy::write_elevated_proxy_config_file(options)?;
         Ok(vec![
-            "--elevated-proxy-config".to_string(),
-            crate::proxy::encode_elevated_proxy_config(options)?,
+            "--elevated-proxy-config-file".to_string(),
+            config_file.to_string_lossy().to_string(),
             "--start-proxy-node".to_string(),
             node_id.to_string(),
         ])
@@ -3031,6 +3104,11 @@ impl VpnApp {
                 return;
             }
         };
+        let temp_config_file = args
+            .windows(2)
+            .find(|pair| pair[0] == "--elevated-proxy-config-file")
+            .map(|pair| std::path::PathBuf::from(&pair[1]));
+
         match platform::request_elevation(&args) {
             Ok(()) => {
                 crate::startup_log("TUN 交接：已请求管理员权限，本实例退出以释放单实例互斥量");
@@ -3039,6 +3117,9 @@ impl VpnApp {
                 self.pending_exit_after_handoff = true;
             }
             Err(error) => {
+                if let Some(ref path) = temp_config_file {
+                    let _ = std::fs::remove_file(path);
+                }
                 self.status =
                     format!("TUN 模式需要管理员权限，提权没成功（被取消或被系统拒绝）：{error}");
             }
@@ -3259,8 +3340,21 @@ impl VpnApp {
             return;
         }
         // 若内核已上报策略组列表，且该 group 并不存在于内核真实策略组中，则直接忽略，避免触发 404 错误
-        if !self.kernel_groups.is_empty() && !self.kernel_groups.iter().any(|g| g.name == group) {
-            return;
+        if !self.kernel_groups.is_empty() {
+            if let Some(g) = self.kernel_groups.iter().find(|g| g.name == group) {
+                // 1. 若为自动调度组 (url-test / fallback / load-balance)，内核不支持手动指定节点，跳过
+                let kind_lower = g.kind.to_ascii_lowercase();
+                if kind_lower.contains("test") || kind_lower.contains("fallback") || kind_lower.contains("balance") {
+                    return;
+                }
+                // 2. 校验待选节点 target 是否真实存在于该组 members 中，若不存在则跳过，杜绝 400 proxy not exist
+                if !g.members.is_empty() && !g.members.iter().any(|m| m == &target) {
+                    tracing::warn!(group = %group, target = %target, "策略组中不存在待切换节点，跳过切换");
+                    return;
+                }
+            } else {
+                return;
+            }
         }
         // 出口变化：服务连通性立即重测（先清掉旧结果，卡片转入"检测中"）
         self.last_service_check =
@@ -3288,7 +3382,12 @@ impl VpnApp {
                     } else {
                         let status = response.status();
                         let body = response.text().await.unwrap_or_default();
-                        Err(format!("内核拒绝切换策略组 {group} ({status}): {body}"))
+                        if body.contains("proxy not exist") || body.contains("Selector update error") {
+                            tracing::warn!(group = %group, target = %target, "内核策略组当前未包含指定节点，已跳过切换");
+                            Ok(())
+                        } else {
+                            Err(format!("内核拒绝切换策略组 {group} ({status}): {body}"))
+                        }
                     }
                 }
                 Err(error) => Err(error.to_string()),
@@ -3340,56 +3439,48 @@ impl VpnApp {
         let running = matches!(self.proxy_status.state, ProxyState::Running);
         let port = self.proxy_status.controller_port;
         let secret = self.proxy_status.controller_secret.clone();
+        let active_kernel = self.proxy_status.kernel;
+        let mixed_port = self.proxy_status.mixed_port;
         let tx = self.tx.clone();
-        if !running {
-            // 内核没在跑就没有接口可问。这时直接把两个库下到工作目录，下次启动即用 ——
-            // 否则就是"不启动代理反而更新不了"那个死结。
-            self.status = "代理未运行，正在直接下载 GeoIP / GeoSite 规则文件...".into();
-            self.rt.spawn(async move {
-                let report = crate::geo::mihomo_dir();
-                let result = crate::geo::provision(&report, None, true)
-                    .await
-                    .map(|detail| {
-                        format!("内核未运行，已直接更新到 {}：{detail}", report.display())
-                    });
-                let _ = tx.send(BgMsg::GeoUpdated(result.map_err(|error| error.to_string())));
-            });
-            return;
-        }
-        self.status = "正在向内核请求更新 GeoIP / GeoSite 规则文件...".into();
-        let client = self.controller_client(port);
+
+        self.status = "正在拉取最新 GeoIP / GeoSite 规则文件并分发到所有内核...".into();
         self.rt.spawn(async move {
-            // 这个调用是**同步**的：内核要自己下完两个库（11MB + 16MB）才回话，
-            // 30 秒会把还在正常下载的情况误判成失败。
-            let Some(client) = client else {
-                return;
+            let proxy_addr = if running {
+                Some(format!("http://127.0.0.1:{mixed_port}"))
+            } else {
+                None
             };
-            let resp = crate::proxy::with_controller_auth(
-                client.post(format!("http://127.0.0.1:{port}/configs/geo")),
-                &secret,
-            )
-            .timeout(std::time::Duration::from_secs(180))
-            .send()
-            .await;
-            let res = match resp {
-                Ok(r) if r.status().is_success() => {
-                    Ok("Geo 规则数据库更新指令已成功执行并重新载入".into())
-                }
-                // 内核会把失败原因写在响应体里（哪家镜像挂了、超时还是半截），必须带出来。
-                Ok(r) => {
-                    let status = r.status();
-                    let body = r.text().await.unwrap_or_default();
-                    let detail = body.trim();
-                    Err(if detail.is_empty() {
-                        format!("更新接口返回状态码: {status}")
+            let main_dir = crate::geo::mihomo_dir();
+            // 1. 统一先将最新的 geosite.dat 和 geoip.dat 下载到基础目录（若有代理则走代理加速，若无则直连极速 CDN 镜像）
+            let dl_res = crate::geo::provision(&main_dir, proxy_addr.as_deref(), true).await;
+            match dl_res {
+                Ok(detail) => {
+                    // 2. 下载成功后，自动将最新文件通过硬链接/复制秒级同步分发至所有内核目录（vp_core, meow, xray, shoes 等），杜绝重复下载
+                    let synced = crate::geo::sync_geo_to_all_kernels(&main_dir);
+                    let sync_summary = if synced.is_empty() {
+                        "所有内核已全部保持最新".to_string()
                     } else {
-                        format!("内核自己下载失败（{status}）：{detail}")
-                    })
+                        format!("已同步至全部内核目录 (共 {} 项)", synced.len())
+                    };
+
+                    // 3. 如果当前运行的内核具备热重载接口（如 Mihomo），尝试通知热重载
+                    if running && active_kernel == Some(crate::kernel::KernelKind::Mihomo) {
+                        let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(10)).build().ok();
+                        if let Some(c) = client {
+                            let _ = crate::proxy::with_controller_auth(
+                                c.post(format!("http://127.0.0.1:{port}/configs/geo")),
+                                &secret,
+                            ).send().await;
+                        }
+                    }
+
+                    let msg = format!("Geo 规则库更新成功：{detail}，{sync_summary}");
+                    let _ = tx.send(BgMsg::GeoUpdated(Ok(msg)));
                 }
-                // reqwest 的错误原因挂在 source 链上，`{e}` 只会打出"error sending request"。
-                Err(e) => Err(format!("请求 Geo 更新失败: {e:#}")),
-            };
-            let _ = tx.send(BgMsg::GeoUpdated(res));
+                Err(e) => {
+                    let _ = tx.send(BgMsg::GeoUpdated(Err(format!("更新分流数据库失败: {e}"))));
+                }
+            }
         });
     }
 
@@ -4372,11 +4463,11 @@ impl eframe::App for VpnApp {
         }
 
         // 自动内存整理与工作集修剪：
-        // 1. 启动并完成首轮全量数据加载 4 秒后，修剪启动阶段由大量反序列化与字体栅格化产生的瞬态内存。
+        // 1. 启动并完成首轮全量数据加载 2 秒后，修剪启动阶段由大量反序列化与字体栅格化产生的瞬态内存。
         // 2. 进程闲置时每 5 分钟自动修剪一次，释放空闲 SQLite 缓存页与工作集，保持极致内存水位。
         if !self.busy && !self.proxy_busy {
             if !self.startup_trim_done
-                && self.last_full_reload.elapsed() >= std::time::Duration::from_secs(4)
+                && self.last_full_reload.elapsed() >= std::time::Duration::from_secs(2)
             {
                 self.startup_trim_done = true;
                 self.last_auto_trim = std::time::Instant::now();
@@ -4442,7 +4533,7 @@ impl eframe::App for VpnApp {
             )
             .show(ctx, |ui| self.ui_sidebar(ui, &mut next_tab));
 
-        egui::TopBottomPanel::bottom("status")
+        let status_panel = egui::TopBottomPanel::bottom("status")
             .frame(
                 Frame::NONE
                     .fill(theme::sidebar())
@@ -4487,10 +4578,19 @@ impl eframe::App for VpnApp {
                     // 系统代理被外部改掉时**不再往这条上写提示**（2026-10-15 他一句"不用显示这个"）。
                     // 核对本身留着：它是设置页那个「自动重开系统代理」开关的唯一触发器
                     // （见 `BgMsg::ProxyDrift`），开关关着就只写 startup.log。
-                    ui.label(RichText::new("状态").strong().color(theme::muted()).small());
+                    let status_log_btn = ui
+                        .add(crate::gui::icons::icon_btn_square(
+                            crate::gui::icons::Icon::Terminal,
+                            12.0,
+                        ))
+                        .on_hover_text("点击打开运行日志抽屉")
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if status_log_btn.clicked() {
+                        self.dashboard_drawer = Some(DashboardDrawer::Logs);
+                    }
+
                     // 状态文本必须给右边的动作组让位。`with_layout(right_to_left)` 的那组
-                    // 按钮永远钉在内容区右边界上，所以文本一长就是**压到按钮上面**（他
-                    // 2026-10-15 报的"挤成位置很奇怪"）。动作组多宽只有画完才知道，
+                    // 按钮永远钉在内容区右边界上，所以文本一长就是**压到按钮上面**。动作组多宽只有画完才知道，
                     // 这里用上一帧量到的那份：按钮组本身从不移动，所以最多抖一帧就对上了。
                     let status_left = ui.cursor().left();
                     // 下限：第一帧还没量过，按"四个控件"的常见宽度先让开。
@@ -4506,15 +4606,15 @@ impl eframe::App for VpnApp {
                         .on_hover_text(status);
                     let mut group_width = 0.0_f32;
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // 2026-10-07 他要求把控制按钮挪到状态栏右侧：先加的最靠右。
-                        // 原来这儿的强调色选择器和会话统计都撤了 —— 主题在系统设置和
-                        // Ctrl+K 里都还能改，流量读数挪到控制台表头那行。
+                        // 控制按钮（启动/停止代理 · 测速全部等）
                         self.ui_proxy_control_buttons(ui);
                         group_width = ui.min_rect().width();
                     });
                     self.status_actions_width = group_width;
                 });
             });
+        self.status_bar_height = status_panel.response.rect.height();
+        self.status_bar_top_y = status_panel.response.rect.min.y;
 
         egui::CentralPanel::default()
             .frame(
@@ -4786,8 +4886,8 @@ mod tests {
         let mut options = crate::proxy::MihomoConfigOptions::default();
         options.mode = ProxyMode::Tun;
         options.url_test_size = 9;
-        let args = VpnApp::tun_handoff_arguments(&options, "node-42").expect("编码不该失败");
-        assert_eq!(args[0], "--elevated-proxy-config");
+        let args = VpnApp::tun_handoff_arguments(&options, "node-42").expect("生成交接参数不该失败");
+        assert_eq!(args[0], "--elevated-proxy-config-file");
         assert_eq!(args[2], "--start-proxy-node");
         assert_eq!(args[3], "node-42");
         assert_eq!(
@@ -4797,7 +4897,8 @@ mod tests {
             2,
             "只该有两个 flag：{args:?}"
         );
-        let decoded = crate::proxy::decode_elevated_proxy_config(&args[1]).expect("解码不该失败");
+        let config_path = std::path::Path::new(&args[1]);
+        let decoded = crate::proxy::read_elevated_proxy_config_file(config_path).expect("读取交接文件失败");
         assert_eq!(decoded, options, "提权实例读回来的配置和这里发出去的不是同一份");
     }
 
@@ -4809,7 +4910,8 @@ mod tests {
     fn the_handoff_never_duplicates_the_node_flag() {
         let current = vec!["--start-proxy-node".to_string(), "old-node".to_string()];
         let options = crate::proxy::MihomoConfigOptions::default();
-        let extra = VpnApp::tun_handoff_arguments(&options, "new-node").expect("编码不该失败");
+        let extra = VpnApp::tun_handoff_arguments(&options, "new-node").expect("生成交接参数不该失败");
+        let temp_file = std::path::PathBuf::from(&extra[1]);
         let assembled = crate::platform::elevated_arguments(&current, &extra);
         let node_flags = assembled
             .iter()
@@ -4817,7 +4919,7 @@ mod tests {
             .count();
         let config_flags = assembled
             .iter()
-            .filter(|token| token.as_str() == "--elevated-proxy-config")
+            .filter(|token| token.as_str() == "--elevated-proxy-config-file")
             .count();
         assert_eq!(node_flags, 1, "节点 flag 重复了：{assembled:?}");
         assert_eq!(config_flags, 1, "配置 flag 重复了：{assembled:?}");
@@ -4829,6 +4931,7 @@ mod tests {
             assembled[position + 1], "new-node",
             "去重时把要启动的新节点吃掉了：{assembled:?}"
         );
+        let _ = std::fs::remove_file(temp_file);
     }
 
     #[test]

@@ -634,6 +634,7 @@ impl VpnApp {
 
         egui::Window::new(RichText::new("网络检测与智能修复").strong().size(15.0))
             .open(&mut open)
+            .order(egui::Order::Tooltip)
             .collapsible(false)
             .resizable(true)
             .default_width(620.0)

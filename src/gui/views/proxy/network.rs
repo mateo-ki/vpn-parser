@@ -54,53 +54,57 @@ impl VpnApp {
 
                         ui.horizontal(|ui| {
                             ui.label("运行内核");
-	                            egui::ComboBox::from_id_salt("proxy_kernel_preference")
-	                                .selected_text(match self.proxy_config.kernel_preference {
-	                                    KernelPreference::Auto => "自动选择",
-	                                    KernelPreference::Mihomo => "Mihomo",
-	                                    KernelPreference::SingBox => "Sing-box",
-	                                    KernelPreference::Xray => "Xray",
-	                                    KernelPreference::Shoes => "Shoes",
-	                                    KernelPreference::Meow => "Meow",
-	                                    KernelPreference::VpCore => "VP-Core",
-	                                })
-	                                .show_ui(ui, |ui| {
-	                                    ui.selectable_value(
-	                                        &mut self.proxy_config.kernel_preference,
-	                                        KernelPreference::Auto,
-	                                        "自动选择",
-	                                    );
-	                                    ui.selectable_value(
-	                                        &mut self.proxy_config.kernel_preference,
-	                                        KernelPreference::Mihomo,
-	                                        "Mihomo",
-	                                    );
-	                                    ui.selectable_value(
-	                                        &mut self.proxy_config.kernel_preference,
-	                                        KernelPreference::SingBox,
-	                                        "Sing-box",
-	                                    );
-	                                    ui.selectable_value(
-	                                        &mut self.proxy_config.kernel_preference,
-	                                        KernelPreference::Xray,
-	                                        "Xray",
-	                                    );
-	                                    ui.selectable_value(
-	                                        &mut self.proxy_config.kernel_preference,
-	                                        KernelPreference::Shoes,
-	                                        "Shoes",
-	                                    );
-	                                    ui.selectable_value(
-	                                        &mut self.proxy_config.kernel_preference,
-	                                        KernelPreference::Meow,
-	                                        "Meow",
-	                                    );
-	                                    ui.selectable_value(
-	                                        &mut self.proxy_config.kernel_preference,
-	                                        KernelPreference::VpCore,
-	                                        "VP-Core",
-	                                    );
-	                                });
+                            let prev_pref = self.proxy_config.kernel_preference;
+		                            egui::ComboBox::from_id_salt("proxy_kernel_preference")
+		                                .selected_text(match self.proxy_config.kernel_preference {
+		                                    KernelPreference::Auto => "自动选择",
+		                                    KernelPreference::Mihomo => "Mihomo",
+		                                    KernelPreference::SingBox => "Sing-box",
+		                                    KernelPreference::Xray => "Xray",
+		                                    KernelPreference::Shoes => "Shoes",
+		                                    KernelPreference::Meow => "Meow",
+		                                    KernelPreference::VpCore => "VP-Core",
+		                                })
+		                                .show_ui(ui, |ui| {
+		                                    ui.selectable_value(
+		                                        &mut self.proxy_config.kernel_preference,
+		                                        KernelPreference::Auto,
+		                                        "自动选择",
+		                                    );
+		                                    ui.selectable_value(
+		                                        &mut self.proxy_config.kernel_preference,
+		                                        KernelPreference::Mihomo,
+		                                        "Mihomo",
+		                                    );
+		                                    ui.selectable_value(
+		                                        &mut self.proxy_config.kernel_preference,
+		                                        KernelPreference::SingBox,
+		                                        "Sing-box",
+		                                    );
+		                                    ui.selectable_value(
+		                                        &mut self.proxy_config.kernel_preference,
+		                                        KernelPreference::Xray,
+		                                        "Xray",
+		                                    );
+		                                    ui.selectable_value(
+		                                        &mut self.proxy_config.kernel_preference,
+		                                        KernelPreference::Shoes,
+		                                        "Shoes",
+		                                    );
+		                                    ui.selectable_value(
+		                                        &mut self.proxy_config.kernel_preference,
+		                                        KernelPreference::Meow,
+		                                        "Meow",
+		                                    );
+		                                    ui.selectable_value(
+		                                        &mut self.proxy_config.kernel_preference,
+		                                        KernelPreference::VpCore,
+		                                        "VP-Core",
+		                                    );
+		                                });
+                            if self.proxy_config.kernel_preference != prev_pref {
+                                self.save_proxy_config_quiet();
+                            }
                         });
                         ui.add_space(8.0);
                         ui.horizontal_wrapped(|ui| {
@@ -270,227 +274,246 @@ impl VpnApp {
                 ui.add_space(8.0);
                 let mut update_kind = None;
 
-                let col_count = self.kernels.len().max(1);
-                ui.columns(col_count, |column_uis| {
-                    for (i, kernel) in self.kernels.iter().enumerate() {
-                        let ui = &mut column_uis[i];
-                        let col_max_w = ui.available_width();
-                        ui.set_max_width(col_max_w);
-                        ui.set_clip_rect(ui.max_rect());
-
-                        let version = kernel.version.as_deref().unwrap_or("未检测到");
-                        let release = self.kernel_releases.iter().find(|release| release.kind == kernel.kind);
-                        let latest = release
-                            .and_then(|release| release.latest_version.as_deref())
-                            .unwrap_or("检查中");
-                        let path = kernel
-                            .path
-                            .as_ref()
-                            .map(|path| path.display().to_string())
-                            .unwrap_or_else(|| "-".into());
-
-                        let is_running = self.proxy_status.kernel == Some(kernel.kind);
-                        let is_preferred = self.proxy_config.kernel_preference == KernelPreference::Auto && kernel.kind == KernelKind::Mihomo
-                            || match self.proxy_config.kernel_preference {
-                                KernelPreference::Mihomo => kernel.kind == KernelKind::Mihomo,
-                                KernelPreference::SingBox => kernel.kind == KernelKind::SingBox,
-                                KernelPreference::Xray => kernel.kind == KernelKind::Xray,
-                                KernelPreference::Shoes => kernel.kind == KernelKind::Shoes,
-                                KernelPreference::Meow => kernel.kind == KernelKind::Meow,
-                                KernelPreference::VpCore => kernel.kind == KernelKind::VpCore,
-                                _ => false,
-                            };
-
-                        let card_stroke = if is_running {
-                            Stroke::new(1.5_f32, theme::accent())
-                        } else if is_preferred {
-                            Stroke::new(1.0_f32, theme::accent().gamma_multiply(0.5))
-                        } else {
-                            Stroke::new(1.0_f32, theme::border_subtle())
-                        };
-
-                        Frame::NONE
-                            .fill(theme::panel())
-                            .stroke(card_stroke)
-                            .corner_radius(CornerRadius::same(12))
-                            .inner_margin(Margin::symmetric(12, 10))
-                            .show(ui, |ui| {
-                                ui.set_max_width(ui.available_width());
-
-                                // 1. 卡片头部：图标 + 标题 + 运行徽标
-                                ui.horizontal(|ui| {
-                                    let (chip_icon, chip_color) = match kernel.kind {
-                                        KernelKind::Mihomo => (Icon::Cpu, theme::accent()),
-                                        KernelKind::SingBox => (Icon::Lightning, theme::accent_strong()),
-                                        KernelKind::Xray => (Icon::Radar, theme::text_secondary()),
-                                        KernelKind::Shoes => (Icon::Shield, theme::accent()),
-                                        KernelKind::Meow => (Icon::Lightning, theme::accent()),
-                                        KernelKind::VpCore => (Icon::Rocket, theme::accent_strong()),
-                                    };
-                                    icon_label(ui, chip_icon, 15.0, chip_color);
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(kernel.kind.display_name())
-                                                .strong()
-                                                .size(14.0)
-                                                .color(theme::text_primary()),
-                                        )
-                                        .truncate(),
-                                    );
-
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if is_running {
-                                            let (beacon, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-                                            ui.painter().circle_filled(beacon.center(), 4.0, theme::accent());
-                                            ui.label(RichText::new("运行中").small().strong().color(theme::accent_strong()));
-                                        } else if kernel.available {
-                                            ui.label(RichText::new("● 就绪").small().color(theme::accent_strong()));
-                                        } else {
-                                            ui.label(RichText::new("○ 未安装").small().color(theme::muted()));
-                                        }
-                                    });
-                                });
-
-                                ui.add_space(6.0);
-
-                                // 2. 特性胶囊标签
-                                let features = match kernel.kind {
-                                    KernelKind::Mihomo => "智能分流 · TUN · Fake-IP · 规则集",
-                                    KernelKind::SingBox => "ShadowTLS · VLESS · Hysteria2",
-                                    KernelKind::Xray => "XTLS · VLESS · Trojan · Splithttp",
-                                    KernelKind::Shoes => "Snell · NaiveProxy · AnyTLS · Clash API",
-                                    KernelKind::Meow => "Rust 版 Mihomo · 高性能 · Clash API",
-                                    KernelKind::VpCore => "全协议 Rust 极速内核 · 4MB 纯静态 · 原生 TUN/Wintun · 毫秒级极速测速",
-                                };
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(features)
-                                            .small()
-                                            .color(theme::text_secondary()),
-                                    )
-                                    .truncate(),
-                                )
-                                .on_hover_text(features);
-
-                                ui.add_space(6.0);
-                                ui.separator();
-                                ui.add_space(6.0);
-
-                                // 3. 版本度量
-                                let clean_ver = clean_kernel_version(version);
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new("当前:").small().color(theme::muted()));
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(clean_ver)
-                                                .strong()
-                                                .small()
-                                                .monospace()
-                                                .color(theme::text_primary()),
-                                        )
-                                        .truncate(),
-                                    )
-                                    .on_hover_text(format!("完整版本：\n{version}"));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new("最新:").small().color(theme::muted()));
-                                    let (lat_text, lat_color) = if release.is_some_and(|r| r.update_available) {
-                                        (format!("{latest} (可更新)"), theme::warning())
-                                    } else {
-                                        (format!("{latest} (最新)"), theme::text_secondary())
-                                    };
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(lat_text)
-                                                .small()
-                                                .strong()
-                                                .color(lat_color),
-                                        )
-                                        .truncate(),
-                                    )
-                                    .on_hover_text(format!("官方远端版本：{latest}"));
-                                });
-
-                                ui.add_space(4.0);
-
-                                // 4. 路径信息
-                                ui.horizontal(|ui| {
-                                    icon_label(ui, Icon::Package, 11.0, theme::muted());
-                                    let display_path = if path == "-" || path.is_empty() {
-                                        "-".to_string()
-                                    } else {
-                                        std::path::Path::new(&path)
-                                            .file_name()
-                                            .map(|name| name.to_string_lossy().to_string())
-                                            .unwrap_or_else(|| path.clone())
-                                    };
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(display_path)
-                                                .small()
-                                                .monospace()
-                                                .color(theme::muted()),
-                                        )
-                                        .truncate(),
-                                    )
-                                    .on_hover_text(format!("文件路径：\n{path}"));
-                                });
-
-                                ui.add_space(8.0);
-
-                                // 5. 操作按钮：若本内核正处于下载/更新中，就地展示进度条，不挤压破坏卡片高度
-                                let is_this_kernel_busy = self.kernel_busy
-                                    && self.kernel_progress.as_ref().map(|p| p.kind) == Some(kernel.kind);
-
-                                if is_this_kernel_busy {
-                                    if let Some(p) = &self.kernel_progress {
-                                        let text = if p.stage == crate::kernel::KernelUpdateStage::Downloading {
-                                            if p.total > 0 {
-                                                let pct = (p.downloaded as f64 / p.total as f64 * 100.0).clamp(0.0, 100.0) as u32;
-                                                format!("{pct}% · {}/s", format_bytes(p.bytes_per_second as u64))
-                                            } else {
-                                                format!("{}/s", format_bytes(p.bytes_per_second as u64))
-                                            }
-                                        } else {
-                                            p.stage.label().to_string()
-                                        };
-                                        ui.add(
-                                            egui::ProgressBar::new(p.fraction())
-                                                .animate(true)
-                                                .desired_width(ui.available_width())
-                                                .text(RichText::new(text).small().strong()),
-                                        );
-                                    }
-                                } else {
-                                    let can_update = release.is_some_and(|release| release.update_available)
-                                        && !self.kernel_busy
-                                        && !self.proxy_status.kernel_in_use(kernel.kind);
-                                    let btn_label = if !kernel.available {
-                                        "📥 下载内核"
-                                    } else if can_update {
-                                        "⚡ 立即更新"
-                                    } else {
-                                        "✅ 已是最新"
-                                    };
-                                    let btn = egui::Button::new(RichText::new(btn_label).small().strong())
-                                        .min_size(Vec2::new(ui.available_width(), 26.0))
-                                        .fill(if can_update || !kernel.available { theme::accent_bg() } else { theme::sidebar() })
-                                        .stroke(Stroke::new(1.0_f32, if can_update || !kernel.available { theme::accent() } else { theme::border_subtle() }))
-                                        .corner_radius(CornerRadius::same(8));
-
-                                    if ui.add_enabled(can_update || !kernel.available, btn).clicked() {
-                                        update_kind = Some(kernel.kind);
-                                    }
-                                }
-                            });
+                // 响应式网格：抽屉内宽度受限，排 2 列或单列，绝不能单行排 6 个把卡片挤爆
+                let cols = if ui.available_width() >= 520.0 { 2 } else { 1 };
+                if cols > 1 {
+                    for chunk in self.kernels.chunks(cols) {
+                        ui.columns(cols, |column_uis| {
+                            for (i, kernel) in chunk.iter().enumerate() {
+                                let ui = &mut column_uis[i];
+                                let col_max_w = ui.available_width();
+                                ui.set_max_width(col_max_w);
+                                self.render_kernel_card(ui, kernel, &mut update_kind);
+                            }
+                        });
+                        ui.add_space(8.0);
                     }
-                });
+                } else {
+                    for kernel in &self.kernels {
+                        self.render_kernel_card(ui, kernel, &mut update_kind);
+                        ui.add_space(8.0);
+                    }
+                }
 
                 ui.add_space(16.0);
                 if let Some(kind) = update_kind {
                     self.open_kernel_download(kind);
                 }
             });
+    }
+
+    pub(crate) fn render_kernel_card(
+        &self,
+        ui: &mut Ui,
+        kernel: &crate::kernel::KernelInfo,
+        update_kind: &mut Option<KernelKind>,
+    ) {
+
+                            let version = kernel.version.as_deref().unwrap_or("未检测到");
+                            let release = self.kernel_releases.iter().find(|release| release.kind == kernel.kind);
+                            let latest = release
+                                .and_then(|release| release.latest_version.as_deref())
+                                .unwrap_or("检查中");
+                            let path = kernel
+                                .path
+                                .as_ref()
+                                .map(|path| path.display().to_string())
+                                .unwrap_or_else(|| "-".into());
+
+                            let is_running = self.proxy_status.kernel == Some(kernel.kind);
+                            let is_preferred = self.proxy_config.kernel_preference == KernelPreference::Auto && kernel.kind == KernelKind::Mihomo
+                                || match self.proxy_config.kernel_preference {
+                                    KernelPreference::Mihomo => kernel.kind == KernelKind::Mihomo,
+                                    KernelPreference::SingBox => kernel.kind == KernelKind::SingBox,
+                                    KernelPreference::Xray => kernel.kind == KernelKind::Xray,
+                                    KernelPreference::Shoes => kernel.kind == KernelKind::Shoes,
+                                    KernelPreference::Meow => kernel.kind == KernelKind::Meow,
+                                    KernelPreference::VpCore => kernel.kind == KernelKind::VpCore,
+                                    _ => false,
+                                };
+
+                            let card_stroke = if is_running {
+                                Stroke::new(1.5_f32, theme::accent())
+                            } else if is_preferred {
+                                Stroke::new(1.0_f32, theme::accent().gamma_multiply(0.5))
+                            } else {
+                                Stroke::new(1.0_f32, theme::border_subtle())
+                            };
+
+                            Frame::NONE
+                                .fill(theme::panel())
+                                .stroke(card_stroke)
+                                .corner_radius(CornerRadius::same(12))
+                                .inner_margin(Margin::symmetric(12, 10))
+                                .show(ui, |ui| {
+                                    ui.set_max_width(ui.available_width());
+
+                                    // 1. 卡片头部：图标 + 标题 + 运行徽标
+                                    ui.horizontal(|ui| {
+                                        let (chip_icon, chip_color) = match kernel.kind {
+                                            KernelKind::Mihomo => (Icon::Cpu, theme::accent()),
+                                            KernelKind::SingBox => (Icon::Lightning, theme::accent_strong()),
+                                            KernelKind::Xray => (Icon::Radar, theme::text_secondary()),
+                                            KernelKind::Shoes => (Icon::Shield, theme::accent()),
+                                            KernelKind::Meow => (Icon::Lightning, theme::accent()),
+                                            KernelKind::VpCore => (Icon::Rocket, theme::accent_strong()),
+                                        };
+                                        icon_label(ui, chip_icon, 15.0, chip_color);
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(kernel.kind.display_name())
+                                                    .strong()
+                                                    .size(14.0)
+                                                    .color(theme::text_primary()),
+                                            )
+                                            .truncate(),
+                                        );
+
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            if is_running {
+                                                let (beacon, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+                                                ui.painter().circle_filled(beacon.center(), 4.0, theme::accent());
+                                                ui.label(RichText::new("运行中").small().strong().color(theme::accent_strong()));
+                                            } else if kernel.available {
+                                                ui.label(RichText::new("● 就绪").small().color(theme::accent_strong()));
+                                            } else {
+                                                ui.label(RichText::new("○ 未安装").small().color(theme::muted()));
+                                            }
+                                        });
+                                    });
+
+                                    ui.add_space(6.0);
+
+                                    // 2. 特性胶囊标签
+                                    let features = match kernel.kind {
+                                        KernelKind::Mihomo => "智能分流 · TUN · Fake-IP · 规则集",
+                                        KernelKind::SingBox => "ShadowTLS · VLESS · Hysteria2",
+                                        KernelKind::Xray => "XTLS · VLESS · Trojan · Splithttp",
+                                        KernelKind::Shoes => "Snell · NaiveProxy · AnyTLS · Clash API",
+                                        KernelKind::Meow => "Rust 版 Mihomo · 高性能 · Clash API",
+                                        KernelKind::VpCore => "全协议 Rust 极速内核 · 4MB 纯静态 · 原生 TUN/Wintun · 毫秒级极速测速",
+                                    };
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(features)
+                                                .small()
+                                                .color(theme::text_secondary()),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(features);
+
+                                    ui.add_space(6.0);
+                                    ui.separator();
+                                    ui.add_space(6.0);
+
+                                    // 3. 版本度量
+                                    let clean_ver = clean_kernel_version(version);
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new("当前:").small().color(theme::muted()));
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(clean_ver)
+                                                    .strong()
+                                                    .small()
+                                                    .monospace()
+                                                    .color(theme::text_primary()),
+                                            )
+                                            .truncate(),
+                                        )
+                                        .on_hover_text(format!("完整版本：\n{version}"));
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new("最新:").small().color(theme::muted()));
+                                        let (lat_text, lat_color) = if release.is_some_and(|r| r.update_available) {
+                                            (format!("{latest} (可更新)"), theme::warning())
+                                        } else {
+                                            (format!("{latest} (最新)"), theme::text_secondary())
+                                        };
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(lat_text)
+                                                    .small()
+                                                    .strong()
+                                                    .color(lat_color),
+                                            )
+                                            .truncate(),
+                                        )
+                                        .on_hover_text(format!("官方远端版本：{latest}"));
+                                    });
+
+                                    ui.add_space(4.0);
+
+                                    // 4. 路径信息
+                                    ui.horizontal(|ui| {
+                                        icon_label(ui, Icon::Package, 11.0, theme::muted());
+                                        let display_path = if path == "-" || path.is_empty() {
+                                            "-".to_string()
+                                        } else {
+                                            std::path::Path::new(&path)
+                                                .file_name()
+                                                .map(|name| name.to_string_lossy().to_string())
+                                                .unwrap_or_else(|| path.clone())
+                                        };
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(display_path)
+                                                    .small()
+                                                    .monospace()
+                                                    .color(theme::muted()),
+                                            )
+                                            .truncate(),
+                                        )
+                                        .on_hover_text(format!("文件路径：\n{path}"));
+                                    });
+
+                                    ui.add_space(8.0);
+
+                                    // 5. 操作按钮：若本内核正处于下载/更新中，就地展示进度条，不挤压破坏卡片高度
+                                    let is_this_kernel_busy = self.kernel_busy
+                                        && self.kernel_progress.as_ref().map(|p| p.kind) == Some(kernel.kind);
+
+                                    if is_this_kernel_busy {
+                                        if let Some(p) = &self.kernel_progress {
+                                            let text = if p.stage == crate::kernel::KernelUpdateStage::Downloading {
+                                                if p.total > 0 {
+                                                    let pct = (p.downloaded as f64 / p.total as f64 * 100.0).clamp(0.0, 100.0) as u32;
+                                                    format!("{pct}% · {}/s", format_bytes(p.bytes_per_second as u64))
+                                                } else {
+                                                    format!("{}/s", format_bytes(p.bytes_per_second as u64))
+                                                }
+                                            } else {
+                                                p.stage.label().to_string()
+                                            };
+                                            ui.add(
+                                                egui::ProgressBar::new(p.fraction())
+                                                    .animate(true)
+                                                    .desired_width(ui.available_width())
+                                                    .text(RichText::new(text).small().strong()),
+                                            );
+                                        }
+                                    } else {
+                                        let can_update = release.is_some_and(|release| release.update_available)
+                                            && !self.kernel_busy
+                                            && !self.proxy_status.kernel_in_use(kernel.kind);
+                                        let btn_label = if !kernel.available {
+                                            "📥 下载内核"
+                                        } else if can_update {
+                                            "⚡ 立即更新"
+                                        } else {
+                                            "✅ 已是最新"
+                                        };
+                                        let btn = egui::Button::new(RichText::new(btn_label).small().strong())
+                                            .min_size(Vec2::new(ui.available_width(), 26.0))
+                                            .fill(if can_update || !kernel.available { theme::accent_bg() } else { theme::sidebar() })
+                                            .stroke(Stroke::new(1.0_f32, if can_update || !kernel.available { theme::accent() } else { theme::border_subtle() }))
+                                            .corner_radius(CornerRadius::same(8));
+
+                                        if ui.add_enabled(can_update || !kernel.available, btn).clicked() {
+                                            *update_kind = Some(kernel.kind);
+                                        }
+                                    }
+                                });
     }
 
     pub(crate) fn render_system_proxy_card(&mut self, ui: &mut Ui) {

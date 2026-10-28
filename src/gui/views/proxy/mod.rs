@@ -23,12 +23,8 @@ pub use network::clean_kernel_version;
 pub(crate) use rules::{RULES_ACTIONS_WIDTH, RULES_TABS_MIN_WIDTH};
 
 
-use crate::gui::icons::Icon;
 use crate::gui::theme;
-use crate::gui::types::ProxyPanel;
-use crate::gui::widgets::{
-    danger_btn, macos_segmented_tabs, primary_btn,
-};
+use crate::gui::widgets::{danger_btn, primary_btn};
 use crate::gui::VpnApp;
 use crate::proxy::ProxyState;
 use eframe::egui::{self, RichText, Stroke, Ui};
@@ -168,83 +164,8 @@ fn status_btn(text: &str) -> egui::Button<'_> {
 
 impl VpnApp {
     pub(crate) fn ui_proxy(&mut self, ui: &mut Ui) {
-        ui.add_space(6.0);
-
-        // ===================================================================
-        // macOS 药丸分段选择条 (Segmented Control Bar)
-        // ===================================================================
-        let tr_charts = self.tr("仪表盘");
-        let tr_nodes = self.tr("可用节点");
-        let tr_groups = self.tr("分流策略组");
-        let tr_rules = self.tr("分流规则");
-        let tr_network = self.tr("DNS / TUN");
-
-        let tr_conns = self.tr("活跃连接");
-        let conn_label = if self.active_connections.is_empty() {
-            tr_conns.to_string()
-        } else {
-            format!("{} ({})", tr_conns, self.active_connections.len())
-        };
-        let tabs = [
-            (ProxyPanel::Charts, Icon::Dashboard, tr_charts),
-            (ProxyPanel::Nodes, Icon::Pin, tr_nodes),
-            (ProxyPanel::Groups, Icon::Rocket, tr_groups),
-            (ProxyPanel::Connections, Icon::Radar, &conn_label),
-            (ProxyPanel::Rules, Icon::Rules, tr_rules),
-            (ProxyPanel::Network, Icon::Globe, tr_network),
-            (ProxyPanel::Kernels, Icon::Cpu, self.tr("内核管理")),
-            (ProxyPanel::Logs, Icon::Terminal, self.tr("运行日志")),
-        ];
-
-        let visible_tabs: Vec<_> = tabs
-            .into_iter()
-            .filter(|(panel, _, _)| self.is_proxy_panel_visible(*panel))
-            .collect();
-
-        // 若当前激活面板已被隐藏，平滑回退到第一个可见面板
-        if !visible_tabs.iter().any(|(panel, _, _)| *panel == self.proxy_panel) {
-            if let Some((first_panel, _, _)) = visible_tabs.first() {
-                self.proxy_panel = *first_panel;
-            }
-        }
-
-        macos_segmented_tabs(ui, &mut self.proxy_panel, &visible_tabs);
-        ui.add_space(8.0);
-
-        match self.proxy_panel {
-            ProxyPanel::Charts => {
-                ui.push_id("panel_charts", |ui| self.ui_proxy_charts(ui));
-            }
-            ProxyPanel::Nodes => {
-                ui.push_id("panel_nodes", |ui| self.ui_proxy_nodes(ui));
-            }
-            ProxyPanel::Groups => {
-                ui.push_id("panel_groups", |ui| self.ui_proxy_groups(ui));
-            }
-            ProxyPanel::Connections => {
-                ui.push_id("panel_connections", |ui| self.ui_proxy_connections(ui));
-            }
-            ProxyPanel::Rules => {
-                ui.push_id("panel_rules", |ui| self.ui_proxy_rules(ui));
-            }
-            ProxyPanel::Network => {
-                ui.push_id("panel_network", |ui| self.ui_proxy_network(ui));
-            }
-            ProxyPanel::PortMappings => {
-                self.tab = crate::gui::types::Tab::Extensions;
-                self.extensions_tab = crate::gui::types::ExtensionsTab::PortMappings;
-            }
-            ProxyPanel::Security => {
-                self.tab = crate::gui::types::Tab::Extensions;
-                self.extensions_tab = crate::gui::types::ExtensionsTab::Security;
-            }
-            ProxyPanel::Kernels => {
-                ui.push_id("panel_kernels", |ui| self.ui_proxy_kernels(ui));
-            }
-            ProxyPanel::Logs => {
-                ui.push_id("panel_logs", |ui| self.ui_proxy_logs(ui));
-            }
-        }
+        ui.add_space(4.0);
+        self.ui_proxy_charts(ui);
     }
 
 

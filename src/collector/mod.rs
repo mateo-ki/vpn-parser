@@ -293,7 +293,9 @@ impl Collector {
                 None => String::new(),
             };
             let content_sha256 = format!("{:x}", Sha256::digest(&body));
-            if source.last_resolved_url.as_deref() == Some(resolved_url.as_str())
+            let shard_populated = self.db.shard_has_nodes(&source.id).await;
+            if shard_populated
+                && source.last_resolved_url.as_deref() == Some(resolved_url.as_str())
                 && source.content_sha256.as_deref() == Some(content_sha256.as_str())
             {
                 let _ = self

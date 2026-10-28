@@ -834,6 +834,24 @@ impl Database {
         Ok(nodes)
     }
 
+    /// 检查指定订阅源的专属分片数据库是否存在且含有节点数据。
+    pub async fn shard_has_nodes(&self, source_id: &str) -> bool {
+        let destination = self.node_db_path(Some(source_id));
+        if !destination.exists() {
+            return false;
+        }
+        if let Ok(pool) = self.open_node_pool(Some(source_id)).await {
+            let count: Option<i64> = sqlx::query_scalar("SELECT count(*) FROM nodes")
+                .fetch_optional(&pool)
+                .await
+                .ok()
+                .flatten();
+            count.unwrap_or(0) > 0
+        } else {
+            false
+        }
+    }
+
     pub async fn list_available_nodes_for_source(
         &self,
         source_id: &str,

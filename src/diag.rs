@@ -99,6 +99,17 @@ pub fn starting_panel() -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+/// 诊断壳专用：要打开的抽屉（`kernels`, `network`, `logs`, `rules`, `groups`, `connections`）。
+pub fn starting_drawer() -> Option<String> {
+    if !enabled() {
+        return None;
+    }
+    std::env::var("VPN_PARSER_DIAG_DRAWER")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+}
+
 /// 只在内容变化时写日志：几何量具每帧都算，全写进去就把 startup.log 冲满了。
 pub fn log_once(line: &str) {
     use std::sync::{Mutex, OnceLock};

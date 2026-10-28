@@ -641,6 +641,22 @@ pub async fn check(
             Err(error) => failures.push(format!("{}: 响应读不完（{error}）", transport.label)),
         }
     }
+
+    // 若 GitHub API（未认证 60 次/小时）遭遇限流或网络阻断，透明回退至 releases.atom 备用源
+    if let Ok(atom_items) = fetch_releases_from_atom(app_proxy, current).await {
+        let picked = match channel {
+            UpdateChannel::Stable => atom_items.into_iter().find(|r| !r.prerelease),
+            UpdateChannel::Insider => atom_items.into_iter().next(),
+        };
+        if let Some(item) = picked {
+            crate::startup_log(&format!(
+                "[更新] GitHub API 请求受阻，已通过 Atom 备用源获取到版本 {}",
+                item.tag
+            ));
+            return Ok(item.to_release_info(current));
+        }
+    }
+
     bail!(
         "读取 {REPOSITORY} 最新 Release 失败：{}",
         failures.join("；")
@@ -692,72 +708,270 @@ pub async fn list_releases(
     let url = format!("https://api.github.com/repos/{REPOSITORY}/releases?per_page={per_page}");
     let mut failures = Vec::new();
     for transport in transports(app_proxy)? {
-        let result = transport
+        let mut request = transport
+            .client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(10));
+        if let Some(token) = github_token() {
+            request = request.bearer_auth(&token);
+        }
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                failures.push(format!("{}: 请求失败: {error}", transport.label));
+                continue;
+            }
+        };
+        let status = response.status();
+        if !status.is_success() {
+            let rate_limited = response
+                .headers()
+                .get("x-ratelimit-remaining")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value == "0");
+            failures.push(format!(
+                "{}: {}",
+                transport.label,
+                describe_rejection(status, rate_limited)
+            ));
+            continue;
+        }
+        match response.json::<Vec<ReleaseJson>>().await {
+            Ok(list) => {
+                let mut items = Vec::new();
+                for release in list.into_iter().filter(|r| !r.draft) {
+                    let asset = pick_installer_asset(&release.assets, &release.tag_name);
+                    let hash_index_url = release
+                        .assets
+                        .iter()
+                        .find(|a| a.name == HASH_INDEX_NAME)
+                        .map(|a| a.browser_download_url.clone())
+                        .or_else(|| {
+                            let installer =
+                                pick_installer_asset(&release.assets, &release.tag_name)?;
+                            Some(
+                                installer
+                                    .url
+                                    .replace(installer.name.rsplit('/').next()?, HASH_INDEX_NAME),
+                            )
+                        });
+                    let tag_clean = release.tag_name.trim_start_matches('v');
+                    let current_clean = current.trim_start_matches('v');
+                    let is_current = tag_clean == current_clean;
+                    let (asset_name, asset_url, asset_size, asset_sha256) = match asset {
+                        Some(a) => (Some(a.name), Some(a.url), a.size, a.sha256),
+                        None => (None, None, 0, None),
+                    };
+                    items.push(ReleaseItem {
+                        tag: release.tag_name.clone(),
+                        name: release.name.unwrap_or_else(|| release.tag_name.clone()),
+                        published_at: release.published_at.map(|d| {
+                            d.split('T').next().unwrap_or(&d).to_string()
+                        }),
+                        prerelease: release.prerelease,
+                        html_url: release.html_url.unwrap_or_else(|| {
+                            format!(
+                                "https://github.com/{REPOSITORY}/releases/tag/{}",
+                                release.tag_name
+                            )
+                        }),
+                        body: release.body,
+                        asset_name,
+                        asset_size,
+                        asset_url,
+                        asset_sha256,
+                        hash_index_url,
+                        is_current,
+                    });
+                }
+                return Ok(items);
+            }
+            Err(error) => {
+                failures.push(format!("{}: 解析 JSON 失败: {error}", transport.label))
+            }
+        }
+    }
+
+    // 若 GitHub API（未认证 60 次/小时）受限或网络故障，透明回退至 releases.atom 备用源
+    match fetch_releases_from_atom(app_proxy, current).await {
+        Ok(items) => {
+            crate::startup_log(&format!(
+                "[更新] GitHub API 请求受阻，已通过 Atom 备用源拉取到 {} 个历史版本",
+                items.len()
+            ));
+            return Ok(items);
+        }
+        Err(atom_err) => {
+            failures.push(format!("Atom 备用源: {atom_err}"));
+        }
+    }
+
+    bail!("获取 Releases 历史列表失败：{}", failures.join("；"))
+}
+
+/// 从 GitHub Atom Feed 备用源拉取历史版本列表（不受 API 60次/小时 限流影响）
+pub async fn fetch_releases_from_atom(
+    app_proxy: Option<&str>,
+    current: &str,
+) -> Result<Vec<ReleaseItem>> {
+    let url = format!("https://github.com/{REPOSITORY}/releases.atom");
+    let mut failures = Vec::new();
+    for transport in transports(app_proxy)? {
+        let response = match transport
             .client
             .get(&url)
             .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
-            .and_then(reqwest::Response::error_for_status);
-        match result {
-            Ok(response) => match response.json::<Vec<ReleaseJson>>().await {
-                Ok(list) => {
-                    let mut items = Vec::new();
-                    for release in list.into_iter().filter(|r| !r.draft) {
-                        let asset = pick_installer_asset(&release.assets, &release.tag_name);
-                        let hash_index_url = release
-                            .assets
-                            .iter()
-                            .find(|a| a.name == HASH_INDEX_NAME)
-                            .map(|a| a.browser_download_url.clone())
-                            .or_else(|| {
-                                let installer =
-                                    pick_installer_asset(&release.assets, &release.tag_name)?;
-                                Some(
-                                    installer
-                                        .url
-                                        .replace(installer.name.rsplit('/').next()?, HASH_INDEX_NAME),
-                                )
-                            });
-                        let tag_clean = release.tag_name.trim_start_matches('v');
-                        let current_clean = current.trim_start_matches('v');
-                        let is_current = tag_clean == current_clean;
-                        let (asset_name, asset_url, asset_size, asset_sha256) = match asset {
-                            Some(a) => (Some(a.name), Some(a.url), a.size, a.sha256),
-                            None => (None, None, 0, None),
-                        };
-                        items.push(ReleaseItem {
-                            tag: release.tag_name.clone(),
-                            name: release.name.unwrap_or_else(|| release.tag_name.clone()),
-                            published_at: release.published_at.map(|d| {
-                                d.split('T').next().unwrap_or(&d).to_string()
-                            }),
-                            prerelease: release.prerelease,
-                            html_url: release.html_url.unwrap_or_else(|| {
-                                format!(
-                                    "https://github.com/{REPOSITORY}/releases/tag/{}",
-                                    release.tag_name
-                                )
-                            }),
-                            body: release.body,
-                            asset_name,
-                            asset_size,
-                            asset_url,
-                            asset_sha256,
-                            hash_index_url,
-                            is_current,
-                        });
-                    }
+        {
+            Ok(res) => res,
+            Err(err) => {
+                failures.push(format!("{}: 连不上（{err}）", transport.label));
+                continue;
+            }
+        };
+        let status = response.status();
+        if !status.is_success() {
+            failures.push(format!("{}: HTTP {status}", transport.label));
+            continue;
+        }
+        match response.text().await {
+            Ok(xml) => {
+                let items = parse_atom_releases(&xml, current);
+                if !items.is_empty() {
                     return Ok(items);
                 }
-                Err(error) => {
-                    failures.push(format!("{}: 解析 JSON 失败: {error}", transport.label))
-                }
-            },
-            Err(error) => failures.push(format!("{}: 请求失败: {error}", transport.label)),
+                failures.push(format!("{}: Atom Feed 中未包含有效 Release 条目", transport.label));
+            }
+            Err(err) => failures.push(format!("{}: 读取 Atom 文本失败: {err}", transport.label)),
         }
     }
-    bail!("获取 Releases 历史列表失败：{}", failures.join("；"))
+    bail!("通过 Atom 备用源获取 Releases 失败：{}", failures.join("；"))
+}
+
+fn extract_xml_tag_content(xml: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}");
+    let close = format!("</{tag}>");
+    let start = xml.find(&open)?;
+    let rest = &xml[start + open.len()..];
+    let end_bracket = rest.find('>')?;
+    let content_start = &rest[end_bracket + 1..];
+    let end = content_start.find(&close)?;
+    Some(content_start[..end].trim().to_string())
+}
+
+fn extract_link_href(xml: &str) -> Option<String> {
+    for line in xml.lines() {
+        if line.contains("<link") && line.contains("href=") {
+            if let Some(start) = line.find("href=\"") {
+                let rest = &line[start + 6..];
+                if let Some(end) = rest.find('"') {
+                    return Some(rest[..end].to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn synthesize_candidate_assets(tag: &str) -> Vec<AssetJson> {
+    let version = tag.trim_start_matches('v');
+    vec![
+        AssetJson {
+            name: format!("vpn-parser-{version}-windows-x64-setup.exe"),
+            browser_download_url: format!(
+                "https://github.com/{REPOSITORY}/releases/download/{tag}/vpn-parser-{version}-windows-x64-setup.exe"
+            ),
+            size: 0,
+            digest: None,
+        },
+        AssetJson {
+            name: format!("vpn-parser_{version}_amd64.deb"),
+            browser_download_url: format!(
+                "https://github.com/{REPOSITORY}/releases/download/{tag}/vpn-parser_{version}_amd64.deb"
+            ),
+            size: 0,
+            digest: None,
+        },
+        AssetJson {
+            name: format!("vpn-parser-{version}-x86_64.AppImage"),
+            browser_download_url: format!(
+                "https://github.com/{REPOSITORY}/releases/download/{tag}/vpn-parser-{version}-x86_64.AppImage"
+            ),
+            size: 0,
+            digest: None,
+        },
+        AssetJson {
+            name: format!("vpn-parser-{version}.AppImage"),
+            browser_download_url: format!(
+                "https://github.com/{REPOSITORY}/releases/download/{tag}/vpn-parser-{version}.AppImage"
+            ),
+            size: 0,
+            digest: None,
+        },
+        AssetJson {
+            name: format!("vpn-parser-{version}-1.x86_64.rpm"),
+            browser_download_url: format!(
+                "https://github.com/{REPOSITORY}/releases/download/{tag}/vpn-parser-{version}-1.x86_64.rpm"
+            ),
+            size: 0,
+            digest: None,
+        },
+    ]
+}
+
+fn parse_atom_releases(xml: &str, current: &str) -> Vec<ReleaseItem> {
+    let mut items = Vec::new();
+    for chunk in xml.split("<entry>").skip(1) {
+        let Some(entry_xml) = chunk.split("</entry>").next() else {
+            continue;
+        };
+        let tag = extract_xml_tag_content(entry_xml, "id")
+            .and_then(|id| id.rsplit('/').next().map(|s| s.trim().to_string()))
+            .unwrap_or_default();
+        if tag.is_empty() {
+            continue;
+        }
+
+        let name = extract_xml_tag_content(entry_xml, "title").unwrap_or_else(|| tag.clone());
+        let published_at = extract_xml_tag_content(entry_xml, "updated").map(|d| {
+            d.split('T').next().unwrap_or(&d).to_string()
+        });
+        let html_url = extract_link_href(entry_xml).unwrap_or_else(|| {
+            format!("https://github.com/{REPOSITORY}/releases/tag/{tag}")
+        });
+        let body = extract_xml_tag_content(entry_xml, "content");
+        let tag_clean = tag.trim_start_matches('v');
+        let current_clean = current.trim_start_matches('v');
+        let is_current = tag_clean == current_clean;
+        let prerelease = tag.contains('-') || tag.contains("alpha") || tag.contains("beta") || tag.contains("rc");
+
+        let candidate_assets = synthesize_candidate_assets(&tag);
+        let picked = pick_installer_asset(&candidate_assets, &tag);
+        let (asset_name, asset_url, asset_size, asset_sha256) = match picked {
+            Some(a) => (Some(a.name), Some(a.url), a.size, a.sha256),
+            None => (None, None, 0, None),
+        };
+        let hash_index_url = Some(format!(
+            "https://github.com/{REPOSITORY}/releases/download/{tag}/{HASH_INDEX_NAME}"
+        ));
+
+        items.push(ReleaseItem {
+            tag,
+            name,
+            published_at,
+            prerelease,
+            html_url,
+            body,
+            asset_name,
+            asset_size,
+            asset_url,
+            asset_sha256,
+            hash_index_url,
+            is_current,
+        });
+    }
+    items
 }
 
 fn summarize(release: ReleaseJson, current: &str, channel: UpdateChannel) -> AppReleaseInfo {
@@ -841,7 +1055,7 @@ where
         .asset
         .clone()
         .with_context(|| format!("Release {} 没有可下载的安装包", info.tag))?;
-    if asset.size == 0 || asset.size > MAX_INSTALLER_SIZE {
+    if asset.size > MAX_INSTALLER_SIZE {
         bail!("安装包大小异常: {} 字节", asset.size);
     }
     let expected = match (asset.sha256.clone(), info.hash_index_url.as_deref()) {
@@ -885,15 +1099,16 @@ where
         .await
         {
             Ok(()) => {
+                let actual_size = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(asset.size);
                 crate::startup_log(&format!(
                     "[更新] 安装包已下载并校验: {}（{} 字节，通道 {label}）",
                     target.display(),
-                    asset.size
+                    actual_size
                 ));
                 progress(AppUpdateProgress {
                     stage: AppUpdateStage::Ready,
-                    downloaded: asset.size,
-                    total: asset.size,
+                    downloaded: actual_size,
+                    total: actual_size,
                     bytes_per_second: 0.0,
                     message: format!("{} 已校验，可以安装", asset.name),
                 });
@@ -934,6 +1149,17 @@ async fn stream(
         .map_err(|error| anyhow::anyhow!("{error:#}"))?
         .error_for_status()
         .context("HTTP 状态失败")?;
+    let response_len = response.content_length().unwrap_or(0);
+    if response_len > MAX_INSTALLER_SIZE {
+        bail!("下载内容过大: {} 字节", response_len);
+    }
+    let total_size = if asset.size > 0 {
+        asset.size
+    } else if response_len > 0 {
+        response_len
+    } else {
+        15 * 1024 * 1024
+    };
     let mut file = std::io::BufWriter::new(
         std::fs::File::create(target).with_context(|| format!("创建 {}", target.display()))?,
     );
@@ -956,7 +1182,7 @@ async fn stream(
                 progress(AppUpdateProgress {
                     stage: AppUpdateStage::Downloading,
                     downloaded: written,
-                    total: asset.size,
+                    total: total_size,
                     bytes_per_second: written as f64 / elapsed,
                     message: format!("正在下载 {}（{label}）", asset.name),
                 });
@@ -967,13 +1193,16 @@ async fn stream(
     }
     std::io::Write::flush(&mut file)?;
     drop(file);
-    if written != asset.size {
+    if asset.size > 0 && written != asset.size {
         bail!("只下到 {written} / {} 字节", asset.size);
+    }
+    if written == 0 {
+        bail!("下载文件为空（0 字节）");
     }
     progress(AppUpdateProgress {
         stage: AppUpdateStage::Verifying,
         downloaded: written,
-        total: asset.size,
+        total: written,
         bytes_per_second: 0.0,
         message: "正在校验 SHA-256".into(),
     });
@@ -1627,4 +1856,38 @@ ID-LIKE=\"debian\"
         assert_eq!(describe_rejection(reqwest::StatusCode::NOT_FOUND, false), "HTTP 404");
     }
 
+    #[test]
+    fn atom_releases_are_parsed_correctly() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <id>tag:github.com,2008:https://github.com/mateo-ki/vpn-parser/releases</id>
+  <title>Release notes</title>
+  <entry>
+    <id>tag:github.com,2008:Repository/1416062168/v1.14.0</id>
+    <updated>2026-10-26T13:07:59Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/mateo-ki/vpn-parser/releases/tag/v1.14.0"/>
+    <title>VPN Parser v1.14.0</title>
+    <content type="html">&lt;h1&gt;Notes&lt;/h1&gt;</content>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1416062168/v1.13.0</id>
+    <updated>2026-10-20T10:00:00Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/mateo-ki/vpn-parser/releases/tag/v1.13.0"/>
+    <title>VPN Parser v1.13.0</title>
+    <content type="html">Older notes</content>
+  </entry>
+</feed>"#;
+        let items = parse_atom_releases(xml, "1.14.0");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].tag, "v1.14.0");
+        assert_eq!(items[0].name, "VPN Parser v1.14.0");
+        assert_eq!(items[0].published_at.as_deref(), Some("2026-10-26"));
+        assert!(items[0].is_current);
+        assert!(!items[0].prerelease);
+        assert!(items[0].asset_name.is_some());
+        assert!(items[0].hash_index_url.is_some());
+
+        assert_eq!(items[1].tag, "v1.13.0");
+        assert!(!items[1].is_current);
+    }
 }

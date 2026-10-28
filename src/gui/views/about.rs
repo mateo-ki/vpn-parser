@@ -20,7 +20,7 @@ const DISCLAIMER_LINES: [&str; 6] = [
     "本软件没有统计上报模块：订阅地址、节点库、分流规则、测速与切换记录都只存在本机的数据目录（展开上面「本机路径」可见），卸载也不会自动删掉它们。",
     "默认路径上的联网只有「取回数据」这一类：拉取你添加的订阅源、检测出口 IP、检查与下载更新、下载内核和 GeoIP/GeoSite 规则库，以及给分流探测做解析的公共 DNS。",
     "有两处会把信息送出去，而且都要你主动点或主动填才发生：把节点发布到你自建的 Web 后台（送出你测通的节点列表），查 IP 风险（把那个 IP 交给 ipinfo.io、ip-api.com、ipwho.is）。",
-    "mihomo / sing-box / xray 等内核与 Geo 规则库都是第三方项目，按各自许可证分发，功能与稳定性由上游负责；界面里的延迟和速率是本机当时的实测值，不代表节点之后的表现。",
+    "VP-Core、Mihomo、Sing-box、Xray 等内核与规则库均为第三方开源成果，功能与稳定性由上游负责；界面延迟与速率为瞬时实测值，不代表节点后续持续表现。",
 ];
 
 /// 免责声明那张卡。文字与渲染分开：判据要能直接量这份清单，而不是量我另抄一遍的字符串。
@@ -43,8 +43,8 @@ fn disclaimer_card(ui: &mut Ui) {
     });
 }
 
-/// 后台自动检查在线更新的间隔：**3 小时**（2026-10-20 他定的）。第一次仍然在启动后 1 秒查。
-const APP_UPDATE_CHECK_INTERVAL_SECS: u64 = 3 * 60 * 60;
+/// 后台自动检查在线更新的间隔：**6 小时**（按需拉取，避开 GitHub 匿名限流）。第一次仍然在启动后 1 秒查。
+const APP_UPDATE_CHECK_INTERVAL_SECS: u64 = 6 * 60 * 60;
 
 impl VpnApp {
     pub(crate) fn ui_about(&mut self, ui: &mut Ui) {
@@ -537,8 +537,7 @@ impl VpnApp {
         });
     }
 
-    /// 自动检查的节奏：**每 3 小时一次**（2026-10-20 他定的）。GitHub 匿名配额 60 次/小时，
-    /// 3 小时一次 = 8 次/小时，留足余量给手动检查和内核更新那几条路。
+    /// 自动检查的节奏：**每 6 小时一次**。留足余量给手动检查和内核更新。
     /// 用户已经在关于页手动查过（或正在查）就跳过这一次。
     pub(crate) fn maybe_check_app_update(&mut self) {
         let Some(due) = self.app_update_due else {
@@ -699,11 +698,11 @@ fn button(text: &str) -> egui::Button<'_> {
 /// 不是它自己的格子），所以光开子 ui 是裁不住的，长路径会直接压到右边的动作按钮上。
 /// 返回"动作按钮这帧被点了没"。
 fn kv_row(ui: &mut Ui, label: &str, value: &str, action: Option<&str>) -> bool {
-    const LABEL_W: f32 = 76.0;
-    const ACTION_W: f32 = 46.0;
+    const LABEL_W: f32 = 78.0;
+    const ACTION_W: f32 = 56.0;
     const GAP: f32 = 8.0;
-    const ROW_H: f32 = 19.0;
-    const VALUE_SIZE: f32 = 11.0;
+    const ROW_H: f32 = 25.0;
+    const VALUE_SIZE: f32 = 11.5;
     let row = egui::Rect::from_min_max(
         egui::pos2(ui.max_rect().left(), ui.cursor().top()),
         egui::pos2(ui.max_rect().right(), ui.cursor().top() + ROW_H),
@@ -723,7 +722,8 @@ fn kv_row(ui: &mut Ui, label: &str, value: &str, action: Option<&str>) -> bool {
                 Vec2::new(LABEL_W, ROW_H),
             )),
         |ui| {
-            ui.label(RichText::new(label).size(11.0).color(theme::muted()));
+            ui.add_space(3.0);
+            ui.label(RichText::new(label).size(11.5).color(theme::muted()));
         },
     );
     ui.allocate_new_ui(
@@ -732,6 +732,7 @@ fn kv_row(ui: &mut Ui, label: &str, value: &str, action: Option<&str>) -> bool {
             .max_rect(cell),
         |ui| {
             ui.set_clip_rect(cell);
+            ui.add_space(3.0);
             ui.label(
                 RichText::new(shown)
                     .monospace()
@@ -749,18 +750,18 @@ fn kv_row(ui: &mut Ui, label: &str, value: &str, action: Option<&str>) -> bool {
                 egui::UiBuilder::new()
                     .id_salt(("about:kv", label, "action"))
                     .max_rect(egui::Rect::from_min_size(
-                        egui::pos2(row.right() - ACTION_W, row.min.y),
-                        Vec2::new(ACTION_W, ROW_H),
+                        egui::pos2(row.right() - ACTION_W, row.min.y + 1.0),
+                        Vec2::new(ACTION_W, ROW_H - 2.0),
                     )),
                 |ui| {
                     ui.add(
                         egui::Button::new(
-                            RichText::new(text).size(11.0).color(theme::accent_strong()),
+                            RichText::new(text).size(11.5).color(theme::accent_strong()),
                         )
                         .fill(theme::panel())
                         .stroke(Stroke::NONE)
-                        .corner_radius(CornerRadius::same(8))
-                        .min_size(Vec2::new(ACTION_W, ROW_H)),
+                        .corner_radius(CornerRadius::same(6))
+                        .min_size(Vec2::new(ACTION_W, ROW_H - 2.0)),
                     )
                     .clicked()
                 },

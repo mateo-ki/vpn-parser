@@ -150,7 +150,11 @@ fn acquire_single_instance_named(name: &str) -> Result<Option<SingleInstanceGuar
 }
 
 /// 提权交接时由新进程自己给出的参数：当前进程里同名的要先剔掉，否则同一个 flag 会出现两次。
-const HANDOFF_OWNED_ARGS: &[&str] = &["--start-proxy-node", "--elevated-proxy-config"];
+const HANDOFF_OWNED_ARGS: &[&str] = &[
+    "--start-proxy-node",
+    "--elevated-proxy-config",
+    "--elevated-proxy-config-file",
+];
 
 /// 组装提权实例的命令行：继承当前进程的参数，但把 `extra` 里会重新给出的 flag 去掉。
 ///
@@ -349,12 +353,19 @@ pub fn request_elevation(extra_args: &[String]) -> Result<()> {
         .collect::<Vec<_>>()
         .join(" ");
     let verb = "runas\0".encode_utf16().collect::<Vec<_>>();
-    let executable = executable
+    let working_dir = executable
+        .parent()
+        .map(|p| p.as_os_str().encode_wide().chain(std::iter::once(0)).collect::<Vec<_>>());
+    let working_dir_ptr = working_dir
+        .as_ref()
+        .map(|v| v.as_ptr())
+        .unwrap_or(std::ptr::null());
+    let executable_w = executable
         .as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
-    let parameters = parameters
+    let parameters_w = parameters
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
@@ -363,13 +374,16 @@ pub fn request_elevation(extra_args: &[String]) -> Result<()> {
         ShellExecuteW(
             std::ptr::null_mut(),
             verb.as_ptr(),
-            executable.as_ptr(),
-            parameters.as_ptr(),
-            std::ptr::null(),
+            executable_w.as_ptr(),
+            parameters_w.as_ptr(),
+            working_dir_ptr,
             SW_SHOWNORMAL,
         )
     };
     if result as isize <= 32 {
+        if result as isize == 5 {
+            return Err(anyhow!("用户在 UAC 授权弹窗中选择了「否」或提权被系统拒绝"));
+        }
         return Err(anyhow!("请求管理员权限失败，ShellExecuteW 返回 {result:?}"));
     }
     Ok(())

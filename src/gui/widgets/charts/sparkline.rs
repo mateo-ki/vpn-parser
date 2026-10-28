@@ -1,6 +1,6 @@
 use crate::gui::theme;
 use crate::gui::widgets::{clock_of, format_speed};
-use eframe::egui::{self, CornerRadius, Sense, Stroke, Ui, Vec2};
+use eframe::egui::{self, Color32, CornerRadius, Sense, Stroke, Ui, Vec2};
 
 /// Catmull-Rom 平滑：把折点采样成曲线，避免心电图式的硬折角。
 pub(crate) fn smooth_polyline(points: &[egui::Pos2], steps: usize) -> Vec<egui::Pos2> {
@@ -182,7 +182,18 @@ pub fn render_traffic_sparkline(
 }
 
 /// 4 格手机/WiFi 风格延迟信号柱图
+#[allow(dead_code)]
 pub fn render_signal_bars(ui: &mut Ui, latency_ms: Option<i64>) {
+    render_signal_bars_with_status(ui, latency_ms, None);
+}
+
+/// 4 格手机/WiFi 风格延迟信号柱图（带测速状态判定）
+/// 规则：<= 700ms 绿色，< 1500ms 黄色，其他 (>= 1500ms 或超时/失败) 红色
+pub fn render_signal_bars_with_status(
+    ui: &mut Ui,
+    latency_ms: Option<i64>,
+    latency_ok: Option<bool>,
+) {
     let size = egui::vec2(16.0, 13.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter_at(rect);
@@ -192,12 +203,19 @@ pub fn render_signal_bars(ui: &mut Ui, latency_ms: Option<i64>) {
     let bar_gap = 1.5;
     let heights = [3.5_f32, 6.5_f32, 9.5_f32, 12.5_f32];
 
-    let (active_bars, bar_color) = match latency_ms {
-        Some(ms) if ms < 100 => (4, theme::accent()),
-        Some(ms) if ms < 220 => (3, theme::accent_strong()),
-        Some(ms) if ms < 450 => (2, theme::text_secondary()),
-        Some(_) => (1, theme::muted()),
-        None => (0, theme::border_subtle()),
+    let green = Color32::from_rgb(52, 199, 89);
+    let yellow = Color32::from_rgb(255, 149, 0);
+    let red = Color32::from_rgb(255, 59, 48);
+
+    let (active_bars, bar_color) = match (latency_ms, latency_ok) {
+        (Some(ms), _) if ms <= 700 => {
+            let bars = if ms <= 350 { 4 } else { 3 };
+            (bars, green)
+        }
+        (Some(ms), _) if ms < 1500 => (2, yellow),
+        (Some(_), _) => (1, red),
+        (None, Some(false)) => (1, red),
+        (None, _) => (0, theme::border_subtle()),
     };
 
     let dim_color = theme::border_subtle();
@@ -217,9 +235,10 @@ pub fn render_signal_bars(ui: &mut Ui, latency_ms: Option<i64>) {
         painter.rect_filled(bar_rect, CornerRadius::same(1), fill);
     }
 
-    let tooltip = match latency_ms {
-        Some(ms) => format!("延迟: {ms} ms (信号: {active_bars}/4 格)"),
-        None => "未测速 / 离线".to_string(),
+    let tooltip = match (latency_ms, latency_ok) {
+        (Some(ms), _) => format!("延迟: {ms} ms (信号: {active_bars}/4 格)"),
+        (None, Some(false)) => "测速超时 / 失败 (1 格)".to_string(),
+        (None, _) => "未测速 / 离线".to_string(),
     };
     response.on_hover_text(tooltip);
 }

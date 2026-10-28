@@ -44,13 +44,15 @@ mod imp {
     use windows_sys::Win32::Graphics::Gdi::{
         RedrawWindow, RDW_ALLCHILDREN, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
     };
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        BringWindowToTop, EnumWindows, GetClassNameW, GetWindowLongPtrW, GetWindowRect,
-        GetWindowThreadProcessId, IsIconic, PostMessageW, SetForegroundWindow, SetWindowLongPtrW,
-        SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, SWP_FRAMECHANGED,
+        BringWindowToTop, EnumWindows, GetClassNameW, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
+        GetWindowThreadProcessId, IsIconic, LoadImageW, PostMessageW, SendMessageW, SetForegroundWindow,
+        SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, IMAGE_ICON,
+        LR_DEFAULTCOLOR, LR_SHARED, SM_CXICON, SM_CYICON, SM_CXSMICON, SM_CYSMICON, SWP_FRAMECHANGED,
         SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_RESTORE, SW_SHOW,
-        WM_PAINT, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_MINIMIZEBOX, WS_SYSMENU,
+        WM_PAINT, WM_SETICON, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_MINIMIZEBOX, WS_SYSMENU,
     };
 
     /// winit 给真实窗口用的类名；事件窗口 / IME 助手窗口都另有其名，必须排掉。
@@ -215,6 +217,8 @@ mod imp {
             );
         }
         set_skip_taskbar(hwnd, true);
+        #[cfg(feature = "gui")]
+        crate::gui::perf::trim_working_set();
         crate::startup_log(&format!(
             "[托盘] 窗口停放到屏幕外 {PARKED_X},{PARKED_Y}（原位置 {} , {} , {}x{}，已从任务栏彻底隐藏）",
             spot.x, spot.y, spot.w, spot.h
@@ -281,6 +285,21 @@ mod imp {
                         "[窗口] 已为 hwnd={:?} 补齐 WS_MINIMIZEBOX | WS_SYSMENU 样式",
                         hwnd
                     ));
+                }
+
+                // 显式加载并设置任务栏大图标 (ICON_BIG) 与标题栏小图标 (ICON_SMALL)
+                let h_mod = GetModuleHandleW(std::ptr::null());
+                let cx_big = GetSystemMetrics(SM_CXICON);
+                let cy_big = GetSystemMetrics(SM_CYICON);
+                let icon_big = LoadImageW(h_mod, 1 as _, IMAGE_ICON, cx_big, cy_big, LR_DEFAULTCOLOR | LR_SHARED);
+                if !icon_big.is_null() {
+                    SendMessageW(hwnd, WM_SETICON, 1, icon_big as LPARAM);
+                }
+                let cx_sm = GetSystemMetrics(SM_CXSMICON);
+                let cy_sm = GetSystemMetrics(SM_CYSMICON);
+                let icon_sm = LoadImageW(h_mod, 1 as _, IMAGE_ICON, cx_sm, cy_sm, LR_DEFAULTCOLOR | LR_SHARED);
+                if !icon_sm.is_null() {
+                    SendMessageW(hwnd, WM_SETICON, 0, icon_sm as LPARAM);
                 }
             }
         }

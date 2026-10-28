@@ -2,7 +2,7 @@ use crate::gui::icons::{icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::widgets::{
     country_flag_and_name, latency_text, protocol_pill, render_country_code_badge,
-    render_signal_bars, sanitize_node_name,
+    render_signal_bars_with_status, sanitize_node_name,
 };
 use crate::models::NodeSummary;
 use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, Vec2};
@@ -136,7 +136,7 @@ pub fn compact_node_card(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(latency_text(node).small().strong());
                     ui.add_space(2.0);
-                    render_signal_bars(ui, node.latency_ms);
+                    render_signal_bars_with_status(ui, node.latency_ms, node.latency_ok);
                 });
             });
         })

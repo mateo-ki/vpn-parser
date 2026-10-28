@@ -120,14 +120,37 @@ impl BackendCompiler for VpCoreCompiler {
                         "mtu": 1500,
                         "fake-ip-range": "198.18.0.0/16",
                         "auto-route": plan.inbounds.tun.auto_route,
+                        "ring-capacity": 4194304,
                     }),
                 );
-                if let Some(dns) = obj.get_mut("dns").and_then(|d| d.as_object_mut()) {
+            } else {
+                obj.remove("tun");
+            }
+
+            if let Some(dns) = obj.get_mut("dns").and_then(|d| d.as_object_mut()) {
+                if plan.inbounds.mode.has_tun() {
                     dns.insert("enhanced-mode".into(), serde_json::json!("fake-ip"));
                     dns.insert("fake-ip-range".into(), serde_json::json!("198.18.0.0/16"));
                 }
-            } else {
-                obj.remove("tun");
+                // 清洗 nameserver-policy：剥离大陆直连无法访问的海外 DoH 规则（1.1.1.1/8.8.8.8），
+                // 避免每个海外域名的首次本地 DNS 解析直接挂起 3 秒超时后降级
+                if let Some(nsp) = dns.get_mut("nameserver-policy").and_then(|p| p.as_object_mut()) {
+                    nsp.remove("geosite:geolocation-!cn");
+                }
+                // 扩充 nameserver 上游并补 UDP 双雄：单一上游可能给出整轮被污染/失效的答案
+                // （节点域名常见），多上游并集配合内核的竞速拨号，任一上游给出活地址即可用
+                if let Some(ns) = dns.get_mut("nameserver").and_then(|v| v.as_array_mut()) {
+                    for extra in ["223.5.5.5", "119.29.29.29"] {
+                        if !ns.iter().any(|v| v.as_str() == Some(extra)) {
+                            ns.insert(0, serde_json::json!(extra));
+                        }
+                    }
+                } else {
+                    dns.insert(
+                        "nameserver".into(),
+                        serde_json::json!(["223.5.5.5", "119.29.29.29"]),
+                    );
+                }
             }
 
             // 过滤与平滑适配 vp_core 不支持的非国家代码 GEOIP 规则（如 GEOIP,google / GEOIP,telegram）
@@ -289,6 +312,9 @@ mod tests {
         assert!(!yaml.contains("geox-url:"));
         assert!(yaml.contains("geosite-url:"));
         assert!(yaml.contains("geoip-url:"));
+        // 节点域名抗污染：DNS 上游必须扩充为多路并集（UDP 双雄 + DoH）
+        assert!(yaml.contains("223.5.5.5"));
+        assert!(yaml.contains("119.29.29.29"));
     }
 
     #[test]

@@ -420,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn xray_rejects_unsupported_process_routing_rule() {
+    fn xray_skips_unsupported_process_routing_rule() {
         let options = MihomoConfigOptions {
             rules: vec![TrafficRule {
                 matcher: RuleMatcher::ProcessName("app.exe".into()),
@@ -428,9 +428,10 @@ mod tests {
             }],
             ..MihomoConfigOptions::default()
         };
-        let error =
-            build_xray_config(&node("trojan", json!({"password":"p"})), options).unwrap_err();
-        assert!(error.to_string().contains("进程名分流"));
+        let config =
+            build_xray_config(&node("trojan", json!({"password":"p"})), options).expect("build config success");
+        let rules = config["routing"]["rules"].as_array().expect("rules array");
+        assert!(!rules.iter().any(|r| r.to_string().contains("app.exe")));
     }
 
     #[test]

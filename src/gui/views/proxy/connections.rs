@@ -3,19 +3,17 @@ use crate::gui::theme;
 use crate::gui::types::{ActiveConnectionInfo, ConnectionsTab, DnsRecord};
 use crate::gui::widgets::{
     card_frame, danger_btn, format_bytes, header_cell,
-    macos_segmented_tabs, panel_frame, section_title,
+    macos_segmented_tabs, panel_frame,
 };
 use crate::gui::VpnApp;
 use crate::proxy::{DnsEnhancedMode, ProxyState};
 use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
 
 impl VpnApp {
-    /// 独立的"活跃连接"标签页（从 dev~1 恢复：标题 + 工具栏 + 概览 + 表格）。
-    pub(crate) fn ui_proxy_connections(&mut self, ui: &mut Ui) {        section_title(
-            ui,
-            "网络连接与 DNS 审计",
-            "分流流向监控、活动连接跟踪、进程带宽矩阵及内核实时 DNS 解析记录",
-        );
+    /// 独立的"活跃连接"标签页（抽屉内全宽展示：Tab + 工具栏 + 概览 + 表格）。
+    pub(crate) fn ui_proxy_connections(&mut self, ui: &mut Ui) {
+        ui.set_min_width(ui.available_width());
+        ui.set_width(ui.available_width());
 
         let is_running = self.proxy_status.state == ProxyState::Running;
         let mut close_id = None;
@@ -78,8 +76,25 @@ impl VpnApp {
         ui.add_space(8.0);
 
         if !is_running {
+            ui.add_space(20.0);
             card_frame().show(ui, |ui| {
-                ui.label(RichText::new("代理内核未运行，暂无活跃连接与实时 DNS 数据。启动代理后将在此自动监听展示。").color(theme::muted()));
+                ui.set_width(ui.available_width());
+                ui.vertical_centered(|ui| {
+                    ui.add_space(40.0);
+                    ui.label(
+                        RichText::new("代理内核未运行")
+                            .strong()
+                            .size(14.0)
+                            .color(theme::text_primary()),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new("启动代理内核后，此处将实时展示各网络连接的目标地址、所属进程、分流规则及上传下载速率。")
+                            .small()
+                            .color(theme::muted()),
+                    );
+                    ui.add_space(40.0);
+                });
             });
             return;
         }
@@ -88,6 +103,7 @@ impl VpnApp {
             .id_salt("proxy_connections_scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 match self.connections_tab {
             ConnectionsTab::List => {
                 // 1. 工具栏：筛选 + 统计 + 批量断开
@@ -183,19 +199,38 @@ impl VpnApp {
                     .collect();
 
                 if filtered.is_empty() {
+                    ui.add_space(16.0);
                     card_frame().show(ui, |ui| {
-                        ui.label(
-                            RichText::new(if self.active_connections.is_empty() {
-                                "当前暂无活动的网络连接"
-                            } else {
-                                "没有匹配筛选条件的网络连接"
-                            })
-                            .color(theme::muted()),
-                        );
+                        ui.set_width(ui.available_width());
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(40.0);
+                            ui.label(
+                                RichText::new(if self.active_connections.is_empty() {
+                                    "当前暂无活动的网络连接"
+                                } else {
+                                    "没有匹配筛选条件的网络连接"
+                                })
+                                .strong()
+                                .size(13.5)
+                                .color(theme::text_secondary()),
+                            );
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new("当有网络请求经由内核转发时，此处将实时呈现连接明细")
+                                    .small()
+                                    .color(theme::muted()),
+                            );
+                            ui.add_space(40.0);
+                        });
                     });
                 } else {
                     panel_frame().show(ui, |ui| {
-                        egui::Grid::new("active_connections_grid")
+                        ui.set_width(ui.available_width());
+                        egui::ScrollArea::horizontal()
+                            .id_salt("active_connections_hscroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                egui::Grid::new("active_connections_grid")
                                     .striped(true)
                                     .min_col_width(60.0)
                                     .spacing([12.0, 7.0])
@@ -237,14 +272,20 @@ impl VpnApp {
                                                     });
                                                 });
 
-                                            // 3. 目标地址
-                                            let target_text = if !c.host.is_empty() {
+                                            // 3. 目标地址（长域名智能截断，悬浮查看完整地址与目标 IP）
+                                            let full_target = if !c.host.is_empty() {
                                                 format!("{} ({})", c.host, c.destination)
                                             } else {
                                                 c.destination.clone()
                                             };
-                                            ui.label(RichText::new(target_text).small().color(theme::text_primary()))
-                                                .on_hover_text(&c.destination);
+                                            let display_target = if full_target.chars().count() > 42 {
+                                                let t: String = full_target.chars().take(40).collect();
+                                                format!("{}...", t)
+                                            } else {
+                                                full_target.clone()
+                                            };
+                                            ui.label(RichText::new(display_target).small().color(theme::text_primary()))
+                                                .on_hover_text(format!("{}\n目标: {}", full_target, c.destination));
 
                                             // 4. 分流规则微标
                                             let is_direct = c.target.eq_ignore_ascii_case("direct") || c.rule.contains("DIRECT");
@@ -258,7 +299,14 @@ impl VpnApp {
                                                 .corner_radius(CornerRadius::same(6))
                                                 .inner_margin(Margin::symmetric(6, 2))
                                                 .show(ui, |ui| {
-                                                    ui.label(RichText::new(&c.rule).small().strong().color(rule_color));
+                                                    let rule_display = if c.rule.chars().count() > 24 {
+                                                        let t: String = c.rule.chars().take(22).collect();
+                                                        format!("{}...", t)
+                                                    } else {
+                                                        c.rule.clone()
+                                                    };
+                                                    ui.label(RichText::new(rule_display).small().strong().color(rule_color))
+                                                        .on_hover_text(&c.rule);
                                                 });
 
                                             // 5. 上传
@@ -288,6 +336,7 @@ impl VpnApp {
                                         }
                                     });
                             });
+                    });
                 }
             }
             ConnectionsTab::Processes => {
@@ -345,11 +394,21 @@ impl VpnApp {
 
                 if filtered_procs.is_empty() {
                     card_frame().show(ui, |ui| {
-                        ui.label(RichText::new("当前暂无进程产生网络连接").color(theme::muted()));
+                        ui.set_width(ui.available_width());
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(20.0);
+                            ui.label(RichText::new("当前暂无进程产生网络连接").color(theme::muted()));
+                            ui.add_space(20.0);
+                        });
                     });
                 } else {
                     panel_frame().show(ui, |ui| {
-                        egui::Grid::new("process_connections_grid")
+                        ui.set_width(ui.available_width());
+                        egui::ScrollArea::horizontal()
+                            .id_salt("process_connections_hscroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                egui::Grid::new("process_connections_grid")
                                     .striped(true)
                                     .min_col_width(70.0)
                                     .spacing([14.0, 8.0])
@@ -418,6 +477,7 @@ impl VpnApp {
                                         }
                                     });
                             });
+                    });
                 }
             }
             ConnectionsTab::Dns => {
@@ -483,18 +543,28 @@ impl VpnApp {
 
                 if filtered_dns.is_empty() {
                     card_frame().show(ui, |ui| {
-                        ui.label(
-                            RichText::new(if self.dns_records.is_empty() {
-                                "暂无实时 DNS 记录（发起网页浏览或网络请求时将在此自动捕获）"
-                            } else {
-                                "没有匹配筛选条件的 DNS 记录"
-                            })
-                            .color(theme::muted()),
-                        );
+                        ui.set_width(ui.available_width());
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(20.0);
+                            ui.label(
+                                RichText::new(if self.dns_records.is_empty() {
+                                    "暂无实时 DNS 记录（发起网页浏览或网络请求时将在此自动捕获）"
+                                } else {
+                                    "没有匹配筛选条件的 DNS 记录"
+                                })
+                                .color(theme::muted()),
+                            );
+                            ui.add_space(20.0);
+                        });
                     });
                 } else {
                     panel_frame().show(ui, |ui| {
-                        egui::Grid::new("dns_records_grid")
+                        ui.set_width(ui.available_width());
+                        egui::ScrollArea::horizontal()
+                            .id_salt("dns_records_hscroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                egui::Grid::new("dns_records_grid")
                                     .striped(true)
                                     .min_col_width(60.0)
                                     .spacing([12.0, 7.0])
@@ -512,12 +582,24 @@ impl VpnApp {
                                             // 1. 时间
                                             ui.label(RichText::new(&r.time_str).small().monospace().color(theme::muted()));
 
-                                            // 2. 域名
-                                            ui.label(RichText::new(&r.host).strong().small().color(theme::text_primary()))
+                                            // 2. 域名（长域名截断）
+                                            let host_display = if r.host.chars().count() > 36 {
+                                                let t: String = r.host.chars().take(34).collect();
+                                                format!("{}...", t)
+                                            } else {
+                                                r.host.clone()
+                                            };
+                                            ui.label(RichText::new(host_display).strong().small().color(theme::text_primary()))
                                                 .on_hover_text(&r.host);
 
-                                            // 3. 解析目标
-                                            ui.label(RichText::new(&r.ip).small().monospace().color(theme::text_secondary()))
+                                            // 3. 解析目标（长 IP 列表截断）
+                                            let ip_display = if r.ip.chars().count() > 30 {
+                                                let t: String = r.ip.chars().take(28).collect();
+                                                format!("{}...", t)
+                                            } else {
+                                                r.ip.clone()
+                                            };
+                                            ui.label(RichText::new(ip_display).small().monospace().color(theme::text_secondary()))
                                                 .on_hover_text(&r.ip);
 
                                             // 4. 发起进程
@@ -574,6 +656,7 @@ impl VpnApp {
                                         }
                                     });
                             });
+                    });
                 }
             }
         }

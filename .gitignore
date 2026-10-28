@@ -31,3 +31,4 @@ logs/
 # Temporary / Scratch files
 *.tmp
 *.bak
+*.db

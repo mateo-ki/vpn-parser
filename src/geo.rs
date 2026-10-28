@@ -99,6 +99,77 @@ pub fn geo_ready(dir: &Path) -> bool {
 /// meow 的 GEOIP 用 MaxMind MMDB（meta-rules-dat 的 country.mmdb），完整库约 7.6MB。
 pub const MIN_MMDB_BYTES: u64 = 4_000_000;
 
+/// 硬链接或复制文件：优先使用硬链接（0 额外磁盘占用，毫秒级就绪，更新时自动保持一致）；失败时回退为物理拷贝
+pub fn link_or_copy(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if dst.exists() {
+        let _ = std::fs::remove_file(dst);
+    }
+    if let Some(parent) = dst.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if std::fs::hard_link(src, dst).is_err() {
+        std::fs::copy(src, dst)?;
+    }
+    Ok(())
+}
+
+/// 将主目录中达标的 Geo 规则库（geosite.dat / geoip.dat / Country.mmdb）自动硬链接/同步分发给所有已知内核目录
+pub fn sync_geo_to_all_kernels(src_dir: &Path) -> Vec<String> {
+    let mut reports = Vec::new();
+    let root = crate::kernel::managed_kernel_root();
+    let kernel_dirs = [
+        root.join("mihomo"),
+        root.join("vp_core"),
+        root.join("vpcore"),
+        root.join("meow"),
+        root.join("xray"),
+        root.join("shoes"),
+    ];
+
+    let geo_files = [
+        ("geosite.dat", MIN_GEOSITE_BYTES),
+        ("geoip.dat", MIN_GEOIP_BYTES),
+        ("Country.mmdb", MIN_MMDB_BYTES),
+    ];
+
+    for (name, min_len) in geo_files {
+        let candidate_srcs = [
+            src_dir.join(name),
+            src_dir.join(if name == "geosite.dat" { "GeoSite.dat" } else { "GeoIP.dat" }),
+            root.join("mihomo").join(name),
+            root.join("meow").join(name),
+            root.join("vp_core").join(name),
+            root.join("vpcore").join(name),
+        ];
+        let Some(valid_src) = candidate_srcs.iter().find(|p| {
+            std::fs::metadata(p).map(|m| m.len() >= min_len).unwrap_or(false)
+        }) else {
+            continue;
+        };
+
+        let src_len = std::fs::metadata(valid_src).map(|sm| sm.len()).unwrap_or(0);
+
+        for dst_dir in &kernel_dirs {
+            if dst_dir == src_dir && valid_src.starts_with(dst_dir) {
+                continue;
+            }
+            if !dst_dir.exists() {
+                let _ = std::fs::create_dir_all(dst_dir);
+            }
+            let dst = dst_dir.join(name);
+            let is_same = std::fs::metadata(&dst)
+                .map(|m| m.len() == src_len)
+                .unwrap_or(false);
+            if !is_same {
+                if let Ok(()) = link_or_copy(valid_src, &dst) {
+                    reports.push(format!("已同步 {name} 至 {}", dst_dir.file_name().unwrap_or_default().to_string_lossy()));
+                }
+            }
+        }
+    }
+    reports
+}
+
 /// meow 内核 home 目录的 geo 准备：
 /// 1. 复用 mihomo 目录的 geosite.dat / geoip.dat（meow 的发现路径接受 protobuf dat，实测加载成功）；
 /// 2. Country.mmdb 缺失时从镜像下载（meow 自己也会下，但走 GitHub，境内大概率卡住启动）。
@@ -113,7 +184,7 @@ pub async fn ensure_meow_home_geo(home: &Path, proxy_url: Option<&str>) -> Resul
         provision(&mihomo, proxy_url, false).await?;
     }
 
-    // 2. 拷进 meow home（meow 的发现路径之一是 <home>/geosite.dat）
+    // 2. 优先通过硬链接接入 meow home（meow 的发现路径之一是 <home>/geosite.dat）
     for name in GEO_FILES {
         let Some(size) = geo_state(&mihomo)
             .into_iter()
@@ -132,8 +203,8 @@ pub async fn ensure_meow_home_geo(home: &Path, proxy_url: Option<&str>) -> Resul
                 mihomo.join(if name == "geosite.dat" { "GeoSite.dat" } else { "GeoIP.dat" }),
             ];
             if let Some(src) = candidates.iter().find(|p| p.exists()) {
-                std::fs::copy(src, &dst)?;
-                report.push(format!("{name} 已复制到 meow 目录"));
+                link_or_copy(src, &dst)?;
+                report.push(format!("{name} 已就绪于 meow 目录"));
             }
         }
     }
@@ -142,9 +213,27 @@ pub async fn ensure_meow_home_geo(home: &Path, proxy_url: Option<&str>) -> Resul
     // 监听端口，而它默认走节点（节点劣化 = 无限卡死"正在启动"）。这里限时
     // 抢先备好；失败也放行（meow 会用配置里的镜像 URL 自愈，失败则快速报错）。
     let mmdb = home.join("Country.mmdb");
-    let mmdb_ok = std::fs::metadata(&mmdb)
+    let mut mmdb_ok = std::fs::metadata(&mmdb)
         .map(|m| m.len() >= MIN_MMDB_BYTES)
         .unwrap_or(false);
+    if !mmdb_ok {
+        let root = crate::kernel::managed_kernel_root();
+        for vp_cand in [
+            root.join("vpcore").join("Country.mmdb"),
+            root.join("vp_core").join("Country.mmdb"),
+        ] {
+            if std::fs::metadata(&vp_cand)
+                .map(|m| m.len() >= MIN_MMDB_BYTES)
+                .unwrap_or(false)
+            {
+                if link_or_copy(&vp_cand, &mmdb).is_ok() {
+                    mmdb_ok = true;
+                    report.push("Country.mmdb 已从 VP-Core 复用".into());
+                    break;
+                }
+            }
+        }
+    }
     if !mmdb_ok {
         const MMDB_UPSTREAMS: [&str; 4] = [
             "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/",
@@ -190,11 +279,43 @@ pub async fn ensure_meow_home_geo(home: &Path, proxy_url: Option<&str>) -> Resul
 }
 
 /// vp_core 内核目录的 geo 准备：
-/// 纯粹维护在 vpcore 自身目录，不跨内核目录复用。
-/// 检查自身目录的 geosite.dat 与 geoip 库（geoip.dat / Country.mmdb / geoip.metadb）；
-/// 若自身缺少则直接从镜像下载到 vpcore 自身目录。文件已就位（大小达标）时跳过，幂等。
+/// 优先尝试从 mihomo / meow 目录复用已有合规数据库（硬链接/复制），杜绝各内核重复下载；
+/// 若全机缺少则从镜像下载到 vpcore 自身目录。文件已就位（大小达标）时跳过，幂等。
 pub async fn ensure_vpcore_geo(home: &Path, proxy_url: Option<&str>) -> Result<String> {
     std::fs::create_dir_all(home)?;
+
+    // 1. 优先尝试从 mihomo / meow 目录复用已有的合规数据库（硬链接/复制），避免重复下载
+    let mihomo = mihomo_dir();
+    let root = crate::kernel::managed_kernel_root();
+    let meow = root.join("meow");
+
+    for (name, min_len) in [
+        ("geosite.dat", MIN_GEOSITE_BYTES),
+        ("geoip.dat", MIN_GEOIP_BYTES),
+    ] {
+        let dst = home.join(name);
+        if !std::fs::metadata(&dst).map(|m| m.len() >= min_len).unwrap_or(false) {
+            let candidates = [
+                mihomo.join(name),
+                mihomo.join(if name == "geosite.dat" { "GeoSite.dat" } else { "GeoIP.dat" }),
+                meow.join(name),
+            ];
+            if let Some(src) = candidates.iter().find(|p| {
+                std::fs::metadata(p).map(|m| m.len() >= min_len).unwrap_or(false)
+            }) {
+                let _ = link_or_copy(src, &dst);
+            }
+        }
+    }
+
+    // Country.mmdb 也优先从 meow 复用
+    let mmdb_dst = home.join("Country.mmdb");
+    if !std::fs::metadata(&mmdb_dst).map(|m| m.len() >= MIN_MMDB_BYTES).unwrap_or(false) {
+        let meow_mmdb = meow.join("Country.mmdb");
+        if std::fs::metadata(&meow_mmdb).map(|m| m.len() >= MIN_MMDB_BYTES).unwrap_or(false) {
+            let _ = link_or_copy(&meow_mmdb, &mmdb_dst);
+        }
+    }
 
     let has_geosite = (home.join("geosite.dat").exists()
         && std::fs::metadata(home.join("geosite.dat"))
@@ -231,12 +352,11 @@ pub async fn ensure_vpcore_geo(home: &Path, proxy_url: Option<&str>) -> Result<S
         return Ok("VP-Core 自有分流数据库已就绪".into());
     }
 
-    // 自身缺少时直接下载所需库到 vpcore 自身目录
+    // 全机缺少时才从镜像下载所需库到 vpcore 目录
     provision_files(home, &needed, proxy_url, false).await
 }
 
 /// 将 vpcore 所需的分流数据库硬链接（或复制）到目标临时工作目录（供 vpcore run -c 启动时直接相对加载）。
-/// 纯粹从 vpcore 自身目录读取，不跨内核目录复用。
 pub fn populate_vpcore_work_dir(vpcore_home: &Path, work_dir_root: &Path) {
     let files = [
         "geosite.dat",
@@ -252,10 +372,7 @@ pub fn populate_vpcore_work_dir(vpcore_home: &Path, work_dir_root: &Path) {
         if src.exists() {
             let dst = work_dir_root.join(name);
             if !dst.exists() {
-                // 优先硬链接（0 耗时 0 空间），跨磁盘失败则回退为拷贝
-                if std::fs::hard_link(&src, &dst).is_err() {
-                    let _ = std::fs::copy(&src, &dst);
-                }
+                let _ = link_or_copy(&src, &dst);
             }
         }
     }
@@ -565,5 +682,17 @@ mod tests {
         assert_eq!(report, "VP-Core 自有分流数据库已就绪");
 
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn test_link_or_copy() {
+        let temp = std::env::temp_dir().join(format!("vpn-parser-link-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let src = temp.join("src.txt");
+        let dst = temp.join("dst.txt");
+        std::fs::write(&src, b"hello geo sync").unwrap();
+        link_or_copy(&src, &dst).unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), b"hello geo sync");
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }
