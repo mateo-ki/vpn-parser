@@ -2,7 +2,7 @@ use crate::gui::icons::{icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::widgets::{
     country_flag_and_name, latency_text, protocol_pill, render_country_code_badge,
-    render_signal_bars_with_status, sanitize_node_name,
+    render_signal_bars_with_status, sanitize_node_name, subscription_pill,
 };
 use crate::models::NodeSummary;
 use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, Vec2};
@@ -10,6 +10,7 @@ use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, 
 pub fn compact_node_card(
     ui: &mut Ui,
     node: &NodeSummary,
+    source_name: Option<&str>,
     is_active: bool,
     is_focused: bool,
     is_switching: bool,
@@ -120,7 +121,7 @@ pub fn compact_node_card(
 
             ui.add_space(4.0);
 
-            // 第二行：协议标签 + 国家名称 + 右侧信号与延迟
+            // 第二行：协议标签 + 国家名称 + 订阅源微标 + 右侧信号与延迟
             ui.horizontal(|ui| {
                 protocol_pill(ui, &node.protocol.to_uppercase());
 
@@ -131,6 +132,12 @@ pub fn compact_node_card(
                             .small()
                             .color(theme::text_secondary()),
                     );
+                }
+
+                if let Some(src) = source_name.filter(|s| !s.is_empty()) {
+                    let reserve_right = 72.0;
+                    let max_pill_w = (ui.available_width() - reserve_right).clamp(24.0, 85.0);
+                    subscription_pill(ui, src, max_pill_w);
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -147,7 +154,7 @@ pub fn compact_node_card(
     if response.hovered() && !is_active && !is_focused && !is_switching {
         ui.painter().rect_stroke(
             response.rect,
-            CornerRadius::same(12),
+            CornerRadius::same(10),
             Stroke::new(1.0_f32, theme::accent().gamma_multiply(0.4)),
             egui::StrokeKind::Inside,
         );

@@ -298,6 +298,7 @@ impl VpnApp {
             self.focused_node_id.as_deref(),
             self.switching_node_id.as_deref(),
             self.busy,
+            |sid| self.source_name_for_id(sid),
         );
         if let Some(action) = action {
             self.handle_node_card_action(action);
@@ -679,14 +680,18 @@ impl VpnApp {
     }
 }
 
-pub fn render_node_cards_grid(
+pub fn render_node_cards_grid<'a, F>(
     ui: &mut Ui,
     nodes: &[crate::models::NodeSummary],
     selected_proxy_node_id: Option<&str>,
     focused_node_id: Option<&str>,
     switching_node_id: Option<&str>,
     is_busy: bool,
-) -> Option<NodeCardAction> {
+    source_resolver: F,
+) -> Option<NodeCardAction>
+where
+    F: Fn(Option<&str>) -> Option<&'a str>,
+{
     let mut card_action: Option<NodeCardAction> = None;
     panel_frame().show(ui, |ui| {
         let (columns, total_card_rows) =
@@ -718,8 +723,9 @@ pub fn render_node_cards_grid(
                                     node.server, node.port
                                 )
                             };
+                            let source_name = source_resolver(node.source_id.as_deref());
                             let response =
-                                compact_node_card(column_ui, node, is_active, is_focused, is_switching)
+                                compact_node_card(column_ui, node, source_name, is_active, is_focused, is_switching)
                                     .on_hover_text(card_tip);
                             let clicked = response.clicked();
                             let double_clicked = response.double_clicked();
@@ -818,7 +824,7 @@ impl VpnApp {
 }
 
 #[cfg(test)]
-mod empty_pool_modal_tests {
+pub(crate) mod empty_pool_modal_tests {
     use super::*;
     use crate::api::ApiServerController;
     use crate::api::AppState;
@@ -832,7 +838,8 @@ mod empty_pool_modal_tests {
 
     /// 一个空库的真 `VpnApp`。新装机器上节点池就是空的，而「导入本地 YAML」恰恰是那种
     /// 机器上唯一还能往里灌东西的入口 —— 所以零节点时弹框必须开得出门。
-    fn app_with_an_empty_library() -> VpnApp {
+    #[cfg(test)]
+    pub(crate) fn app_with_an_empty_library() -> VpnApp {
         let rt = Arc::new(tokio::runtime::Runtime::new().unwrap());
         let dir = std::env::temp_dir().join(format!("vp-nodes-modal-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

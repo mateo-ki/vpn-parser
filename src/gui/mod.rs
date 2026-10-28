@@ -3759,6 +3759,26 @@ impl VpnApp {
         });
     }
 
+    pub(crate) fn source_name_for_id<'a>(&'a self, source_id: Option<&str>) -> Option<&'a str> {
+        let sid = match source_id {
+            Some(s) if !s.is_empty() => s,
+            _ => return Some("未分组"),
+        };
+        if sid == crate::db::UNGROUPED_SOURCE_ID {
+            return Some("未分组");
+        }
+        if let Some(src) = self.sources.iter().find(|s| s.id == sid) {
+            return Some(&src.name);
+        }
+        if let Some(grp) = self.node_groups.iter().find(|g| g.source_id.as_deref() == Some(sid)) {
+            return Some(&grp.source_name);
+        }
+        if let Some(grp) = self.proxy_node_groups.iter().find(|g| g.source_id.as_deref() == Some(sid)) {
+            return Some(&grp.source_name);
+        }
+        Some("未分组")
+    }
+
     pub(crate) fn handle_node_card_action(&mut self, action: NodeCardAction) {
         match action {
             NodeCardAction::Select { id, name } => {
@@ -5153,6 +5173,40 @@ mod tests {
         // Newer click matching current_seq
         let incoming_fresh_seq = current_seq;
         assert_eq!(current_seq, incoming_fresh_seq);
+    }
+
+    #[test]
+    fn test_source_name_for_id_resolution() {
+        let mut app = crate::gui::views::nodes::empty_pool_modal_tests::app_with_an_empty_library();
+        let src: crate::models::Source = serde_json::from_value(serde_json::json!({
+            "id": "src-1",
+            "name": "主力优质机场",
+            "url_template": "https://example.com/sub",
+            "enabled": true,
+            "last_node_count": 10,
+            "created_at": "2026-10-28T00:00:00Z",
+            "updated_at": "2026-10-28T00:00:00Z"
+        }))
+        .unwrap();
+        app.sources = vec![src];
+        app.node_groups = vec![
+            crate::models::NodeGroupSummary {
+                source_id: Some("src-2".into()),
+                source_name: "备用订阅源".into(),
+                total: 5,
+                alive: 5,
+            },
+        ];
+
+        // 匹配已注册订阅源
+        assert_eq!(app.source_name_for_id(Some("src-1")), Some("主力优质机场"));
+        // 匹配已注册分组
+        assert_eq!(app.source_name_for_id(Some("src-2")), Some("备用订阅源"));
+        // 未分组 / 空 ID / __ungrouped__
+        assert_eq!(app.source_name_for_id(None), Some("未分组"));
+        assert_eq!(app.source_name_for_id(Some("")), Some("未分组"));
+        assert_eq!(app.source_name_for_id(Some(crate::db::UNGROUPED_SOURCE_ID)), Some("未分组"));
+        assert_eq!(app.source_name_for_id(Some("non-existent-src")), Some("未分组"));
     }
 
     /// 跑一遍标题栏那种"exact_height 面板 + 右上角三个格子"的写法，返回面板真正占掉的

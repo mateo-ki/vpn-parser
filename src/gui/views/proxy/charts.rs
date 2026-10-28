@@ -1363,9 +1363,11 @@ impl VpnApp {
                                         let is_focused = focused_id.as_deref() == Some(node.id.as_str());
                                         let is_switching = switching_id.as_deref() == Some(&node.id);
 
+                                        let source_name = self.source_name_for_id(node.source_id.as_deref());
                                         let resp = crate::gui::widgets::node_card::compact_node_card(
                                             column_ui,
                                             node,
+                                            source_name,
                                             is_active,
                                             is_focused,
                                             is_switching,

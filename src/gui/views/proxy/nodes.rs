@@ -7,7 +7,7 @@ use crate::gui::types::{
 };
 use crate::gui::view_models::nodes_vm::{NodeCardAction, NodesViewModel};
 use crate::gui::widgets::{
-    card_frame, compact_node_card, section_title,
+    card_frame, compact_node_card, panel_frame, section_title,
 };
 use crate::gui::VpnApp;
 use crate::models::NodeSummary;
@@ -348,15 +348,16 @@ impl VpnApp {
             });
             ui.add_space(4.0);
 
-            egui::ScrollArea::vertical()
-                .id_salt("proxy_nodes_cards_scroll")
-                .auto_shrink([false, false])
-                .show_rows(ui, 64.0, total_card_rows, |ui, row_range| {
-                    for row_idx in row_range {
-                        let start = row_idx * columns;
-                        let end = (start + columns).min(paged_rows.len());
-                        let row = &paged_rows[start..end];
-                        ui.columns(columns, |column_uis| {
+            panel_frame().show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("proxy_nodes_cards_scroll")
+                    .auto_shrink([false, false])
+                    .show_rows(ui, 64.0, total_card_rows, |ui, row_range| {
+                        for row_idx in row_range {
+                            let start = row_idx * columns;
+                            let end = (start + columns).min(paged_rows.len());
+                            let row = &paged_rows[start..end];
+                            ui.columns(columns, |column_uis| {
                             for (column_index, column_ui) in column_uis.iter_mut().enumerate() {
                                 let Some(entry) = row.get(column_index) else {
                                     continue;
@@ -388,9 +389,11 @@ impl VpnApp {
                                     )
                                 };
 
+                                let source_name = self.source_name_for_id(node.source_id.as_deref());
                                 let response = compact_node_card(
                                     column_ui,
                                     node,
+                                    source_name,
                                     is_active,
                                     is_focused,
                                     is_switching,
@@ -471,9 +474,10 @@ impl VpnApp {
                                 }
                             }
                         });
-                        ui.add_space(6.0);
+                        ui.add_space(4.0);
                     }
                 });
+            });
 
             if total_pages > 1 {
                 ui.add_space(6.0);

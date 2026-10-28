@@ -1522,6 +1522,7 @@ impl VpnApp {
                         });
                     });
                 } else {
+                    let modal_src = self.source_modal_source_name.as_str();
                     let action = crate::gui::views::nodes::render_node_cards_grid(
                         ui,
                         &self.source_modal_nodes,
@@ -1529,6 +1530,7 @@ impl VpnApp {
                         self.focused_node_id.as_deref(),
                         self.switching_node_id.as_deref(),
                         self.busy,
+                        |_| Some(modal_src),
                     );
                     if let Some(action) = action {
                         let is_delete = matches!(action, NodeCardAction::Delete(_));

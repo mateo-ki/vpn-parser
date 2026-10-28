@@ -1,4 +1,4 @@
-use crate::gui::icons::Icon;
+use crate::gui::icons::{icon_label, Icon};
 use crate::gui::theme;
 use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, Vec2};
 
@@ -38,6 +38,44 @@ pub fn protocol_pill(ui: &mut Ui, protocol: &str) {
                     .color(color),
             );
         });
+}
+
+/// 订阅源小微标：展示节点所属的订阅源
+pub fn subscription_pill(ui: &mut Ui, source_name: &str, max_text_width: f32) {
+    let text = source_name.trim();
+    if text.is_empty() {
+        return;
+    }
+    Frame::NONE
+        .fill(theme::panel_hover())
+        .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+        .corner_radius(CornerRadius::same(5))
+        .inner_margin(Margin::symmetric(5, 2))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(3.0, 0.0);
+                icon_label(ui, Icon::Subscription, 9.0, theme::icon_muted());
+                let font_id = egui::TextStyle::Small.resolve(ui.style());
+                let text_w = ui.fonts(|f| {
+                    f.layout_no_wrap(text.to_string(), font_id, theme::text_secondary())
+                        .size()
+                        .x
+                });
+                let alloc_w = text_w.clamp(14.0, max_text_width);
+                ui.add_sized(
+                    [alloc_w, 15.0],
+                    egui::Label::new(
+                        RichText::new(text)
+                            .small()
+                            .size(10.5)
+                            .color(theme::text_secondary()),
+                    )
+                    .truncate(),
+                );
+            });
+        })
+        .response
+        .on_hover_text(format!("订阅源: {text}"));
 }
 
 
