@@ -2121,22 +2121,24 @@ impl VpnApp {
         let inner = outer.shrink2(Vec2::new(20.0, 10.0));
         ui.allocate_ui_at_rect(inner, |ui| {
             ui.vertical(|ui| {
+                ui.add_space(14.0);
                 dash_label(ui, if up { "上传" } else { "下载" }, Some(peak_str));
-                ui.add_space(2.0);
+                ui.add_space(4.0);
                 ui.label(
                     RichText::new(format_speed(rate))
                         .strong()
                         .size(24.0)
                         .color(theme::text_primary()),
                 );
+                ui.add_space(2.0);
                 ui.label(
                     RichText::new(format!("累计 {}", format_bytes(total)))
                         .size(11.5)
                         .color(theme::muted()),
                 );
-                ui.add_space(6.0);
+                ui.add_space(14.0);
                 let spark_w = ui.available_width();
-                dash_sparkline(ui, spark_w, 32.0, series, color);
+                dash_sparkline(ui, spark_w, 38.0, series, color);
             });
         });
     }

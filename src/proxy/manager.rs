@@ -939,9 +939,12 @@ impl ProxyManager {
 
         if runtime.options.terminal_proxy && (!runtime.options.mode.has_system() || !self.system_proxy.supported()) {
             let port = runtime.options.mixed_port;
-            let _ = tokio::task::spawn_blocking(move || {
-                crate::system_proxy::terminal::enable(port)
-            }).await;
+            tokio::task::spawn_blocking(move || {
+                match crate::system_proxy::terminal::enable(port) {
+                    Ok(report) => tracing::info!(summary = report.summary(), "终端代理已启用"),
+                    Err(error) => tracing::warn!(%error, "终端代理启用失败"),
+                }
+            });
         }
 
         let elapsed_ms = startup_started.elapsed().as_millis() as u64;
@@ -1100,11 +1103,11 @@ impl ProxyManager {
                 }
             }
             #[cfg(windows)]
-            {
-                let _ = crate::platform::restore_all_stale_loopback_dns();
+            if options.mode.has_tun() {
+                tokio::task::spawn_blocking(crate::platform::self_heal_stale_dns);
             }
             if !had_snapshot && options.terminal_proxy {
-                let _ = tokio::task::spawn_blocking(crate::system_proxy::terminal::disable).await;
+                tokio::task::spawn_blocking(crate::system_proxy::terminal::disable);
             }
             None
         } else {
@@ -1350,7 +1353,7 @@ pub async fn wait_for_port(child: &mut ProxyChild, port: u16, timeout: Duration)
         {
             return true;
         }
-        tokio::time::sleep(Duration::from_millis(40)).await;
+        tokio::time::sleep(Duration::from_millis(15)).await;
     }
     false
 }
@@ -1522,10 +1525,12 @@ pub async fn activate_system_proxy(
     .await
     .context("系统代理任务执行失败")??;
     if let Some(port) = terminal_proxy_port {
-        match crate::system_proxy::terminal::enable(port) {
-            Ok(report) => tracing::info!(summary = report.summary(), "终端代理已启用"),
-            Err(error) => tracing::warn!(%error, "终端代理启用失败"),
-        }
+        tokio::task::spawn_blocking(move || {
+            match crate::system_proxy::terminal::enable(port) {
+                Ok(report) => tracing::info!(summary = report.summary(), "终端代理已启用"),
+                Err(error) => tracing::warn!(%error, "终端代理启用失败"),
+            }
+        });
     }
     Ok(snapshot)
 }
@@ -1560,10 +1565,12 @@ pub async fn restore_system_proxy(
         .await
         .context("系统代理恢复任务执行失败")??;
     if clear_terminal_proxy {
-        match crate::system_proxy::terminal::disable() {
-            Ok(report) => tracing::info!(summary = report.summary(), "终端代理已清除"),
-            Err(error) => tracing::warn!(%error, "终端代理清除失败"),
-        }
+        tokio::task::spawn_blocking(|| {
+            match crate::system_proxy::terminal::disable() {
+                Ok(report) => tracing::info!(summary = report.summary(), "终端代理已清除"),
+                Err(error) => tracing::warn!(%error, "终端代理清除失败"),
+            }
+        });
     }
     Ok(())
 }

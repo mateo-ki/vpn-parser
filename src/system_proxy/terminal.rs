@@ -119,23 +119,19 @@ fn delete_env_value(name: &str) -> Result<()> {
 #[cfg(windows)]
 fn broadcast_environment_change() {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+        SendNotifyMessageW, HWND_BROADCAST, WM_SETTINGCHANGE,
     };
 
     let param: Vec<u16> = "Environment"
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
-    let mut result: usize = 0;
     unsafe {
-        SendMessageTimeoutW(
+        SendNotifyMessageW(
             HWND_BROADCAST,
             WM_SETTINGCHANGE,
             0,
             param.as_ptr() as isize,
-            SMTO_ABORTIFHUNG,
-            2000,
-            &mut result,
         );
     }
 }
