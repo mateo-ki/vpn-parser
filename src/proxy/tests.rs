@@ -288,7 +288,7 @@ use std::time::Duration;
         // 智能规则（全自动版本）：即使没有配置任何用户自定义规则，也自动集成完整的推荐分流（国内直连、广告拦截、局域网放行）
         let rules = config["rules"].as_array().unwrap();
         assert!(rules.iter().any(|r| r == "GEOSITE,cn,DIRECT"));
-        assert!(rules.iter().any(|r| r == "GEOIP,CN,DIRECT,no-resolve"));
+        assert!(rules.iter().any(|r| r == "GEOIP,CN,DIRECT"));
         for host in crate::geo::MIRROR_DIRECT_HOSTS {
             assert!(rules.iter().any(|r| r == &format!("DOMAIN-SUFFIX,{host},DIRECT")));
         }
@@ -322,7 +322,7 @@ use std::time::Duration;
         assert_eq!(rules[12], "GEOSITE,cn,DIRECT");
         assert_eq!(rules[13], "GEOSITE,google,PROXY");
         assert_eq!(rules[14], "GEOSITE,youtube,PROXY");
-        assert_eq!(rules[15], "GEOIP,CN,DIRECT,no-resolve");
+        assert_eq!(rules[15], "GEOIP,CN,DIRECT");
         assert_eq!(rules.last().unwrap(), "MATCH,PROXY");
     }
 
@@ -622,8 +622,8 @@ use std::time::Duration;
         let rules = config["rules"].as_array().unwrap();
         let geoip = rules
             .iter()
-            .position(|rule| rule == "GEOIP,CN,DIRECT,no-resolve")
-            .expect("GEOIP,CN,DIRECT,no-resolve");
+            .position(|rule| rule == "GEOIP,CN,DIRECT")
+            .expect("GEOIP,CN,DIRECT");
         assert_eq!(&rules[geoip - 2], "GEOSITE,google,PROXY");
         assert_eq!(&rules[geoip - 1], "GEOSITE,youtube,PROXY");
         assert_eq!(rules.last().unwrap(), "MATCH,PROXY");
@@ -737,7 +737,7 @@ use std::time::Duration;
         // 生成配置时污染免疫规则被插在 GEOIP,CN 之前，用户规则表本身不变。
         assert_eq!(config["rules"][1], "GEOSITE,google,PROXY");
         assert_eq!(config["rules"][2], "GEOSITE,youtube,PROXY");
-        assert_eq!(config["rules"][3], "GEOIP,CN,DIRECT,no-resolve");
+        assert_eq!(config["rules"][3], "GEOIP,CN,DIRECT");
         assert_eq!(
             config["rules"][4],
             "AND,((NETWORK,udp),(DST-PORT,443)),REJECT"

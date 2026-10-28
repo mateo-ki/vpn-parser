@@ -68,6 +68,46 @@ fn sanitize_name(s: &str) -> String {
         .to_string()
 }
 
+fn extract_skip_cert_verify(obj: &Map<String, Value>, node: &Node) -> bool {
+    let check_val = |v: Option<&Value>| match v {
+        Some(Value::Bool(b)) => Some(*b),
+        Some(Value::String(s)) => match s.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" => Some(true),
+            "false" | "0" => Some(false),
+            _ => None,
+        },
+        Some(Value::Number(n)) => Some(n.as_i64() == Some(1)),
+        _ => None,
+    };
+    for key in [
+        "skip-cert-verify",
+        "skip_cert_verify",
+        "insecure",
+        "allowInsecure",
+        "allow_insecure",
+    ] {
+        if let Some(b) = check_val(obj.get(key)) {
+            return b;
+        }
+        if let Some(b) = check_val(node.config.get(key)) {
+            return b;
+        }
+    }
+    let raw_lower = node.raw.to_ascii_lowercase();
+    if raw_lower.contains("skip-cert-verify: true")
+        || raw_lower.contains("skip-cert-verify: 1")
+        || raw_lower.contains("skip_cert_verify=1")
+        || raw_lower.contains("skip_cert_verify=true")
+        || raw_lower.contains("allowinsecure=1")
+        || raw_lower.contains("allowinsecure=true")
+        || raw_lower.contains("insecure=1")
+        || raw_lower.contains("insecure=true")
+    {
+        return true;
+    }
+    false
+}
+
 fn node_to_clash_proxy(node: &Node) -> Option<Value> {
     let mut cfg = node.config.clone();
     if !cfg.is_object() {
@@ -80,11 +120,7 @@ fn node_to_clash_proxy(node: &Node) -> Option<Value> {
         "vless" => Some(normalize_vless(&mut cfg, node)),
         "trojan" => Some(normalize_trojan(&mut cfg, node)),
         "hysteria2" | "hy2" => Some(normalize_hysteria2(&mut cfg, node)),
-        "hysteria" => {
-            set_type(&mut cfg, "hysteria");
-            ensure_server_port_name(&mut cfg, node);
-            Some(cfg)
-        }
+        "hysteria" => Some(normalize_hysteria(&mut cfg, node)),
         "socks5" | "socks" => {
             set_type(&mut cfg, "socks5");
             ensure_server_port_name(&mut cfg, node);
@@ -103,6 +139,12 @@ fn node_to_clash_proxy(node: &Node) -> Option<Value> {
         "tuic" => {
             set_type(&mut cfg, "tuic");
             ensure_server_port_name(&mut cfg, node);
+            if let Some(obj) = cfg.as_object_mut() {
+                let insecure = extract_skip_cert_verify(obj, node);
+                obj.remove("allowInsecure");
+                obj.remove("insecure");
+                obj.insert("skip-cert-verify".into(), json!(insecure));
+            }
             Some(cfg)
         }
         "anytls" => {
@@ -226,6 +268,12 @@ fn normalize_vmess(cfg: &mut Value, node: &Node) -> Value {
         _ => false,
     };
     obj.insert("tls".into(), json!(tls));
+    if tls {
+        let insecure = extract_skip_cert_verify(obj, node);
+        obj.remove("allowInsecure");
+        obj.remove("insecure");
+        obj.insert("skip-cert-verify".into(), json!(insecure));
+    }
 
     if let Some(sni) = first_str(obj, &["servername", "sni"]).filter(|s| !s.is_empty()) {
         obj.insert("servername".into(), json!(sni));
@@ -410,11 +458,10 @@ fn normalize_vless(cfg: &mut Value, node: &Node) -> Value {
         }
     }
 
-    // 节点数据来自远端订阅/gist：允许它关掉证书校验就等于让来源自己决定要不要
-    // 被 MITM。实测 19158 个节点里没有一个用到这些标记，所以一律强制关闭。
+    let insecure = extract_skip_cert_verify(obj, node);
     obj.remove("allowInsecure");
     obj.remove("insecure");
-    obj.insert("skip-cert-verify".into(), json!(false));
+    obj.insert("skip-cert-verify".into(), json!(insecure));
 
     for k in [
         "security",
@@ -500,11 +547,10 @@ fn normalize_trojan(cfg: &mut Value, node: &Node) -> Value {
         _ => {}
     }
 
-    // 节点数据来自远端订阅/gist：允许它关掉证书校验就等于让来源自己决定要不要
-    // 被 MITM。实测 19158 个节点里没有一个用到这些标记，所以一律强制关闭。
+    let insecure = extract_skip_cert_verify(obj, node);
     obj.remove("allowInsecure");
     obj.remove("insecure");
-    obj.insert("skip-cert-verify".into(), json!(false));
+    obj.insert("skip-cert-verify".into(), json!(insecure));
 
     if let Some(Value::String(s)) = obj.get("alpn").cloned() {
         let list: Vec<String> = s
@@ -554,11 +600,10 @@ fn normalize_hysteria2(cfg: &mut Value, node: &Node) -> Value {
     if let Some(sni) = first_str(obj, &["sni", "servername"]).filter(|s| !s.is_empty()) {
         obj.insert("sni".into(), json!(sni));
     }
-    // 节点数据来自远端订阅/gist：允许它关掉证书校验就等于让来源自己决定要不要
-    // 被 MITM。实测 19158 个节点里没有一个用到这些标记，所以一律强制关闭。
+    let insecure = extract_skip_cert_verify(obj, node);
     obj.remove("allowInsecure");
     obj.remove("insecure");
-    obj.insert("skip-cert-verify".into(), json!(false));
+    obj.insert("skip-cert-verify".into(), json!(insecure));
     let obfs = first_str(obj, &["obfs"]).unwrap_or_default();
     if obfs.is_empty() {
         obj.remove("obfs");
@@ -567,6 +612,78 @@ fn normalize_hysteria2(cfg: &mut Value, node: &Node) -> Value {
     strip_empty_strings(obj, &["sni", "obfs", "obfs-password"]);
     obj.remove("insecure");
     obj.remove("allowInsecure");
+    cfg.clone()
+}
+
+fn normalize_hysteria(cfg: &mut Value, node: &Node) -> Value {
+    set_type(cfg, "hysteria");
+    ensure_server_port_name(cfg, node);
+    let Some(obj) = cfg.as_object_mut() else {
+        return cfg.clone();
+    };
+
+    let auth = first_str(obj, &["auth-str", "auth_str", "auth", "password"])
+        .or_else(|| {
+            if let Some(map) = node.config.as_object() {
+                first_str(map, &["auth-str", "auth_str", "auth", "password"])
+            } else {
+                None
+            }
+        });
+    if let Some(a) = auth {
+        obj.insert("auth-str".into(), json!(a));
+        obj.insert("auth_str".into(), json!(a));
+    }
+
+    let insecure = extract_skip_cert_verify(obj, node);
+    obj.remove("allowInsecure");
+    obj.remove("insecure");
+    obj.insert("skip-cert-verify".into(), json!(insecure));
+
+    if let Some(sni) = first_str(obj, &["sni", "peer", "server_name", "server-name"])
+        .filter(|s| !s.is_empty())
+    {
+        obj.insert("sni".into(), json!(sni));
+    }
+
+    let has_alpn = obj
+        .get("alpn")
+        .and_then(|v| v.as_array())
+        .map(|arr| !arr.is_empty())
+        .unwrap_or(false);
+    if !has_alpn {
+        obj.insert("alpn".into(), json!(["h3"]));
+    }
+
+    let has_proto = obj
+        .get("protocol")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    if !has_proto {
+        obj.insert("protocol".into(), json!("udp"));
+    }
+
+    if !obj.contains_key("up") {
+        if let Some(up) = obj.get("upmbps").or_else(|| obj.get("up_mbps")) {
+            obj.insert("up".into(), up.clone());
+        } else {
+            obj.insert("up".into(), json!("100 Mbps"));
+        }
+    }
+    if !obj.contains_key("down") {
+        if let Some(down) = obj.get("downmbps").or_else(|| obj.get("down_mbps")) {
+            obj.insert("down".into(), down.clone());
+        } else {
+            obj.insert("down".into(), json!("500 Mbps"));
+        }
+    }
+
+    let obfs = first_str(obj, &["obfs"]).unwrap_or_default();
+    if obfs.is_empty() {
+        obj.remove("obfs");
+    }
+    strip_empty_strings(obj, &["sni", "obfs"]);
     cfg.clone()
 }
 
@@ -580,6 +697,7 @@ fn node_to_share_uri(node: &Node) -> Option<String> {
         "vmess" => rebuild_vmess_uri(cfg, node),
         "vless" => rebuild_vless_uri(cfg, node),
         "trojan" => rebuild_trojan_uri(cfg, node),
+        "hysteria" => rebuild_hysteria1_uri(cfg, node),
         "hysteria2" | "hy2" => rebuild_hysteria2_uri(cfg, node),
         "socks5" | "socks" => rebuild_socks_uri(cfg, node),
         "http" | "https" => rebuild_http_uri(cfg, node),
@@ -859,6 +977,51 @@ fn rebuild_trojan_uri(cfg: &Value, node: &Node) -> Option<String> {
         .collect::<Vec<_>>()
         .join("&");
     let mut uri = format!("trojan://{password}@{server}:{port}");
+    if !query.is_empty() {
+        uri.push('?');
+        uri.push_str(&query);
+    }
+    if !name.is_empty() {
+        uri.push('#');
+        uri.push_str(&urlencoding_lite(&name));
+    }
+    Some(uri)
+}
+
+fn rebuild_hysteria1_uri(cfg: &Value, node: &Node) -> Option<String> {
+    let server = str_field(cfg, &["server"]).unwrap_or_else(|| node.server.clone());
+    let port = port_field(cfg).unwrap_or(node.port);
+    let name = str_field(cfg, &["name"]).unwrap_or_else(|| node.name.clone());
+    let auth = str_field(cfg, &["auth", "auth-str", "auth_str", "password"]).unwrap_or_default();
+    let mut q: Vec<(String, String)> = Vec::new();
+    if !auth.is_empty() {
+        q.push(("auth".into(), auth));
+    }
+    if let Some(sni) = str_field(cfg, &["sni", "peer", "server_name", "server-name"]).filter(|s| !s.is_empty()) {
+        q.push(("peer".into(), sni));
+    }
+    let insecure = extract_skip_cert_verify(cfg.as_object().unwrap_or(&serde_json::Map::new()), node);
+    if insecure {
+        q.push(("insecure".into(), "1".into()));
+    }
+    if let Some(up) = cfg.get("up").and_then(Value::as_u64) {
+        q.push(("upmbps".into(), up.to_string()));
+    }
+    if let Some(down) = cfg.get("down").and_then(Value::as_u64) {
+        q.push(("downmbps".into(), down.to_string()));
+    }
+    if let Some(proto) = str_field(cfg, &["protocol"]).filter(|s| !s.is_empty()) {
+        q.push(("protocol".into(), proto));
+    }
+    if let Some(obfs) = str_field(cfg, &["obfs"]).filter(|s| !s.is_empty()) {
+        q.push(("obfs".into(), obfs));
+    }
+    let query = q
+        .into_iter()
+        .map(|(k, v)| format!("{}={}", k, urlencoding_lite(&v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    let mut uri = format!("hysteria://{server}:{port}");
     if !query.is_empty() {
         uri.push('?');
         uri.push_str(&query);
@@ -1215,5 +1378,80 @@ mod tests {
         assert!(uris[0].starts_with("vless://"), "got {}", uris[0]);
         assert!(uris[0].contains("type=ws"));
         assert!(uris[0].contains("11111111-2222-4333-8444-555555555555@203.0.113.200:80"));
+    }
+
+    #[test]
+    fn skip_cert_verify_propagation() {
+        let node_hy2 = sample_node(
+            "hysteria2",
+            json!({
+                "type": "hysteria2",
+                "server": "1.1.1.1",
+                "port": 443,
+                "password": "pw",
+                "sni": "bing.com",
+                "skip-cert-verify": true
+            }),
+            "skip-cert-verify: true\n",
+        );
+        let proxies = nodes_to_clash_proxies(&[node_hy2]);
+        assert_eq!(proxies[0]["skip-cert-verify"], json!(true));
+
+        let node_trojan = sample_node(
+            "trojan",
+            json!({
+                "type": "trojan",
+                "server": "1.1.1.1",
+                "port": 443,
+                "password": "pw",
+                "allowInsecure": true
+            }),
+            "",
+        );
+        let proxies = nodes_to_clash_proxies(&[node_trojan]);
+        assert_eq!(proxies[0]["skip-cert-verify"], json!(true));
+
+        let node_hy1 = sample_node(
+            "hysteria",
+            json!({
+                "type": "hysteria",
+                "server": "198.200.57.142",
+                "port": 22335,
+                "auth-str": "token123",
+                "protocol": "udp",
+                "skip-cert-verify": true
+            }),
+            "",
+        );
+        let proxies = nodes_to_clash_proxies(&[node_hy1]);
+        assert_eq!(proxies[0]["type"], "hysteria");
+        assert_eq!(proxies[0]["auth-str"], "token123");
+        assert_eq!(proxies[0]["auth_str"], "token123");
+        assert_eq!(proxies[0]["skip-cert-verify"], json!(true));
+        assert_eq!(proxies[0]["alpn"], json!(["h3"]));
+        assert_eq!(proxies[0]["protocol"], "udp");
+    }
+
+    #[test]
+    fn rebuild_hysteria1_share_uri() {
+        let node = sample_node(
+            "hysteria",
+            json!({
+                "type": "hysteria",
+                "server": "1.2.3.4",
+                "port": 22335,
+                "auth": "secret",
+                "name": "my-hy1",
+                "protocol": "udp",
+                "skip-cert-verify": true
+            }),
+            "",
+        );
+        let uris = nodes_to_share_uris(&[node]);
+        assert_eq!(uris.len(), 1);
+        assert!(uris[0].starts_with("hysteria://1.2.3.4:22335"));
+        assert!(uris[0].contains("auth=secret"));
+        assert!(uris[0].contains("insecure=1"));
+        assert!(uris[0].contains("#my-hy1"));
     }
 }

@@ -729,6 +729,26 @@ pub fn select_proxy_kernel_preference_for_node_with(
             ));
         }
     }
+    if kind == KernelKind::VpCore {
+        if let Some(reason) = is_node_incompatible_with_vpcore(node) {
+            tracing::warn!(
+                reason,
+                "VP-Core 内核与当前节点不兼容，自动平滑回退至 Mihomo"
+            );
+            for fallback in [KernelKind::Mihomo, KernelKind::SingBox] {
+                if fallback.supports_proxy_protocol(&node.protocol) && available(fallback) {
+                    let notice = format!(
+                        "检测到{reason}，已默认平滑回退至 {} 运行",
+                        fallback.display_name()
+                    );
+                    return Ok((fallback, Some(notice)));
+                }
+            }
+            return Err(anyhow::anyhow!(
+                "VP-Core 暂不支持此配置（{reason}），且未安装可用的回退内核（如 Mihomo）"
+            ));
+        }
+    }
     Ok((kind, None))
 }
 

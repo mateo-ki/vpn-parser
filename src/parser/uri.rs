@@ -772,6 +772,15 @@ fn parse_hysteria1(uri: &str, source_id: Option<&str>) -> Option<Node> {
         .cloned()
         .unwrap_or_else(|| "udp".to_string());
 
+    let insecure = q
+        .get("insecure")
+        .or_else(|| q.get("allowInsecure"))
+        .or_else(|| q.get("allow_insecure"))
+        .or_else(|| q.get("skip-cert-verify"))
+        .or_else(|| q.get("skip_cert_verify"))
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
     let alpn = if let Some(a) = q.get("alpn") {
         if a.contains(',') {
             a.split(',')
@@ -781,10 +790,10 @@ fn parse_hysteria1(uri: &str, source_id: Option<&str>) -> Option<Node> {
         } else if !a.is_empty() {
             vec![a.clone()]
         } else {
-            vec![]
+            vec!["h3".to_string()]
         }
     } else {
-        vec![]
+        vec!["h3".to_string()]
     };
 
     let config = json!({
@@ -802,8 +811,9 @@ fn parse_hysteria1(uri: &str, source_id: Option<&str>) -> Option<Node> {
         "obfs": obfs,
         "protocol": protocol,
         "alpn": alpn,
-        "insecure": json!(false),
-        "allowInsecure": json!(false),
+        "skip-cert-verify": json!(insecure),
+        "insecure": json!(insecure),
+        "allowInsecure": json!(insecure),
     });
 
     Some(make_node(
@@ -911,7 +921,7 @@ mod tests {
 
     #[test]
     fn parses_hysteria1_uri() {
-        let uri = "hysteria://hy.example.com:443/?auth=mysecrettoken&peer=hy.example.com&upmbps=100&downmbps=500&obfs=myobfs#Hysteria1Node";
+        let uri = "hysteria://hy.example.com:443/?auth=mysecrettoken&peer=hy.example.com&upmbps=100&downmbps=500&obfs=myobfs&insecure=1#Hysteria1Node";
         let node = parse_uri(uri, None).expect("hysteria1 parse");
         assert_eq!(node.protocol, "hysteria");
         assert_eq!(node.name, "Hysteria1Node");
@@ -927,5 +937,7 @@ mod tests {
         );
         assert_eq!(node.config.get("up").and_then(|v| v.as_u64()), Some(100));
         assert_eq!(node.config.get("down").and_then(|v| v.as_u64()), Some(500));
+        assert_eq!(node.config.get("skip-cert-verify"), Some(&json!(true)));
+        assert_eq!(node.config.get("alpn"), Some(&json!(["h3"])));
     }
 }

@@ -165,7 +165,7 @@ fn build_mihomo_config_legacy(node: &Node, options: MihomoConfigOptions) -> Resu
                 let is_tls = obj.get("tls").and_then(Value::as_bool) == Some(true)
                     || obj.contains_key("reality-opts")
                     || obj.contains_key("public-key")
-                    || matches!(p_type, "vless" | "vmess" | "trojan" | "hysteria2" | "tuic" | "ssr");
+                    || matches!(p_type, "vless" | "vmess" | "trojan" | "hysteria" | "hysteria2" | "tuic" | "ssr");
                 if is_tls && (!obj.contains_key("client-fingerprint") || obj.get("client-fingerprint").and_then(Value::as_str) == Some("")) {
                     obj.insert("client-fingerprint".into(), fp_val.clone());
                 }

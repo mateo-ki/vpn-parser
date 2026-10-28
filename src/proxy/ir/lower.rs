@@ -312,7 +312,7 @@ fn convert_matcher(matcher: &RuleMatcher) -> (IRMatcher, bool) {
         RuleMatcher::DomainSuffix(d) => (IRMatcher::DomainSuffix(d.clone()), false),
         RuleMatcher::DomainKeyword(k) => (IRMatcher::DomainKeyword(k.clone()), false),
         RuleMatcher::GeoSite(s) => (IRMatcher::GeoSite(s.clone()), false),
-        RuleMatcher::GeoIp(country) => (IRMatcher::GeoIp(country.clone()), true),
+        RuleMatcher::GeoIp(country) => (IRMatcher::GeoIp(country.clone()), false),
         RuleMatcher::IpCidr(cidr) => {
             let no_res = crate::hostutil::is_private_cidr(cidr);
             (IRMatcher::IpCidr(cidr.clone()), no_res)
@@ -413,9 +413,8 @@ pub fn parse_clash_rules_yaml_to_ir(rules_yaml: Option<&str>, source: RuleSource
             matchers: vec![matcher],
             action,
             no_resolve: no_resolve
-                || matches!(matcher_type.as_str(), "GEOIP")
                 || (matches!(matcher_type.as_str(), "IP-CIDR" | "IP-CIDR6")
-                    && (no_resolve || crate::hostutil::is_private_cidr(target))),
+                    && crate::hostutil::is_private_cidr(target)),
             source,
         });
     }

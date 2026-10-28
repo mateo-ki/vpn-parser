@@ -324,7 +324,7 @@ impl BackendCompiler for MihomoCompiler {
                         || obj.contains_key("public-key")
                         || matches!(
                             p_type,
-                            "vless" | "vmess" | "trojan" | "hysteria2" | "tuic" | "ssr"
+                            "vless" | "vmess" | "trojan" | "hysteria" | "hysteria2" | "tuic" | "ssr"
                         );
                     if is_tls
                         && (!obj.contains_key("client-fingerprint")
