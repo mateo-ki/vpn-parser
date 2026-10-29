@@ -28,9 +28,19 @@ fi
 echo "==> Packaging vpn-parser v${VERSION} for OpenWrt 25.x (Architecture: $APK_ARCH)..."
 
 # Ensure apk with mkpkg is available
+# 注意：不能用 `apk --help | grep -q mkpkg`——脚本开了 pipefail，grep -q 命中即退出，
+# apk 继续写 help 触发 SIGPIPE(141)，管道整体被判失败，探测永远不通过（CI 一直
+# 因此静默跳过 .apk 打包）。先捕获输出再做模式匹配，不吃 SIGPIPE。
 check_apk() {
     local bin="$1"
-    [ -n "$bin" ] && [ -x "$bin" ] && "$bin" --version >/dev/null 2>&1 && ("$bin" mkpkg --help >/dev/null 2>&1 || "$bin" --help 2>&1 | grep -q "mkpkg")
+    local help_out=""
+    [ -n "$bin" ] && [ -x "$bin" ] || return 1
+    "$bin" --version >/dev/null 2>&1 || return 1
+    if "$bin" mkpkg --help >/dev/null 2>&1; then
+        return 0
+    fi
+    help_out="$("$bin" --help 2>&1)" || true
+    [[ "$help_out" == *mkpkg* ]]
 }
 
 APK_BIN=""

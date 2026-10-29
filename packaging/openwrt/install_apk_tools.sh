@@ -7,7 +7,16 @@
 set -euo pipefail
 
 if command -v apk >/dev/null 2>&1; then
-    if apk mkpkg --help >/dev/null 2>&1 || apk --help 2>&1 | grep -q "mkpkg"; then
+    # 同 make_apk.sh check_apk：不能用 `apk --help | grep -q mkpkg`，pipefail + grep -q
+    # 的 SIGPIPE 竞态会让探测必挂；先捕获输出再匹配。
+    help_out=""
+    if apk mkpkg --help >/dev/null 2>&1; then
+        echo "==> apk-tools with mkpkg is already installed: $(which apk)"
+        apk --version 2>/dev/null || true
+        exit 0
+    fi
+    help_out="$(apk --help 2>&1)" || true
+    if [[ "$help_out" == *mkpkg* ]]; then
         echo "==> apk-tools with mkpkg is already installed: $(which apk)"
         apk --version 2>/dev/null || true
         exit 0
