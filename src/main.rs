@@ -393,6 +393,11 @@ fn main() -> Result<()> {
                     Ok(_) => {}
                     Err(e) => tracing::warn!(error = %e, "scrub invalid hosts failed"),
                 }
+                match scrub_db.fix_misclassified_tr_nodes().await {
+                    Ok(n) if n > 0 => info!(count = n, "auto-corrected misclassified TR nodes"),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(error = %e, "fix misclassified TR nodes failed"),
+                }
             });
         }
         // 新安装如果缺少 Geo 分流规则库，在后台异步预先拉取（Fastly CDN 2秒就绪）

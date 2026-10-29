@@ -497,8 +497,8 @@ pub fn is_node_incompatible_with_meow(node: &Node, has_tun: bool) -> Option<&'st
 /// 必须在选内核阶段就回退，不能等 vpcore 进程退出码 1）。
 pub fn is_node_incompatible_with_vpcore(node: &Node) -> Option<&'static str> {
     let proto = node.protocol.to_ascii_lowercase();
-    if matches!(proto.as_str(), "masque" | "hysteria" | "hy1") {
-        return Some("MASQUE/Hysteria 协议（VP-Core 暂不支持）");
+    if proto == "masque" {
+        return Some("MASQUE 协议（VP-Core 暂不支持）");
     }
     let mut nets: Vec<String> = Vec::new();
     if let Some(net) = node.config.get("network").and_then(|v| v.as_str()) {

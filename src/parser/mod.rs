@@ -318,7 +318,7 @@ pub fn make_node(
         port,
         raw: raw.to_string(),
         config,
-        country: guess_country(name),
+        country: guess_country_with_server(name, Some(server)),
         latency_ms: None,
         latency_ok: None,
         download_kbps: None,
@@ -330,99 +330,398 @@ pub fn make_node(
     }
 }
 
+/// 从节点名称推断国家/地区两字符代码（ISO 3166-1 alpha-2，如 "US", "HK", "JP"）。
 pub fn guess_country(name: &str) -> Option<String> {
-    let n = name.to_ascii_lowercase();
-    // Prefer ASCII tokens to avoid encoding issues; Chinese labels still matched via contains on original.
-    let ascii = [
+    guess_country_with_server(name, None)
+}
+
+/// 从节点名称以及可选的服务器地址综合推断国家/地区。
+pub fn guess_country_with_server(name: &str, server: Option<&str>) -> Option<String> {
+    let s = name.trim();
+
+    // 1. 优先提取 Emoji 旗帜 (Regional Indicator Symbol 符号对，100% 精准无歧义)
+    // 🇦=U+1F1E6, 🇿=U+1F1FF
+    let chars: Vec<char> = s.chars().collect();
+    for i in 0..chars.len().saturating_sub(1) {
+        let c1 = chars[i];
+        let c2 = chars[i + 1];
+        if ('\u{1F1E6}'..='\u{1F1FF}').contains(&c1) && ('\u{1F1E6}'..='\u{1F1FF}').contains(&c2) {
+            let b1 = ((c1 as u32 - 0x1F1E6) + ('A' as u32)) as u8;
+            let b2 = ((c2 as u32 - 0x1F1E6) + ('A' as u32)) as u8;
+            if b1.is_ascii_uppercase() && b2.is_ascii_uppercase() {
+                return Some(String::from_utf8(vec![b1, b2]).unwrap());
+            }
+        }
+    }
+
+    // 2. 中文地名与城市匹配（先于短 ASCII 代码，避免像「洛杉矶 Trojan」被 trojan 中的 tr 抢先误判）
+    let zh_map = [
+        ("香港", "HK"),
+        ("台湾", "TW"),
+        ("臺灣", "TW"),
+        ("台北", "TW"),
+        ("臺北", "TW"),
+        ("高雄", "TW"),
+        ("日本", "JP"),
+        ("东京", "JP"),
+        ("東京", "JP"),
+        ("大阪", "JP"),
+        ("名古屋", "JP"),
+        ("福冈", "JP"),
+        ("福岡", "JP"),
+        ("横滨", "JP"),
+        ("新加坡", "SG"),
+        ("狮城", "SG"),
+        ("獅城", "SG"),
+        ("美国", "US"),
+        ("美國", "US"),
+        ("洛杉矶", "US"),
+        ("洛杉磯", "US"),
+        ("圣何塞", "US"),
+        ("聖何塞", "US"),
+        ("硅谷", "US"),
+        ("矽谷", "US"),
+        ("西雅图", "US"),
+        ("西雅圖", "US"),
+        ("旧金山", "US"),
+        ("舊金山", "US"),
+        ("纽约", "US"),
+        ("紐約", "US"),
+        ("芝加哥", "US"),
+        ("达拉斯", "US"),
+        ("達拉斯", "US"),
+        ("凤凰城", "US"),
+        ("邁阿密", "US"),
+        ("迈阿密", "US"),
+        ("亚特兰大", "US"),
+        ("波特兰", "US"),
+        ("波士顿", "US"),
+        ("弗吉尼亚", "US"),
+        ("韩国", "KR"),
+        ("韓國", "KR"),
+        ("首尔", "KR"),
+        ("首爾", "KR"),
+        ("仁川", "KR"),
+        ("英国", "GB"),
+        ("英國", "GB"),
+        ("伦敦", "GB"),
+        ("倫敦", "GB"),
+        ("曼彻斯特", "GB"),
+        ("德国", "DE"),
+        ("德國", "DE"),
+        ("法兰克福", "DE"),
+        ("法蘭克福", "DE"),
+        ("柏林", "DE"),
+        ("法国", "FR"),
+        ("法國", "FR"),
+        ("巴黎", "FR"),
+        ("加拿大", "CA"),
+        ("多伦多", "CA"),
+        ("温哥华", "CA"),
+        ("溫哥華", "CA"),
+        ("澳洲", "AU"),
+        ("澳大利亚", "AU"),
+        ("澳大利亞", "AU"),
+        ("悉尼", "AU"),
+        ("墨尔本", "AU"),
+        ("俄罗斯", "RU"),
+        ("俄羅斯", "RU"),
+        ("莫斯科", "RU"),
+        ("印度", "IN"),
+        ("孟买", "IN"),
+        ("新德里", "IN"),
+        ("土耳其", "TR"),
+        ("伊斯坦布尔", "TR"),
+        ("荷兰", "NL"),
+        ("荷蘭", "NL"),
+        ("阿姆斯特丹", "NL"),
+        ("马来西亚", "MY"),
+        ("吉隆坡", "MY"),
+        ("泰国", "TH"),
+        ("曼谷", "TH"),
+        ("越南", "VN"),
+        ("菲律宾", "PH"),
+        ("印尼", "ID"),
+    ];
+    for (k, v) in zh_map {
+        if s.contains(k) {
+            return Some(v.to_string());
+        }
+    }
+
+    let n = s.to_ascii_lowercase();
+
+    // 3. 完整英文单词及城市名（至少 3 字符以上的明确单词）
+    let full_words = [
         ("hongkong", "HK"),
         ("hong kong", "HK"),
         ("taiwan", "TW"),
+        ("taipei", "TW"),
+        ("japan", "JP"),
         ("tokyo", "JP"),
         ("osaka", "JP"),
-        ("japan", "JP"),
         ("singapore", "SG"),
+        ("united states", "US"),
+        ("unitedstates", "US"),
+        ("america", "US"),
         ("losangeles", "US"),
         ("los angeles", "US"),
-        ("america", "US"),
-        ("united states", "US"),
-        ("seoul", "KR"),
+        ("san jose", "US"),
+        ("sanjose", "US"),
+        ("seattle", "US"),
+        ("new york", "US"),
+        ("newyork", "US"),
+        ("chicago", "US"),
+        ("silicon valley", "US"),
+        ("siliconvalley", "US"),
+        ("fremont", "US"),
+        ("dallas", "US"),
+        ("phoenix", "US"),
+        ("atlanta", "US"),
+        ("miami", "US"),
+        ("ashburn", "US"),
         ("korea", "KR"),
-        ("london", "GB"),
+        ("seoul", "KR"),
+        ("incheon", "KR"),
+        ("united kingdom", "GB"),
         ("england", "GB"),
+        ("london", "GB"),
+        ("manchester", "GB"),
         ("germany", "DE"),
+        ("frankfurt", "DE"),
+        ("berlin", "DE"),
         ("france", "FR"),
+        ("paris", "FR"),
         ("canada", "CA"),
+        ("toronto", "CA"),
+        ("vancouver", "CA"),
+        ("montreal", "CA"),
         ("australia", "AU"),
+        ("sydney", "AU"),
+        ("melbourne", "AU"),
         ("russia", "RU"),
+        ("moscow", "RU"),
         ("india", "IN"),
+        ("mumbai", "IN"),
+        ("delhi", "IN"),
         ("turkey", "TR"),
+        ("istanbul", "TR"),
         ("netherlands", "NL"),
-        ("hk", "HK"),
-        ("tw", "TW"),
-        ("jp", "JP"),
-        ("sg", "SG"),
-        ("us", "US"),
-        ("usa", "US"),
-        ("kr", "KR"),
-        ("uk", "GB"),
-        ("gb", "GB"),
-        ("de", "DE"),
-        ("fr", "FR"),
-        ("ca", "CA"),
-        ("au", "AU"),
-        ("ru", "RU"),
-        ("in", "IN"),
-        ("tr", "TR"),
-        ("nl", "NL"),
+        ("amsterdam", "NL"),
+        ("malaysia", "MY"),
+        ("thailand", "TH"),
+        ("bangkok", "TH"),
+        ("vietnam", "VN"),
+        ("philippines", "PH"),
+        ("indonesia", "ID"),
     ];
-    for (k, v) in ascii {
+    for (k, v) in full_words {
         if n.contains(k) {
             return Some(v.to_string());
         }
     }
-    // Chinese region keywords (UTF-8).
-    let zh = name;
-    let zh_map = [
-        ("\u{9999}\u{6e2f}", "HK"), // 香港
-        ("\u{53f0}\u{6e7e}", "TW"), // 台湾
-        ("\u{53f0}\u{7063}", "TW"), // 臺灣
-        ("\u{53f0}\u{5317}", "TW"), // 台北
-        ("\u{81fa}\u{5317}", "TW"), // 臺北
-        ("\u{65e5}\u{672c}", "JP"), // 日本
-        ("\u{4e1c}\u{4eac}", "JP"), // 东京
-        ("\u{6771}\u{4eac}", "JP"), // 東京
-        ("\u{5927}\u{962a}", "JP"), // 大阪
-        ("\u{65b0}\u{52a0}\u{5761}", "SG"), // 新加坡
-        ("\u{72ee}\u{57ce}", "SG"), // 狮城
-        ("\u{7345}\u{57ce}", "SG"), // 獅城
-        ("\u{7f8e}\u{56fd}", "US"), // 美国
-        ("\u{7f8e}\u{570b}", "US"), // 美國
-        ("\u{6d1b}\u{6749}\u{77f6}", "US"), // 洛杉矶
-        ("\u{7ebd}\u{7ea6}", "US"), // 纽约
-        ("\u{7d10}\u{7d04}", "US"), // 紐約
-        ("\u{65e7}\u{91d1}\u{5c71}", "US"), // 旧金山
-        ("\u{897f}\u{96c5}\u{56fe}", "US"), // 西雅图
-        ("\u{7845}\u{8c37}", "US"), // 硅谷
-        ("\u{97e9}\u{56fd}", "KR"), // 韩国
-        ("\u{97d3}\u{570b}", "KR"), // 韓國
-        ("\u{9996}\u{5c14}", "KR"), // 首尔
-        ("\u{82f1}\u{56fd}", "GB"), // 英国
-        ("\u{82f1}\u{570b}", "GB"), // 英國
-        ("\u{4f26}\u{6566}", "GB"), // 伦敦
-        ("\u{5fb7}\u{56fd}", "DE"), // 德国
-        ("\u{6cd5}\u{56fd}", "FR"), // 法国
-        ("\u{52a0}\u{62ff}\u{5927}", "CA"), // 加拿大
-        ("\u{6fb3}\u{6d32}", "AU"), // 澳洲
-        ("\u{6fb3}\u{5927}\u{5229}\u{4e9a}", "AU"), // 澳大利亚
-        ("\u{6089}\u{5c3c}", "AU"), // 悉尼
-        ("\u{4fc4}\u{7f57}\u{65af}", "RU"), // 俄罗斯
-        ("\u{5370}\u{5ea6}", "IN"), // 印度
-        ("\u{571f}\u{8033}\u{5176}", "TR"), // 土耳其
-        ("\u{8377}\u{5170}", "NL"), // 荷兰
+
+    // 4. 常见机场与枢纽代码（严格要求词边界，如 lax, sjc, sfo, hkg, nrt）
+    let airport_codes = [
+        ("lax", "US"),
+        ("sjc", "US"),
+        ("sfo", "US"),
+        ("sea", "US"),
+        ("jfk", "US"),
+        ("ord", "US"),
+        ("dfw", "US"),
+        ("iad", "US"),
+        ("ewr", "US"),
+        ("atl", "US"),
+        ("mia", "US"),
+        ("hkg", "HK"),
+        ("nrt", "JP"),
+        ("hnd", "JP"),
+        ("kix", "JP"),
+        ("tpe", "TW"),
+        ("khh", "TW"),
+        ("sin", "SG"),
+        ("icn", "KR"),
+        ("lhr", "GB"),
+        ("fra", "DE"),
+        ("ams", "NL"),
     ];
-    for (k, v) in zh_map {
-        if zh.contains(k) {
+    for (k, v) in airport_codes {
+        if has_isolated_token(&n, k) {
             return Some(v.to_string());
+        }
+    }
+
+    // 5. 2 字符/3 字符国家地区简写（必须严格具备词边界，禁止作为其他单词子串匹配！
+    // 彻底根除 trojan->tr(土耳其), node->de(德国), china->in(印度), auto->au, location->ca 等低级误判）
+    let iso_tokens = [
+        ("usa", "US"),
+        ("us", "US"),
+        ("hkg", "HK"),
+        ("hk", "HK"),
+        ("jpn", "JP"),
+        ("jp", "JP"),
+        ("sgp", "SG"),
+        ("sg", "SG"),
+        ("twn", "TW"),
+        ("tw", "TW"),
+        ("kor", "KR"),
+        ("kr", "KR"),
+        ("gbr", "GB"),
+        ("gb", "GB"),
+        ("uk", "GB"),
+        ("deu", "DE"),
+        ("de", "DE"),
+        ("fra", "FR"),
+        ("fr", "FR"),
+        ("can", "CA"),
+        ("ca", "CA"),
+        ("aus", "AU"),
+        ("au", "AU"),
+        ("rus", "RU"),
+        ("ru", "RU"),
+        ("ind", "IN"),
+        ("tur", "TR"),
+        ("tr", "TR"),
+        ("nld", "NL"),
+        ("nl", "NL"),
+        ("mys", "MY"),
+        ("tha", "TH"),
+        ("th", "TH"),
+        ("vnm", "VN"),
+        ("vn", "VN"),
+        ("phl", "PH"),
+        ("ph", "PH"),
+        ("idn", "ID"),
+        ("id", "ID"),
+    ];
+    for (k, v) in iso_tokens {
+        if has_isolated_token(&n, k) {
+            return Some(v.to_string());
+        }
+    }
+
+    // 对于常见英文介词/代词重合的两字母代码（如 my -> 我的，in -> 在...中），
+    // 仅在带有定界符/前后缀（如 [MY], MY-01, MY_01, [IN], IN-01）或后接数字时才采纳，避免 "My Node" 误判为马来西亚
+    for (special_code, country) in [("my", "MY"), ("in", "IN")] {
+        if has_bracketed_or_prefixed(&n, special_code) {
+            return Some(country.to_string());
+        }
+    }
+
+    // 6. 若从名称中无法识别，尝试根据服务器域名后缀或关键域名特征推断
+    server.and_then(guess_country_from_server)
+}
+
+/// 检查 token 是否作为独立单词/符号分隔词出现（前后不能紧挨字母）
+fn has_isolated_token(text: &str, token: &str) -> bool {
+    let t = text.as_bytes();
+    let tok = token.as_bytes();
+    if tok.is_empty() || t.len() < tok.len() {
+        return false;
+    }
+    let mut idx = 0;
+    while idx + tok.len() <= t.len() {
+        if &t[idx..idx + tok.len()] == tok {
+            let before_ok = idx == 0 || !t[idx - 1].is_ascii_alphabetic();
+            let after_idx = idx + tok.len();
+            let after_ok = after_idx == t.len() || !t[after_idx].is_ascii_alphabetic();
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        idx += 1;
+    }
+    false
+}
+
+/// 检查类似 MY/IN 等高歧义二字代码是否带有括号、连字符、下划线定界或后接数字，避免匹配普通英文单词
+fn has_bracketed_or_prefixed(text: &str, tok: &str) -> bool {
+    let t = text.as_bytes();
+    let tok_bytes = tok.as_bytes();
+    if tok_bytes.is_empty() || t.len() < tok_bytes.len() {
+        return false;
+    }
+    let mut idx = 0;
+    while idx + tok_bytes.len() <= t.len() {
+        if &t[idx..idx + tok_bytes.len()] == tok_bytes {
+            let prev = if idx > 0 { Some(t[idx - 1]) } else { None };
+            let next = if idx + tok_bytes.len() < t.len() {
+                Some(t[idx + tok_bytes.len()])
+            } else {
+                None
+            };
+            let prev_bracket = prev.map_or(true, |b| matches!(b, b'[' | b'(' | b'-' | b'_' | b' ' | b'|'));
+            let next_is_digit = next.map_or(false, |b| b.is_ascii_digit());
+            let next_is_delim = next.map_or(true, |b| matches!(b, b']' | b')' | b'-' | b'_' | b' ' | b'|'));
+            let has_strict_delimiter = prev.is_some_and(|b| matches!(b, b'[' | b'(' | b'-' | b'_'))
+                || next.is_some_and(|b| matches!(b, b']' | b')' | b'-' | b'_'));
+
+            if prev_bracket && (next_is_digit || has_strict_delimiter) && (next_is_digit || next_is_delim) {
+                return true;
+            }
+        }
+        idx += 1;
+    }
+    false
+}
+
+/// 根据 server 域名/主机名推测国家（如 .hk -> HK, .jp -> JP 等）
+fn guess_country_from_server(server: &str) -> Option<String> {
+    let host = server.trim().to_ascii_lowercase();
+    if host.is_empty() {
+        return None;
+    }
+    // 检查国家代码顶级域名
+    let tld_map = [
+        (".hk", "HK"),
+        (".tw", "TW"),
+        (".jp", "JP"),
+        (".sg", "SG"),
+        (".kr", "KR"),
+        (".uk", "GB"),
+        (".de", "DE"),
+        (".fr", "FR"),
+        (".ca", "CA"),
+        (".au", "AU"),
+        (".ru", "RU"),
+        (".in", "IN"),
+        (".tr", "TR"),
+        (".nl", "NL"),
+        (".my", "MY"),
+        (".th", "TH"),
+        (".vn", "VN"),
+    ];
+    for (suffix, code) in tld_map {
+        if host.ends_with(suffix) || host.contains(&format!("{suffix}:")) {
+            return Some(code.to_string());
+        }
+    }
+
+    // 检查常见子域名中包含的地区前缀（如 lax.vmiss.com, sjc.node.com）
+    let prefixes = [
+        ("lax.", "US"),
+        ("sjc.", "US"),
+        ("sfo.", "US"),
+        ("sea.", "US"),
+        ("us-", "US"),
+        ("us.", "US"),
+        ("hk-", "HK"),
+        ("hk.", "HK"),
+        ("hkg.", "HK"),
+        ("jp-", "JP"),
+        ("jp.", "JP"),
+        ("tokyo.", "JP"),
+        ("sg-", "SG"),
+        ("sg.", "SG"),
+        ("sin.", "SG"),
+    ];
+    for (prefix, code) in prefixes {
+        if host.starts_with(prefix)
+            || host.contains(&format!(".{prefix}"))
+            || host.contains(&format!("-{prefix}"))
+        {
+            return Some(code.to_string());
         }
     }
     None
@@ -484,10 +783,22 @@ pub fn clean_node_name(name: &str, country_hint: Option<&str>, server: &str, por
         .trim()
         .to_string();
 
-    let country_code = country_hint
-        .map(|c| c.to_string())
-        .or_else(|| guess_country(&s))
-        .or_else(|| guess_country(name));
+    let validated_hint = country_hint.filter(|c| {
+        if c.eq_ignore_ascii_case("TR") {
+            let n_low = name.to_ascii_lowercase();
+            n_low.contains("turkey")
+                || n_low.contains("istanbul")
+                || name.contains("土耳其")
+                || name.contains("🇹🇷")
+                || has_isolated_token(&n_low, "tr")
+        } else {
+            true
+        }
+    });
+
+    let country_code = guess_country_with_server(name, Some(server))
+        .or_else(|| guess_country_with_server(&s, Some(server)))
+        .or_else(|| validated_hint.map(|c| c.to_string()));
 
     if let Some(code) = country_code {
         let zh_name = match code.to_ascii_uppercase().as_str() {
@@ -569,6 +880,53 @@ mod tests {
                 443
             ),
             "日本 专线"
+        );
+    }
+
+    #[test]
+    fn guess_country_fixes_vmiss_and_trojan_false_positives() {
+        // Emoji 国旗精准提取
+        assert_eq!(guess_country("🇺🇸【北美洲】美国04原生丨直连【2x】"), Some("US".into()));
+        assert_eq!(guess_country("🇭🇰 香港 BGP 01"), Some("HK".into()));
+        assert_eq!(guess_country("🇯🇵 东京专线"), Some("JP".into()));
+        assert_eq!(guess_country("🇸🇬 新加坡优化"), Some("SG".into()));
+
+        // 中文城市名
+        assert_eq!(guess_country("VMiss 洛杉矶 Trojan"), Some("US".into()));
+        assert_eq!(guess_country("VMiss 圣何塞 优化线路"), Some("US".into()));
+        assert_eq!(guess_country("VMiss 西雅图 CN2"), Some("US".into()));
+
+        // 英文全词与机场枢纽代码
+        assert_eq!(guess_country("VMiss - US - Trojan"), Some("US".into()));
+        assert_eq!(guess_country("VMiss LAX Trojan"), Some("US".into()));
+        assert_eq!(guess_country("VMiss SJC Trojan"), Some("US".into()));
+        assert_eq!(guess_country("VMiss - San Jose - Trojan"), Some("US".into()));
+        assert_eq!(guess_country("VMiss-Seattle-Trojan"), Some("US".into()));
+
+        // 杜绝单词子串误判：trojan 中的 tr 绝不能误判为土耳其 TR！
+        assert_eq!(guess_country("VMiss-Trojan"), None);
+        assert_eq!(guess_country("Node 01"), None); // de 绝不能误判为德国
+        assert_eq!(guess_country("China Telecom"), None); // in 绝不能误判为印度
+        assert_eq!(guess_country("VMiss Ultra"), None); // tr 绝不能误判为土耳其
+        assert_eq!(guess_country("Dedicated 01"), None);
+
+        // 真实的土耳其节点必须识别
+        assert_eq!(guess_country("VMiss - TR - 01"), Some("TR".into()));
+        assert_eq!(guess_country("土耳其 01"), Some("TR".into()));
+        assert_eq!(guess_country("🇹🇷 伊斯坦布尔"), Some("TR".into()));
+
+        // 结合 server 推断
+        assert_eq!(
+            guess_country_with_server("VMiss-Trojan", Some("lax.vmiss.com")),
+            Some("US".into())
+        );
+        assert_eq!(
+            guess_country_with_server("My Node", Some("sjc.example.net")),
+            Some("US".into())
+        );
+        assert_eq!(
+            guess_country_with_server("VPS Server", Some("node01.hk")),
+            Some("HK".into())
         );
     }
 

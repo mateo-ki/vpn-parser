@@ -588,6 +588,28 @@ impl VpnApp {
                             if manual {
                                 self.status = format!("IP 检测：{}", risk.headline());
                             }
+                            // 若查验到有效的国家/地区代码，自动同步并纠正节点国家归属
+                            if !risk.country.is_empty() {
+                                let target_id = if manual {
+                                    self.ip_risk_target.clone()
+                                } else {
+                                    self.ip_risk_auto_for.clone()
+                                };
+                                if let Some(target_id) = target_id {
+                                    let db = self.db.clone();
+                                    let country = risk.country.clone();
+                                    let tid = target_id.clone();
+                                    self.rt.spawn(async move {
+                                        let _ = db.update_node_country(&tid, &country).await;
+                                    });
+                                    if let Some(node) = self.nodes.iter_mut().find(|n| n.id == target_id) {
+                                        node.country = Some(risk.country.clone());
+                                    }
+                                    if let Some(node) = self.proxy_nodes.iter_mut().find(|n| n.id == target_id) {
+                                        node.country = Some(risk.country.clone());
+                                    }
+                                }
+                            }
                             self.ip_risk = Some(risk);
                         }
                         BgMsg::IpRisk(Err(error), manual) => {

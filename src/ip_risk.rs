@@ -203,12 +203,16 @@ pub fn parse(hostname: &str, ip: &str, body: &str, api_body: Option<&str>) -> Re
     let info: IpInfo =
         serde_json::from_str(body).map_err(|error| anyhow!("解析 IP 归属失败: {error}"))?;
     let api: Option<IpApi> = api_body.and_then(|text| serde_json::from_str::<IpApi>(text).ok());
-    let datacenter = classify(&info, api.as_ref());
+    build_ip_risk(hostname, ip, &info, api.as_ref())
+}
+
+fn build_ip_risk(hostname: &str, ip: &str, info: &IpInfo, api: Option<&IpApi>) -> Result<IpRisk> {
+    let datacenter = classify(info, api);
     let public_proxy = api
         .as_ref()
         .is_some_and(|value| matches!(value.proxy, Some(true)));
-    let country = info.country.unwrap_or_default();
-    let org = info.org.unwrap_or_default();
+    let country = info.country.clone().unwrap_or_default();
+    let org = info.org.clone().unwrap_or_default();
     let verdict = if datacenter {
         "机房/云厂商出口：AI 站点（OpenAI / Google / Claude）更容易按 ASN 风控，掉登录、要求验证或封号的风险偏高"
             .to_owned()
@@ -260,27 +264,184 @@ async fn fetch_text(client: &reqwest::Client, url: &str, what: &str) -> Result<S
         .map_err(|error| anyhow!("{what} 读取响应失败: {error:#}"))
 }
 
+async fn fetch_ipinfo(client: &reqwest::Client, address: std::net::IpAddr) -> Result<IpInfo> {
+    let url = format!("https://ipinfo.io/{address}/json");
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(6))
+        .send()
+        .await
+        .map_err(|e| anyhow!("ipinfo 请求异常: {e:#}"))?;
+    if resp.status().as_u16() == 429 {
+        return Err(anyhow!("ipinfo 触发 429 速率限制"));
+    }
+    let resp = resp
+        .error_for_status()
+        .map_err(|e| anyhow!("ipinfo 状态错误: {e:#}"))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| anyhow!("ipinfo 读取失败: {e:#}"))?;
+    let info: IpInfo =
+        serde_json::from_str(&text).map_err(|e| anyhow!("ipinfo 解析失败: {e}"))?;
+    Ok(info)
+}
+
+async fn fetch_ipwhois(client: &reqwest::Client, address: std::net::IpAddr) -> Result<IpInfo> {
+    let url = format!("https://ipwho.is/{address}");
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(6))
+        .send()
+        .await
+        .map_err(|e| anyhow!("ipwho.is 请求异常: {e:#}"))?;
+    if resp.status().as_u16() == 429 {
+        return Err(anyhow!("ipwho.is 触发 429 速率限制"));
+    }
+    let resp = resp
+        .error_for_status()
+        .map_err(|e| anyhow!("ipwho.is 状态错误: {e:#}"))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| anyhow!("ipwho.is 读取失败: {e:#}"))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| anyhow!("ipwho.is 解析失败: {e}"))?;
+    if v.get("success").and_then(|s| s.as_bool()) == Some(false) {
+        return Err(anyhow!("ipwho.is 返回未成功"));
+    }
+    let country = v
+        .get("country_code")
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string());
+    let conn = v.get("connection");
+    let asn = conn.and_then(|c| c.get("asn")).and_then(|a| a.as_u64());
+    let org_name = conn
+        .and_then(|c| c.get("org"))
+        .and_then(|o| o.as_str())
+        .or_else(|| conn.and_then(|c| c.get("isp")).and_then(|i| i.as_str()));
+    let org = match (asn, org_name) {
+        (Some(asn), Some(name)) => Some(format!("AS{asn} {name}")),
+        (None, Some(name)) => Some(name.to_string()),
+        (Some(asn), None) => Some(format!("AS{asn}")),
+        (None, None) => None,
+    };
+    Ok(IpInfo {
+        country,
+        org,
+        priv_type: None,
+        company: None,
+    })
+}
+
+async fn fetch_ipapi(
+    client: &reqwest::Client,
+    address: std::net::IpAddr,
+) -> Result<(IpInfo, IpApi)> {
+    let url = format!(
+        "http://ip-api.com/json/{address}?fields=status,message,country,countryCode,hosting,proxy,mobile,as,isp,org"
+    );
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(6))
+        .send()
+        .await
+        .map_err(|e| anyhow!("ip-api 请求异常: {e:#}"))?;
+    if resp.status().as_u16() == 429 {
+        return Err(anyhow!("ip-api 触发 429 速率限制"));
+    }
+    let resp = resp
+        .error_for_status()
+        .map_err(|e| anyhow!("ip-api 状态错误: {e:#}"))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| anyhow!("ip-api 读取失败: {e:#}"))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| anyhow!("ip-api 解析失败: {e}"))?;
+    if v.get("status").and_then(|s| s.as_str()) != Some("success") {
+        return Err(anyhow!("ip-api 返回未成功: {:?}", v.get("message")));
+    }
+    let country = v
+        .get("countryCode")
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string());
+    let as_str = v.get("as").and_then(|a| a.as_str());
+    let org_str = v
+        .get("org")
+        .and_then(|o| o.as_str())
+        .or_else(|| v.get("isp").and_then(|i| i.as_str()));
+    let org = as_str
+        .map(|s| s.to_string())
+        .or_else(|| org_str.map(|s| s.to_string()));
+    let hosting = v.get("hosting").and_then(|h| h.as_bool());
+    let proxy = v.get("proxy").and_then(|p| p.as_bool());
+    let mobile = v.get("mobile").and_then(|m| m.as_bool());
+    Ok((
+        IpInfo {
+            country,
+            org,
+            priv_type: None,
+            company: None,
+        },
+        IpApi {
+            hosting,
+            proxy,
+            mobile,
+        },
+    ))
+}
+
 async fn classify_ip(
     client: &reqwest::Client,
     label: &str,
     address: std::net::IpAddr,
 ) -> Result<IpRisk> {
-    // ipinfo.io 对纯 IP 查询不需要 token。
-    let body = fetch_text(
-        client,
-        &format!("https://ipinfo.io/{address}/json"),
-        "ipinfo",
-    )
-    .await?;
-    // ip-api 挂了不影响结论，只是少一路证据（免费档只有 HTTP，且不能走代理）。
-    let api = fetch_text(
-        client,
-        &format!("http://ip-api.com/json/{address}?fields=status,hosting,proxy,mobile,as,isp"),
-        "ip-api",
-    )
-    .await
-    .ok();
-    parse(label, &address.to_string(), &body, api.as_deref())
+    let mut ip_info: Option<IpInfo> = None;
+    let mut ip_api: Option<IpApi> = None;
+    let mut errors: Vec<String> = Vec::new();
+
+    // 1. 优先尝试 ipinfo.io
+    match fetch_ipinfo(client, address).await {
+        Ok(info) => ip_info = Some(info),
+        Err(err) => {
+            tracing::warn!(address = %address, error = %err, "ipinfo 查询未命中或被限流，降级尝试 ipwho.is");
+            errors.push(err.to_string());
+        }
+    }
+
+    // 2. 若 ipinfo 429 或失败，自动降级至 ipwho.is
+    if ip_info.is_none() {
+        match fetch_ipwhois(client, address).await {
+            Ok(info) => ip_info = Some(info),
+            Err(err) => {
+                tracing::warn!(address = %address, error = %err, "ipwho.is 查询失败，降级尝试 ip-api");
+                errors.push(err.to_string());
+            }
+        }
+    }
+
+    // 3. 辅助查询 ip-api（获取 hosting/proxy/mobile 标记，若前面都失败则作为兜底数据源）
+    match fetch_ipapi(client, address).await {
+        Ok((info, api)) => {
+            if ip_info.is_none() {
+                ip_info = Some(info);
+            }
+            ip_api = Some(api);
+        }
+        Err(err) => {
+            errors.push(err.to_string());
+        }
+    }
+
+    let Some(info) = ip_info else {
+        return Err(anyhow!(
+            "所有 IP 归属数据源均查询失败 (触发速率限制/网络超时): {}",
+            errors.join("; ")
+        ));
+    };
+
+    build_ip_risk(label, &address.to_string(), &info, ip_api.as_ref())
 }
 
 pub async fn lookup(client: &reqwest::Client, server: &str) -> Result<IpRisk> {
@@ -299,9 +460,13 @@ pub async fn lookup_egress(direct: &reqwest::Client, proxy_url: &str) -> Result<
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|error| anyhow!("构建代理客户端失败: {error}"))?;
-    // 两个回显地址轮流试：内核每 300 秒换成员，某个出口打不通其中一家站点的概率不低。
+    // 三个回显地址轮流试：内核每 300 秒换成员，某个出口打不通其中一家站点的概率不低。
     let mut last_error = String::from("没有可用的回显地址");
-    for url in ["https://api.ipify.org", "https://ipinfo.io/ip"] {
+    for url in [
+        "https://api.ipify.org",
+        "https://icanhazip.com",
+        "https://ipinfo.io/ip",
+    ] {
         match fetch_text(&proxied, url, "出口 IP").await {
             Ok(body) => {
                 let candidate = body

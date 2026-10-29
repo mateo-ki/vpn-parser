@@ -411,6 +411,28 @@ fn normalize_vless(cfg: &mut Value, node: &Node) -> Value {
         obj.remove("flow");
     }
 
+    // ECH：分享链接 `ech=<查询名>+<DoH URL>` / 裸查询名 → 内核 ech-opts
+    // （mihomo / VP-Core 同语法：enable + query-server-name + doh）。
+    if let Some(ech) = first_str(obj, &["ech"]).filter(|s| !s.is_empty()) {
+        obj.remove("ech");
+        if !obj.contains_key("ech-opts") {
+            let mut eo = Map::new();
+            eo.insert("enable".into(), json!(true));
+            match ech.split_once('+') {
+                Some((name, doh)) if doh.contains("://") => {
+                    if !name.trim().is_empty() {
+                        eo.insert("query-server-name".into(), json!(name.trim()));
+                    }
+                    eo.insert("doh".into(), json!(doh.trim()));
+                }
+                _ => {
+                    eo.insert("query-server-name".into(), json!(ech.trim()));
+                }
+            }
+            obj.insert("ech-opts".into(), Value::Object(eo));
+        }
+    }
+
     let path = first_str(obj, &["path"]).unwrap_or_default();
     let host = first_str(obj, &["host"]).unwrap_or_default();
 
@@ -511,6 +533,27 @@ fn normalize_trojan(cfg: &mut Value, node: &Node) -> Value {
 
     if let Some(sni) = first_str(obj, &["sni", "servername"]).filter(|s| !s.is_empty()) {
         obj.insert("sni".into(), json!(sni));
+    }
+
+    // ECH：分享链接 `ech=<查询名>+<DoH URL>` / 裸查询名 → 内核 ech-opts
+    if let Some(ech) = first_str(obj, &["ech"]).filter(|s| !s.is_empty()) {
+        obj.remove("ech");
+        if !obj.contains_key("ech-opts") {
+            let mut eo = Map::new();
+            eo.insert("enable".into(), json!(true));
+            match ech.split_once('+') {
+                Some((name, doh)) if doh.contains("://") => {
+                    if !name.trim().is_empty() {
+                        eo.insert("query-server-name".into(), json!(name.trim()));
+                    }
+                    eo.insert("doh".into(), json!(doh.trim()));
+                }
+                _ => {
+                    eo.insert("query-server-name".into(), json!(ech.trim()));
+                }
+            }
+            obj.insert("ech-opts".into(), Value::Object(eo));
+        }
     }
 
     let path = first_str(obj, &["path"]).unwrap_or_default();
@@ -1315,6 +1358,34 @@ mod tests {
         assert_eq!(proxies[0]["ws-opts"]["headers"]["Host"], "example.com");
         assert_eq!(proxies[0]["servername"], "example.com");
         assert!(proxies[0].get("security").is_none());
+    }
+
+    #[test]
+    fn clash_vless_ech_name_plus_doh() {
+        // 分享链接 `ech=查询名+DoH URL` 应转成 ech-opts（mihomo / VP-Core 同语法）
+        let node = sample_node(
+            "vless",
+            json!({
+                "type": "vless",
+                "server": "www.visa.cn",
+                "port": 443,
+                "uuid": "dffc2650-0fc4-450e-8c0e-19de6d5345b1",
+                "name": "ech-node",
+                "network": "ws",
+                "security": "tls",
+                "sni": "loukas.ccwu.cc",
+                "host": "loukas.ccwu.cc",
+                "path": "/",
+                "ech": "cloudflare-ech.com+https://dns.alidns.com/dns-query"
+            }),
+            "vless://dffc2650-0fc4-450e-8c0e-19de6d5345b1@www.visa.cn:443?security=tls&type=ws&ech=cloudflare-ech.com%2Bhttps%3A%2F%2Fdns.alidns.com%2Fdns-query&host=loukas.ccwu.cc&sni=loukas.ccwu.cc&path=%2F",
+        );
+        let proxies = nodes_to_clash_proxies(&[node]);
+        let eo = &proxies[0]["ech-opts"];
+        assert_eq!(eo["enable"], true, "{:?}", proxies[0]);
+        assert_eq!(eo["query-server-name"], "cloudflare-ech.com");
+        assert_eq!(eo["doh"], "https://dns.alidns.com/dns-query");
+        assert!(proxies[0].get("ech").is_none(), "原始 ech 字段应被消费掉");
     }
 
     #[test]

@@ -228,6 +228,7 @@ fn vpcore_supports_proxy(p: &serde_json::Value) -> bool {
             | "vless"
             | "trojan"
             | "anytls"
+            | "hysteria"
             | "hysteria2"
             | "hy2"
             | "tuic"
@@ -251,6 +252,10 @@ fn vpcore_supports_proxy(p: &serde_json::Value) -> bool {
         .and_then(|v| v.as_str())
         .unwrap_or("tcp")
         .trim();
+    if ty == "hysteria" {
+        // hysteria v1 基于 QUIC，没有额外传输层；带上 ws/grpc 等 network 的节点不是纯 hy1
+        return matches!(net, "" | "tcp" | "udp");
+    }
     matches!(net, "" | "tcp" | "ws" | "grpc" | "http" | "udp")
 }
 
@@ -453,7 +458,8 @@ rules:
         assert!(!ok(json!({"type": "vless", "network": "httpupgrade"})));
         assert!(!ok(json!({"type": "vless", "network": "h2"})));
         assert!(!ok(json!({"type": "masque"})));
-        assert!(!ok(json!({"type": "hysteria"})));
+        assert!(ok(json!({"type": "hysteria"})));
+        assert!(!ok(json!({"type": "hysteria", "network": "ws"})));
     }
 
     #[test]

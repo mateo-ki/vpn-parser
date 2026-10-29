@@ -280,6 +280,9 @@ fn vless_node(
         "host": q.get("host").cloned().unwrap_or_default(),
         "serviceName": q.get("serviceName").cloned().unwrap_or_default(),
         "alpn": q.get("alpn").cloned().unwrap_or_default(),
+        // ECH（Encrypted Client Hello）请求：`<HTTPS(type65) 查询名>+<DoH URL>`
+        // 或裸查询名；导出时转成内核的 ech-opts。
+        "ech": q.get("ech").cloned().unwrap_or_default(),
         // 查询参数来自订阅链接本身，不能让它关掉证书校验。
         "allowInsecure": json!(false),
     });
@@ -330,6 +333,7 @@ fn trojan_node(
         "security": q.get("security").cloned().unwrap_or_else(|| "tls".into()),
         "fp": q.get("fp").cloned().unwrap_or_default(),
         "alpn": q.get("alpn").cloned().unwrap_or_default(),
+        "ech": q.get("ech").cloned().unwrap_or_default(),
         "path": q.get("path").cloned().unwrap_or_default(),
         "host": q.get("host").cloned().unwrap_or_default(),
         // 查询参数来自订阅链接本身，不能让它关掉证书校验。

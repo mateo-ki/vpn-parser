@@ -1192,7 +1192,7 @@ impl Database {
             let rows = sqlx::query("SELECT id, name, server, port, country FROM nodes")
                 .fetch_all(&pool)
                 .await?;
-            let mut renames: Vec<(String, String)> = Vec::new();
+            let mut updates: Vec<(String, Option<String>, String)> = Vec::new();
 
             for row in rows {
                 let id: String = row.get("id");
@@ -1201,22 +1201,38 @@ impl Database {
                 let port: i64 = row.get("port");
                 let country: Option<String> = row.get("country");
 
+                let guessed = crate::parser::guess_country_with_server(&old_name, Some(&server));
+                let country_is_bad_tr = country.as_deref().is_some_and(|c| {
+                    c.eq_ignore_ascii_case("TR")
+                        && !old_name.to_ascii_lowercase().contains("turkey")
+                        && !old_name.to_ascii_lowercase().contains("istanbul")
+                        && !old_name.contains("土耳其")
+                        && !old_name.contains("🇹🇷")
+                });
+                let effective_country = if country_is_bad_tr {
+                    guessed.clone()
+                } else {
+                    country.clone().or_else(|| guessed.clone())
+                };
+
                 let cleaned = crate::parser::clean_node_name(
                     &old_name,
-                    country.as_deref(),
+                    effective_country.as_deref(),
                     &server,
                     port as u16,
                 );
-                if cleaned != old_name {
-                    renames.push((cleaned, id));
+                let country_changed = effective_country != country;
+                if cleaned != old_name || country_changed {
+                    updates.push((cleaned, effective_country, id));
                 }
             }
 
             // 一个分库一个事务：逐条 UPDATE 在 19000 个节点上就是 19000 次提交。
             let mut tx = pool.begin().await?;
-            for (cleaned, id) in &renames {
-                let res = sqlx::query("UPDATE nodes SET name = ? WHERE id = ?")
+            for (cleaned, new_c, id) in &updates {
+                let res = sqlx::query("UPDATE nodes SET name = ?, country = ? WHERE id = ?")
                     .bind(cleaned)
+                    .bind(new_c)
                     .bind(id)
                     .execute(&mut *tx)
                     .await?;
@@ -1230,6 +1246,63 @@ impl Database {
             self.invalidate_node_index().await;
         }
         Ok(updated)
+    }
+
+    /// 更新指定节点的国家/地区代码（例如 IP 归属查验后自动纠偏）
+    pub async fn update_node_country(&self, id: &str, country: &str) -> Result<()> {
+        for (_scope, pool) in self.active_node_pools(None).await? {
+            let res = sqlx::query("UPDATE nodes SET country = ? WHERE id = ?")
+                .bind(country)
+                .bind(id)
+                .execute(&pool)
+                .await?;
+            if res.rows_affected() > 0 {
+                self.invalidate_node_index().await;
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    /// 自动纠正历史上因 trojan/traffic 等子串误判为土耳其 (TR) 的遗留节点
+    pub async fn fix_misclassified_tr_nodes(&self) -> Result<usize> {
+        let mut fixed = 0usize;
+        for (_scope, pool) in self.active_node_pools(None).await? {
+            let rows = sqlx::query("SELECT id, name, server FROM nodes WHERE lower(country) = 'tr'")
+                .fetch_all(&pool)
+                .await?;
+            let mut fixes = Vec::new();
+            for row in rows {
+                let id: String = row.get("id");
+                let name: String = row.get("name");
+                let server: String = row.get("server");
+                let n_lower = name.to_ascii_lowercase();
+                let is_really_tr = n_lower.contains("turkey")
+                    || n_lower.contains("istanbul")
+                    || name.contains("土耳其")
+                    || name.contains("🇹🇷");
+                if !is_really_tr {
+                    let new_c = crate::parser::guess_country_with_server(&name, Some(&server));
+                    fixes.push((new_c, id));
+                }
+            }
+            if !fixes.is_empty() {
+                let mut tx = pool.begin().await?;
+                for (new_c, id) in &fixes {
+                    sqlx::query("UPDATE nodes SET country = ? WHERE id = ?")
+                        .bind(new_c)
+                        .bind(id)
+                        .execute(&mut *tx)
+                        .await?;
+                    fixed += 1;
+                }
+                tx.commit().await?;
+            }
+        }
+        if fixed > 0 {
+            self.invalidate_node_index().await;
+        }
+        Ok(fixed)
     }
 
     pub async fn scrub_invalid_hosts(&self) -> Result<u64> {
