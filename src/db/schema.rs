@@ -314,6 +314,8 @@ impl Database {
             .await?;
         self.ensure_column("settings", "console_tabs", "TEXT NOT NULL DEFAULT 'all'")
             .await?;
+        self.ensure_column("settings", "dashboard_ui_mode", "TEXT NOT NULL DEFAULT 'compact'")
+            .await?;
 
         // 订阅源持久化存储原始分流规则与策略组
         self.ensure_column("sources", "rules_yaml", "TEXT").await?;

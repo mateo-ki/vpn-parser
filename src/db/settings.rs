@@ -59,7 +59,7 @@ impl Database {
                        auto_prepare_kernel, speedtest_added_source,
                        auto_rearm_system_proxy,
                        gist_pages, gist_queries,
-                       window_size, console_tabs,
+                       window_size, console_tabs, dashboard_ui_mode,
                        last_auto_fetch_at, last_auto_speedtest_at
                 FROM settings WHERE id = 1"#,
         )
@@ -165,6 +165,8 @@ impl Database {
                 .unwrap_or_else(|_| "large".to_string()),
             console_tabs: sqlx::Row::try_get::<String, _>(&row, "console_tabs")
                 .unwrap_or_else(|_| "all".to_string()),
+            dashboard_ui_mode: sqlx::Row::try_get::<String, _>(&row, "dashboard_ui_mode")
+                .unwrap_or_else(|_| "standard".to_string()),
             last_auto_fetch_at: sqlx::Row::get::<Option<String>, _>(&row, "last_auto_fetch_at")
                 .map(|s| super::parse_dt(&s)),
             last_auto_speedtest_at: sqlx::Row::get::<Option<String>, _>(
@@ -324,6 +326,12 @@ impl Database {
                 s.console_tabs = v;
             }
         }
+        if let Some(v) = input.dashboard_ui_mode {
+            let v = v.trim().to_string();
+            if !v.is_empty() {
+                s.dashboard_ui_mode = v;
+            }
+        }
         sqlx::query(
             r#"UPDATE settings SET
                  auto_fetch_enabled=?,
@@ -367,7 +375,8 @@ impl Database {
                  gist_pages=?,
                  gist_queries=?,
                  window_size=?,
-                 console_tabs=?
+                 console_tabs=?,
+                 dashboard_ui_mode=?
                WHERE id=1"#,
         )
         .bind(s.auto_fetch_enabled as i64)
@@ -412,6 +421,7 @@ impl Database {
         .bind(&s.gist_queries)
         .bind(&s.window_size)
         .bind(&s.console_tabs)
+        .bind(&s.dashboard_ui_mode)
         .execute(&self.pool)
         .await?;
         self.get_settings().await

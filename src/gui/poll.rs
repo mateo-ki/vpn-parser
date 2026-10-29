@@ -4,7 +4,7 @@ use crate::gui::widgets::{format_speedtest_progress, node_group_key, normalize_a
 use crate::gui::VpnApp;
 use crate::kernel::KernelKind;
 use crate::models::{FetchResult, GOOGLE_PROXY_TEST_KIND};
-use crate::proxy::{ProxyMode, ProxyState};
+use crate::proxy::ProxyState;
 use eframe::egui;
 use std::sync::mpsc::TryRecvError;
 
@@ -835,7 +835,7 @@ impl VpnApp {
                                         // 立刻静默查出口归属：状态卡"机房/住宅"马上有真实数据
                                         self.refresh_egress_silently();
                                         self.proxy_status.local_proxy_ready = true;
-                                        self.proxy_status.system_proxy_enabled = self.proxy_config.mode == ProxyMode::System;
+                                        self.proxy_status.system_proxy_enabled = self.proxy_config.mode.has_system();
                                     }
                                 }
                                 Err(error) => {

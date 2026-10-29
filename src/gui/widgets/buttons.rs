@@ -69,6 +69,12 @@ pub fn nav_item_icon_only(
     // 展开态传 `Some(短名)`：图标靠左、文字靠右；收起态传 `None` = 只有居中的图标。
     label: Option<&str>,
 ) {
+    let item_size = egui::vec2(ui.available_width(), 40.0);
+    let (rect, resp) = ui.allocate_exact_size(item_size, Sense::click());
+    if resp.clicked() {
+        *current = tab;
+    }
+
     let selected = *current == tab;
     let (fill, stroke, icon_color) = if selected {
         (
@@ -84,8 +90,6 @@ pub fn nav_item_icon_only(
         )
     };
 
-    let item_size = egui::vec2(ui.available_width(), 40.0);
-    let (rect, resp) = ui.allocate_exact_size(item_size, Sense::click());
     let painter = ui.painter_at(rect);
 
     let is_hovered = resp.hovered();
@@ -155,9 +159,6 @@ pub fn nav_item_icon_only(
         painter.circle_filled(dot_pos, 2.5, color);
     }
 
-    if resp.clicked() {
-        *current = tab;
-    }
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(tooltip);
     ui.add_space(4.0);

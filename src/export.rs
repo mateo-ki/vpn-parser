@@ -150,6 +150,24 @@ fn node_to_clash_proxy(node: &Node) -> Option<Value> {
         "anytls" => {
             set_type(&mut cfg, "anytls");
             ensure_server_port_name(&mut cfg, node);
+            if let Some(obj) = cfg.as_object_mut() {
+                let security = first_str(obj, &["security", "tls"]).unwrap_or_default();
+                let sec_l = security.to_ascii_lowercase();
+                let is_reality = sec_l == "reality" || obj.contains_key("reality-opts") || obj.contains_key("pbk");
+                if is_reality {
+                    let mut ro = Map::new();
+                    if let Some(pbk) = first_str(obj, &["pbk", "public-key"]).filter(|s| !s.is_empty()) {
+                        ro.insert("public-key".into(), json!(pbk));
+                    }
+                    if let Some(sid) = first_str(obj, &["sid", "short-id"]).filter(|s| !s.is_empty()) {
+                        ro.insert("short-id".into(), json!(sid));
+                    }
+                    if let Some(spx) = first_str(obj, &["spx", "spider-x"]).filter(|s| !s.is_empty()) {
+                        ro.insert("spider-x".into(), json!(spx));
+                    }
+                    obj.insert("reality-opts".into(), Value::Object(ro));
+                }
+            }
             Some(cfg)
         }
         "mieru" => {

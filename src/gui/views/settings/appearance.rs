@@ -201,6 +201,45 @@ impl VpnApp {
                 ui.add_space(FONT_TICK_BAND_HEIGHT);
                 paint_font_scale_ticks(ui, rect, travel);
             }
+
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.label(RichText::new(self.tr("控制台 UI 模式")).strong());
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("设置控制台仪表盘的布局密度：完整模式展示全量性能与连接监控，简易模式轻量清爽。")
+                    .small()
+                    .color(theme::muted()),
+            );
+            ui.add_space(6.0);
+            let standard_label = self.tr("完整模式");
+            let compact_label = self.tr("简易模式");
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_value(
+                        &mut self.edit_dashboard_ui_mode,
+                        "standard".to_string(),
+                        standard_label,
+                    )
+                    .on_hover_text("展示活动连接、软硬件性能与核心运行指标全量视图")
+                    .clicked()
+                {
+                    auto_save = true;
+                }
+                if ui
+                    .selectable_value(
+                        &mut self.edit_dashboard_ui_mode,
+                        "compact".to_string(),
+                        compact_label,
+                    )
+                    .on_hover_text("隐藏中间监控行并将高度分配给第一行与第三行卡片，隐藏状态卡内核选择，极简纯净")
+                    .clicked()
+                {
+                    auto_save = true;
+                }
+            });
         });
 
         if auto_save && self.settings_dirty() {

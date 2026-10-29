@@ -12,7 +12,6 @@ use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Stroke,
 impl VpnApp {
     pub(crate) fn ui_sources(&mut self, ui: &mut Ui) {
         self.ui_clear_sources_confirm(ui.ctx());
-        self.ui_gist_config_modal(ui.ctx());
 
         section_title(ui, self.tr("订阅源"), "多源汇聚 · 自动拉取 · 节点解析");
 
@@ -51,117 +50,6 @@ impl VpnApp {
         if self.sources_panel == SourcesPanel::Results {
             self.ui_fetch_results(ui);
             return;
-        }
-
-        // 订阅源健康与产出度量看板
-        if let Some(s) = self.stats.as_ref() {
-            Frame::NONE
-                .fill(theme::panel())
-                .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
-                .corner_radius(CornerRadius::same(10))
-                .inner_margin(Margin::symmetric(14, 8))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let enabled_ratio = if s.source_count > 0 {
-                            (s.enabled_source_count as f32 / s.source_count as f32).clamp(0.0, 1.0)
-                        } else {
-                            0.0
-                        };
-
-                        let yield_ratio = if s.node_count > 0 {
-                            (s.alive_count as f32 / s.node_count as f32).clamp(0.0, 1.0)
-                        } else {
-                            0.0
-                        };
-
-                        // 两条横向进度线（横线）：源启用率 与 源可用率
-                        ui.vertical(|ui| {
-                            let bar_w = 140.0_f32;
-                            let bar_h = 5.0_f32;
-
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new("源启用率")
-                                        .small()
-                                        .strong()
-                                        .color(theme::text_primary()),
-                                );
-                                render_bar_chart(
-                                    ui,
-                                    enabled_ratio,
-                                    bar_w,
-                                    bar_h,
-                                    theme::accent(),
-                                    format!("源启用率: {:.1}%", enabled_ratio * 100.0),
-                                );
-                                ui.label(
-                                    RichText::new(format!("{:.0}%", enabled_ratio * 100.0))
-                                        .small()
-                                        .strong()
-                                        .color(theme::accent()),
-                                );
-                            });
-
-                            ui.add_space(4.0);
-
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new("源可用率")
-                                        .small()
-                                        .strong()
-                                        .color(theme::text_primary()),
-                                );
-                                render_bar_chart(
-                                    ui,
-                                    yield_ratio,
-                                    bar_w,
-                                    bar_h,
-                                    theme::accent_strong(),
-                                    format!("源可用率: {:.1}%", yield_ratio * 100.0),
-                                );
-                                ui.label(
-                                    RichText::new(format!("{:.0}%", yield_ratio * 100.0))
-                                        .small()
-                                        .strong()
-                                        .color(theme::accent_strong()),
-                                );
-                            });
-                        });
-
-                        ui.add_space(16.0);
-                        ui.separator();
-                        ui.add_space(12.0);
-
-                        ui.vertical(|ui| {
-                            ui.add_space(2.0);
-                            ui.horizontal(|ui| {
-                                icon_label(ui, Icon::Globe, 13.0, theme::accent());
-                                ui.label(
-                                    RichText::new(format!(
-                                        "订阅源池: {} 个 (已启用 {})",
-                                        s.source_count, s.enabled_source_count
-                                    ))
-                                    .strong()
-                                    .small()
-                                    .color(theme::text_primary()),
-                                );
-                            });
-                            ui.add_space(3.0);
-                            ui.horizontal(|ui| {
-                                icon_label(ui, Icon::Radar, 13.0, theme::accent_strong());
-                                ui.label(
-                                    RichText::new(format!(
-                                        "累计解析节点: {} 个 · 实测可用: {} 个",
-                                        s.node_count, s.alive_count
-                                    ))
-                                    .small()
-                                    .color(theme::text_secondary()),
-                                );
-                            });
-                        });
-                    });
-                });
-            ui.add_space(6.0);
         }
 
         // 第 1 行：新建 拉取全部 代理拉取全部 导入订阅 导出订阅 清空全部
@@ -211,7 +99,7 @@ impl VpnApp {
 
         ui.add_space(6.0);
 
-        // 第 2 行：接入openRung节点 原生注册warp节点 gist节点 gist配置
+        // 第 2 行：接入openRung节点 原生注册warp节点 反向剔除同质化源
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(!self.busy, egui::Button::new(format!("🌐 {}", self.tr("接入 OpenRung 节点"))))
@@ -226,20 +114,6 @@ impl VpnApp {
                 .clicked()
             {
                 self.fetch_warp_masque_native();
-            }
-            if ui
-                .add_enabled(!self.busy, egui::Button::new(format!("🔍 {}", self.tr("Gist 节点"))))
-                .on_hover_text("扫描 gist.github.com 搜索结果（按配置的协议词），能解析出节点的 gist 自动注册为订阅源")
-                .clicked()
-            {
-                self.discover_gists();
-            }
-            if ui
-                .button(format!("⚙️ {}", self.tr("Gist 配置")))
-                .on_hover_text("弹框选择 Gist 抓取协议类型、扫描页数与历史记录重置")
-                .clicked()
-            {
-                self.show_gist_config_modal = true;
             }
 
             let prune_enabled = !self.busy && !self.homogeneity_busy;
@@ -420,23 +294,6 @@ impl VpnApp {
                                     if s.push_disabled {
                                         ui.label(RichText::new(self.tr("不推送")).small().color(theme::warning()));
                                     }
-                                    ui.label(
-                                        RichText::new(
-                                            s.last_status.clone().unwrap_or_else(|| "-".into()),
-                                        )
-                                        .small()
-                                        .color(theme::muted()),
-                                    );
-                                    if s.fail_streak >= crate::collector::DEGRADED_FAIL_STREAK {
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "连续超时 {} 次",
-                                                s.fail_streak
-                                            ))
-                                            .small()
-                                            .color(theme::warning()),
-                                        );
-                                    }
                                     if let Some(reports) = &self.homogeneity_reports {
                                         if let Some(rep) = reports.iter().find(|r| r.source_id == s.id) {
                                             if rep.total_nodes == 0 {
@@ -470,11 +327,6 @@ impl VpnApp {
                                                 .unwrap_or_else(|| "-".into()),
                                         )
                                         .small(),
-                                    );
-                                    ui.label(
-                                        RichText::new(format!("最近解析 {}", s.last_node_count))
-                                            .small()
-                                            .color(theme::muted()),
                                     );
                                     render_fetch_ticks(ui, self.fetch_history.get(&s.id));
                                 }).response.interact(egui::Sense::click())
@@ -1259,6 +1111,7 @@ impl VpnApp {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn ui_gist_config_modal(&mut self, ctx: &egui::Context) {
         if !self.show_gist_config_modal {
             return;

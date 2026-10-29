@@ -209,8 +209,8 @@ impl ProxyManager {
     pub async fn rearm_system_proxy(&self) -> Result<String> {
         let _operation = self.operation.lock().await;
         let mut runtime = self.runtime.lock().await;
-        if runtime.options.mode != ProxyMode::System {
-            return Err(anyhow::anyhow!("当前不是系统代理模式，不写注册表"));
+        if !runtime.options.mode.has_system() {
+            return Err(anyhow::anyhow!("当前未启用系统代理，不写注册表"));
         }
         let server = format!("127.0.0.1:{}", runtime.options.mixed_port);
         let terminal_port = runtime

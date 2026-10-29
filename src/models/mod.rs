@@ -348,8 +348,15 @@ pub struct AppSettings {
     /// 控制台 Tab 显示配置（逗号分隔的 panel id，"all" 为全显）
     #[serde(default = "default_console_tabs")]
     pub console_tabs: String,
+    /// 控制台 UI 布局模式："standard" (完整模式) / "compact" (简易模式)
+    #[serde(default = "default_dashboard_ui_mode")]
+    pub dashboard_ui_mode: String,
     pub last_auto_fetch_at: Option<DateTime<Utc>>,
     pub last_auto_speedtest_at: Option<DateTime<Utc>>,
+}
+
+fn default_dashboard_ui_mode() -> String {
+    "compact".to_string()
 }
 
 fn default_window_size() -> String {
@@ -500,6 +507,7 @@ impl Default for AppSettings {
             gist_queries: default_gist_queries(),
             window_size: default_window_size(),
             console_tabs: default_console_tabs(),
+            dashboard_ui_mode: default_dashboard_ui_mode(),
             last_auto_fetch_at: None,
             last_auto_speedtest_at: None,
         }
@@ -551,6 +559,7 @@ pub struct UpdateSettings {
     pub gist_queries: Option<String>,
     pub window_size: Option<String>,
     pub console_tabs: Option<String>,
+    pub dashboard_ui_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

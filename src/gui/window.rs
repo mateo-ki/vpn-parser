@@ -256,10 +256,21 @@ impl VpnApp {
                     );
                     let drag = ui.interact(drag_rect, ui.id().with("titlebar_drag"), Sense::drag());
                     if drag.drag_started() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                    }
-                    if drag.double_clicked() {
-                        action_toggle_max = true;
+                        let now = std::time::Instant::now();
+                        let current_pos = ui.input(|i| i.pointer.interact_pos()).unwrap_or(drag_rect.center());
+                        let is_double_click = if let Some((last_time, last_pos)) = self.last_titlebar_click {
+                            now.duration_since(last_time).as_millis() < 400 && current_pos.distance(last_pos) < 10.0
+                        } else {
+                            false
+                        };
+
+                        if is_double_click {
+                            self.last_titlebar_click = None;
+                            action_toggle_max = true;
+                        } else {
+                            self.last_titlebar_click = Some((now, current_pos));
+                            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                        }
                     }
                 }
 
@@ -280,10 +291,21 @@ impl VpnApp {
                         egui::Rect::from_min_max(bar.min, egui::pos2(buttons_left, bar.max.y));
                     let drag = ui.interact(drag_rect, ui.id().with("titlebar_drag"), Sense::drag());
                     if drag.drag_started() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                    }
-                    if drag.double_clicked() {
-                        action_toggle_max = true;
+                        let now = std::time::Instant::now();
+                        let current_pos = ui.input(|i| i.pointer.interact_pos()).unwrap_or(drag_rect.center());
+                        let is_double_click = if let Some((last_time, last_pos)) = self.last_titlebar_click {
+                            now.duration_since(last_time).as_millis() < 400 && current_pos.distance(last_pos) < 10.0
+                        } else {
+                            false
+                        };
+
+                        if is_double_click {
+                            self.last_titlebar_click = None;
+                            action_toggle_max = true;
+                        } else {
+                            self.last_titlebar_click = Some((now, current_pos));
+                            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                        }
                     }
 
                     let cell = |index: usize| {

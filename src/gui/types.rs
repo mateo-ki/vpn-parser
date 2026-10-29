@@ -589,6 +589,7 @@ pub struct SettingsEditState {
     pub firewall_auto_allow: bool,
     pub window_size: String,
     pub console_tabs: String,
+    pub dashboard_ui_mode: String,
 }
 
 impl SettingsEditState {
@@ -631,6 +632,7 @@ impl SettingsEditState {
             firewall_auto_allow: s.firewall_auto_allow,
             window_size: s.window_size.clone(),
             console_tabs: s.console_tabs.clone(),
+            dashboard_ui_mode: s.dashboard_ui_mode.clone(),
         }
     }
 
@@ -673,5 +675,6 @@ impl SettingsEditState {
             || self.insider_channel != s.insider_channel
             || self.window_size != s.window_size
             || self.console_tabs != s.console_tabs
+            || self.dashboard_ui_mode != s.dashboard_ui_mode
     }
 }

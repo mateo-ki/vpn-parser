@@ -123,6 +123,7 @@
                 gist_queries: None,
                 window_size: None,
                 console_tabs: None,
+                dashboard_ui_mode: None,
             })
             .await
             .unwrap();

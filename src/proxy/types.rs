@@ -13,13 +13,17 @@ pub fn is_node_connectivity_failure(message: &str) -> bool {
     message.contains("节点连通性验证失败")
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ProxyMode {
+    #[default]
     System,
     Tun,
     /// 系统代理 + TUN 同时开：应用层走系统代理，网络层被 TUN 兜底接管。
     Both,
+    /// 仅本地端口监听（系统代理与 TUN 同时关闭）
+    #[serde(alias = "none", alias = "port", alias = "manual")]
+    None,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

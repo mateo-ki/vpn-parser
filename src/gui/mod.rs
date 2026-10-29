@@ -212,6 +212,8 @@ pub struct VpnApp {
     pub(crate) parked: bool,
     /// 跟踪上一帧是否处于最小化状态，用于捕获任务栏还原动作
     pub(crate) was_minimized: bool,
+    /// 标题栏上一次点击的时间与位置（用于双击最大化/还原判定）
+    pub(crate) last_titlebar_click: Option<(std::time::Instant, egui::Pos2)>,
     /// 从最小化或托盘恢复后，连续强刷渲染的冷却帧数
     pub(crate) restore_cooldown_frames: u32,
     /// 停放前记下的位置与大小，还原时用。
@@ -416,6 +418,7 @@ pub struct VpnApp {
     pub(crate) edit_firewall_auto_allow: bool,
     pub(crate) edit_window_size: String,
     pub(crate) edit_console_tabs: String,
+    pub(crate) edit_dashboard_ui_mode: String,
     /// 「下载内核」弹框：是否打开、选中的方式、本地 zip 路径。
     pub(crate) show_kernel_dialog: bool,
     pub(crate) kernel_dialog_source: String,
@@ -643,6 +646,7 @@ impl VpnApp {
             diag_trace: None,
             parked: false,
             was_minimized: false,
+            last_titlebar_click: None,
             restore_cooldown_frames: 0,
             park_spot: None,
             parked_at: None,
@@ -768,6 +772,7 @@ impl VpnApp {
             edit_firewall_auto_allow: false,
             edit_window_size: "small".to_string(),
             edit_console_tabs: "all".to_string(),
+            edit_dashboard_ui_mode: "compact".to_string(),
             show_kernel_dialog: false,
             kernel_dialog_source: crate::kernel::KernelSource::GhFast.id().to_string(),
             kernel_dialog_path: String::new(),
@@ -3025,7 +3030,12 @@ impl VpnApp {
                                 ))
                             } else {
                                 let k_name = status.kernel.map(|k| k.display_name()).unwrap_or("代理");
-                                let mode_str = if mode == ProxyMode::Tun { "TUN 模式" } else { "系统代理" };
+                                let mode_str = match mode {
+                                    ProxyMode::Tun => "TUN 模式",
+                                    ProxyMode::Both => "系统代理与 TUN 模式",
+                                    ProxyMode::System => "系统代理",
+                                    ProxyMode::None => "纯端口模式",
+                                };
                                 let msg = if status.message.contains("回退") {
                                     let hint = status.message.split('（').nth(1).and_then(|s| s.strip_suffix('）')).unwrap_or(&status.message);
                                     format!("{k_name} 已启动，{mode_str}已启用（{hint}）")
@@ -4067,6 +4077,7 @@ impl VpnApp {
             bandwidth_min_kbps: self.edit_bandwidth_min_kbps,
             window_size: self.edit_window_size.clone(),
             console_tabs: self.edit_console_tabs.clone(),
+            dashboard_ui_mode: self.edit_dashboard_ui_mode.clone(),
         }
     }
 
@@ -4121,6 +4132,7 @@ impl VpnApp {
         self.edit_firewall_auto_allow = state.firewall_auto_allow;
         self.edit_window_size = state.window_size.clone();
         self.edit_console_tabs = state.console_tabs.clone();
+        self.edit_dashboard_ui_mode = state.dashboard_ui_mode.clone();
     }
 
     pub(crate) fn build_update_settings(&self) -> UpdateSettings {
@@ -4169,6 +4181,7 @@ impl VpnApp {
             gist_queries: None,
             window_size: Some(self.edit_window_size.clone()),
             console_tabs: Some(self.edit_console_tabs.clone()),
+            dashboard_ui_mode: Some(self.edit_dashboard_ui_mode.clone()),
         }
     }
 
@@ -4647,6 +4660,13 @@ impl eframe::App for VpnApp {
         self.status_bar_height = status_panel.response.rect.height();
         self.status_bar_top_y = status_panel.response.rect.min.y;
 
+        if next_tab != self.tab {
+            if self.tab == Tab::Settings && self.settings_dirty() {
+                self.save_settings();
+            }
+            self.tab = next_tab;
+        }
+
         egui::CentralPanel::default()
             .frame(
                 Frame::NONE
@@ -4655,42 +4675,22 @@ impl eframe::App for VpnApp {
             )
             .show(ctx, |ui| {
                 match self.tab {
-                    Tab::Sources => {
-                        ui.push_id("top_tab_sources", |ui| self.ui_sources(ui));
-                    }
-                    Tab::Nodes => {
-                        ui.push_id("top_tab_nodes", |ui| self.ui_nodes(ui));
-                    }
-                    Tab::Proxy => {
-                        ui.push_id("top_tab_proxy", |ui| self.ui_proxy(ui));
-                    }
-                    Tab::Extensions => {
-                        ui.push_id("top_tab_extensions", |ui| self.ui_extensions(ui));
-                    }
-                    Tab::Settings => {
-                        ui.push_id("top_tab_settings", |ui| self.ui_settings(ui));
-                    }
+                    Tab::Sources => self.ui_sources(ui),
+                    Tab::Nodes => self.ui_nodes(ui),
+                    Tab::Proxy => self.ui_proxy(ui),
+                    Tab::Extensions => self.ui_extensions(ui),
+                    Tab::Settings => self.ui_settings(ui),
                     Tab::Api => {
                         self.tab = Tab::Settings;
                         self.settings_tab = SettingsTab::Api;
-                        ui.push_id("top_tab_settings", |ui| self.ui_settings(ui));
+                        self.ui_settings(ui);
                     }
-                    Tab::About => {
-                        ui.push_id("top_tab_about", |ui| self.ui_about(ui));
-                    }
+                    Tab::About => self.ui_about(ui),
                 }
             });
 
         // 无边框之后系统的缩放手边没有了，这层覆盖只在窗口最外圈 6px 内响应。
         self.ui_resize_handles(ctx);
-
-        if next_tab != self.tab {
-            if self.tab == Tab::Settings && self.settings_dirty() {
-                self.save_settings();
-            }
-            self.tab = next_tab;
-            ctx.request_repaint();
-        }
 
         self.ui_source_form(ctx);
         self.ui_detail(ctx);
