@@ -1303,6 +1303,7 @@ impl ProxyManager {
             return Ok(String::new());
         };
         let text = tokio::fs::read_to_string(log_path).await?;
+        let text = strip_ansi(&text);
         if text.chars().count() <= max_chars {
             return Ok(text);
         }
