@@ -20,6 +20,7 @@ mod kernel;
 mod models;
 mod parser;
 mod platform;
+pub mod profile;
 mod proxy;
 mod proxy_probe;
 mod router;
@@ -84,6 +85,11 @@ struct Cli {
     /// 无头高权限内核守护进程模式
     #[arg(long, hide = true, default_value_t = false)]
     run_elevated_kernel: bool,
+
+    /// 「以管理员方式启动软件」的提权重启标记：新实例等待旧实例释放互斥量后接管
+    /// （与 TUN 提权交接同一套 3 秒轮询，否则新实例会撞上旧实例还没退出的互斥量直接自杀）
+    #[arg(long, hide = true, default_value_t = false)]
+    elevated_relaunch: bool,
 
     #[arg(long, hide = true)]
     parent_pid: Option<u32>,
@@ -250,7 +256,9 @@ fn main() -> Result<()> {
         .or_else(|| std::env::var("VPN_PARSER_API_TOKEN").ok())
         .filter(|token| !token.trim().is_empty())
         .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
-    let elevated_handoff = cli.elevated_proxy_config.is_some() || cli.elevated_proxy_config_file.is_some();
+    let elevated_handoff = cli.elevated_proxy_config.is_some()
+        || cli.elevated_proxy_config_file.is_some()
+        || cli.elevated_relaunch;
     let _single_instance = if diag {
         // 诊断壳不抢互斥量，也不唤醒/杀死任何别的实例：这台机器上用户实例可能正在跑。
         startup_log("DIAG: 跳过单实例互斥量与重复实例清理");
@@ -491,6 +499,40 @@ fn main() -> Result<()> {
 
     // Start HTTP API in background if headless or enabled in settings
     let app_settings = rt.block_on(db.get_settings()).unwrap_or_default();
+
+    // 开机自启动对账：开着就确保 Run 键指向当前 exe（软件挪过位置也能自己跟上），
+    // 关着就清掉残留值。纯 HKCU 注册表读写、亚毫秒级，不挡启动；诊断壳不碰用户注册表。
+    if !diag && !platform::sync_launch_at_startup(app_settings.launch_at_startup) {
+        startup_log("警告：开机自启动同步失败（HKCU Run 键写入被拒绝）");
+    }
+
+    // 「以管理员方式启动软件」必须在**创建任何窗口之前**决策：提权成功则本实例直接退出，
+    // 整个过程没有窗口出现过，用户只看到提权实例那一个窗口——否则普通实例先把窗口画出来、
+    // 提权后再闪第二个，就是"启动闪一次"的来源。UAC 被取消则本实例以普通权限继续（不再重试）。
+    if app_settings.launch_as_admin
+        && !diag
+        && !cli.headless
+        && !cli.run_elevated_kernel
+        && !elevated_handoff
+        && !platform::is_elevated()
+    {
+        startup_log(
+            "管理员启动：设置开启且本实例非提权，在窗口创建前请求 runas 接管",
+        );
+        match platform::request_elevation(&["--elevated-relaunch".to_string()]) {
+            Ok(()) => {
+                startup_log("管理员启动：提权已批准，本实例未显示窗口即退出，由提权实例接管");
+                return Ok(());
+            }
+            Err(error) => {
+                platform::mark_admin_relaunch_cancelled();
+                startup_log(&format!(
+                    "管理员启动：提权被取消或拒绝（{error}），本次以普通权限继续启动"
+                ));
+            }
+        }
+    }
+
     // 提权子进程只做代理，不接管 HTTP API：否则等于把（刚加上鉴权的）接口
     // 以管理员身份再监听一次。
     if diag {

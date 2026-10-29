@@ -279,6 +279,8 @@ impl VpnApp {
                             } else if !self.settings_dirty() && !self.settings_saving {
                                 self.sync_edit_settings();
                             }
+                            // 「以管理员方式启动」的提权决策已前移到 main() 窗口创建之前
+                            // （避免普通实例先闪一个窗口），这里不再重复处理。
                         }
                         BgMsg::PublisherSaved(Err(error)) => {
                             self.remote_api_status = format!("保存失败: {error}");
@@ -296,9 +298,31 @@ impl VpnApp {
                         BgMsg::Settings(Err(e)) => self.status = format!("加载设置失败: {e}"),
                         BgMsg::SettingsSaved(Ok(s)) => {
                             self.settings_saving = false;
+                            // 开机自启动 changed → 立即同步 HKCU Run 键（库已落盘，系统侧跟上）
+                            let prev_startup = self.settings.launch_at_startup;
                             self.settings = s;
                             self.sync_edit_settings();
                             self.status = "设置已保存".into();
+                            if self.settings.launch_at_startup != prev_startup {
+                                let ok = crate::platform::sync_launch_at_startup(
+                                    self.settings.launch_at_startup,
+                                );
+                                if ok {
+                                    self.status = if self.settings.launch_at_startup {
+                                        "设置已保存：开机自动启动已开启".into()
+                                    } else {
+                                        "设置已保存：开机自动启动已关闭".into()
+                                    };
+                                } else {
+                                    self.status =
+                                        "设置已保存，但开机自启动写入系统失败（详见 startup.log）"
+                                            .into();
+                                }
+                                crate::startup_log(&format!(
+                                    "[开机自启动] 已同步为 {}（HKCU Run 键）",
+                                    self.settings.launch_at_startup
+                                ));
+                            }
                         }
                         BgMsg::SettingsSaved(Err(e)) => {
                             self.settings_saving = false;
@@ -384,6 +408,44 @@ impl VpnApp {
                                     .unwrap_or("本地配置")
                                     .to_string();
                                 self.import_yaml_source_name = filename;
+                            }
+                        }
+                        BgMsg::ProfileExported(res) => {
+                            match res {
+                                Ok(msg) => {
+                                    self.profile_status = Some((msg, false));
+                                }
+                                Err(err) => {
+                                    self.profile_status = Some((format!("导出配置失败: {err}"), true));
+                                }
+                            }
+                        }
+                        BgMsg::ProfileImported(res) => {
+                            match res {
+                                Ok(summary) => {
+                                    self.profile_status = Some((
+                                        format!(
+                                            "配置恢复成功：新增 {} 个源，更新 {} 个源，导入 {} 个自建节点",
+                                            summary.sources_added,
+                                            summary.sources_updated,
+                                            summary.custom_nodes_imported
+                                        ),
+                                        false,
+                                    ));
+                                    self.reload_sources();
+                                    self.reload_nodes();
+                                    self.reload_settings();
+                                    let db = self.db.clone();
+                                    let tx = self.tx.clone();
+                                    self.rt.spawn(async move {
+                                        if let Ok(cfg) = db.get_proxy_config().await {
+                                            let _ = tx.send(BgMsg::ProxyConfigSaved(Ok(cfg)));
+                                        }
+                                    });
+                                }
+                                Err(err) => {
+                                    self.profile_status = Some((format!("导入配置失败: {err}"), true));
+                                }
                             }
                         }
                         BgMsg::FetchHistory(rows) => {
@@ -788,6 +850,24 @@ impl VpnApp {
                             self.note_proxy_state_transition(status.state);
                             self.proxy_status = status;
                         }
+                        BgMsg::ProxyModeHotToggled { ok, message } => {
+                            if ok {
+                                // 热切换已生效：就地更新运行状态，进程未重启、连接未中断
+                                self.proxy_busy = false;
+                                self.note_proxy_state_transition(ProxyState::Running);
+                                self.proxy_status.state = ProxyState::Running;
+                                self.proxy_status.mode = self.proxy_config.mode;
+                                self.proxy_status.last_error = None;
+                                self.status = message;
+                                // TUN 状态变了，出口归属立刻静默复核一遍
+                                self.refresh_egress_silently();
+                            } else {
+                                // 内核不支持热切换：回退整进程重启（start_proxy 内部
+                                // 会处理提权交接与非 TUN 内核拦截）
+                                self.status = message;
+                                self.start_proxy();
+                            }
+                        }
                         BgMsg::ServiceChecks(results) => {
                             self.service_checks = Some(results);
                             self.service_checks_running = false;
@@ -1004,6 +1084,137 @@ impl VpnApp {
                                 self.flush_rule_hits();
                             }
                             self.active_connections = connections;
+
+                            // 节点流量统计：增量累加与瞬时速率计算
+                            let active_conn_ids: std::collections::HashSet<String> =
+                                self.active_connections.iter().map(|c| c.id.clone()).collect();
+
+                            for rec in self.node_traffic_records.values_mut() {
+                                rec.active_conns = 0;
+                                rec.upload_rate = 0;
+                                rec.download_rate = 0;
+                            }
+                            for rec in self.domain_traffic_records.values_mut() {
+                                rec.active_conns = 0;
+                                rec.upload_rate = 0;
+                                rec.download_rate = 0;
+                            }
+                            for rec in self.process_traffic_records.values_mut() {
+                                rec.active_conns = 0;
+                                rec.upload_rate = 0;
+                                rec.download_rate = 0;
+                            }
+
+                            let dt_val = if let Some((prev_time, _, _)) = self.traffic_prev_sample {
+                                now.duration_since(prev_time).as_secs_f64().max(0.1)
+                            } else {
+                                1.0
+                            };
+
+                            for conn in &self.active_connections {
+                                let node_name = conn.chains.iter().rev()
+                                    .find(|s| {
+                                        let s_low = s.to_lowercase();
+                                        s_low != "local-mixed" && s_low != "direct" && s_low != "reject"
+                                    })
+                                    .cloned()
+                                    .unwrap_or_else(|| {
+                                        if conn.chains.iter().any(|s| s.eq_ignore_ascii_case("direct"))
+                                            || conn.target.eq_ignore_ascii_case("direct")
+                                        {
+                                            "DIRECT (直连)".to_string()
+                                        } else if let Some(ref sel) = self.selected_proxy_node_name {
+                                            sel.clone()
+                                        } else {
+                                            conn.target.clone()
+                                        }
+                                    });
+
+                                let (delta_up, delta_down) = match self.conn_prev_traffic.get(&conn.id) {
+                                    Some((_prev_node, prev_up, prev_down)) => {
+                                        (conn.upload.saturating_sub(*prev_up), conn.download.saturating_sub(*prev_down))
+                                    }
+                                    None => (conn.upload, conn.download),
+                                };
+
+                                self.conn_prev_traffic.insert(
+                                    conn.id.clone(),
+                                    (node_name.clone(), conn.upload, conn.download),
+                                );
+
+                                let (proto, srv, country) = self.nodes.iter()
+                                    .find(|n| n.name == node_name)
+                                    .map(|n| (n.protocol.clone(), n.server.clone(), n.country.clone()))
+                                    .unwrap_or_else(|| ("-".into(), "-".into(), None));
+
+                                let rec = self.node_traffic_records
+                                    .entry(node_name.clone())
+                                    .or_insert_with(|| crate::gui::types::NodeTrafficRecord {
+                                        node_name: node_name.clone(),
+                                        protocol: proto.clone(),
+                                        server: srv.clone(),
+                                        country,
+                                        ..Default::default()
+                                    });
+
+                                if rec.protocol.is_empty() || rec.protocol == "-" {
+                                    if !proto.is_empty() && proto != "-" {
+                                        rec.protocol = proto;
+                                        rec.server = srv;
+                                    }
+                                }
+
+                                rec.upload_bytes = rec.upload_bytes.saturating_add(delta_up);
+                                rec.download_bytes = rec.download_bytes.saturating_add(delta_down);
+                                rec.active_conns += 1;
+                                rec.upload_rate += (delta_up as f64 / dt_val) as u64;
+                                rec.download_rate += (delta_down as f64 / dt_val) as u64;
+
+                                // 域名维度：优先 host，纯 IP 连接用目标地址去端口
+                                let domain_key = if !conn.host.is_empty() {
+                                    conn.host.clone()
+                                } else {
+                                    conn.destination
+                                        .split(':')
+                                        .next()
+                                        .unwrap_or(&conn.destination)
+                                        .to_string()
+                                };
+                                if !domain_key.is_empty() {
+                                    let drec = self.domain_traffic_records
+                                        .entry(domain_key.clone())
+                                        .or_insert_with(|| crate::gui::types::DomainTrafficRecord {
+                                            domain: domain_key,
+                                            ..Default::default()
+                                        });
+                                    drec.upload_bytes = drec.upload_bytes.saturating_add(delta_up);
+                                    drec.download_bytes = drec.download_bytes.saturating_add(delta_down);
+                                    drec.active_conns += 1;
+                                    drec.upload_rate += (delta_up as f64 / dt_val) as u64;
+                                    drec.download_rate += (delta_down as f64 / dt_val) as u64;
+                                }
+
+                                // 软件进程维度：拿不到进程名的归入「未知进程」
+                                let proc_key = if conn.process.is_empty() {
+                                    "未知进程".to_string()
+                                } else {
+                                    conn.process.clone()
+                                };
+                                let prec = self.process_traffic_records
+                                    .entry(proc_key.clone())
+                                    .or_insert_with(|| crate::gui::types::ProcessTrafficRecord {
+                                        process: proc_key,
+                                        ..Default::default()
+                                    });
+                                prec.upload_bytes = prec.upload_bytes.saturating_add(delta_up);
+                                prec.download_bytes = prec.download_bytes.saturating_add(delta_down);
+                                prec.active_conns += 1;
+                                prec.upload_rate += (delta_up as f64 / dt_val) as u64;
+                                prec.download_rate += (delta_down as f64 / dt_val) as u64;
+                            }
+
+                            // 清理已经断开关闭的连接记录
+                            self.conn_prev_traffic.retain(|id, _| active_conn_ids.contains(id));
 
                             let down_kb = self.traffic_down_rate as f32 / 1024.0;
                             let up_kb = self.traffic_up_rate as f32 / 1024.0;

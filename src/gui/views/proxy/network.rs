@@ -32,16 +32,82 @@ impl VpnApp {
                         });
                         ui.add_space(6.0);
 
-                        let is_narrow_net = ui.available_width() < 550.0;
-                        if is_narrow_net {
-                            self.render_system_proxy_card(ui);
-                            ui.add_space(8.0);
-                            self.render_tun_proxy_card(ui);
-                        } else {
-                            ui.columns(2, |column_uis| {
-                                self.render_system_proxy_card(&mut column_uis[0]);
-                                self.render_tun_proxy_card(&mut column_uis[1]);
+                        // 两种接管方式合成一枚单行胶囊分段选择器（与出站模式胶囊同构）：
+                        // 选中项填充强调色，点选即改 mode，统一走底部「保存网络配置」持久化。
+                        let seg_w = ui.available_width();
+                        Frame::NONE
+                            .fill(theme::sidebar())
+                            .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                            .corner_radius(CornerRadius::same(10))
+                            .inner_margin(Margin::symmetric(3, 3))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                    let bw = ((seg_w - 14.0) / 2.0).floor();
+                                    let is_sys = self.proxy_config.mode == ProxyMode::System;
+                                    let is_tun = self.proxy_config.mode == ProxyMode::Tun;
+                                    for (name, active) in
+                                        [("系统代理", is_sys), ("TUN 模式", is_tun)]
+                                    {
+                                        let (fill, text_color) = if active {
+                                            (theme::accent(), Color32::WHITE)
+                                        } else {
+                                            (Color32::TRANSPARENT, theme::text_secondary())
+                                        };
+                                        let btn = egui::Button::new(
+                                            RichText::new(format!(
+                                                "{} {name}",
+                                                if active { "●" } else { "○" }
+                                            ))
+                                            .size(12.0)
+                                            .strong()
+                                            .color(text_color),
+                                        )
+                                        .fill(fill)
+                                        .corner_radius(CornerRadius::same(8))
+                                        .min_size(Vec2::new(bw, 26.0));
+                                        if ui.add(btn).clicked() && !active {
+                                            self.proxy_config.mode = if name == "系统代理" {
+                                                ProxyMode::System
+                                            } else {
+                                                ProxyMode::Tun
+                                            };
+                                        }
+                                    }
+                                });
                             });
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(match self.proxy_config.mode {
+                                ProxyMode::System => "系统代理：自动配置系统 HTTP / SOCKS5 代理，适用于浏览器与支持系统代理的桌面应用，零系统侵入",
+                                ProxyMode::Tun => "TUN 模式：创建底层虚拟网卡接管全系统 IP 层流量，拦截 UDP/ICMP、游戏加速、终端命令全自动透明分流",
+                                ProxyMode::Both => "系统代理 + TUN 同时接管（底部控制条可分别开关）",
+                                ProxyMode::None => "未选用接管方式：仅 Mixed 端口在监听，供手动配置代理的应用使用",
+                            })
+                            .small()
+                            .color(theme::text_secondary()),
+                        );
+
+                        #[cfg(target_os = "linux")]
+                        {
+                            if self.proxy_config.mode == ProxyMode::System {
+                                let has_gsettings =
+                                    crate::system_proxy::system_proxy_supported_on_this_platform();
+                                if has_gsettings {
+                                    ui.label(RichText::new("✓ GNOME gsettings 环境就绪").small().color(theme::accent_strong()));
+                                } else {
+                                    ui.label(RichText::new("ℹ️ 非 GNOME 环境 (无 gsettings 全局代理)").small().color(Color32::from_rgb(234, 179, 8)));
+                                }
+                            }
+                            if self.proxy_config.mode == ProxyMode::Tun {
+                                let kernel_path = crate::kernel::managed_kernel_path(crate::kernel::KernelKind::Mihomo);
+                                if crate::platform::kernel_has_tun_capability(&kernel_path) {
+                                    ui.label(RichText::new("✓ Linux CAP_NET_ADMIN 权限就绪").small().color(theme::accent_strong()));
+                                } else {
+                                    let cmd = crate::platform::tun_capability_command(&kernel_path);
+                                    ui.label(RichText::new(format!("⚠️ 缺少 CAP_NET_ADMIN，TUN 可能起不来。授权命令：{cmd}")).small().color(Color32::from_rgb(234, 179, 8)));
+                                }
+                            }
                         }
 
                         #[cfg(target_os = "linux")]
@@ -514,100 +580,6 @@ impl VpnApp {
                                         }
                                     }
                                 });
-    }
-
-    pub(crate) fn render_system_proxy_card(&mut self, ui: &mut Ui) {
-        let is_sys = self.proxy_config.mode == ProxyMode::System;
-        let (stroke, bg) = if is_sys {
-            (Stroke::new(1.5_f32, theme::accent()), theme::accent_bg())
-        } else {
-            (Stroke::new(1.0_f32, theme::border_subtle()), theme::sidebar())
-        };
-        let card1 = Frame::NONE
-            .fill(bg)
-            .stroke(stroke)
-            .corner_radius(CornerRadius::same(10))
-            .inner_margin(Margin::symmetric(14, 10))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    icon_label(ui, Icon::Globe, 16.0, if is_sys { theme::accent() } else { theme::muted() });
-                    ui.label(RichText::new("系统代理 (System)").strong().color(theme::text_primary()));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if is_sys {
-                            ui.label(RichText::new("● 激活中").small().strong().color(theme::accent_strong()));
-                        } else {
-                            ui.label(RichText::new("○ 点击选用").small().color(theme::muted()));
-                        }
-                    });
-                });
-                ui.add_space(4.0);
-                ui.label(RichText::new("自动配置系统 HTTP / SOCKS5 代理").small().color(theme::text_secondary()));
-                ui.label(RichText::new("适用于浏览器与支持系统代理的桌面应用，零系统侵入").small().color(theme::muted()));
-
-                #[cfg(target_os = "linux")]
-                {
-                    ui.add_space(4.0);
-                    let has_gsettings = crate::system_proxy::system_proxy_supported_on_this_platform();
-                    if has_gsettings {
-                        ui.label(RichText::new("✓ GNOME gsettings 环境就绪").small().color(theme::accent_strong()));
-                    } else {
-                        ui.label(RichText::new("ℹ️ 非 GNOME 环境 (无 gsettings 全局代理)").small().color(Color32::from_rgb(234, 179, 8)));
-                    }
-                }
-            });
-        if card1.response.interact(Sense::click()).clicked() {
-            self.proxy_config.mode = ProxyMode::System;
-        }
-    }
-
-    pub(crate) fn render_tun_proxy_card(&mut self, ui: &mut Ui) {
-        let is_tun = self.proxy_config.mode == ProxyMode::Tun;
-        let (stroke, bg) = if is_tun {
-            (Stroke::new(1.5_f32, theme::accent()), theme::accent_bg())
-        } else {
-            (Stroke::new(1.0_f32, theme::border_subtle()), theme::sidebar())
-        };
-        let card2 = Frame::NONE
-            .fill(bg)
-            .stroke(stroke)
-            .corner_radius(CornerRadius::same(10))
-            .inner_margin(Margin::symmetric(14, 10))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    icon_label(ui, Icon::Lightning, 16.0, if is_tun { theme::accent() } else { theme::muted() });
-                    ui.label(RichText::new("TUN 虚拟网卡 (Global)").strong().color(theme::text_primary()));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if is_tun {
-                            ui.label(RichText::new("● 激活中").small().strong().color(theme::accent_strong()));
-                        } else {
-                            ui.label(RichText::new("○ 点击选用").small().color(theme::muted()));
-                        }
-                    });
-                });
-                ui.add_space(4.0);
-                ui.label(RichText::new("创建底层虚拟网卡接管全系统 IP 层流量").small().color(theme::text_secondary()));
-                ui.label(RichText::new("拦截 UDP/ICMP、游戏加速、终端命令全自动透明分流").small().color(theme::muted()));
-
-                #[cfg(target_os = "linux")]
-                {
-                    ui.add_space(4.0);
-                    let kernel_path = crate::kernel::managed_kernel_path(crate::kernel::KernelKind::Mihomo);
-                    let has_cap = crate::platform::kernel_has_tun_capability(&kernel_path);
-                    if has_cap {
-                        ui.label(RichText::new("✓ Linux CAP_NET_ADMIN 权限就绪").small().color(theme::accent_strong()));
-                    } else {
-                        let cmd = crate::platform::tun_capability_command(&kernel_path);
-                        let copy_btn = ui.button(RichText::new("⚠️ 缺少 CAP_NET_ADMIN (点击复制授权命令)").small().color(Color32::from_rgb(234, 179, 8)));
-                        if copy_btn.on_hover_text(format!("点击复制到剪贴板并在终端执行：\n{cmd}")).clicked() {
-                            ui.output_mut(|o| o.copied_text = cmd);
-                            self.status = "已复制 Linux 内核授权命令，请在终端执行后启动 TUN".into();
-                        }
-                    }
-                }
-            });
-        if card2.response.interact(Sense::click()).clicked() {
-            self.proxy_config.mode = ProxyMode::Tun;
-        }
     }
 
     #[allow(dead_code)]

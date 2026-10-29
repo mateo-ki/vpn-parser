@@ -301,11 +301,13 @@ impl TrafficRule {
     }
 }
 
-/// 仅 mihomo 使用的域名优先规则：fake-ip 模式下 `GEOIP,CN` 会拿真实解析结果参与判定，
-/// 而境内 DoH 间歇性把 google/youtube 的 CDN 域名污染成国内 IP（实测 googlevideo 解析
-/// 到上海/北京），于是被判成"国内直连"再 i/o timeout。插在第一条 GEOIP,CN 之前按域名
-/// 定性，就不需要依赖任何境外 DNS。sing-box 侧没有对应分类的 rule-set，故只在生成
-/// mihomo 配置时注入，不写进用户可见的规则列表。
+/// 仅走 Mihomo 编译管线的内核（Mihomo / VP-Core / Meow）使用的域名优先规则：
+/// fake-ip 模式下 `GEOIP,CN` 会拿真实解析结果参与判定，而境内 DoH 间歇性把
+/// google/youtube 的 CDN 域名污染成国内 IP（实测 googlevideo 解析到上海/北京），
+/// 于是被判成"国内直连"再 i/o timeout。插在第一条 GEOIP,CN 之前按域名定性，
+/// 就不需要依赖任何境外 DNS。VP-Core 与 Meow 的编译器复用 Mihomo 编译器作为基础，
+/// 注入随管线自动生效（vp-core 原生支持 GEOSITE 与 geosite.dat 自动下载）。
+/// sing-box 侧没有对应分类的 rule-set，不注入。
 pub fn mihomo_dns_poison_overrides() -> Vec<TrafficRule> {
     ["google", "youtube"]
         .into_iter()

@@ -443,6 +443,164 @@ impl ProxyManager {
         }
     }
 
+    /// TUN 开关热切换：代理运行中改 TUN 启停不重启内核进程、不断已建立连接。
+    /// - Mihomo：PATCH /configs 只提交 tun 段差量（内核即时建/删 Wintun 网卡与路由）；
+    /// - VP-Core：重新编译全量配置后 PUT /configs 热重载（内核按 tun.enable 差量同步入站）；
+    /// - 其余内核（SingBox / Xray / Shoes / Meow）没有运行时 TUN API：返回 Ok(false)，
+    ///   由调用方回退整进程重启。
+    /// 返回 Ok(true) = 热切换已生效；Ok(false) = 内核不支持或热切换失败（可安全回退重启）。
+    pub async fn try_hot_toggle_tun(&self, mut options: MihomoConfigOptions) -> Result<bool> {
+        options.validate()?;
+        let started = tokio::time::Instant::now();
+        let tun_on = options.mode.has_tun();
+
+        let (kernel, config_path, controller_port, controller_secret, mut options, node) = {
+            let mut runtime = self.runtime.lock().await;
+            if !matches!(
+                runtime.status.state,
+                ProxyState::Running | ProxyState::Degraded
+            ) {
+                return Ok(false);
+            }
+            let Some(kernel) = runtime.status.kernel else {
+                return Ok(false);
+            };
+            let alive = match runtime.child.as_mut() {
+                Some(child) => child.try_wait().ok().flatten().is_none(),
+                None => false,
+            };
+            if !alive {
+                return Ok(false);
+            }
+            let Some(work_dir) = &runtime.work_dir else {
+                return Ok(false);
+            };
+            // 一次性字段（密钥 / 候选节点 / 端口映射）不持久化：为空时沿用运行时当前值，
+            // 否则热重载出的配置会丢鉴权、丢 url-test 候选（与 apply_options 同一套规则）。
+            if options.controller_secret.is_empty() {
+                options.controller_secret = runtime.options.controller_secret.clone();
+            }
+            if options.url_test_nodes.is_empty() {
+                options.url_test_nodes = runtime.options.url_test_nodes.clone();
+            }
+            if options.port_mapping_nodes.is_empty() {
+                options.port_mapping_nodes = runtime.options.port_mapping_nodes.clone();
+            }
+            (
+                kernel,
+                work_dir.config_path(),
+                runtime.options.controller_port,
+                runtime.options.controller_secret.clone(),
+                options,
+                runtime.current_node.clone(),
+            )
+        };
+
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_millis(2500))
+            .build()
+        {
+            Ok(client) => client,
+            Err(error) => {
+                tracing::warn!("创建 TUN 热切换 HTTP 客户端失败: {error}");
+                return Ok(false);
+            }
+        };
+
+        let hot_applied = match kernel {
+            KernelKind::Mihomo => {
+                // PATCH 只提交 tun 段差量，字段与 mihomo 编译器保持一致
+                let mut dns_hijack = options.tun.dns_hijack.clone();
+                if !dns_hijack.iter().any(|h| h.contains("tcp://")) {
+                    dns_hijack.push("tcp://any:53".into());
+                }
+                let payload = serde_json::json!({
+                    "tun": {
+                        "enable": tun_on,
+                        "stack": options.tun.stack.as_mihomo_value(),
+                        "dns-hijack": dns_hijack,
+                        "auto-route": options.tun.auto_route,
+                        "auto-detect-interface": options.tun.auto_detect_interface,
+                        "strict-route": true,
+                        "endpoint-independent-nat": true,
+                    }
+                });
+                let url = format!("http://127.0.0.1:{controller_port}/configs");
+                let request = with_controller_auth(client.patch(&url).json(&payload), &controller_secret);
+                match request.send().await {
+                    Ok(response) if response.status().is_success() => true,
+                    Ok(response) => {
+                        tracing::warn!(status = %response.status(), "Mihomo TUN 热切换 PATCH 失败");
+                        false
+                    }
+                    Err(error) => {
+                        tracing::warn!("请求 Mihomo TUN 热切换失败: {error}");
+                        false
+                    }
+                }
+            }
+            KernelKind::VpCore => {
+                let Some(node) = node else {
+                    tracing::warn!("VP-Core TUN 热切换缺当前节点，回退重启");
+                    return Ok(false);
+                };
+                let config = match build_kernel_config(KernelKind::VpCore, &node, options.clone())
+                {
+                    Ok(config) => config,
+                    Err(error) => {
+                        tracing::warn!("构建 VP-Core TUN 热切换配置失败: {error}");
+                        return Ok(false);
+                    }
+                };
+                let config_text = match serialize_kernel_config(KernelKind::VpCore, &config) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        tracing::warn!("序列化 VP-Core TUN 热切换配置失败: {error}");
+                        return Ok(false);
+                    }
+                };
+                if let Err(error) = tokio::fs::write(&config_path, &config_text).await {
+                    tracing::warn!("写入 VP-Core 热切换配置文件失败: {error}");
+                    return Ok(false);
+                }
+                let url = format!("http://127.0.0.1:{controller_port}/configs?force=true");
+                let payload = serde_json::json!({
+                    "path": config_path.to_string_lossy(),
+                });
+                let request = with_controller_auth(client.put(&url).json(&payload), &controller_secret);
+                match request.send().await {
+                    Ok(response) if response.status().is_success() => true,
+                    Ok(response) => {
+                        tracing::warn!(status = %response.status(), "VP-Core TUN 热切换 PUT 失败");
+                        false
+                    }
+                    Err(error) => {
+                        tracing::warn!("请求 VP-Core TUN 热切换失败: {error}");
+                        false
+                    }
+                }
+            }
+            _ => false,
+        };
+
+        if !hot_applied {
+            return Ok(false);
+        }
+
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        let mut runtime = self.runtime.lock().await;
+        runtime.apply_options(options.clone());
+        runtime.status.mode = options.mode;
+        runtime.status.last_error = None;
+        runtime.status.message = if tun_on {
+            format!("{} TUN 已热开启（{elapsed_ms} ms，未重启进程）", kernel.display_name())
+        } else {
+            format!("{} TUN 已热关闭（{elapsed_ms} ms，未重启进程）", kernel.display_name())
+        };
+        tracing::info!(kernel = %kernel.display_name(), tun_on, elapsed_ms, "TUN 热切换生效");
+        Ok(true)
+    }
+
     pub async fn start(&self, node: &Node) -> Result<()> {
         self.connect(node, None).await
     }

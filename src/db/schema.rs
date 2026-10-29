@@ -259,6 +259,12 @@ impl Database {
             self.ensure_column("settings", column, "INTEGER NOT NULL DEFAULT 1")
                 .await?;
         }
+        // 以管理员方式启动软件：默认关（老库升级不打扰现有用户）。
+        self.ensure_column("settings", "launch_as_admin", "INTEGER NOT NULL DEFAULT 0")
+            .await?;
+        // 开机自启动：默认关（写的是用户注册表，不能擅自开）。
+        self.ensure_column("settings", "launch_at_startup", "INTEGER NOT NULL DEFAULT 0")
+            .await?;
         // 五个测速优化开关默认全部关闭，行为与老版本一致。
         for column in [
             "speedtest_parallel_kernels",

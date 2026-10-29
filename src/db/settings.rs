@@ -57,6 +57,8 @@ impl Database {
                        publisher_api, publisher_token, ui_theme, app_icon_style, ui_language, ui_scale, ui_dark, sidebar_expanded, kernel_source, firewall_auto_allow,
                        auto_failover, insider_channel, speedtest_auto_refill,
                        auto_prepare_kernel, speedtest_added_source,
+                       launch_as_admin,
+                       launch_at_startup,
                        auto_rearm_system_proxy,
                        gist_pages, gist_queries,
                        window_size, console_tabs, dashboard_ui_mode,
@@ -154,6 +156,12 @@ impl Database {
             // 这两条缺列时按"开"读：它们是默认开的行为开关，不能因为老库没这列就变成关。
             auto_prepare_kernel: sqlx::Row::try_get::<i64, _>(&row, "auto_prepare_kernel")
                 .unwrap_or(1)
+                != 0,
+            launch_as_admin: sqlx::Row::try_get::<i64, _>(&row, "launch_as_admin")
+                .unwrap_or(0)
+                != 0,
+            launch_at_startup: sqlx::Row::try_get::<i64, _>(&row, "launch_at_startup")
+                .unwrap_or(0)
                 != 0,
             speedtest_added_source: sqlx::Row::try_get::<i64, _>(&row, "speedtest_added_source")
                 .unwrap_or(1)
@@ -302,6 +310,12 @@ impl Database {
         if let Some(v) = input.auto_prepare_kernel {
             s.auto_prepare_kernel = v;
         }
+        if let Some(v) = input.launch_as_admin {
+            s.launch_as_admin = v;
+        }
+        if let Some(v) = input.launch_at_startup {
+            s.launch_at_startup = v;
+        }
         if let Some(v) = input.speedtest_added_source {
             s.speedtest_added_source = v;
         }
@@ -371,6 +385,8 @@ impl Database {
                  speedtest_auto_refill=?,
                  auto_rearm_system_proxy=?,
                  auto_prepare_kernel=?,
+                 launch_as_admin=?,
+                 launch_at_startup=?,
                  speedtest_added_source=?,
                  gist_pages=?,
                  gist_queries=?,
@@ -416,6 +432,8 @@ impl Database {
         .bind(s.speedtest_auto_refill as i64)
         .bind(s.auto_rearm_system_proxy as i64)
         .bind(s.auto_prepare_kernel as i64)
+        .bind(s.launch_as_admin as i64)
+        .bind(s.launch_at_startup as i64)
         .bind(s.speedtest_added_source as i64)
         .bind(s.gist_pages as i64)
         .bind(&s.gist_queries)

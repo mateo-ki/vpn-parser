@@ -44,6 +44,8 @@ pub enum Icon {
     SidebarCollapse,
     /// 文件夹 / 本地文件浏览
     Folder,
+    /// 迷你柱状统计图（速率卡片右上角的流量统计入口）
+    Stats,
 }
 
 pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -1038,6 +1040,31 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
             painter.line_segment([Pos2::new(tab_x0, body_top), Pos2::new(tab_x0, tab_y)], stroke);
             painter.line_segment([Pos2::new(tab_x0, tab_y), Pos2::new(tab_x1, tab_y)], stroke);
             painter.line_segment([Pos2::new(tab_x1, tab_y), Pos2::new(tab_x2, body_top)], stroke);
+        }
+        Icon::Stats => {
+            // 柱状统计图：横轴基线 + 四根高低错落的圆角柱。
+            // 光有递增柱会被读成"信号强度"，加一条基线才一眼是"图表/统计"。
+            let bar_w = s * 0.13;
+            let gap = s * 0.10;
+            let total_w = bar_w * 4.0 + gap * 3.0;
+            let x0 = center.x - total_w / 2.0;
+            let base_y = center.y + s * 0.28;
+            let heights = [0.28_f32, 0.55, 0.36, 0.70];
+            for (i, h) in heights.iter().enumerate() {
+                let bx = x0 + i as f32 * (bar_w + gap);
+                let bar = Rect::from_min_size(
+                    Pos2::new(bx, base_y - s * h),
+                    Vec2::new(bar_w, s * h),
+                );
+                painter.rect_filled(bar, CornerRadius::same(1), color);
+            }
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - total_w / 2.0 - s * 0.03, base_y),
+                    Pos2::new(center.x + total_w / 2.0 + s * 0.03, base_y),
+                ],
+                Stroke::new((s * 0.05).clamp(1.0, 1.3), color),
+            );
         }
     }
 }

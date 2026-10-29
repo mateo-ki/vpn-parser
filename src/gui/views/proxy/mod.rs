@@ -7,6 +7,7 @@ pub mod nodes;
 pub mod port_mappings;
 pub mod rules;
 pub mod security;
+pub mod traffic;
 
 #[cfg(test)]
 mod tests;

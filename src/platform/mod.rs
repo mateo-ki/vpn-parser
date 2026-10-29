@@ -12,6 +12,20 @@ pub use window_park::{
 
 const SINGLE_INSTANCE_MUTEX_NAME: &str = "Local\\VPNParser-7F61E55C-DB54-49C6-AB9E-986AEBFDD56B";
 
+/// 「以管理员方式启动」在窗口创建前提权时被 UAC 取消的会话标记：
+/// 设置页据此提示"本次以普通权限运行"，应用生命周期内不再重复弹 UAC。
+static ADMIN_RELAUNCH_CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 本次会话的「管理员方式启动」提权是否被用户取消（设置页提示用）
+pub fn admin_relaunch_cancelled() -> bool {
+    ADMIN_RELAUNCH_CANCELLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 标记本次会话的启动提权被取消（main 启动早期调用）
+pub fn mark_admin_relaunch_cancelled() {
+    ADMIN_RELAUNCH_CANCELLED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 #[cfg(windows)]
 pub struct SingleInstanceGuard {
     handle: windows_sys::Win32::Foundation::HANDLE,
@@ -1619,6 +1633,132 @@ pub struct ElevatedKernelArgs {
     pub log_file: std::path::PathBuf,
 }
 
+/// 「开机自启动」对账结论：按（期望开关，注册表现状，期望路径）该做什么。
+/// 拆成纯函数是为了单测不用碰真注册表。
+#[derive(Debug, PartialEq)]
+pub enum StartupSyncAction {
+    /// 值不在或指向旧路径 → 写入（引号包裹的 exe 全路径）
+    Write,
+    /// 设置关了但值还在 → 删除
+    Remove,
+    /// 注册表已与期望一致 → 什么都不动（每帧/每次启动都调用，不能瞎写）
+    Leave,
+}
+
+pub fn startup_sync_action(enabled: bool, current: Option<&str>, desired: &str) -> StartupSyncAction {
+    match (enabled, current) {
+        (true, Some(v)) if v == desired => StartupSyncAction::Leave,
+        (true, _) => StartupSyncAction::Write,
+        (false, Some(_)) => StartupSyncAction::Remove,
+        (false, None) => StartupSyncAction::Leave,
+    }
+}
+
+/// 开机自启动的注册表条目：值名与数据形状（引号包裹的 exe 全路径，路径带空格也稳）。
+pub const LAUNCH_AT_STARTUP_VALUE_NAME: &str = "VPN Parser";
+
+pub fn launch_at_startup_desired_value(exe_path: &std::path::Path) -> String {
+    format!("\"{}\"", exe_path.display())
+}
+
+/// 把「开机自启动」设置同步到系统（每次启动 + 用户改设置时各调一次）：
+/// 开 → 确保 HKCU Run 键的值指向**当前** exe（软件挪过位置也能自己跟上）；
+/// 关 → 清掉残留值。只写 HKCU，不需要提权；返回是否达成期望状态。
+#[cfg(windows)]
+pub fn sync_launch_at_startup(enabled: bool) -> bool {
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW,
+        RegSetValueExW, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE,
+        REG_SZ,
+    };
+
+    let exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(_) => return false,
+    };
+    let desired = launch_at_startup_desired_value(&exe);
+    let run_key: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Run\0"
+        .encode_utf16()
+        .collect();
+    let value_name: Vec<u16> = format!("{}\0", LAUNCH_AT_STARTUP_VALUE_NAME)
+        .encode_utf16()
+        .collect();
+    let desired_w: Vec<u16> = format!("{desired}\0").encode_utf16().collect();
+
+    unsafe {
+        // 先读现状，一致就一个字节都不写
+        let mut current: Option<String> = None;
+        let mut hkey = std::ptr::null_mut();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, run_key.as_ptr(), 0, KEY_QUERY_VALUE, &mut hkey) == 0 {
+            let mut buf = [0u16; 520];
+            let mut len = (buf.len() * 2) as u32;
+            let status = RegQueryValueExW(
+                hkey,
+                value_name.as_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                buf.as_mut_ptr() as *mut u8,
+                &mut len,
+            );
+            if status == 0 {
+                let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+                current = Some(String::from_utf16_lossy(&buf[..end]));
+            }
+            RegCloseKey(hkey);
+        }
+
+        match startup_sync_action(enabled, current.as_deref(), &desired) {
+            StartupSyncAction::Leave => true,
+            StartupSyncAction::Write => {
+                let mut hkey = std::ptr::null_mut();
+                if RegCreateKeyExW(
+                    HKEY_CURRENT_USER,
+                    run_key.as_ptr(),
+                    0,
+                    std::ptr::null(),
+                    REG_OPTION_NON_VOLATILE,
+                    KEY_SET_VALUE,
+                    std::ptr::null(),
+                    &mut hkey,
+                    std::ptr::null_mut(),
+                ) != 0
+                {
+                    return false;
+                }
+                let ok = RegSetValueExW(
+                    hkey,
+                    value_name.as_ptr(),
+                    0,
+                    REG_SZ,
+                    desired_w.as_ptr() as *const u8,
+                    (desired_w.len() * 2) as u32,
+                ) == 0;
+                RegCloseKey(hkey);
+                ok
+            }
+            StartupSyncAction::Remove => {
+                let mut hkey = std::ptr::null_mut();
+                if RegOpenKeyExW(HKEY_CURRENT_USER, run_key.as_ptr(), 0, KEY_SET_VALUE, &mut hkey)
+                    != 0
+                {
+                    // 键打不开 = 值也无从谈起，目标状态已达成
+                    return true;
+                }
+                let status = RegDeleteValueW(hkey, value_name.as_ptr());
+                RegCloseKey(hkey);
+                // 2 = ERROR_FILE_NOT_FOUND：值本来就不在，同样算达成
+                status == 0 || status == 2
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+/// 目前只有 Windows 实装开机自启；其它平台是 no-op（设置照常保存，只是不生效）。
+pub fn sync_launch_at_startup(_enabled: bool) -> bool {
+    true
+}
+
 #[cfg(windows)]
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -1960,4 +2100,89 @@ pub fn run_elevated_kernel_supervisor(args: ElevatedKernelArgs) -> Result<()> {
 #[cfg(not(windows))]
 pub fn run_elevated_kernel_supervisor(_args: ElevatedKernelArgs) -> Result<()> {
     Err(anyhow!("无头提权仅在 Windows 平台上可用"))
+}
+
+#[cfg(test)]
+mod startup_sync_tests {
+    use super::{launch_at_startup_desired_value, startup_sync_action, StartupSyncAction};
+
+    /// 四象限：开+一致=不动；开+缺/旧=写；关+在=删；关+缺=不动。
+    #[test]
+    fn the_sync_decision_covers_all_four_quadrants() {
+        let desired = r#""C:\Apps\VPN Parser\vpn-parser.exe""#;
+        assert_eq!(
+            startup_sync_action(true, Some(desired), desired),
+            StartupSyncAction::Leave
+        );
+        assert_eq!(
+            startup_sync_action(true, None, desired),
+            StartupSyncAction::Write
+        );
+        // 软件挪了位置：旧路径要被新路径覆盖
+        assert_eq!(
+            startup_sync_action(true, Some(r#""D:\old\vpn-parser.exe""#), desired),
+            StartupSyncAction::Write
+        );
+        assert_eq!(
+            startup_sync_action(false, Some(desired), desired),
+            StartupSyncAction::Remove
+        );
+        assert_eq!(
+            startup_sync_action(false, None, desired),
+            StartupSyncAction::Leave
+        );
+    }
+
+    /// 数据形状：引号包裹的 exe 全路径 —— 路径带空格（Program Files 类）不炸。
+    #[test]
+    fn the_desired_value_quotes_the_exe_path() {
+        let v = launch_at_startup_desired_value(std::path::Path::new(r"C:\Apps\VPN Parser\vpn-parser.exe"));
+        assert_eq!(v, r#""C:\Apps\VPN Parser\vpn-parser.exe""#);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod startup_sync_e2e {
+    use super::{launch_at_startup_desired_value, sync_launch_at_startup};
+
+    /// 真注册表端到端：开 → Run 键里出现指向当前 exe 的引号路径；关 → 值消失。
+    /// 净效果为零，但中途任何一步失败都可能留下值 —— 所以关掉的动作放在断言前。
+    #[test]
+    fn sync_writes_then_removes_the_real_run_value() {
+        fn read_value() -> Option<String> {
+            let out = std::process::Command::new("reg")
+                .args([
+                    "query",
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    "/v",
+                    "VPN Parser",
+                ])
+                .output()
+                .ok()?;
+            if !out.status.success() {
+                return None;
+            }
+            let text = String::from_utf8_lossy(&out.stdout);
+            text.lines()
+                .find(|line| line.contains("VPN Parser"))
+                .and_then(|line| line.split("REG_SZ").nth(1))
+                .map(|rest| rest.trim().to_string())
+        }
+
+        let desired = launch_at_startup_desired_value(&std::env::current_exe().unwrap());
+
+        assert!(sync_launch_at_startup(true), "写入 HKCU Run 键被拒绝");
+        // 先执行关闭（清理）再断言开启结果，失败也不留痕
+        let written = read_value();
+        let removed = sync_launch_at_startup(false);
+        assert!(
+            written.as_deref() == Some(desired.as_str()),
+            "开启后 Run 键应指向当前 exe（引号包裹），实际 {written:?}"
+        );
+        assert!(removed, "删除 HKCU Run 键值被拒绝");
+        assert!(
+            read_value().is_none(),
+            "关闭后 Run 键里不应再有 VPN Parser 值"
+        );
+    }
 }

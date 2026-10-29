@@ -351,6 +351,43 @@ mod tests {
         assert!(yaml.contains("auto-route: true"));
     }
 
+    /// 境内 DoH 污染免疫注入对 VP-Core 同样生效：VP-Core 编译器复用 Mihomo 编译器
+    /// 作为基础，GEOSITE,google/youtube 必须随管线插入第一条 GEOIP,CN 之前
+    /// （vp-core 内核原生支持 GEOSITE 与 geosite.dat 自动下载，注入规则可直接生效）。
+    #[test]
+    fn test_vpcore_compiler_injects_dns_poison_overrides() {
+        let node = test_node(
+            "ss",
+            json!({
+                "cipher": "aes-128-gcm",
+                "password": "pwd"
+            }),
+        );
+        let mut options = MihomoConfigOptions::default();
+        options.mode = ProxyMode::System;
+        let plan = crate::proxy::ir::lower_options_to_ir(&options, Some(&node));
+        let artifact = VpCoreCompiler.compile(&plan).expect("compile success");
+        let yaml = match artifact {
+            CompiledArtifact::Yaml(y) => y,
+            _ => panic!("expected Yaml artifact"),
+        };
+
+        assert!(
+            yaml.contains("GEOSITE,google,PROXY") && yaml.contains("GEOSITE,youtube,PROXY"),
+            "vp_core 配置应注入污染免疫规则:\n{yaml}"
+        );
+        let inject_pos = yaml
+            .find("GEOSITE,google,PROXY")
+            .expect("注入规则存在性已在上一断言保证");
+        let cn_pos = yaml
+            .find("GEOIP,CN")
+            .expect("默认推荐规则应包含 GEOIP,CN");
+        assert!(
+            inject_pos < cn_pos,
+            "注入规则必须插在第一条 GEOIP,CN 之前（inject={inject_pos}, cn={cn_pos}）"
+        );
+    }
+
     #[test]
     fn test_vpcore_compiler_filters_invalid_geoip_rules() {
         assert!(is_valid_vpcore_geoip_code("CN"));

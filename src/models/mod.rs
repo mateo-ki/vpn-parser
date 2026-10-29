@@ -333,6 +333,13 @@ pub struct AppSettings {
     /// 就该自己动起来，关了就等于没有这个状态（用户 2026-10-08 指定）。
     #[serde(default = "default_true_setting")]
     pub auto_prepare_kernel: bool,
+    /// 以管理员方式启动软件：非提权实例加载到这条设置时自动 runas 重启（UAC 取消则本会话跳过）。
+    #[serde(default)]
+    pub launch_as_admin: bool,
+    /// 开机自启动：写/清 HKCU Run 键（仅 Windows 实装）。默认关 —— 动的是用户的注册表，
+    /// 不能擅自开；开启后每次启动还会对账一次，软件挪了位置也能把 Run 键指回新路径。
+    #[serde(default)]
+    pub launch_at_startup: bool,
     /// 新增订阅源后自动拉取它并只测这个源。同样默认开：他要的是"加完就知道好不好用"。
     #[serde(default = "default_true_setting")]
     pub speedtest_added_source: bool,
@@ -502,6 +509,8 @@ impl Default for AppSettings {
             speedtest_auto_refill: false,
             auto_rearm_system_proxy: false,
             auto_prepare_kernel: true,
+            launch_as_admin: false,
+            launch_at_startup: false,
             speedtest_added_source: true,
             gist_pages: default_gist_pages(),
             gist_queries: default_gist_queries(),
@@ -554,6 +563,8 @@ pub struct UpdateSettings {
     pub speedtest_auto_refill: Option<bool>,
     pub auto_rearm_system_proxy: Option<bool>,
     pub auto_prepare_kernel: Option<bool>,
+    pub launch_as_admin: Option<bool>,
+    pub launch_at_startup: Option<bool>,
     pub speedtest_added_source: Option<bool>,
     pub gist_pages: Option<u32>,
     pub gist_queries: Option<String>,

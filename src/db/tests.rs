@@ -119,6 +119,8 @@
                 auto_rearm_system_proxy: None,
                 auto_prepare_kernel: None,
                 speedtest_added_source: None,
+                launch_as_admin: None,
+                launch_at_startup: None,
                 gist_pages: None,
                 gist_queries: None,
                 window_size: None,
@@ -1592,3 +1594,43 @@
             let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
         }
     }
+
+/// 开机自启动：默认关，开了能落库、重开软件还在，关回去也能清掉。
+#[tokio::test]
+async fn persists_launch_at_startup_and_defaults_to_off() {
+    let path = std::env::temp_dir().join(format!(
+        "vpn-parser-launch-at-startup-{}.db",
+        Uuid::new_v4()
+    ));
+    let db = Database::connect(path.to_str().unwrap()).await.unwrap();
+
+    // 默认关：动用户注册表的开关不能擅自开
+    assert!(!db.get_settings().await.unwrap().launch_at_startup);
+
+    let saved = db
+        .update_settings(UpdateSettings {
+            launch_at_startup: Some(true),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(saved.launch_at_startup);
+
+    drop(db);
+    let reopened = Database::connect(path.to_str().unwrap()).await.unwrap();
+    assert!(reopened.get_settings().await.unwrap().launch_at_startup);
+
+    let off = reopened
+        .update_settings(UpdateSettings {
+            launch_at_startup: Some(false),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(!off.launch_at_startup);
+
+    drop(reopened);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+    let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+}

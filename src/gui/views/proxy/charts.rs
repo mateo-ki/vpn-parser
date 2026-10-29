@@ -127,6 +127,23 @@ fn dash_label(ui: &mut Ui, title: &str, peak: Option<String>) {
     });
 }
 
+/// 速率卡片右上角的统计图表小按钮：迷你柱状图，点击呼出流量统计抽屉
+fn dash_stats_icon_button(ui: &mut Ui) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        ui.painter()
+            .circle_filled(rect.center(), 11.0, theme::panel_hover());
+    }
+    let color = if resp.hovered() {
+        theme::accent()
+    } else {
+        theme::muted()
+    };
+    crate::gui::icons::draw_icon(ui.painter(), rect, crate::gui::icons::Icon::Stats, color);
+    resp.on_hover_text("查看流量统计（节点 / 域名 / 软件进程）")
+}
+
 /// 状态小圆点。
 fn dash_dot(ui: &mut Ui, color: Color32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
@@ -759,16 +776,11 @@ impl VpnApp {
             // 底部预留舒适呼吸内边距，消除滚动到底部时的边界摩擦与振荡
             ui.add_space(16.0);
         });
-
-        // 策略组调度抽屉（右侧滑出）
-        self.render_group_drawer(ui);
-        // 控制台通用功能抽屉（网络/日志/规则/内核/策略组/活跃连接）
-        self.render_dashboard_drawer(ui);
     }
 
     /// 策略组调度抽屉：右侧滑出（egui 原生窗口，精确宽度、内容自动裁剪），
     /// 四种调度方式 + 可用节点列表（带地区/名称筛选），点选即设为启动节点。
-    fn render_group_drawer(&mut self, ui: &mut Ui) {
+    pub(crate) fn render_group_drawer(&mut self, ctx: &egui::Context) {
         let Some(group_name) = self.group_drawer.clone() else {
             return;
         };
@@ -784,7 +796,7 @@ impl VpnApp {
                 members: Vec::new(),
             });
 
-        let ctx = ui.ctx().clone();
+        let ctx = ctx.clone();
         // 分流策略组抽屉宽度调整为 70% 屏幕宽度
         let width = (ctx.screen_rect().width() * 0.70).clamp(560.0, 1400.0);
         let screen = ctx.screen_rect();
@@ -809,7 +821,6 @@ impl VpnApp {
         };
         // 确保抽屉和遮罩底边严格在状态栏上方（留 2px 绝对安全间距，彻底杜绝遮盖状态栏与底部按钮）
         let safe_max_y = status_top_y - 2.0;
-        let content_h = (safe_max_y - title_bar_h).max(100.0);
         let backdrop_rect = egui::Rect::from_min_max(
             egui::pos2(0.0, title_bar_h),
             egui::pos2(screen.width(), safe_max_y),
@@ -841,107 +852,141 @@ impl VpnApp {
         };
 
         // 抽屉本体：原生窗口（严格限制在标题栏与状态栏之间的内容区域内，不遮挡标题栏与状态栏）
-        egui::Window::new("调度方式")
-            .anchor(egui::Align2::RIGHT_TOP, [0.0, title_bar_h])
-            .resizable(false)
-            .collapsible(false)
-            .title_bar(false)
-            .order(egui::Order::Foreground)
-            .fixed_size([width, content_h])
-            .min_size([width, content_h])
-            .max_size([width, content_h])
-            .frame(
-                egui::Frame::NONE
-                    .fill(panel_fill)
-                    .stroke(Stroke::new(1.0_f32, apple_stroke())),
-            )
-            .show(&ctx, |ui| {
-                let safe_rect = egui::Rect::from_min_max(
-                    egui::pos2(0.0, title_bar_h),
-                    egui::pos2(screen.width(), safe_max_y),
-                );
-                ui.set_clip_rect(ui.clip_rect().intersect(safe_rect));
-                ui.set_min_size(Vec2::new(width, content_h));
-                ui.set_max_size(Vec2::new(width, content_h));
-                ui.vertical(|ui| {
-                    ui.add_space(16.0);
-                    // 头部：标题 + 关闭（满宽分配，使关闭按钮严格靠最右上角）
-                    let avail_w = ui.available_width();
-                    let header_bar_rect = egui::Rect::from_min_size(
-                        ui.cursor().min,
-                        Vec2::new(avail_w, 42.0),
-                    );
-                    let drag_resp = ui.interact(
-                        header_bar_rect,
-                        ui.id().with(("group_drawer_header_drag", group.name.clone())),
-                        Sense::drag(),
-                    );
-                    if drag_resp.drag_started() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                    }
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(avail_w, 42.0),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.set_min_width(avail_w);
-                            ui.set_max_width(avail_w);
-                            ui.add_space(16.0);
-                            ui.vertical(|ui| {
-                                ui.label(
-                                    RichText::new("调度方式")
-                                        .size(15.0)
-                                        .strong()
-                                        .color(theme::text_primary()),
-                                );
-                                ui.label(
-                                    RichText::new(format!(
-                                        "{} · {}",
-                                        group.name,
-                                        if is_selector { "手动选择" } else { "自动调度" }
-                                    ))
-                                    .size(10.5)
-                                    .color(theme::muted()),
-                                );
-                            });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.add_space(16.0);
-                                // 关闭按钮：圆形底 + ✕，始终可见可点
-                                let (btn_rect, btn_resp) = ui.allocate_exact_size(
-                                    Vec2::splat(26.0),
-                                    Sense::click(),
-                                );
-                                let bp = ui.painter().clone();
-                                bp.circle_filled(
-                                    btn_rect.center(),
-                                    13.0,
-                                    apple_sub_bg(),
-                                );
-                                let x_color = theme::text_secondary();
-                                let s = 4.5_f32;
-                                let c = btn_rect.center();
-                                for (a, b) in [
-                                    (egui::pos2(c.x - s, c.y - s), egui::pos2(c.x + s, c.y + s)),
-                                    (egui::pos2(c.x - s, c.y + s), egui::pos2(c.x + s, c.y - s)),
-                                ] {
-                                    bp.line_segment([a, b], Stroke::new(2.0_f32, x_color));
-                                }
-                                if btn_resp.hovered() {
-                                    bp.circle_stroke(
-                                        c,
-                                        13.0,
-                                        Stroke::new(1.0_f32, apple_stroke()),
-                                    );
-                                }
-                                if btn_resp.clicked() {
-                                    close = true;
-                                }
-                            });
-                        },
-                    );
+        let drawer_rect = egui::Rect::from_min_max(
+            egui::pos2(screen.width() - width, title_bar_h),
+            egui::pos2(screen.width(), safe_max_y),
+        );
 
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(8.0);
+        egui::Area::new(egui::Id::new("group_drawer_panel"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(drawer_rect.min)
+            .show(&ctx, |ui| {
+                ui.set_clip_rect(drawer_rect);
+
+                // 拦截抽屉本体所有点击与拖拽，防止事件穿透至底层卡片
+                let _ = ui.interact(
+                    drawer_rect,
+                    ui.id().with(("group_drawer_panel_interact", group.name.clone())),
+                    Sense::click_and_drag(),
+                );
+
+                // 绘制抽屉底色与左侧描边
+                ui.painter().rect_filled(drawer_rect, CornerRadius::ZERO, panel_fill);
+                ui.painter().line_segment(
+                    [drawer_rect.left_top(), drawer_rect.left_bottom()],
+                    Stroke::new(1.0_f32, apple_stroke()),
+                );
+
+                // 抽屉头部栏（高度 56px：标题 21px + 间距 2px + 副标题 14px + 上下余量。
+                // 48px 时副标题下缘顶到分割线，视觉上像被线盖住）
+                let header_h = 56.0_f32;
+                let header_rect = egui::Rect::from_min_max(
+                    drawer_rect.min,
+                    egui::pos2(drawer_rect.right(), drawer_rect.min.y + header_h),
+                );
+
+                // 关闭按钮：严格钉在抽屉最右上角（距右边框 16px，垂直居中）
+                let btn_size = 28.0_f32;
+                let btn_rect = egui::Rect::from_min_size(
+                    egui::pos2(
+                        drawer_rect.right() - 16.0 - btn_size,
+                        drawer_rect.min.y + (header_h - btn_size) * 0.5,
+                    ),
+                    Vec2::splat(btn_size),
+                );
+
+                // 头部剩余区域支持拖拽主窗口
+                let drag_rect = egui::Rect::from_min_max(
+                    drawer_rect.min,
+                    egui::pos2(btn_rect.min.x - 8.0, header_rect.max.y),
+                );
+                let drag_resp = ui.interact(
+                    drag_rect,
+                    ui.id().with(("group_drawer_header_drag", group.name.clone())),
+                    Sense::drag(),
+                );
+                if drag_resp.drag_started() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+
+                // 左侧标题与副标题
+                let title_rect = egui::Rect::from_min_max(
+                    egui::pos2(drawer_rect.left() + 18.0, drawer_rect.min.y + 7.0),
+                    egui::pos2(btn_rect.min.x - 12.0, header_rect.max.y - 3.0),
+                );
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(title_rect), |ui| {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.label(
+                            RichText::new("调度方式")
+                                .size(15.5)
+                                .strong()
+                                .color(theme::text_primary()),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "{} · {}",
+                                group.name,
+                                if is_selector { "手动选择" } else { "自动调度" }
+                            ))
+                            .size(10.5)
+                            .color(theme::muted()),
+                        );
+                    });
+                });
+
+                // 右上角关闭按钮
+                let btn_resp = ui.interact(
+                    btn_rect,
+                    ui.id().with(("group_drawer_close_btn", group.name.clone())),
+                    Sense::click(),
+                );
+                if btn_resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                let bp = ui.painter().clone();
+                let bg_col = if btn_resp.hovered() {
+                    theme::panel_hover()
+                } else {
+                    apple_sub_bg()
+                };
+                bp.circle_filled(btn_rect.center(), 14.0, bg_col);
+                let x_color = if btn_resp.hovered() {
+                    theme::text_primary()
+                } else {
+                    theme::text_secondary()
+                };
+                let s = 5.0_f32;
+                let c = btn_rect.center();
+                for (a, b) in [
+                    (egui::pos2(c.x - s, c.y - s), egui::pos2(c.x + s, c.y + s)),
+                    (egui::pos2(c.x + s, c.y - s), egui::pos2(c.x - s, c.y + s)),
+                ] {
+                    bp.line_segment([a, b], Stroke::new(1.8_f32, x_color));
+                }
+                if btn_resp.hovered() {
+                    bp.circle_stroke(c, 14.0, Stroke::new(1.0_f32, apple_stroke()));
+                }
+                if btn_resp.clicked() {
+                    close = true;
+                }
+
+                // 细微满宽分割线
+                let sep_y = header_rect.max.y;
+                ui.painter().line_segment(
+                    [egui::pos2(drawer_rect.left(), sep_y), egui::pos2(drawer_rect.right(), sep_y)],
+                    Stroke::new(1.0_f32, apple_stroke()),
+                );
+
+                // 内容区
+                let body_top = sep_y + 8.0;
+                let body_rect = egui::Rect::from_min_max(
+                    egui::pos2(drawer_rect.left(), body_top),
+                    egui::pos2(drawer_rect.right(), safe_max_y - 6.0),
+                );
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(body_rect), |ui| {
+                    ui.set_clip_rect(body_rect);
+                    ui.vertical(|ui| {
 
                     // 当前出口（内核实时值优先，其次应用当前选中节点）
                     let current_display = group
@@ -1392,8 +1437,9 @@ impl VpnApp {
                             }
                             ui.add_space(12.0);
                         });   // ScrollArea::show
-                });        // ui.vertical
-            });            // Window::show
+                    });       // ui.vertical
+                });           // allocate_new_ui
+            });               // Area::show
 
         if close {
             self.group_drawer = None;
@@ -1409,16 +1455,17 @@ impl VpnApp {
 
     /// 仪表盘多功能控制台抽屉（右侧滑出）
     /// 支持：网络设置(DNS/TUN)、运行日志、分流规则、内核管理、分流策略组、活跃连接
-    fn render_dashboard_drawer(&mut self, ui: &mut Ui) {
+    pub(crate) fn render_dashboard_drawer(&mut self, ctx: &egui::Context) {
         let Some(drawer) = self.dashboard_drawer else {
             return;
         };
 
-        let ctx = ui.ctx().clone();
+        let ctx = ctx.clone();
         let screen = ctx.screen_rect();
         // 抽屉宽度根据内容自适应：优雅贴边，宽度适中不遮挡大屏
         let width = match drawer {
             DashboardDrawer::Connections => (screen.width() * 0.72).clamp(760.0, 1400.0),
+            DashboardDrawer::Traffic => (screen.width() * 0.58).clamp(620.0, 960.0),
             DashboardDrawer::Rules => (screen.width() * 0.70).clamp(580.0, 1400.0),
             DashboardDrawer::Groups => (screen.width() * 0.70).clamp(580.0, 1400.0),
             DashboardDrawer::Logs => (screen.width() * 0.50).clamp(500.0, 800.0),
@@ -1441,7 +1488,6 @@ impl VpnApp {
         };
         // 抽屉和遮罩底边严格在状态栏上方（留 2px 绝对安全间距，彻底杜绝遮盖状态栏）
         let safe_max_y = status_top_y - 2.0;
-        let content_h = (safe_max_y - title_bar_h).max(100.0);
         let backdrop_rect = egui::Rect::from_min_max(
             egui::pos2(0.0, title_bar_h),
             egui::pos2(screen.width(), safe_max_y),
@@ -1479,132 +1525,152 @@ impl VpnApp {
             DashboardDrawer::Kernels => ("内核管理", "代理内核版本、偏好与运行状态"),
             DashboardDrawer::Groups => ("分流策略组", "策略组节点分流与调度配置"),
             DashboardDrawer::Connections => ("网络连接与 DNS 审计", "分流流向监控 · 活动连接跟踪 · 进程带宽矩阵 · 内核实时 DNS 解析记录"),
+            DashboardDrawer::Traffic => ("流量统计排行", "节点 · 域名 · 软件进程三维度排行 · 实时速率 · 累计上行与下行"),
         };
 
-        // 抽屉本体：右侧滑入原生浮层窗口（严格在标题栏与状态栏之间的内容区，铺满内容区高度）
-        egui::Window::new(format!("dashboard_drawer_{:?}", drawer))
-            .anchor(egui::Align2::RIGHT_TOP, [0.0, title_bar_h])
-            .resizable(false)
-            .collapsible(false)
-            .title_bar(false)
+        // 抽屉本体：右侧原生浮层（严格在标题栏与状态栏之间的内容区，紧贴窗口最右侧，严禁右侧留白）
+        let drawer_rect = egui::Rect::from_min_max(
+            egui::pos2(screen.width() - width, title_bar_h),
+            egui::pos2(screen.width(), safe_max_y),
+        );
+
+        egui::Area::new(egui::Id::new("dashboard_drawer_panel"))
             .order(egui::Order::Foreground)
-            .fixed_size([width, content_h])
-            .min_size([width, content_h])
-            .max_size([width, content_h])
-            .frame(
-                egui::Frame::NONE
-                    .fill(panel_fill)
-                    .stroke(Stroke::new(1.0_f32, apple_stroke())),
-            )
+            .fixed_pos(drawer_rect.min)
             .show(&ctx, |ui| {
-                let safe_rect = egui::Rect::from_min_max(
-                    egui::pos2(0.0, title_bar_h),
-                    egui::pos2(screen.width(), safe_max_y),
+                ui.set_clip_rect(drawer_rect);
+
+                // 拦截抽屉本体所有点击与拖拽，防止事件穿透至底层卡片
+                let _ = ui.interact(
+                    drawer_rect,
+                    ui.id().with(("drawer_panel_interact", format!("{:?}", drawer))),
+                    Sense::click_and_drag(),
                 );
-                ui.set_clip_rect(ui.clip_rect().intersect(safe_rect));
-                ui.set_min_size(Vec2::new(width, content_h));
-                ui.set_max_size(Vec2::new(width, content_h));
-                ui.vertical(|ui| {
-                    ui.add_space(14.0);
 
-                    // 抽屉头部栏：左侧标题与副标题，右侧绝对右上角关闭按钮（与调度抽屉严密对齐）
-                    let avail_w = ui.available_width();
-                    let header_bar_rect = egui::Rect::from_min_size(
-                        ui.cursor().min,
-                        Vec2::new(avail_w, 42.0),
-                    );
-                    let drag_resp = ui.interact(
-                        header_bar_rect,
-                        ui.id().with(("drawer_header_drag", format!("{:?}", drawer))),
-                        Sense::drag(),
-                    );
-                    if drag_resp.drag_started() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                    }
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(avail_w, 42.0),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.set_min_width(avail_w);
-                            ui.set_max_width(avail_w);
-                            ui.add_space(16.0);
-                            ui.vertical(|ui| {
-                                ui.label(
-                                    RichText::new(title)
-                                        .size(16.0)
-                                        .strong()
-                                        .color(theme::text_primary()),
-                                );
-                                ui.label(
-                                    RichText::new(subtitle)
-                                        .size(11.0)
-                                        .color(theme::muted()),
-                                );
-                            });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.add_space(16.0);
-                                let (btn_rect, btn_resp) = ui.allocate_exact_size(
-                                    Vec2::splat(28.0),
-                                    Sense::click(),
-                                );
-                                let bp = ui.painter().clone();
-                                let bg_col = if btn_resp.hovered() {
-                                    theme::panel_hover()
-                                } else {
-                                    apple_sub_bg()
-                                };
-                                bp.circle_filled(btn_rect.center(), 14.0, bg_col);
-                                let x_color = if btn_resp.hovered() {
-                                    theme::text_primary()
-                                } else {
-                                    theme::text_secondary()
-                                };
-                                let s = 5.0_f32;
-                                let c = btn_rect.center();
-                                for (a, b) in [
-                                    (egui::pos2(c.x - s, c.y - s), egui::pos2(c.x + s, c.y + s)),
-                                    (egui::pos2(c.x + s, c.y - s), egui::pos2(c.x - s, c.y + s)),
-                                ] {
-                                    bp.line_segment([a, b], Stroke::new(1.8_f32, x_color));
-                                }
-                                if btn_resp.hovered() {
-                                    bp.circle_stroke(c, 14.0, Stroke::new(1.0_f32, apple_stroke()));
-                                }
-                                if btn_resp.clicked() {
-                                    close = true;
-                                }
-                            });
-                        },
-                    );
+                // 绘制抽屉底色与左侧描边
+                ui.painter().rect_filled(drawer_rect, CornerRadius::ZERO, panel_fill);
+                ui.painter().line_segment(
+                    [drawer_rect.left_top(), drawer_rect.left_bottom()],
+                    Stroke::new(1.0_f32, apple_stroke()),
+                );
 
-                    ui.add_space(10.0);
-                    // 细微分割线（满宽）
-                    let (sep_rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
-                    ui.painter().rect_filled(sep_rect, CornerRadius::ZERO, apple_stroke());
-                    ui.add_space(8.0);
+                // 抽屉头部栏（高度 56px：标题 21px + 间距 2px + 副标题 14px + 上下余量。
+                // 48px 时副标题下缘顶到分割线，视觉上像被线盖住）
+                let header_h = 56.0_f32;
+                let header_rect = egui::Rect::from_min_max(
+                    drawer_rect.min,
+                    egui::pos2(drawer_rect.right(), drawer_rect.min.y + header_h),
+                );
 
-                    // 内容区严格铺满剩余内容区域（空列表也保持完整抽屉高度，内容超长时内部滚动，严防溢出遮盖状态栏）
-                    ui.add_space(4.0);
-                    let pad_x = 16.0;
-                    let avail_body_w = (ui.available_width() - pad_x * 2.0).max(100.0);
-                    let avail_body_h = (ui.available_height() - 2.0).max(50.0);
-                    let body_rect = egui::Rect::from_min_size(
-                        egui::pos2(ui.cursor().min.x + pad_x, ui.cursor().min.y),
-                        Vec2::new(avail_body_w, avail_body_h),
-                    );
-                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(body_rect), |ui| {
-                        ui.set_clip_rect(body_rect);
-                        ui.set_min_width(body_rect.width());
-                        ui.set_max_width(body_rect.width());
-                        match drawer {
-                            DashboardDrawer::Network => self.ui_proxy_network(ui),
-                            DashboardDrawer::Logs => self.ui_proxy_logs(ui),
-                            DashboardDrawer::Rules => self.ui_proxy_rules(ui),
-                            DashboardDrawer::Kernels => self.ui_proxy_kernels(ui),
-                            DashboardDrawer::Groups => self.ui_proxy_groups(ui),
-                            DashboardDrawer::Connections => self.ui_proxy_connections(ui),
-                        }
+                // 关闭按钮：严格钉在抽屉最右上角（距右边框 16px，垂直居中）
+                let btn_size = 28.0_f32;
+                let btn_rect = egui::Rect::from_min_size(
+                    egui::pos2(
+                        drawer_rect.right() - 16.0 - btn_size,
+                        drawer_rect.min.y + (header_h - btn_size) * 0.5,
+                    ),
+                    Vec2::splat(btn_size),
+                );
+
+                // 头部剩余区域支持拖拽主窗口
+                let drag_rect = egui::Rect::from_min_max(
+                    drawer_rect.min,
+                    egui::pos2(btn_rect.min.x - 8.0, header_rect.max.y),
+                );
+                let drag_resp = ui.interact(
+                    drag_rect,
+                    ui.id().with(("drawer_header_drag", format!("{:?}", drawer))),
+                    Sense::drag(),
+                );
+                if drag_resp.drag_started() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+
+                // 左侧标题与副标题（距左边框 18px）
+                let title_rect = egui::Rect::from_min_max(
+                    egui::pos2(drawer_rect.left() + 18.0, drawer_rect.min.y + 7.0),
+                    egui::pos2(btn_rect.min.x - 12.0, header_rect.max.y - 3.0),
+                );
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(title_rect), |ui| {
+                    ui.vertical(|ui| {
+                        // 标题与副标题收紧行距：48→56 后本就放得下，再收 1px 求稳
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.label(
+                            RichText::new(title)
+                                .size(15.5)
+                                .strong()
+                                .color(theme::text_primary()),
+                        );
+                        ui.label(
+                            RichText::new(subtitle)
+                                .size(10.5)
+                                .color(theme::muted()),
+                        );
                     });
+                });
+
+                // 右上角关闭按钮绘制与交互
+                let btn_resp = ui.interact(
+                    btn_rect,
+                    ui.id().with(("drawer_close_btn", format!("{:?}", drawer))),
+                    Sense::click(),
+                );
+                if btn_resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                let bp = ui.painter().clone();
+                let bg_col = if btn_resp.hovered() {
+                    theme::panel_hover()
+                } else {
+                    apple_sub_bg()
+                };
+                bp.circle_filled(btn_rect.center(), 14.0, bg_col);
+                let x_color = if btn_resp.hovered() {
+                    theme::text_primary()
+                } else {
+                    theme::text_secondary()
+                };
+                let s = 5.0_f32;
+                let c = btn_rect.center();
+                for (a, b) in [
+                    (egui::pos2(c.x - s, c.y - s), egui::pos2(c.x + s, c.y + s)),
+                    (egui::pos2(c.x + s, c.y - s), egui::pos2(c.x - s, c.y + s)),
+                ] {
+                    bp.line_segment([a, b], Stroke::new(1.8_f32, x_color));
+                }
+                if btn_resp.hovered() {
+                    bp.circle_stroke(c, 14.0, Stroke::new(1.0_f32, apple_stroke()));
+                }
+                if btn_resp.clicked() {
+                    close = true;
+                }
+
+                // 细微满宽分割线
+                let sep_y = header_rect.max.y;
+                ui.painter().line_segment(
+                    [egui::pos2(drawer_rect.left(), sep_y), egui::pos2(drawer_rect.right(), sep_y)],
+                    Stroke::new(1.0_f32, apple_stroke()),
+                );
+
+                // 内容区严格铺满剩余内容区域（两侧留 16px 舒适边距，上下留白匀称）
+                let body_top = sep_y + 8.0;
+                let body_rect = egui::Rect::from_min_max(
+                    egui::pos2(drawer_rect.left() + 16.0, body_top),
+                    egui::pos2(drawer_rect.right() - 16.0, safe_max_y - 6.0),
+                );
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(body_rect), |ui| {
+                    ui.set_clip_rect(body_rect);
+                    ui.set_width(body_rect.width());
+                    ui.set_height(body_rect.height());
+                    match drawer {
+                        DashboardDrawer::Network => self.ui_proxy_network(ui),
+                        DashboardDrawer::Logs => self.ui_proxy_logs(ui),
+                        DashboardDrawer::Rules => self.ui_proxy_rules(ui),
+                        DashboardDrawer::Kernels => self.ui_proxy_kernels(ui),
+                        DashboardDrawer::Groups => self.ui_proxy_groups(ui),
+                        DashboardDrawer::Connections => self.ui_proxy_connections(ui),
+                        DashboardDrawer::Traffic => self.ui_proxy_node_traffic(ui),
+                    }
                 });
             });
 
@@ -1637,12 +1703,12 @@ impl VpnApp {
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_clip_rect(inner);
             ui.vertical(|ui| {
-                // 动态垂直上下居中：消除大卡片内部吸顶与底部空白
-                let content_h = if is_compact { 146.0_f32 } else { 132.0_f32 };
-                let v_pad = ((inner.height() - content_h) * 0.5).max(0.0).floor();
-                if v_pad > 0.0 {
-                    ui.add_space(v_pad);
-                }
+                // 行距归零：区块间距全部由下面的 add_space 显式控制（否则 egui 默认
+                // 行距会叠在估算之外，把最后一行顶出卡片被裁掉）。
+                ui.spacing_mut().item_spacing.y = 0.0;
+                // 上下只各留一小条边距，剩余空间摊给区块间距让内容撑满卡片：
+                // 原先按内容估高垂直居中，大卡上下各空 ~35px，内容挤在正中间。
+                ui.add_space(6.0);
 
                 // 顶部状态行
                 let (state_text, state_color, dot_color) = if is_running {
@@ -1671,6 +1737,19 @@ impl VpnApp {
                         self.dashboard_drawer = Some(DashboardDrawer::Logs);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // 卡片右上角内核管理入口：点击滑出内核管理抽屉
+                        let (kx_rect, kx_resp) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
+                        let kx_color = if kx_resp.hovered() { theme::accent() } else { theme::text_secondary() };
+                        draw_icon(ui.painter(), kx_rect.shrink(1.5), Icon::Cpu, kx_color);
+                        let kx_resp = kx_resp
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text("内核管理：版本、偏好与运行状态");
+                        if kx_resp.clicked() {
+                            self.dashboard_drawer = Some(DashboardDrawer::Kernels);
+                        }
+                        // 仪表盘外层把 item_spacing.x 归零了，这里必须显式留缝，
+                        // 否则状态圆点会和齿轮图标贴死
+                        ui.add_space(6.0);
                         dash_dot(ui, dot_color);
                         let sub_title = if let Some(node) = selected_node {
                             format!("{state_text} · {}", crate::gui::widgets::clean_node_display_name(&node.name))
@@ -1705,10 +1784,24 @@ impl VpnApp {
                     )
                 };
 
+                // 主行可用高度在进入 horizontal 前量好：horizontal 里的子 vertical 只拿得到
+                // 内容自身的高度（available_height 会是 0），必须显式 allocate 才有得可分。
+                let avail_h = ui.available_height();
+                let flag_h = if is_compact { 34.0 } else { 36.0 };
+                let pills_h = 28.0_f32;
+                let meta_h = if is_compact { 44.0 } else { 46.0 };
+                let content_slack = (avail_h - flag_h - pills_h - meta_h).max(0.0);
+                // 空余高度的 40% 给两处区块间距（上限 48px），其余对半当上下留白：
+                // 内容撑满卡片，上下只剩对称的一小条。
+                let slack_gap = (content_slack * 0.4).clamp(6.0, 48.0);
+                let pad_rest = ((content_slack - slack_gap * 2.0) * 0.5).clamp(0.0, 14.0);
+
                 ui.horizontal(|ui| {
+                    ui.allocate_ui(egui::vec2(left_w, avail_h), |ui| {
                     ui.vertical(|ui| {
                         ui.set_min_width(left_w);
                         ui.set_max_width(left_w);
+                        ui.add_space(pad_rest);
 
                         // 国旗方块 + 大字 IP / 节点名
                         ui.horizontal(|ui| {
@@ -1753,11 +1846,12 @@ impl VpnApp {
                             .on_hover_text(&display_title);
                         });
 
-                        ui.add_space(6.0);
+                        // 两处区块间距吃掉大半空余，让 国旗行 / 药丸行 / 元信息行 撑满整张卡
+                        ui.add_space(slack_gap);
 
                         // 标签药丸行：IP 类型 / 质量（按实测延迟分档）/ IP 协议版本
                         ui.horizontal_wrapped(|ui| {
-                            ui.spacing_mut().item_spacing.x = 5.0;
+                            ui.spacing_mut().item_spacing.x = 9.0;
                             let tag_dc = if let Some(dc) = egress_dc {
                                 if dc { "机房" } else { "住宅" }
                             } else if egress_checking {
@@ -1839,11 +1933,11 @@ impl VpnApp {
                             dash_pill(ui, tag_v, apple_sub_bg(), theme::text_secondary());
                         });
 
-                        ui.add_space(6.0);
+                        ui.add_space(slack_gap);
 
                         // 四列元信息 [运行时长] [组织] [协议] [内核]
                         ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = if is_compact { 10.0 } else { 20.0 };
+                            ui.spacing_mut().item_spacing.x = if is_compact { 16.0 } else { 22.0 };
 
                             // 1. 运行时长
                             let uptime_str = if is_running { "02:47:13" } else { "00:00:00" };
@@ -1863,7 +1957,7 @@ impl VpnApp {
                             ui.vertical(|ui| {
                                 ui.label(RichText::new("组织").size(10.5).color(theme::muted()));
                                 ui.add_sized(
-                                    [if is_compact { 55.0 } else { 80.0 }, 16.0],
+                                    [if is_compact { 62.0 } else { 80.0 }, 16.0],
                                     egui::Label::new(
                                         RichText::new(org_str)
                                             .size(13.0)
@@ -1995,6 +2089,7 @@ impl VpnApp {
                             }
                         });
                     });
+                    });
 
                     // ---- 右侧：86px 拟物启停大按钮 ----
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2092,15 +2187,48 @@ impl VpnApp {
             Vec2::new(w + 40.0, h + 20.0),
         );
         dash_card_at(ui, outer);
+
         // 画框不推进 cursor：显式把光标拨到卡右侧，行内下一元素从这继续
         ui.advance_cursor_after_rect(outer);
         let inner = outer.shrink2(Vec2::new(20.0, 10.0));
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_clip_rect(inner);
+            // 垂直间距全部显式控制：主题全局 item_spacing.y = 9 会在每个元素间叠加，
+            // 把波形图顶出卡片被裁切，标题与统计按钮之间也会被撑出一大段空白
+            ui.spacing_mut().item_spacing.y = 0.0;
             ui.vertical(|ui| {
-                let v_pad = ((inner.height() - 146.0) * 0.5).max(10.0).floor();
-                ui.add_space(v_pad);
-                dash_label(ui, if up { "上传" } else { "下载" }, Some(peak_str));
+                // 统计入口钉在卡片右上角（贴内边距顶格），不随内容垂直居中下移
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    // 统计图表入口：点击呼出流量统计抽屉（定位到节点页并按本卡方向排序）
+                    let stats_resp = dash_stats_icon_button(ui);
+                    if stats_resp.clicked() {
+                        self.dashboard_drawer = Some(DashboardDrawer::Traffic);
+                        self.traffic_stat_tab = crate::gui::types::TrafficStatTab::Node;
+                        self.node_traffic_sort = if up {
+                            crate::gui::types::NodeTrafficSort::Upload
+                        } else {
+                            crate::gui::types::NodeTrafficSort::Download
+                        };
+                    }
+                });
+                ui.add_space(4.0);
+                // 顶部行：标题居左 + 峰值居右（统计图表入口已钉到卡片角）
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(if up { "上传" } else { "下载" })
+                            .size(12.5)
+                            .strong()
+                            .color(theme::text_secondary()),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(peak_str).small().color(theme::muted()),
+                            )
+                            .truncate(),
+                        );
+                    });
+                });
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(format_speed(rate))
@@ -2114,8 +2242,9 @@ impl VpnApp {
                         .size(11.5)
                         .color(theme::muted()),
                 );
-                let spark_h = (inner.height() - v_pad - 88.0).clamp(38.0, 68.0);
-                ui.add_space(10.0);
+                // 波形图吃掉剩余全部高度：按已用内容动态计算，既不溢出裁切也不留底部空洞
+                ui.add_space(8.0);
+                let spark_h = (ui.available_height() - 2.0).max(30.0);
                 let spark_w = ui.available_width();
                 dash_sparkline(ui, spark_w, spark_h, series, color);
             });
@@ -2257,8 +2386,9 @@ impl VpnApp {
                             }
                             self.save_proxy_config();
                             if running && !self.proxy_busy {
-                                self.start_proxy();
-                                self.status = "工作模式已切换，代理正在重启...".into();
+                                // 系统代理开关：若同时动了 TUN（Both→System）走内核热切换，
+                                // TUN 未变（System↔None / Tun↔Both）保持原重启语义
+                                self.apply_proxy_mode_change(tun_on);
                             }
                         }
                     });
@@ -2283,8 +2413,8 @@ impl VpnApp {
                             }
                             self.save_proxy_config();
                             if running && !self.proxy_busy {
-                                self.start_proxy();
-                                self.status = "工作模式已切换，代理正在重启...".into();
+                                // TUN 热切换优先（毫秒级生效、不断连接），不支持再回退重启
+                                self.apply_proxy_mode_change(tun_on);
                             }
                         }
                     });
@@ -2407,7 +2537,7 @@ impl VpnApp {
 
                 let item_w = ui.available_width();
                 let item_h = if h > 150.0 { 26.0 } else if h > 120.0 { 22.0 } else { 16.5_f32 };
-                let row_gap = if h > 150.0 { 6.0 } else if h > 120.0 { 4.5 } else { 1.5_f32 };
+                let row_gap = if h > 150.0 { 8.0 } else if h > 120.0 { 6.5 } else { 3.5_f32 };
                 let total_content_h = 20.0 + item_h * 4.0 + row_gap * 3.0;
                 let v_pad = ((inner.height() - total_content_h) * 0.5).max(2.0).floor();
                 if v_pad > 0.0 {

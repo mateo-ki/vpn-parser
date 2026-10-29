@@ -704,7 +704,7 @@ impl VpnApp {
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(format!(
-                            "内置注入（不可编辑，仅 Mihomo 生效，插在 GEOIP,CN 之前）：{}",
+                            "内置注入（不可编辑，插在 GEOIP,CN 之前；Mihomo / VP-Core / Meow 内核生效）：{}",
                             injected.join(" · ")
                         ))
                         .small()

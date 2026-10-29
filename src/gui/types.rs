@@ -195,6 +195,77 @@ pub enum DashboardDrawer {
     Kernels,     // 内核管理
     Groups,      // 分流策略组
     Connections, // 活跃连接
+    Traffic,     // 节点流量统计
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum NodeTrafficSort {
+    #[default]
+    Total,
+    Download,
+    Upload,
+}
+
+/// 流量统计抽屉的三个标签页：节点 / 域名 / 软件进程
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TrafficStatTab {
+    #[default]
+    Node,
+    Domain,
+    Process,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NodeTrafficRecord {
+    pub node_name: String,
+    pub protocol: String,
+    pub server: String,
+    pub country: Option<String>,
+    pub upload_bytes: u64,
+    pub download_bytes: u64,
+    pub active_conns: usize,
+    pub upload_rate: u64,
+    pub download_rate: u64,
+}
+
+impl NodeTrafficRecord {
+    pub fn total_bytes(&self) -> u64 {
+        self.upload_bytes.saturating_add(self.download_bytes)
+    }
+}
+
+/// 域名维度流量记录：按连接 host（缺 host 用目标 IP）聚合
+#[derive(Debug, Clone, Default)]
+pub struct DomainTrafficRecord {
+    pub domain: String,
+    pub upload_bytes: u64,
+    pub download_bytes: u64,
+    pub active_conns: usize,
+    pub upload_rate: u64,
+    pub download_rate: u64,
+}
+
+impl DomainTrafficRecord {
+    pub fn total_bytes(&self) -> u64 {
+        self.upload_bytes.saturating_add(self.download_bytes)
+    }
+}
+
+/// 软件进程维度流量记录：按连接 process 聚合（拿不到进程名的归入「未知进程」）
+#[derive(Debug, Clone, Default)]
+pub struct ProcessTrafficRecord {
+    pub process: String,
+    pub upload_bytes: u64,
+    pub download_bytes: u64,
+    pub active_conns: usize,
+    pub upload_rate: u64,
+    pub download_rate: u64,
+}
+
+impl ProcessTrafficRecord {
+    pub fn total_bytes(&self) -> u64 {
+        self.upload_bytes.saturating_add(self.download_bytes)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -359,6 +430,10 @@ pub enum BgMsg {
     LocalFileSelectedForSource(String),
     /// 本地文件选择回调：节点池导入本地 YAML 时选取本地文件路径。
     LocalFileSelectedForNodeImport(String),
+    /// 全量配置文件导出结果
+    ProfileExported(Result<String, String>),
+    /// 全量配置文件导入结果
+    ProfileImported(Result<crate::profile::ImportSummary, String>),
     Status(String),
     GistDiscoveryDone(Result<String, String>),
     FetchOneDone {
@@ -387,6 +462,8 @@ pub enum BgMsg {
     AppUpdateDownloaded(Result<std::path::PathBuf, String>),
     AppReleasesListed(Result<Vec<crate::app_update::ReleaseItem>, String>),
     ProxyStatus(ProxyRuntimeStatus),
+    /// TUN 热切换结果：ok=true 已生效（message 为状态栏文案）；false 时界面回退整进程重启。
+    ProxyModeHotToggled { ok: bool, message: String },
     ProxyConfig(Result<MihomoConfigOptions, String>),
     ProxyConfigSaved(Result<MihomoConfigOptions, String>),
     ProxyConfigQuietSaved(Result<MihomoConfigOptions, String>),
@@ -453,6 +530,8 @@ pub struct ActiveConnectionInfo {
     pub rule: String,
     /// 规则把这条连接派给了谁（组名 / DIRECT）。命中统计按 (rule, target) 计数。
     pub target: String,
+    /// 内核派发链（代理组及出站物理节点名链条）
+    pub chains: Vec<String>,
     pub upload: u64,
     pub download: u64,
 }
@@ -574,6 +653,8 @@ pub struct SettingsEditState {
     pub speedtest_auto_refill: bool,
     pub auto_rearm_system_proxy: bool,
     pub auto_prepare_kernel: bool,
+    pub launch_as_admin: bool,
+    pub launch_at_startup: bool,
     pub speedtest_added_source: bool,
     pub bandwidth_guard: bool,
     pub bandwidth_min_kbps: u32,
@@ -618,6 +699,8 @@ impl SettingsEditState {
             speedtest_auto_refill: s.speedtest_auto_refill,
             auto_rearm_system_proxy: s.auto_rearm_system_proxy,
             auto_prepare_kernel: s.auto_prepare_kernel,
+            launch_as_admin: s.launch_as_admin,
+            launch_at_startup: s.launch_at_startup,
             speedtest_added_source: s.speedtest_added_source,
             bandwidth_guard: s.bandwidth_guard,
             bandwidth_min_kbps: s.bandwidth_min_kbps,
@@ -662,6 +745,8 @@ impl SettingsEditState {
             || self.speedtest_auto_refill != s.speedtest_auto_refill
             || self.auto_rearm_system_proxy != s.auto_rearm_system_proxy
             || self.auto_prepare_kernel != s.auto_prepare_kernel
+            || self.launch_as_admin != s.launch_as_admin
+            || self.launch_at_startup != s.launch_at_startup
             || self.speedtest_added_source != s.speedtest_added_source
             // 外观这两条以前不在这里比：设置页只点主题时 `auto_save && settings_dirty()`
             // 的后半个条件不成立，于是"即时切换并自动保存"其实没落盘（Ctrl+K 那条路是直接

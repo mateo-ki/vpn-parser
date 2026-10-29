@@ -232,17 +232,17 @@ pub const THEMES: [Theme; 4] = [
     Theme {
         id: "theme-morandi",
         name: "莫兰迪低饱和 (柔和护眼)",
-        accent: 0x52_79_6F,
+        accent: 0x3F_8F_80,
     },
     Theme {
         id: "theme-surge",
         name: "Surge 拓扑绿 (方案二)",
-        accent: 0x34_C7_59,
+        accent: 0x3B_9E_56,
     },
     Theme {
         id: "theme-apple-store",
         name: "Apple Store 晶紫 (方案三)",
-        accent: 0xA8_55_F7,
+        accent: 0x9F_6D_D5,
     },
 ];
 

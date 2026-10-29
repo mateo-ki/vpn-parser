@@ -13,6 +13,7 @@ pub type TrayWaker = Arc<dyn Fn() + Send + Sync>;
 pub enum TrayEvent {
     ShowWindow,
     ToggleProxy,
+    RestartProxy,
     Quit,
 }
 
@@ -341,7 +342,7 @@ fn run_tray_loop(
         DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, HICON, IMAGE_ICON,
         LoadIconW, LoadImageW, LR_DEFAULTCOLOR, LR_SHARED, PostMessageW, PostQuitMessage,
         RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SM_CXSMICON, SM_CYSMICON,
-        TrackPopupMenu, TranslateMessage, IDI_APPLICATION, MF_SEPARATOR, MF_STRING, MSG,
+        TrackPopupMenu, TranslateMessage, IDI_APPLICATION, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
         TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_CLOSE, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
         WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPED,
     };
@@ -351,6 +352,7 @@ fn run_tray_loop(
     const CMD_SHOW: u32 = 2001;
     const CMD_TOGGLE_PROXY: u32 = 2002;
     const CMD_EXIT: u32 = 2003;
+    const CMD_RESTART_PROXY: u32 = 2004;
 
     struct TrayContext {
         event_tx: Sender<TrayEvent>,
@@ -505,6 +507,21 @@ fn run_tray_loop(
                                     proxy_text.as_ptr(),
                                 );
 
+                                // 重启代理：只在代理运行时可点（没跑就没啥可重启的）
+                                let restart_text =
+                                    "重启代理\0".encode_utf16().collect::<Vec<u16>>();
+                                let restart_flags = if running {
+                                    MF_STRING
+                                } else {
+                                    MF_STRING | MF_GRAYED
+                                };
+                                AppendMenuW(
+                                    hmenu,
+                                    restart_flags,
+                                    CMD_RESTART_PROXY as usize,
+                                    restart_text.as_ptr(),
+                                );
+
                                 AppendMenuW(hmenu, MF_SEPARATOR, 0, std::ptr::null());
 
                                 let exit_text = "退出程序\0".encode_utf16().collect::<Vec<u16>>();
@@ -536,6 +553,10 @@ fn run_tray_loop(
                                     }
                                     CMD_TOGGLE_PROXY => {
                                         let _ = event_tx.send(TrayEvent::ToggleProxy);
+                                        trigger_waker(&waker);
+                                    }
+                                    CMD_RESTART_PROXY => {
+                                        let _ = event_tx.send(TrayEvent::RestartProxy);
                                         trigger_waker(&waker);
                                     }
                                     CMD_EXIT => {

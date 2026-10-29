@@ -2,7 +2,7 @@ use crate::gui::icons::{self, icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::widgets::{card_frame, primary_btn, status_badge};
 use crate::gui::VpnApp;
-use eframe::egui::{self, RichText, Ui};
+use eframe::egui::{RichText, Ui};
 
 impl VpnApp {
     /// 通用设置：桌面窗口生命周期、托盘行为、系统物理内存释放与 Windows 防火墙规则。
@@ -21,12 +21,6 @@ impl VpnApp {
                 };
                 status_badge(ui, tray_badge.0, tray_badge.1);
             });
-            ui.add_space(2.0);
-            ui.label(
-                RichText::new("配置程序关闭行为、系统托盘常驻逻辑与首次运行内核自动化下载。")
-                    .small()
-                    .color(theme::muted()),
-            );
             ui.add_space(8.0);
 
             ui.label(RichText::new(self.tr("点击主窗口关闭按钮 (X) 时：")).strong());
@@ -53,20 +47,6 @@ impl VpnApp {
             {
                 auto_save = true;
             }
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                icon_label(ui, Icon::Lightbulb, 12.0, theme::muted());
-                let tip = if self.tray.supported() {
-                    "提示：最小化到托盘后，可通过任务栏托盘图标右键菜单退出程序，或双击托盘图标唤出界面。"
-                } else {
-                    "提示：当前系统环境（Linux / Wayland）已接入单实例保护与标准桌面管理；若重复启动将自动激活唤醒已有窗口。"
-                };
-                ui.label(
-                    RichText::new(tip)
-                        .small()
-                        .color(theme::muted()),
-                );
-            });
 
             ui.add_space(8.0);
             ui.separator();
@@ -79,6 +59,60 @@ impl VpnApp {
                 )
                 .on_hover_text(
                     "首次安装或重置后，检测到一个内核都没装时自动下载官方内核；关掉后仅在手动点击时下载。",
+                )
+                .changed()
+            {
+                auto_save = true;
+            }
+
+            ui.add_space(6.0);
+
+            // 以管理员方式启动软件：只落库，下次启动时自动按配置请求提权（UAC）
+            let elevated_now = crate::platform::is_elevated();
+            if ui
+                .checkbox(
+                    &mut self.edit_launch_as_admin,
+                    "以管理员方式启动软件（TUN 模式推荐）",
+                )
+                .on_hover_text(
+                    "勾选仅保存设置，不影响当前运行的实例；下次启动软件时自动请求管理员权限\
+                     （弹出 UAC 授权框，取消则本次以普通权限运行）。TUN 虚拟网卡模式需要管理员权限。",
+                )
+                .changed()
+            {
+                auto_save = true;
+                self.status = if self.edit_launch_as_admin {
+                    "已保存：下次启动软件时将以管理员权限运行（届时弹出 UAC 授权框）".into()
+                } else {
+                    "已关闭「以管理员方式启动」，下次启动以普通权限运行".into()
+                };
+            }
+            if self.edit_launch_as_admin && elevated_now {
+                ui.label(
+                    RichText::new("当前已以管理员权限运行")
+                        .small()
+                        .color(theme::accent_strong()),
+                );
+            } else if self.edit_launch_as_admin && crate::platform::admin_relaunch_cancelled() {
+                ui.label(
+                    RichText::new("本次启动的提权被取消，当前以普通权限运行；下次启动会再次请求")
+                        .small()
+                        .color(theme::warning()),
+                );
+            }
+
+            ui.add_space(6.0);
+
+            // 开机自启动：默认关（写的是用户注册表，不能擅自开）。
+            // 保存设置时同步 HKCU Run 键；每次启动还会对账一次（exe 挪了位置能自己跟上）。
+            if ui
+                .checkbox(
+                    &mut self.edit_launch_at_startup,
+                    "开机自动启动（登录后自动在后台运行本软件）",
+                )
+                .on_hover_text(
+                    "写入当前用户的注册表 Run 键（不需要管理员权限），登录 Windows 后自动启动。\
+                     仅指向当前 exe 路径，软件挪动位置后下次启动会自动校正。目前仅 Windows 生效。",
                 )
                 .changed()
             {
@@ -101,25 +135,9 @@ impl VpnApp {
                 };
                 status_badge(ui, perm_badge.0, perm_badge.1);
             });
-            ui.add_space(2.0);
-            ui.label(
-                RichText::new("管理进程常驻内存释放，以及 Windows 本地回环端口防火墙放行规则。")
-                    .small()
-                    .color(theme::muted()),
-            );
             ui.add_space(8.0);
 
             ui.label(RichText::new("进程内存深度整理").strong());
-            ui.add(
-                egui::Label::new(
-                    RichText::new(
-                        "主动释放 SQLite 连接池缓存与 Windows 物理工作集，显著降低程序与后台服务常驻内存。",
-                    )
-                    .small()
-                    .color(theme::muted()),
-                )
-                .wrap(),
-            );
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 if ui
@@ -139,16 +157,6 @@ impl VpnApp {
             ui.add_space(8.0);
 
             ui.label(RichText::new("Windows 防火墙放行").strong());
-            ui.add(
-                egui::Label::new(
-                    RichText::new(
-                        "放行程序与代理内核的本地回环监听端口，避免代理启动后 9980 端口无响应或被系统拦截。",
-                    )
-                    .small()
-                    .color(theme::muted()),
-                )
-                .wrap(),
-            );
             ui.add_space(4.0);
             if ui
                 .checkbox(
@@ -174,14 +182,65 @@ impl VpnApp {
                 }
                 if let Some(status) = self.firewall_status.clone() {
                     ui.label(RichText::new(status).small().color(theme::text_secondary()));
-                } else if !elevated {
-                    ui.label(
-                        RichText::new("（当前非管理员权限：勾选后在提权启动时自动补上）")
-                            .small()
-                            .color(theme::muted()),
-                    );
                 }
             });
+        });
+
+        ui.add_space(10.0);
+
+        // 3. 配置备份与全量迁移 (Profile Backup & Migration)
+        card_frame().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                icon_label(ui, Icon::Export, 16.0, theme::accent());
+                ui.label(RichText::new("统一配置备份与全量迁移 (Unified Profile)").strong().size(15.0));
+                status_badge(ui, "跨端归一化", theme::accent_strong());
+            });
+            ui.add_space(8.0);
+
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+
+                if ui
+                    .add(icons::button_with_icon(Icon::Package, "一键备份到本地", theme::accent()))
+                    .on_hover_text("导出 YAML 配置并保存至 data/backups/，同时自动复制到剪贴板")
+                    .clicked()
+                {
+                    self.export_profile_to_backup();
+                }
+
+                if ui
+                    .add(icons::button_with_icon(Icon::Export, "另存为配置文件...", theme::accent()))
+                    .on_hover_text("弹出系统文件选择框，将当前统一配置另存为指定 .yaml 配置文件")
+                    .clicked()
+                {
+                    self.export_profile_to_file();
+                }
+
+                if ui
+                    .add(icons::button_with_icon(Icon::Folder, "从文件导入还原...", theme::accent()))
+                    .on_hover_text("选取本地 YAML / JSON 配置文件无损还原订阅源、分流规则与自定义节点")
+                    .clicked()
+                {
+                    self.import_profile_from_file();
+                }
+
+                if ui
+                    .add(icons::button_with_icon(Icon::Clipboard, "从剪贴板还原", theme::accent()))
+                    .on_hover_text("从剪贴板读取统一配置文本并解析恢复")
+                    .clicked()
+                {
+                    self.import_profile_from_clipboard();
+                }
+            });
+
+            if let Some((ref status, is_err)) = self.profile_status {
+                ui.add_space(8.0);
+                let color = if is_err { theme::danger() } else { theme::success() };
+                ui.horizontal(|ui| {
+                    icon_label(ui, if is_err { Icon::Alert } else { Icon::Check }, 14.0, color);
+                    ui.label(RichText::new(status).small().color(color));
+                });
+            }
         });
 
         if auto_save && self.settings_dirty() {

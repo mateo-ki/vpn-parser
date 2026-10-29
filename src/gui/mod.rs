@@ -171,6 +171,8 @@ pub struct VpnApp {
     pub(crate) import_yaml_path: String,
     pub(crate) import_yaml_as_source: bool,
     pub(crate) import_yaml_source_name: String,
+    /// 全量配置文件导出/导入状态反馈 (文本, 是否为错误)
+    pub(crate) profile_status: Option<(String, bool)>,
     /// 分流规则面板的分区（配置 / 命中记录）。
     pub(crate) rules_tab: RulesTab,
     /// 分流策略组面板的分区（视图 / 配置）。
@@ -252,6 +254,10 @@ pub struct VpnApp {
     pub(crate) edit_download_test_ms: u32,
     pub(crate) edit_http_server_enabled: bool,
     pub(crate) edit_close_to_tray: bool,
+    /// 以管理员方式启动软件（提权决策在 main() 窗口创建前完成，这里只管存取）
+    pub(crate) edit_launch_as_admin: bool,
+    /// 开机自启动（默认关；保存时同步 HKCU Run 键，启动时也会对账一次）
+    pub(crate) edit_launch_at_startup: bool,
     pub(crate) memory_trimmed_status: Option<String>,
     pub(crate) settings_saving: bool,
 
@@ -307,6 +313,25 @@ pub struct VpnApp {
     /// 未启动代理时在抽屉里记住的调度选择（组名, 成员），进入 Running 后自动应用。
     pub(crate) pending_group_pick: Option<(String, String)>,
     pub(crate) active_connections: Vec<ActiveConnectionInfo>,
+    /// 节点流量统计记录：node_name -> NodeTrafficRecord
+    pub(crate) node_traffic_records: std::collections::HashMap<String, crate::gui::types::NodeTrafficRecord>,
+    /// 域名流量统计记录：domain -> DomainTrafficRecord
+    pub(crate) domain_traffic_records: std::collections::HashMap<String, crate::gui::types::DomainTrafficRecord>,
+    /// 软件进程流量统计记录：process -> ProcessTrafficRecord
+    pub(crate) process_traffic_records: std::collections::HashMap<String, crate::gui::types::ProcessTrafficRecord>,
+    /// 连接上一拍记录的流量：conn_id -> (node_name, prev_upload, prev_download)
+    pub(crate) conn_prev_traffic: std::collections::HashMap<String, (String, u64, u64)>,
+    /// 节点流量抽屉的排序模式
+    pub(crate) node_traffic_sort: crate::gui::types::NodeTrafficSort,
+    /// 节点流量抽屉搜索过滤词
+    pub(crate) node_traffic_search: String,
+    /// 流量统计抽屉当前标签页（节点 / 域名 / 软件进程）
+    pub(crate) traffic_stat_tab: crate::gui::types::TrafficStatTab,
+    /// 域名 / 进程页各自的排序与搜索状态
+    pub(crate) domain_traffic_sort: crate::gui::types::NodeTrafficSort,
+    pub(crate) domain_traffic_search: String,
+    pub(crate) process_traffic_sort: crate::gui::types::NodeTrafficSort,
+    pub(crate) process_traffic_search: String,
     pub(crate) traffic_prev_sample: Option<(std::time::Instant, u64, u64)>,
     pub(crate) last_traffic_poll: std::time::Instant,
     pub(crate) last_groups_poll: std::time::Instant,
@@ -536,6 +561,7 @@ impl VpnApp {
                 "rules" => Some(DashboardDrawer::Rules),
                 "groups" => Some(DashboardDrawer::Groups),
                 "connections" => Some(DashboardDrawer::Connections),
+                "traffic" => Some(DashboardDrawer::Traffic),
                 _ => None,
             }),
             group_drawer: None,
@@ -619,6 +645,7 @@ impl VpnApp {
             import_yaml_path: String::new(),
             import_yaml_as_source: true,
             import_yaml_source_name: String::new(),
+            profile_status: None,
             rules_tab: RulesTab::default(),
             groups_tab: GroupsTab::default(),
             connections_tab: ConnectionsTab::default(),
@@ -672,6 +699,8 @@ impl VpnApp {
             edit_download_test_ms: 800,
             edit_http_server_enabled: false,
             edit_close_to_tray: true,
+            edit_launch_as_admin: false,
+            edit_launch_at_startup: false,
             memory_trimmed_status: None,
             settings_saving: false,
             export_max_latency_ms: 800,
@@ -689,6 +718,17 @@ impl VpnApp {
             traffic_down_total: 0,
             traffic_history: VecDeque::with_capacity(160),
             active_connections: Vec::new(),
+            node_traffic_records: std::collections::HashMap::new(),
+            domain_traffic_records: std::collections::HashMap::new(),
+            process_traffic_records: std::collections::HashMap::new(),
+            conn_prev_traffic: std::collections::HashMap::new(),
+            node_traffic_sort: crate::gui::types::NodeTrafficSort::default(),
+            node_traffic_search: String::new(),
+            traffic_stat_tab: crate::gui::types::TrafficStatTab::default(),
+            domain_traffic_sort: crate::gui::types::NodeTrafficSort::default(),
+            domain_traffic_search: String::new(),
+            process_traffic_sort: crate::gui::types::NodeTrafficSort::default(),
+            process_traffic_search: String::new(),
             traffic_prev_sample: None,
             last_traffic_poll: std::time::Instant::now(),
             last_groups_poll: std::time::Instant::now() - std::time::Duration::from_secs(60),
@@ -1577,6 +1617,112 @@ impl VpnApp {
                 result,
                 unlock: true,
             });
+        });
+    }
+
+    /// 导出完整统一配置至本地 data/backups/ 目录并复制到剪贴板
+    pub(crate) fn export_profile_to_backup(&mut self) {
+        let db = self.db.clone();
+        let tx = self.tx.clone();
+        self.profile_status = Some(("正在导出完整配置...".to_string(), false));
+        self.rt.spawn(async move {
+            let res = async {
+                let profile = crate::profile::export_unified_profile(&db, Some("VPN Parser 配置备份".into()), true).await?;
+                let yaml = crate::profile::to_yaml(&profile)?;
+                let path = crate::profile::save_backup_file(&yaml)?;
+                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                    let _ = clipboard.set_text(yaml);
+                }
+                Ok(format!("配置已成功备份至: {}（已复制到剪贴板）", path.display()))
+            }
+            .await
+            .map_err(|e: anyhow::Error| e.to_string());
+            let _ = tx.send(BgMsg::ProfileExported(res));
+        });
+    }
+
+    /// 另存为统一配置文件到用户指定路径
+    pub(crate) fn export_profile_to_file(&mut self) {
+        let db = self.db.clone();
+        let tx = self.tx.clone();
+        self.profile_status = Some(("正在选择保存路径...".to_string(), false));
+        self.rt.spawn(async move {
+            let res = async {
+                let profile = crate::profile::export_unified_profile(&db, Some("VPN Parser 配置文件".into()), true).await?;
+                let yaml = crate::profile::to_yaml(&profile)?;
+                let file = rfd::AsyncFileDialog::new()
+                    .set_title("保存统一配置文件")
+                    .set_file_name("vpn-parser-profile.yaml")
+                    .add_filter("YAML 配置文件 (*.yaml, *.yml)", &["yaml", "yml"])
+                    .add_filter("全部文件 (*.*)", &["*"])
+                    .save_file()
+                    .await;
+                if let Some(handle) = file {
+                    let path = handle.path();
+                    std::fs::write(path, yaml)?;
+                    Ok(format!("已成功导出至文件: {}", path.display()))
+                } else {
+                    Ok("已取消另存为操作".to_string())
+                }
+            }
+            .await
+            .map_err(|e: anyhow::Error| e.to_string());
+            let _ = tx.send(BgMsg::ProfileExported(res));
+        });
+    }
+
+    /// 从用户选择的本地统一配置文件导入还原
+    pub(crate) fn import_profile_from_file(&mut self) {
+        let db = self.db.clone();
+        let tx = self.tx.clone();
+        self.profile_status = Some(("正在打开文件选择器...".to_string(), false));
+        self.rt.spawn(async move {
+            let file = rfd::AsyncFileDialog::new()
+                .set_title("选择统一配置文件进行恢复")
+                .add_filter("统一配置文件 (*.yaml, *.yml, *.json)", &["yaml", "yml", "json"])
+                .add_filter("全部文件 (*.*)", &["*"])
+                .pick_file()
+                .await;
+            if let Some(handle) = file {
+                let path = handle.path();
+                let res = async {
+                    let content = std::fs::read_to_string(path)?;
+                    let profile = crate::profile::from_str(&content)?;
+                    crate::profile::import_unified_profile(&db, &profile, false).await
+                }
+                .await
+                .map_err(|e: anyhow::Error| e.to_string());
+                let _ = tx.send(BgMsg::ProfileImported(res));
+            } else {
+                let _ = tx.send(BgMsg::ProfileExported(Ok("已取消文件导入操作".to_string())));
+            }
+        });
+    }
+
+    /// 从剪贴板中的配置文本还原统一配置
+    pub(crate) fn import_profile_from_clipboard(&mut self) {
+        let text = match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
+            Ok(text) if !text.trim().is_empty() => text,
+            Ok(_) => {
+                self.profile_status = Some(("剪贴板内容为空".to_string(), true));
+                return;
+            }
+            Err(e) => {
+                self.profile_status = Some((format!("读取剪贴板失败: {e}"), true));
+                return;
+            }
+        };
+        let db = self.db.clone();
+        let tx = self.tx.clone();
+        self.profile_status = Some(("正在解析剪贴板配置并还原...".to_string(), false));
+        self.rt.spawn(async move {
+            let res = async {
+                let profile = crate::profile::from_str(&text)?;
+                crate::profile::import_unified_profile(&db, &profile, false).await
+            }
+            .await
+            .map_err(|e: anyhow::Error| e.to_string());
+            let _ = tx.send(BgMsg::ProfileImported(res));
         });
     }
 
@@ -2878,6 +3024,56 @@ impl VpnApp {
         });
     }
 
+    /// TUN 开关变更后的应用入口：代理运行中优先走内核热切换（不重启进程、不断已建立
+    /// 连接），内核不支持或热切换失败再回退 `start_proxy()` 整进程重启。
+    /// `was_tun` 是开关拨动前界面上渲染的 TUN 状态，用来判断本次是否产生了 TUN 差量。
+    pub(crate) fn apply_proxy_mode_change(&mut self, was_tun: bool) {
+        if !matches!(
+            self.proxy_status.state,
+            ProxyState::Running | ProxyState::Degraded
+        ) || self.proxy_busy
+        {
+            return;
+        }
+        let tun_on = self.proxy_config.mode.has_tun();
+        if tun_on == was_tun {
+            // TUN 没变（纯系统代理开关）：保持原重启语义，系统代理归 manager 统一收放
+            self.start_proxy();
+            return;
+        }
+        if tun_on && !crate::platform::is_elevated() {
+            // 开 TUN 需要管理员权限建 Wintun 网卡：本进程没提权，热切换必然失败，
+            // 直接走现有 UAC 提权重启交接（提权实例接管后本窗口关闭）
+            self.start_proxy();
+            return;
+        }
+        let manager = self.proxy_manager.clone();
+        let options = self.prepare_proxy_config_options();
+        let tx = self.tx.clone();
+        self.proxy_busy = true;
+        self.status = if tun_on {
+            "正在热开启 TUN 模式（无需重启）...".to_string()
+        } else {
+            "正在热关闭 TUN 模式（无需重启）...".to_string()
+        };
+        self.rt.spawn(async move {
+            let hot = manager
+                .try_hot_toggle_tun(options)
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!("TUN 热切换请求失败: {error}");
+                    false
+                });
+            let message = if hot {
+                // 用 manager 运行时里的文案：带内核名与耗时（"…TUN 已热开启（X ms，未重启进程）"）
+                manager.status().await.message
+            } else {
+                "当前内核不支持 TUN 热切换，正在重启代理...".to_string()
+            };
+            let _ = tx.send(BgMsg::ProxyModeHotToggled { ok: hot, message });
+        });
+    }
+
     pub(crate) fn start_proxy(&mut self) {
         if self.selected_proxy_node_id.is_none() {
             if let Some(ref focused) = self.focused_node_id {
@@ -3277,6 +3473,7 @@ impl VpnApp {
                                 process,
                                 rule: rule_str,
                                 target: target_str,
+                                chains: c.chains,
                                 upload: c.upload,
                                 download: c.download,
                             });
@@ -4055,6 +4252,8 @@ impl VpnApp {
             speedtest_auto_refill: self.edit_speedtest_auto_refill,
             auto_rearm_system_proxy: self.edit_auto_rearm_system_proxy,
             auto_prepare_kernel: self.edit_auto_prepare_kernel,
+            launch_as_admin: self.edit_launch_as_admin,
+            launch_at_startup: self.edit_launch_at_startup,
             speedtest_added_source: self.edit_speedtest_added_source,
             fetch_concurrency: self.edit_fetch_concurrency,
             fetch_timeout_secs: self.edit_fetch_timeout_secs,
@@ -4101,6 +4300,8 @@ impl VpnApp {
         self.edit_speedtest_auto_refill = state.speedtest_auto_refill;
         self.edit_auto_rearm_system_proxy = state.auto_rearm_system_proxy;
         self.edit_auto_prepare_kernel = state.auto_prepare_kernel;
+        self.edit_launch_as_admin = state.launch_as_admin;
+        self.edit_launch_at_startup = state.launch_at_startup;
         self.edit_speedtest_added_source = state.speedtest_added_source;
         self.edit_fetch_concurrency = state.fetch_concurrency;
         self.edit_fetch_timeout_secs = state.fetch_timeout_secs;
@@ -4143,6 +4344,8 @@ impl VpnApp {
             speedtest_auto_refill: Some(self.edit_speedtest_auto_refill),
             auto_rearm_system_proxy: Some(self.edit_auto_rearm_system_proxy),
             auto_prepare_kernel: Some(self.edit_auto_prepare_kernel),
+            launch_as_admin: Some(self.edit_launch_as_admin),
+            launch_at_startup: Some(self.edit_launch_at_startup),
             speedtest_added_source: Some(self.edit_speedtest_added_source),
             fetch_concurrency: Some(self.edit_fetch_concurrency.clamp(1, 8)),
             fetch_timeout_secs: Some(self.edit_fetch_timeout_secs),
@@ -4403,6 +4606,18 @@ impl eframe::App for VpnApp {
                         self.start_proxy();
                     }
                 }
+                crate::platform::TrayEvent::RestartProxy => {
+                    // 运行中调 start_proxy() 走的就是 manager 的 restart 分支
+                    // （stop_inner_for_restart + 重新拉起）；没跑就当普通启动。
+                    if self.proxy_busy {
+                        crate::startup_log("TrayEvent::RestartProxy ignored (proxy busy)");
+                        self.status = "代理正在处理其他操作，稍后再重启".into();
+                    } else {
+                        crate::startup_log("TrayEvent::RestartProxy received, restarting proxy");
+                        self.start_proxy();
+                        self.status = "正在重启代理...".into();
+                    }
+                }
                 crate::platform::TrayEvent::Quit => {
                     crate::startup_log("TrayEvent::Quit received, exiting application");
                     self.force_quit = true;
@@ -4452,10 +4667,9 @@ impl eframe::App for VpnApp {
             self.firewall_seeded = true;
             if crate::platform::is_elevated() {
                 self.apply_firewall_rules();
-            } else {
-                self.firewall_status =
-                    Some("已勾选但本次未提权，规则没写入；用管理员权限启动后会自动补上".into());
             }
+            // 非提权时静默跳过：不再设置"规则没写入"的提示文案（开了
+            // 「以管理员方式启动」后，下次启动自然以提权身份补上）
         }
         if self.applied_theme_id != self.settings.ui_theme
             || self.applied_ui_dark != self.settings.ui_dark
@@ -4703,6 +4917,8 @@ impl eframe::App for VpnApp {
         self.ui_paste_dialog(ctx);
         self.ui_source_nodes_modal(ctx);
         self.ui_node_picker_modal(ctx);
+        self.render_dashboard_drawer(ctx);
+        self.render_group_drawer(ctx);
 
         // Ctrl+V 走的是这里，不是 Key 事件：egui-winit 一认出粘贴组合就把它换成
         // `Event::Paste(剪贴板内容)`，然后**直接 return，不再发 `Event::Key{V}`**
