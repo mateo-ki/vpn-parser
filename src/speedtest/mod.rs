@@ -73,7 +73,6 @@ pub struct SpeedTestOptions {
     pub tcp_ping_only: bool,
 }
 
-pub const TCP_PREFILTER_TIMEOUT_MS: u32 = 2500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeedTestPhase {
@@ -410,6 +409,54 @@ pub fn build_speedtest_summary(results: Vec<LatencyResult>) -> Result<SpeedTestS
 mod tests {
     use super::*;
     use crate::hostutil::is_public_proxy_host;
+
+    /// 大规模回归：多节点 + 多线程 runtime 走完整 test_all_sources 链路，
+    /// 必须在有限时间内完成（曾因 worker 池 sender 未释放而永久挂起）。
+    /// 节点用 TEST-NET 地址：TCP 必连失败但立即返回，不碰真实网络。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_all_sources_completes_on_many_nodes() {
+        let path = std::env::temp_dir().join(format!(
+            "vpn-parser-scale-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let db = Database::connect(path.to_str().unwrap()).await.unwrap();
+        let now = chrono::Utc::now();
+        let nodes: Vec<Node> = (0..2000)
+            .map(|i| Node {
+                id: format!("scale-node-{i}"),
+                source_id: Some(format!("src-{}", i % 5)),
+                protocol: "ss".into(),
+                name: format!("node-{i}"),
+                server: format!("192.0.2.{}", (i % 254) + 1),
+                port: (1000 + i % 60000) as u16,
+                raw: format!("ss://scale-{i}"),
+                config: serde_json::json!({"password": format!("pw-{i}"), "cipher": "aes-256-gcm"}),
+                country: None,
+                latency_ms: None,
+                latency_ok: None,
+                download_kbps: None,
+                latency_kernel: None,
+                latency_test_kind: None,
+                latency_tested_at: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .collect();
+        let imported = db.import_nodes(&nodes).await.unwrap();
+        assert_eq!(imported, 2000);
+
+        let tester = SpeedTester::new(db.clone(), TaskTracker::default());
+        let mut opts = SpeedTestOptions::default();
+        opts.tcp_ping_only = true;
+        let summary = tester.test_all_sources(opts).await.unwrap();
+        assert_eq!(summary.total, 2000);
+        assert_eq!(summary.ok + summary.fail, 2000);
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
 
     #[test]
     fn udp_proxy_protocols_skip_tcp_prefilter() {

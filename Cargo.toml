@@ -1,6 +1,6 @@
 [package]
 name = "vpn-parser"
-version = "1.15.6"
+version = "1.15.7"
 edition = "2021"
 description = "VPN/proxy subscription collector with desktop GUI and HTTP API"
 license = "MIT"
@@ -8,6 +8,7 @@ license = "MIT"
 [dependencies]
 anyhow = "1.0"
 axum = { version = "0.8", features = ["macros"] }
+tower = { version = "0.5", features = ["util"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }

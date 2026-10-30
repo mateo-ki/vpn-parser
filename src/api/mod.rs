@@ -81,7 +81,15 @@ pub fn router(state: AppState, api_token: Option<String>) -> Router {
             let expected = api_token.clone();
             async move { authenticate_request(request, next, expected.as_deref()).await }
         }))
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(|request: &Request<Body>| {
+            // 访问日志只记 method + path：导出链接的 ?token= 与带凭据的 query
+            // 绝不能进日志（默认 span 会记完整 URI 含 query）
+            tracing::debug_span!(
+                "http_request",
+                method = %request.method(),
+                path = request.uri().path(),
+            )
+        }))
         .with_state(Arc::new(state))
 }
 
@@ -176,6 +184,11 @@ impl ApiServerController {
     }
 }
 
+/// 允许 `?token=` 的只读导出路由前缀：导出订阅链接要贴进浏览器 / 其他客户端，
+/// token 只能随 URL 走；其余 GET 一律要求 Bearer 头，避免 token 经浏览器历史、
+/// 访问日志、Referer 泄露后拿到全量节点凭据。
+const QUERY_TOKEN_ALLOWED_PREFIXES: &[&str] = &["/api/export/"];
+
 async fn authenticate_request(
     request: Request<Body>,
     next: Next,
@@ -190,20 +203,24 @@ async fn authenticate_request(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .map(str::to_owned);
-    let from_query = (request.method() == Method::GET)
-        .then(|| {
-            request.uri().query().map(|query| {
-                query
-                    .split('&')
-                    .find_map(|pair| {
-                        let (key, value) = pair.split_once('=')?;
-                        (key == "token").then(|| value.to_owned())
-                    })
-                    .unwrap_or_default()
-            })
+    let path = request.uri().path();
+    let from_query = (request.method() == Method::GET
+        && QUERY_TOKEN_ALLOWED_PREFIXES
+            .iter()
+            .any(|prefix| path.starts_with(prefix)))
+    .then(|| {
+        request.uri().query().map(|query| {
+            query
+                .split('&')
+                .find_map(|pair| {
+                    let (key, value) = pair.split_once('=')?;
+                    (key == "token").then(|| value.to_owned())
+                })
+                .unwrap_or_default()
         })
-        .flatten()
-        .filter(|value| !value.is_empty());
+    })
+    .flatten()
+    .filter(|value| !value.is_empty());
     let authorized = [from_header, from_query]
         .into_iter()
         .flatten()
@@ -884,6 +901,7 @@ fn error_resp(e: impl std::fmt::Display) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::routing::get;
 
     #[test]
     fn proxy_request_keeps_old_body_compatible() {
@@ -899,5 +917,57 @@ mod tests {
             serde_json::from_str(r#"{"node_id":"node-1","kernel":"xray"}"#).unwrap();
 
         assert_eq!(body.kernel, Some(KernelPreference::Xray));
+    }
+
+    /// `?token=` 只允许出现在导出路由：导出链接需要进浏览器/客户端，
+    /// 其余 GET 一律必须走 Bearer 头，防止 token 泄露面扩大。
+    #[tokio::test]
+    async fn query_token_only_accepted_on_export_routes() {
+        let app = Router::new()
+            .route("/api/export/uri", get(|| async { "export-ok" }))
+            .route("/api/nodes", get(|| async { "nodes-ok" }))
+            .layer(axum::middleware::from_fn(
+                |req: Request<Body>, next: Next| async move {
+                    authenticate_request(req, next, Some("secret")).await
+                },
+            ));
+
+        use tower::ServiceExt;
+        let get = |uri: &'static str| http_request(Method::GET, uri);
+
+        // 导出路由：query token 放行
+        let resp = app
+            .clone()
+            .oneshot(get("/api/export/uri?token=secret"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 同样的 token 打到普通 GET：拒绝
+        let resp = app
+            .clone()
+            .oneshot(get("/api/nodes?token=secret"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        // Bearer 头在任意路由都放行
+        let mut req = get("/api/nodes");
+        req.headers_mut()
+            .insert(header::AUTHORIZATION, "Bearer secret".parse().unwrap());
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 无凭据：拒绝
+        let resp = app.oneshot(get("/api/nodes")).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    fn http_request(method: Method, uri: &'static str) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap()
     }
 }

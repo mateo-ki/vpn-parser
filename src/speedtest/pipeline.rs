@@ -7,7 +7,6 @@ use crate::speedtest::dns::resolve_targets_parallel;
 use crate::speedtest::prefilter::probe_full_resolved;
 use crate::speedtest::{
     SpeedTestOptions, SpeedTestPhase, SpeedTestProgress, SpeedtestIntensity,
-    TCP_PREFILTER_TIMEOUT_MS,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -132,12 +131,15 @@ pub async fn run_speedtest_pipeline(
     let concurrency = opts.concurrency.clamp(1, 512) as usize;
     let (prefilter_timeout_ms, proxy_timeout_duration) = match opts.intensity {
         SpeedtestIntensity::Fast => (opts.timeout_ms.clamp(800, 1500), Duration::from_millis(3000)),
+        // 预筛只是一次 TCP SYN：1.5s 内握手没回来基本就是死节点。以前把内核测速的
+        // 超时（用户可设 5s）原样带进预筛，死节点每个吃满 2.5~5s，几万节点的库
+        // 第一阶段要干等十几分钟——SYN 不值得这么耐心，这里独立封顶。
         SpeedtestIntensity::Standard => (
-            opts.timeout_ms.clamp(1200, TCP_PREFILTER_TIMEOUT_MS),
+            opts.timeout_ms.clamp(1200, 1500),
             Duration::from_millis(opts.timeout_ms.clamp(3_000, 15_000) as u64),
         ),
         SpeedtestIntensity::Deep => (
-            opts.timeout_ms.clamp(2000, 5000),
+            opts.timeout_ms.clamp(1500, 2500),
             Duration::from_millis(opts.timeout_ms.clamp(5_000, 25_000) as u64),
         ),
     };
@@ -157,134 +159,171 @@ pub async fn run_speedtest_pipeline(
     // 1. 并发 DNS 预解析
     let dns_targets: Vec<(String, u16)> =
         nodes.iter().map(|n| (n.server.clone(), n.port)).collect();
-    let resolved = resolve_targets_parallel(
-        dns_targets,
-        network_limit.clone(),
-        Duration::from_millis(2500),
-    )
-    .await;
+    // DNS 阶段也走同一进度通道（phase 仍记 TcpPrefilter），让域名多的池子
+    // 在预筛真正开始前就有可见的计数变化
+    let resolved = {
+        let progress = progress.as_ref();
+        resolve_targets_parallel(
+            dns_targets,
+            network_limit.clone(),
+            Duration::from_millis(2500),
+            progress.map(|cb| {
+                move |done: usize, total: usize| {
+                    cb(SpeedTestProgress {
+                        phase: SpeedTestPhase::TcpPrefilter,
+                        done,
+                        total,
+                        ok: 0,
+                        fail: 0,
+                        elapsed: started.elapsed(),
+                        kernel: None,
+                        batch_index: None,
+                        batch_total: None,
+                    })
+                }
+            }),
+        )
+        .await
+    };
 
-    // 2. TCP 粗筛探测
-    let prefilter_semaphore = Arc::new(Semaphore::new(concurrency));
+    // 2. TCP 粗筛探测：固定 worker 池逐个从队列取节点——无论节点多少，在途任务恒 ≤
+    //    concurrency。旧实现先为全量节点 spawn task、再在 task 内等信号量，大节点库下
+    //    等待 task 及其携带的节点副本会随节点数线性膨胀。
+    let (job_tx, job_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(
+            Node,
+            Result<Vec<std::net::SocketAddr>, String>,
+        )>();
+    let (result_tx, mut result_rx) =
+        tokio::sync::mpsc::channel::<LatencyResult>(concurrency.max(4));
     let mut tasks = JoinSet::new();
+    let job_rx = Arc::new(tokio::sync::Mutex::new(job_rx));
+    for _ in 0..concurrency {
+        let job_rx = job_rx.clone();
+        let network_limit = network_limit.clone();
+        let result_tx = result_tx.clone();
+        tasks.spawn(async move {
+            loop {
+                let Some((node, addresses)) = job_rx.lock().await.recv().await else {
+                    break;
+                };
+                let result = {
+                    let network_limit = network_limit.clone();
+                    async {
+                        let _net_permit = match network_limit.acquire_owned().await {
+                        Ok(permit) => permit,
+                        Err(_) => {
+                            return LatencyResult {
+                                id: node.id,
+                                name: node.name,
+                                server: node.server,
+                                port: node.port,
+                                ok: false,
+                                latency_ms: None,
+                                download_kbps: None,
+                                latency_kernel: None,
+                                latency_test_kind: Some("concurrency_limit".into()),
+                                message: "测速并发控制已关闭".into(),
+                            };
+                        }
+                    };
+
+                    if requires_proxy_without_tcp(&node.protocol) {
+                        let can_resolve =
+                            addresses.as_ref().map(|a| !a.is_empty()).unwrap_or(false);
+                        let message = if can_resolve {
+                            "UDP/QUIC 协议跳过 TCP 预筛，直进内核握手".to_string()
+                        } else {
+                            format!(
+                                "DNS 解析失败: {:?}",
+                                addresses.err().unwrap_or_default()
+                            )
+                        };
+                        return LatencyResult {
+                            id: node.id,
+                            name: node.name,
+                            server: node.server,
+                            port: node.port,
+                            ok: can_resolve,
+                            latency_ms: None,
+                            download_kbps: None,
+                            latency_kernel: None,
+                            latency_test_kind: (!can_resolve).then(|| "dns_fail".into()),
+                            message,
+                        };
+                    }
+
+                    let (ok, latency_ms, download_kbps, message) = probe_full_resolved(
+                        &node.server,
+                        node.port,
+                        prefilter_timeout_ms,
+                        addresses,
+                    )
+                    .await;
+
+                    LatencyResult {
+                        id: node.id,
+                        name: node.name,
+                        server: node.server,
+                        port: node.port,
+                        ok,
+                        latency_ms,
+                        download_kbps,
+                        latency_kernel: None,
+                        latency_test_kind: (!ok).then(|| "tcp_prefilter".into()),
+                        message,
+                    }
+                    }
+                    .await
+                };
+                if result_tx.send(result).await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    // 队列填充端有界背压：节点留在 Vec 里逐个入队，不再一次性克隆进每个 task
     for node in nodes {
         let addresses = match resolved.get(&(node.server.clone(), node.port)) {
             Some(res) => res.clone(),
             None => Err("DNS 解析未覆盖".into()),
         };
-        let is_udp_tunnel = requires_proxy_without_tcp(&node.protocol);
-        let network_limit = network_limit.clone();
-        let prefilter_semaphore = prefilter_semaphore.clone();
-
-        tasks.spawn(async move {
-            let _net_permit = match network_limit.acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => {
-                    return LatencyResult {
-                        id: node.id,
-                        name: node.name,
-                        server: node.server,
-                        port: node.port,
-                        ok: false,
-                        latency_ms: None,
-                        download_kbps: None,
-                        latency_kernel: None,
-                        latency_test_kind: Some("concurrency_limit".into()),
-                        message: "测速并发控制已关闭".into(),
-                    };
-                }
-            };
-            let _permit = match prefilter_semaphore.acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => {
-                    return LatencyResult {
-                        id: node.id,
-                        name: node.name,
-                        server: node.server,
-                        port: node.port,
-                        ok: false,
-                        latency_ms: None,
-                        download_kbps: None,
-                        latency_kernel: None,
-                        latency_test_kind: Some("cancelled".into()),
-                        message: "测速任务已取消".into(),
-                    };
-                }
-            };
-
-            if is_udp_tunnel {
-                let can_resolve = addresses.as_ref().map(|a| !a.is_empty()).unwrap_or(false);
-                let message = if can_resolve {
-                    "UDP/QUIC 协议跳过 TCP 预筛，直进内核握手".to_string()
-                } else {
-                    format!("DNS 解析失败: {:?}", addresses.err().unwrap_or_default())
-                };
-                return LatencyResult {
-                    id: node.id,
-                    name: node.name,
-                    server: node.server,
-                    port: node.port,
-                    ok: can_resolve,
-                    latency_ms: None,
-                    download_kbps: None,
-                    latency_kernel: None,
-                    latency_test_kind: (!can_resolve).then(|| "dns_fail".into()),
-                    message,
-                };
-            }
-
-            let (ok, latency_ms, download_kbps, message) = probe_full_resolved(
-                &node.server,
-                node.port,
-                prefilter_timeout_ms,
-                addresses,
-            )
-            .await;
-
-            LatencyResult {
-                id: node.id,
-                name: node.name,
-                server: node.server,
-                port: node.port,
-                ok,
-                latency_ms,
-                download_kbps,
-                latency_kernel: None,
-                latency_test_kind: (!ok).then(|| "tcp_prefilter".into()),
-                message,
-            }
-        });
+        if job_tx.send((node, addresses)).is_err() {
+            break;
+        }
     }
+    drop(job_tx);
+    // 释放原始 sender：主循环靠 recv() 返回 None 收尾，任何一个 result_tx 克隆
+    // 残留都会让收集循环在收完全部结果后永久挂起
+    drop(result_tx);
 
     let mut results = Vec::with_capacity(total);
     let mut done = 0;
     let mut ok_count = 0;
-    while let Some(task_result) = tasks.join_next().await {
+    while let Some(result) = result_rx.recv().await {
         if cancelled.load(Ordering::Relaxed) {
             tasks.abort_all();
             info!("TCP 预筛阶段收到中断信号，提前终止余下预筛任务");
             break;
         }
-        if let Ok(result) = task_result {
-            done += 1;
-            if result.ok {
-                ok_count += 1;
-            }
-            if let Some(progress_cb) = progress.as_ref() {
-                progress_cb(SpeedTestProgress {
-                    phase: SpeedTestPhase::TcpPrefilter,
-                    done,
-                    total,
-                    ok: ok_count,
-                    fail: done.saturating_sub(ok_count),
-                    elapsed: started.elapsed(),
-                    kernel: None,
-                    batch_index: None,
-                    batch_total: None,
-                });
-            }
-            results.push(result);
+        done += 1;
+        if result.ok {
+            ok_count += 1;
         }
+        if let Some(progress_cb) = progress.as_ref() {
+            progress_cb(SpeedTestProgress {
+                phase: SpeedTestPhase::TcpPrefilter,
+                done,
+                total,
+                ok: ok_count,
+                fail: done.saturating_sub(ok_count),
+                elapsed: started.elapsed(),
+                kernel: None,
+                batch_index: None,
+                batch_total: None,
+            });
+        }
+        results.push(result);
     }
 
     if cancelled.load(Ordering::Relaxed) {

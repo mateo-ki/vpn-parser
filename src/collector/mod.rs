@@ -96,6 +96,17 @@ pub struct SubscriptionUserinfo {
     pub expire: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// 把文本里所有 http(s) URL 的 query 部分抹掉——订阅 URL 常内嵌付费 token，
+/// 不得写进本地日志或源状态字段。既用于纯 URL，也用于可能夹带 URL 的错误信息。
+fn redact_url_query(text: &str) -> String {
+    static URL_QUERY: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = URL_QUERY.get_or_init(|| {
+        // query 段同时排除 `)`：reqwest 错误文本里 URL 常被包在圆括号里
+        regex::Regex::new(r"(https?://[^\s?#]+)\?[^\s#)]*").expect("valid url query regex")
+    });
+    re.replace_all(text, "$1").into_owned()
+}
+
 pub fn parse_subscription_userinfo(header: &str) -> SubscriptionUserinfo {
     let mut info = SubscriptionUserinfo::default();
     for part in header.split(';') {
@@ -217,7 +228,9 @@ impl Collector {
                     .fetch_telegram_source(source, &channel, task_id, attempt_budget)
                     .await;
             }
-            info!(name = %source.name, url = %resolved_url, "fetching source");
+            // 订阅 URL 常内嵌付费 token（query 或路径段），日志里只留 scheme://host/path，
+            // 丢弃 query——足够定位是哪个源，又不把凭据写进本地日志文件
+            info!(name = %source.name, url = %redact_url_query(&resolved_url), "fetching source");
             self.tasks
                 .phase(task_id, &source.id, TaskPhase::Downloading);
             let download_started = Instant::now();
@@ -232,7 +245,7 @@ impl Collector {
                 .await
             {
                 Err(message) => {
-                    warn!(name = %source.name, error = %message, "fetch failed");
+                    warn!(name = %source.name, error = %redact_url_query(&message), "fetch failed");
                     self.mark_source_fetched(&source.id, &message, 0).await;
                     return FetchResult {
                         source_id: source.id.clone(),
@@ -1363,6 +1376,25 @@ mod tests {
         assert_eq!(info.download, Some(2147483648));
         assert_eq!(info.total, Some(107374182400));
         assert!(info.expire.is_some());
+    }
+
+    /// 订阅 URL 内嵌的付费 token 不得进日志：query 被抹掉、路径与错误上下文保留。
+    #[test]
+    fn redact_url_query_strips_query_keeps_context() {
+        assert_eq!(
+            redact_url_query("https://sub.example.com/token/abc?token=secret&flag=1"),
+            "https://sub.example.com/token/abc"
+        );
+        // 错误信息里夹带 URL：URL 脱敏，其余文本原样保留
+        assert_eq!(
+            redact_url_query("error sending request for url (https://a.b/c?token=x): timeout"),
+            "error sending request for url (https://a.b/c): timeout"
+        );
+        // 无 query 的 URL 原样保留
+        assert_eq!(
+            redact_url_query("https://plain.example.com/path"),
+            "https://plain.example.com/path"
+        );
     }
 
     #[test]

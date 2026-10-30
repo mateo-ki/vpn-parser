@@ -153,7 +153,9 @@ pub fn looks_like_clash(content: &str) -> bool {
 }
 
 /// Stable identity for a proxy endpoint (ignores display name / source).
-/// Same server:port + credentials => same node, even if name differs across free lists.
+/// Same server:port + full connection config => same node, even if name differs
+/// across free lists. 传输参数（SNI / WS path / gRPC service / Reality 等）参与指纹，
+/// 否则仅凭据与端点相同、传输不同的节点会被误判重复。
 pub fn node_fingerprint(node: &Node) -> String {
     fingerprint_from_parts(&node.protocol, &node.server, node.port, &node.config)
 }
@@ -168,8 +170,60 @@ pub fn fingerprint_from_parts(
 ) -> String {
     let protocol = normalize_protocol(protocol);
     let server = server.trim().to_ascii_lowercase();
-    let cred = credential_token(&protocol, config);
-    format!("{protocol}|{server}|{port}|{cred}")
+    let canonical = canonical_config_json(config);
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(protocol.as_bytes());
+    hasher.update([0]);
+    hasher.update(server.as_bytes());
+    hasher.update([0]);
+    hasher.update(port.to_string().as_bytes());
+    hasher.update([0]);
+    hasher.update(canonical.as_bytes());
+    format!("v2:{:x}", hasher.finalize())
+}
+
+/// 展示字段：机场给同一节点起不同名字/备注，不应影响“是否同一节点”。
+const CONFIG_DISPLAY_KEYS: &[&str] = &["name", "remark"];
+
+/// 规范化连接配置：剔除顶层展示字段，递归丢弃 null / 空串 / 空容器
+/// （“字段为空串”与“字段缺省”语义等价），再交给 serde_json 序列化。
+/// serde_json 默认 BTreeMap，对象键天然有序，序列化结果稳定。
+fn canonical_config_json(config: &serde_json::Value) -> String {
+    fn prune(value: &serde_json::Value) -> Option<serde_json::Value> {
+        match value {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(s) if s.is_empty() => None,
+            serde_json::Value::Array(items) => {
+                let kept: Vec<_> = items.iter().filter_map(prune).collect();
+                if kept.is_empty() {
+                    None
+                } else {
+                    Some(serde_json::Value::Array(kept))
+                }
+            }
+            serde_json::Value::Object(map) => {
+                let kept: serde_json::Map<String, serde_json::Value> = map
+                    .iter()
+                    .filter(|(k, _)| !CONFIG_DISPLAY_KEYS.contains(&k.as_str()))
+                    .filter_map(|(k, v)| prune(v).map(|v| (k.clone(), v)))
+                    .collect();
+                if kept.is_empty() {
+                    None
+                } else {
+                    Some(serde_json::Value::Object(kept))
+                }
+            }
+            other => Some(other.clone()),
+        }
+    }
+
+    match config {
+        serde_json::Value::Object(_) => prune(config)
+            .map(|pruned| pruned.to_string())
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
 }
 
 pub fn normalize_protocol(protocol: &str) -> String {
@@ -180,61 +234,6 @@ pub fn normalize_protocol(protocol: &str) -> String {
         "socks" | "socks5" => "socks5".into(),
         "https" => "http".into(),
         other => other.to_string(),
-    }
-}
-
-fn credential_token(protocol: &str, config: &serde_json::Value) -> String {
-    let s = |keys: &[&str]| -> String {
-        for k in keys {
-            if let Some(v) = config.get(*k) {
-                match v {
-                    serde_json::Value::String(x) if !x.is_empty() => return x.clone(),
-                    serde_json::Value::Number(n) => return n.to_string(),
-                    serde_json::Value::Bool(b) => return b.to_string(),
-                    _ => {}
-                }
-            }
-        }
-        String::new()
-    };
-
-    match protocol {
-        "shadowsocks" => format!("{}:{}", s(&["cipher", "method"]), s(&["password"])),
-        "shadowsocksr" => format!(
-            "{}:{}:{}:{}",
-            s(&["cipher", "method"]),
-            s(&["password"]),
-            s(&["protocol", "protocolparam"]),
-            s(&["obfs", "obfsparam"])
-        ),
-        "vmess" | "vless" => s(&["uuid", "id"]),
-        "trojan" | "hysteria2" | "hysteria" | "tuic" => {
-            s(&["password", "auth", "auth-str", "uuid"])
-        }
-        "socks5" | "http" => format!("{}:{}", s(&["username", "user"]), s(&["password", "pass"])),
-        "wireguard" => s(&["private-key", "private_key", "public-key", "public_key"]),
-        "masque" => s(&[
-            "private-key",
-            "private_key",
-            "public-key",
-            "public_key",
-            "publicKey",
-            "privateKey",
-        ]),
-        _ => {
-            // Fallback: hash a few stable fields if present.
-            let parts = [
-                s(&["uuid", "id"]),
-                s(&["password", "auth"]),
-                s(&["cipher", "method"]),
-                s(&["username"]),
-            ];
-            parts
-                .into_iter()
-                .filter(|p| !p.is_empty())
-                .collect::<Vec<_>>()
-                .join(":")
-        }
     }
 }
 
@@ -983,6 +982,56 @@ mod tests {
             None,
         );
         assert_ne!(node_fingerprint(&a), node_fingerprint(&b));
+    }
+
+    /// 同端点同凭据、仅传输参数不同：绝不能合并成同一节点。
+    #[test]
+    fn fingerprint_differs_by_transport_and_reality_params() {
+        let base = |mut extra: serde_json::Value| {
+            let obj = extra.as_object_mut().unwrap();
+            obj.insert("uuid".into(), serde_json::json!("11111111-1111-1111-1111-111111111111"));
+            make_node("vless", "n", "1.2.3.4", 443, "raw", extra, None)
+        };
+        let plain = base(serde_json::json!({"network":"ws"}));
+        let ws_path = base(serde_json::json!({"network":"ws","path":"/aaa"}));
+        let ws_path2 = base(serde_json::json!({"network":"ws","path":"/bbb"}));
+        let sni = base(serde_json::json!({"network":"tcp","sni":"a.com"}));
+        let sni2 = base(serde_json::json!({"network":"tcp","sni":"b.com"}));
+        let reality = base(serde_json::json!({"network":"tcp","reality-opts":{"public-key":"pk1"}}));
+        let reality2 = base(serde_json::json!({"network":"tcp","reality-opts":{"public-key":"pk2"}}));
+
+        assert_ne!(node_fingerprint(&plain), node_fingerprint(&ws_path));
+        assert_ne!(node_fingerprint(&ws_path), node_fingerprint(&ws_path2));
+        assert_ne!(node_fingerprint(&sni), node_fingerprint(&sni2));
+        assert_ne!(node_fingerprint(&reality), node_fingerprint(&reality2));
+        // 仅展示字段（name/remark）不同：仍视为同一节点。
+        let named = base(serde_json::json!({"name":"节点A","remark":"xx"}));
+        let renamed = base(serde_json::json!({"name":"节点B"}));
+        assert_eq!(node_fingerprint(&named), node_fingerprint(&renamed));
+    }
+
+    /// “字段为空串”与“字段缺省”语义等价，指纹应一致。
+    #[test]
+    fn fingerprint_treats_empty_string_as_absent() {
+        let absent = make_node(
+            "trojan",
+            "n",
+            "1.2.3.4",
+            443,
+            "raw",
+            serde_json::json!({"password":"pw"}),
+            None,
+        );
+        let empty = make_node(
+            "trojan",
+            "n",
+            "1.2.3.4",
+            443,
+            "raw",
+            serde_json::json!({"password":"pw","alpn":[],"sni":""}),
+            None,
+        );
+        assert_eq!(node_fingerprint(&absent), node_fingerprint(&empty));
     }
 
     #[test]

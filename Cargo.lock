@@ -4290,7 +4290,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vpn-parser"
-version = "1.15.6"
+version = "1.15.7"
 dependencies = [
  "anyhow",
  "arboard",
@@ -4321,6 +4321,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tokio-rustls",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",

@@ -45,6 +45,7 @@ pub async fn resolve_targets_parallel(
     targets: Vec<(String, u16)>,
     network_limit: Arc<Semaphore>,
     dns_timeout: Duration,
+    progress: Option<impl Fn(usize, usize) + Send + Sync>,
 ) -> ResolvedTargets {
     let mut resolved: ResolvedTargets = HashMap::with_capacity(targets.len());
     let mut domains_to_resolve: HashMap<String, HashSet<u16>> = HashMap::new();
@@ -128,6 +129,8 @@ pub async fn resolve_targets_parallel(
         });
     }
 
+    let total_domains = tasks.len();
+    let mut resolved_domains = 0usize;
     while let Some(task_res) = tasks.join_next().await {
         if let Ok((host, ports, ip_res)) = task_res {
             match ip_res {
@@ -143,6 +146,11 @@ pub async fn resolve_targets_parallel(
                     }
                 }
             }
+        }
+        // DNS 阶段以前完全没有进度输出，域名多的池子这几分钟界面上纹丝不动
+        resolved_domains += 1;
+        if let Some(cb) = progress.as_ref() {
+            cb(resolved_domains, total_domains);
         }
     }
 
@@ -161,7 +169,7 @@ mod tests {
             ("8.8.8.8".to_string(), 853),
             ("1.1.1.1".to_string(), 8443),
         ];
-        let res = resolve_targets_parallel(targets, limit, Duration::from_millis(500)).await;
+        let res = resolve_targets_parallel(targets, limit, Duration::from_millis(500), None::<fn(usize, usize)>).await;
         assert_eq!(res.len(), 3);
         let a = res.get(&("1.1.1.1".to_string(), 443)).unwrap().as_ref().unwrap();
         assert_eq!(a[0], "1.1.1.1:443".parse().unwrap());
