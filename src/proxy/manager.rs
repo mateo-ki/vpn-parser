@@ -4,7 +4,9 @@ use crate::kernel::{
 };
 use crate::models::Node;
 use crate::proxy::adapter::kernel_adapter;
-use crate::proxy::types::{MihomoConfigOptions, ProxyMode, ProxyRuntimeStatus, ProxyState};
+use crate::proxy::types::{
+    MihomoConfigOptions, ProxyMode, ProxyRuntimeStatus, ProxyState, RoutingMode,
+};
 use crate::proxy_probe::{ProxyProbeProgress, ProxyProbeResult, PROXY_CONNECTIVITY_TEST_URL};
 use crate::system_proxy::{platform_system_proxy, SystemProxyControl, SystemProxySnapshot};
 use anyhow::{anyhow, Context, Result};
@@ -333,6 +335,7 @@ impl ProxyManager {
         }
         runtime.apply_options(options.clone());
         runtime.status.mode = options.mode;
+        runtime.status.routing_mode = options.routing_mode;
         runtime.status.mixed_port = options.mixed_port;
         runtime.status.controller_port = options.controller_port;
         runtime.status.controller_secret = options.controller_secret.clone();
@@ -351,6 +354,7 @@ impl ProxyManager {
             ) {
                 runtime.apply_options(options.clone());
                 runtime.status.mode = options.mode;
+                runtime.status.routing_mode = options.routing_mode;
                 runtime.status.mixed_port = options.mixed_port;
                 runtime.status.controller_port = options.controller_port;
                 runtime.status.controller_secret = options.controller_secret.clone();
@@ -591,6 +595,7 @@ impl ProxyManager {
         let mut runtime = self.runtime.lock().await;
         runtime.apply_options(options.clone());
         runtime.status.mode = options.mode;
+        runtime.status.routing_mode = options.routing_mode;
         runtime.status.last_error = None;
         runtime.status.message = if tun_on {
             format!("{} TUN 已热开启（{elapsed_ms} ms，未重启进程）", kernel.display_name())
@@ -598,6 +603,134 @@ impl ProxyManager {
             format!("{} TUN 已热关闭（{elapsed_ms} ms，未重启进程）", kernel.display_name())
         };
         tracing::info!(kernel = %kernel.display_name(), tun_on, elapsed_ms, "TUN 热切换生效");
+        Ok(true)
+    }
+
+    /// 分流出站模式热切换：代理运行中动态切换「规则 / 全局 / 直连」等模式，
+    /// 无论配合 Mihomo 还是 VP-Core 均通过内核 REST 控制器 `PATCH /configs {"mode": "..."}`
+    /// 实现微秒/毫秒级无感热切，不重启进程、不断开已有 TCP/UDP 连接。
+    /// 若内核不支持或热切换失败返回 Ok(false)。
+    pub async fn try_hot_switch_routing_mode(&self, routing_mode: RoutingMode) -> Result<bool> {
+        let started = tokio::time::Instant::now();
+        let (kernel, config_path, controller_port, controller_secret) = {
+            let mut runtime = self.runtime.lock().await;
+            if !matches!(
+                runtime.status.state,
+                ProxyState::Running | ProxyState::Degraded
+            ) {
+                runtime.options.routing_mode = routing_mode;
+                runtime.status.routing_mode = routing_mode;
+                return Ok(true);
+            }
+            let Some(kernel) = runtime.status.kernel else {
+                return Ok(false);
+            };
+            let alive = match runtime.child.as_mut() {
+                Some(child) => child.try_wait().ok().flatten().is_none(),
+                None => false,
+            };
+            if !alive {
+                return Ok(false);
+            }
+            let Some(work_dir) = &runtime.work_dir else {
+                return Ok(false);
+            };
+            (
+                kernel,
+                work_dir.config_path(),
+                runtime.options.controller_port,
+                runtime.options.controller_secret.clone(),
+            )
+        };
+
+        let mode_str = routing_mode.as_controller_mode();
+
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_millis(2500))
+            .build()
+        {
+            Ok(client) => client,
+            Err(error) => {
+                tracing::warn!("创建分流模式热切 HTTP 客户端失败: {error}");
+                return Ok(false);
+            }
+        };
+
+        let hot_applied = match kernel {
+            KernelKind::Mihomo | KernelKind::VpCore | KernelKind::Meow => {
+                let payload = serde_json::json!({
+                    "mode": mode_str
+                });
+                let url = format!("http://127.0.0.1:{controller_port}/configs");
+                let request = with_controller_auth(client.patch(&url).json(&payload), &controller_secret);
+                match request.send().await {
+                    Ok(response) if response.status().is_success() => {
+                        // 同步持久化修改工作目录内的 config.yaml
+                        if let Ok(content) = tokio::fs::read_to_string(&config_path).await {
+                            if let Ok(re) = regex::Regex::new(r"(?m)^(\s*mode\s*:\s*).*$") {
+                                let new_content = re.replace(&content, format!("${{1}}{mode_str}")).to_string();
+                                let _ = tokio::fs::write(&config_path, &new_content).await;
+                            }
+                        }
+                        true
+                    }
+                    Ok(response) => {
+                        tracing::warn!(
+                            status = %response.status(),
+                            kernel = %kernel.display_name(),
+                            "内核 PATCH /configs 模式热切失败，尝试回退热重载"
+                        );
+                        // VP-Core 优雅兜底：若运行的旧二进制无 PATCH 路由，自动重写配置并走 PUT /configs
+                        if kernel == KernelKind::VpCore {
+                            if let Ok(content) = tokio::fs::read_to_string(&config_path).await {
+                                if let Ok(re) = regex::Regex::new(r"(?m)^(\s*mode\s*:\s*).*$") {
+                                    let new_content = re.replace(&content, format!("${{1}}{mode_str}")).to_string();
+                                    let _ = tokio::fs::write(&config_path, &new_content).await;
+                                    let put_url = format!("http://127.0.0.1:{controller_port}/configs?force=true");
+                                    let put_payload = serde_json::json!({
+                                        "path": config_path.to_string_lossy(),
+                                    });
+                                    let put_req = with_controller_auth(client.put(&put_url).json(&put_payload), &controller_secret);
+                                    if let Ok(resp) = put_req.send().await {
+                                        resp.status().is_success()
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!("请求模式热切失败: {error}");
+                        false
+                    }
+                }
+            }
+            _ => false,
+        };
+
+        if !hot_applied {
+            return Ok(false);
+        }
+
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        let mut runtime = self.runtime.lock().await;
+        runtime.options.routing_mode = routing_mode;
+        runtime.status.routing_mode = routing_mode;
+        runtime.status.last_error = None;
+        runtime.status.message = format!(
+            "{} 已免停热切至「{}」模式（{} ms）",
+            kernel.display_name(),
+            routing_mode.short_label(),
+            elapsed_ms
+        );
+        tracing::info!(kernel = %kernel.display_name(), ?routing_mode, elapsed_ms, "分流模式热切生效");
         Ok(true)
     }
 
@@ -612,6 +745,7 @@ impl ProxyManager {
             let mut runtime = self.runtime.lock().await;
             runtime.apply_options(options.clone());
             runtime.status.mode = options.mode;
+            runtime.status.routing_mode = options.routing_mode;
             runtime.status.mixed_port = options.mixed_port;
             runtime.status.controller_port = options.controller_port;
             runtime.status.controller_secret = options.controller_secret.clone();
@@ -1118,6 +1252,7 @@ impl ProxyManager {
 
         let elapsed_ms = startup_started.elapsed().as_millis() as u64;
         runtime.status.state = ProxyState::Running;
+        runtime.status.routing_mode = runtime.options.routing_mode;
         // 这个字段的意思是"本地 mixed 端口已经就绪"（刚 spawn 就置真的那几处是同一个意思），
         // 不是"系统代理归我们"。归属由 `system_proxy_enabled` 表达，别在这儿混用。
         runtime.status.local_proxy_ready = true;
@@ -1390,6 +1525,7 @@ impl ProxyManager {
                 runtime.status.node_id = Some(node.id.clone());
                 runtime.current_node = Some(node.clone());
                 runtime.status.state = ProxyState::Running;
+                runtime.status.routing_mode = runtime.options.routing_mode;
                 runtime.status.local_proxy_ready = true;
                 runtime.status.last_error = None;
                 runtime.status.message = format!(

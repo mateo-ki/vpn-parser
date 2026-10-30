@@ -4,7 +4,8 @@ use crate::kernel::KernelKind;
 use crate::models::Node;
 use crate::proxy::adapter::kernel_adapter;
 use crate::proxy::compiler::{
-    BackendCompiler, CompiledArtifact, MihomoCompiler, ShoesCompiler, SingBoxCompiler, XrayCompiler,
+    BackendCompiler, CompiledArtifact, MihomoCompiler, ShoesCompiler, SingBoxCompiler,
+    VpCoreCompiler, XrayCompiler,
 };
 use crate::proxy::ir::{lower_options_to_ir, IRAction, IRMatcher, RuleSource};
 use crate::proxy::mihomo::{URL_TEST_INTERVAL_SECS, URL_TEST_TIMEOUT_MS, URL_TEST_TOLERANCE_MS};
@@ -1631,4 +1632,67 @@ proxy-groups:
         let xray_outbounds = xray_json["outbounds"].as_array().expect("xray outbounds");
         let xray_proxy = xray_outbounds.iter().find(|o| o.get("tag") == Some(&json!("proxy"))).expect("proxy outbound");
         assert_eq!(xray_proxy["streamSettings"]["tlsSettings"]["allowInsecure"], json!(true), "Xray 必须正确识别 skip-cert-verify: true");
+    }
+
+    #[test]
+    fn test_compiler_emits_correct_mode_for_mihomo_and_vpcore() {
+        let test_node = node(
+            "ss",
+            json!({
+                "server": "1.2.3.4",
+                "port": 8388,
+                "password": "pass",
+                "cipher": "aes-128-gcm",
+            }),
+        );
+
+        let cases = [
+            (RoutingMode::Rule, "rule"),
+            (RoutingMode::Global, "global"),
+            (RoutingMode::Direct, "direct"),
+            (RoutingMode::ChinaDirect, "rule"),
+            (RoutingMode::GfwList, "rule"),
+            (RoutingMode::Subscription, "rule"),
+        ];
+
+        for (mode, expected_str) in cases {
+            let mut options = MihomoConfigOptions::default();
+            options.routing_mode = mode;
+            let plan = lower_options_to_ir(&options, Some(&test_node));
+
+            // MihomoCompiler
+            let mihomo_art = MihomoCompiler::new().compile(&plan).expect("Mihomo compile");
+            let mihomo_json = mihomo_art.as_json_value().expect("Mihomo json");
+            assert_eq!(
+                mihomo_json["mode"], expected_str,
+                "Mihomo 在 {:?} 模式下输出 mode 必须为 {}",
+                mode, expected_str
+            );
+
+            // VpCoreCompiler
+            let vp_art = VpCoreCompiler::new().compile(&plan).expect("VP-Core compile");
+            let vp_json = vp_art.as_json_value().expect("VP-Core json");
+            assert_eq!(
+                vp_json["mode"], expected_str,
+                "VP-Core 在 {:?} 模式下输出 mode 必须为 {}",
+                mode, expected_str
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_proxy_manager_hot_switch_routing_mode_when_stopped() {
+        let options = MihomoConfigOptions::default();
+        let manager = ProxyManager::new(options);
+
+        // 未运行时热切换，直接更新内存中的 routing_mode 且返回 Ok(true)
+        let result = manager.try_hot_switch_routing_mode(RoutingMode::Global).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+
+        let status = manager.status().await;
+        assert_eq!(status.routing_mode, RoutingMode::Global);
+
+        let config = manager.config().await;
+        assert_eq!(config.routing_mode, RoutingMode::Global);
     }

@@ -2745,8 +2745,12 @@ impl VpnApp {
                 RoutingMode::Direct => "直连",
             }
         };
-        let current = self.proxy_config.routing_mode;
-        let editable = self.proxy_status.config_editable() && !self.proxy_busy;
+        let current = if self.proxy_status.local_proxy_active() {
+            self.proxy_status.routing_mode
+        } else {
+            self.proxy_config.routing_mode
+        };
+        let is_busy = self.proxy_busy;
 
         let outer = Rect::from_min_size(
             ui.cursor().min,
@@ -2791,12 +2795,12 @@ impl VpnApp {
                                 .stroke(stroke)
                                 .corner_radius(CornerRadius::same(8))
                                 .min_size(Vec2::new(bw, 24.0));
-                                if ui.add(btn).clicked() && !active {
-                                    if editable {
+                                if ui.add(btn).clicked() && !active && !is_busy {
+                                    if self.proxy_status.local_proxy_active() {
+                                        self.hot_switch_routing_mode(mode);
+                                    } else {
                                         self.proxy_config.routing_mode = mode;
                                         self.save_proxy_config_quiet();
-                                    } else {
-                                        self.status = "请先停止代理后再切换分流模式".into();
                                     }
                                 }
                             }

@@ -1,7 +1,7 @@
 use crate::models::Node;
 use crate::proxy::{
     AutoRoutingStrategy, DnsEnhancedMode, NetworkProtocol,
-    PortMapping, ProxyMode, TunConfig,
+    PortMapping, ProxyMode, RoutingMode, TunConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -126,4 +126,6 @@ pub struct RoutingPlan {
     pub dns: DnsPlan,
     pub rules: Vec<IRRule>,
     pub default_action: IRAction,
+    #[serde(default)]
+    pub routing_mode: RoutingMode,
 }

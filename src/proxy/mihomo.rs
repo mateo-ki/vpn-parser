@@ -496,12 +496,18 @@ fn build_mihomo_config_legacy(node: &Node, options: MihomoConfigOptions) -> Resu
         ]
     };
 
+    let mode_str = match options.routing_mode {
+        RoutingMode::Global => "global",
+        RoutingMode::Direct => "direct",
+        _ => "rule",
+    };
+
     let mut config = json!({
         "mixed-port": options.mixed_port,
         "external-controller": format!("127.0.0.1:{}", options.controller_port),
         "secret": options.controller_secret,
         "allow-lan": options.allow_lan,
-        "mode": "rule",
+        "mode": mode_str,
         "log-level": "info",
         "proxies": candidate_proxies,
         "proxy-groups": proxy_groups,

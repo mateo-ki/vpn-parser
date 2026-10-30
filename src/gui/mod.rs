@@ -3080,6 +3080,54 @@ impl VpnApp {
         });
     }
 
+    /// 分流模式运行中免停热切：支持「规则 / 全局 / 直连」瞬时生效，不重启进程、不断已有连接
+    pub(crate) fn hot_switch_routing_mode(&mut self, mode: RoutingMode) {
+        if self.proxy_busy {
+            return;
+        }
+        self.proxy_config.routing_mode = mode;
+        self.proxy_status.routing_mode = mode;
+        self.save_proxy_config_quiet();
+
+        if !self.proxy_status.local_proxy_active() {
+            return;
+        }
+
+        let manager = self.proxy_manager.clone();
+        let tx = self.tx.clone();
+        self.proxy_busy = true;
+        self.status = format!("正在免停热切至「{}」模式...", mode.short_label());
+
+        self.rt.spawn(async move {
+            match manager.try_hot_switch_routing_mode(mode).await {
+                Ok(true) => {
+                    let message = manager.status().await.message;
+                    let _ = tx.send(BgMsg::ProxyRoutingModeHotSwitched {
+                        ok: true,
+                        mode,
+                        message,
+                    });
+                }
+                Ok(false) => {
+                    let message = "当前运行内核不支持模式免停热切，如需更改请重启代理".to_string();
+                    let _ = tx.send(BgMsg::ProxyRoutingModeHotSwitched {
+                        ok: false,
+                        mode,
+                        message,
+                    });
+                }
+                Err(error) => {
+                    let message = format!("模式热切换请求失败: {error}");
+                    let _ = tx.send(BgMsg::ProxyRoutingModeHotSwitched {
+                        ok: false,
+                        mode,
+                        message,
+                    });
+                }
+            }
+        });
+    }
+
     pub(crate) fn start_proxy(&mut self) {
         if self.selected_proxy_node_id.is_none() {
             if let Some(ref focused) = self.focused_node_id {

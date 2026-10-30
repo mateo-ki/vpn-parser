@@ -334,9 +334,10 @@ impl VpnApp {
                     }
                 });
 
-                // 选中分流模式后自动静默保存，杜绝全屏 UI 锁定与重度重绘
+                // 选中分流模式后自动静默保存或热切，杜绝全屏 UI 锁定与重度重绘
                 if mode_changed || self.proxy_config.routing_mode != prev_mode {
-                    if self.proxy_config.routing_mode == RoutingMode::Subscription {
+                    let target_mode = self.proxy_config.routing_mode;
+                    if target_mode == RoutingMode::Subscription {
                         let sid = self.proxy_config.subscription_rules_source_id.as_deref();
                         if let Some(src) = self.sources.iter().find(|s| sid == Some(s.id.as_str())) {
                             if let Some(ref y) = src.rules_yaml {
@@ -352,7 +353,11 @@ impl VpnApp {
                                 .join("\n");
                         }
                     }
-                    self.save_proxy_config_quiet();
+                    if self.proxy_status.local_proxy_active() {
+                        self.hot_switch_routing_mode(target_mode);
+                    } else {
+                        self.save_proxy_config_quiet();
+                    }
                 }
 
                 if self.proxy_config.routing_mode == RoutingMode::Subscription {

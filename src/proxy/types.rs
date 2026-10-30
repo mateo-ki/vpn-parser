@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use crate::kernel::{KernelKind, KernelPreference};
-use crate::proxy::config::{DnsConfig, RoutingMode, TrafficRule, TunConfig};
+pub use crate::proxy::config::{DnsConfig, RoutingMode, TrafficRule, TunConfig};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -262,6 +262,8 @@ pub struct ProxyRuntimeStatus {
     pub state: ProxyState,
     pub kernel: Option<KernelKind>,
     pub mode: ProxyMode,
+    #[serde(default)]
+    pub routing_mode: RoutingMode,
     pub node_id: Option<String>,
     pub mixed_port: u16,
     pub controller_port: u16,
@@ -282,6 +284,7 @@ impl ProxyRuntimeStatus {
             state: ProxyState::Stopped,
             kernel: None,
             mode: options.mode,
+            routing_mode: options.routing_mode,
             node_id: None,
             mixed_port: options.mixed_port,
             controller_port: options.controller_port,

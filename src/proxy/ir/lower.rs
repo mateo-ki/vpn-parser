@@ -303,6 +303,7 @@ pub fn lower_options_to_ir(options: &MihomoConfigOptions, primary_node: Option<&
         dns,
         rules,
         default_action,
+        routing_mode: options.routing_mode,
     }
 }
 

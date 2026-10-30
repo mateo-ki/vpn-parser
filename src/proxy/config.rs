@@ -20,6 +20,29 @@ pub enum RoutingMode {
     Subscription,
 }
 
+impl RoutingMode {
+    /// 映射到 Clash / Mihomo / VP-Core 的外部控制器出站模式字符串 ("rule" | "global" | "direct")
+    pub fn as_controller_mode(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Direct => "direct",
+            _ => "rule",
+        }
+    }
+
+    /// 用户友好的简短模式中文名称
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::Rule => "智能规则",
+            Self::ChinaDirect => "大陆直连",
+            Self::GfwList => "GFW 列表",
+            Self::Global => "全局代理",
+            Self::Direct => "全部直连",
+            Self::Subscription => "订阅规则",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TunStack {

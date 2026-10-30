@@ -2,7 +2,7 @@ use super::{BackendCompiler, CompiledArtifact, CompilerCapabilities};
 use crate::export::nodes_to_clash_proxies;
 use crate::kernel::KernelKind;
 use crate::proxy::ir::{IRAction, IRMatcher, RoutingPlan};
-use crate::proxy::types::AutoRoutingStrategy;
+use crate::proxy::types::{AutoRoutingStrategy, RoutingMode};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -1001,12 +1001,18 @@ impl BackendCompiler for MihomoCompiler {
             ]
         };
 
+        let mode_str = match plan.routing_mode {
+            RoutingMode::Global => "global",
+            RoutingMode::Direct => "direct",
+            _ => "rule",
+        };
+
         let mut config = json!({
             "mixed-port": plan.inbounds.mixed_port,
             "external-controller": format!("127.0.0.1:{}", plan.inbounds.controller_port),
             "secret": plan.inbounds.controller_secret,
             "allow-lan": plan.inbounds.allow_lan,
-            "mode": "rule",
+            "mode": mode_str,
             "log-level": "info",
             "proxies": candidate_proxies,
             "proxy-groups": proxy_groups,

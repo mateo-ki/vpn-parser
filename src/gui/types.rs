@@ -3,7 +3,9 @@ use crate::models::{
     AppSettings, FetchResult, Node, NodeGroupSummary, NodeSummary, PruneHomogeneityResult, Source,
     SourceHomogeneityReport, SpeedTestSummary, Stats,
 };
-use crate::proxy::{MihomoConfigOptions, NetworkProtocol, ProxyRuntimeStatus, RuleMatcher};
+use crate::proxy::{
+    MihomoConfigOptions, NetworkProtocol, ProxyRuntimeStatus, RoutingMode, RuleMatcher,
+};
 use crate::speedtest::SpeedTestProgress;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -465,6 +467,12 @@ pub enum BgMsg {
     ProxyStatus(ProxyRuntimeStatus),
     /// TUN 热切换结果：ok=true 已生效（message 为状态栏文案）；false 时界面回退整进程重启。
     ProxyModeHotToggled { ok: bool, message: String },
+    /// 分流出站模式（规则 / 全局 / 直连）免停热切结果
+    ProxyRoutingModeHotSwitched {
+        ok: bool,
+        mode: RoutingMode,
+        message: String,
+    },
     ProxyConfig(Result<MihomoConfigOptions, String>),
     ProxyConfigSaved(Result<MihomoConfigOptions, String>),
     ProxyConfigQuietSaved(Result<MihomoConfigOptions, String>),

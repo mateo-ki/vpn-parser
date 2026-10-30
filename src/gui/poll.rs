@@ -868,6 +868,17 @@ impl VpnApp {
                                 self.start_proxy();
                             }
                         }
+                        BgMsg::ProxyRoutingModeHotSwitched { ok, mode, message } => {
+                            self.proxy_busy = false;
+                            if ok {
+                                self.proxy_config.routing_mode = mode;
+                                self.proxy_status.routing_mode = mode;
+                                self.status = message;
+                                self.refresh_egress_silently();
+                            } else {
+                                self.status = message;
+                            }
+                        }
                         BgMsg::ServiceChecks(results) => {
                             self.service_checks = Some(results);
                             self.service_checks_running = false;
