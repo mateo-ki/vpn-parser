@@ -98,21 +98,12 @@ pub fn extract_clash_rules(content: &str) -> Vec<crate::proxy::TrafficRule> {
                         "google" | "youtube" | "telegram" | "netflix" | "openai" | "chatgpt"
                         | "microsoft" | "github" | "twitter" | "facebook" | "apple"
                         | "speedtest" | "steam" => {
-                            if crate::geo::has_geosite_category(&lower) {
-                                rule.matcher = crate::proxy::RuleMatcher::GeoSite(lower);
-                                true
-                            } else {
-                                false
-                            }
+                            rule.matcher = crate::proxy::RuleMatcher::GeoSite(lower);
+                            true
                         }
-                        other => {
-                            if crate::geo::has_geosite_category(other) {
-                                rule.matcher = crate::proxy::RuleMatcher::GeoSite(other.to_string());
-                                true
-                            } else {
-                                // 未知外部规则集（通常依赖外部独立 rule-provider），本地无对应数据库时跳过，避免内核崩溃
-                                false
-                            }
+                        _ => {
+                            // 未知外部规则集（通常依赖外部独立 rule-provider），本地无对应数据库时跳过，避免内核崩溃
+                            false
                         }
                     }
                 }

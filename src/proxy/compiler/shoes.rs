@@ -312,7 +312,12 @@ pub(crate) fn find_geo_file(name: &str) -> Option<std::path::PathBuf> {
 
 #[allow(dead_code)]
 pub(crate) fn has_geosite_category(code: &str) -> bool {
-    crate::geo::has_geosite_category(code)
+    if let Some(p) = find_geo_file("geosite.dat") {
+        let normalized = crate::geo::normalize_geo_code(code);
+        crate::geo::dat_has_category(&p, normalized)
+    } else {
+        false
+    }
 }
 
 /// 将统一 IR 规则转为 Shoes 规则映射列表。
