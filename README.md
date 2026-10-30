@@ -10,7 +10,7 @@ Rust + egui 编写的高性能现代化跨平台桌面代理工具：采集订�
   <img src="docs/images/dashboard.png" alt="VPN Parser 控制台主界面" width="100%">
 </p>
 
-- **Windows**：安装包（Inno Setup）+ 系统代理一键控制 + TUN 虚拟网卡模式（带管理员提权）
+- **Windows**：安装包（Inno Setup）+ 便携版（Scoop 一键安装）+ 系统代理一键控制 + TUN 虚拟网卡模式（带管理员提权）
 - **Linux**：通用免安装 **AppImage**、Debian/Ubuntu **deb** 与 Fedora/RHEL **rpm** 全套发布包支持，提供本地混合代理端口（默认 `127.0.0.1:9980`）
 - **OpenWrt**：提供原生 **.ipk** 服务包（x86_64 / aarch64_generic）与通用 **LuCI Web 控制面板 (`luci-app-vpn-parser`)**，集成 `procd` 守护与 UCI 配置，超轻量无头微服务常驻路由器（~20MB 内存），详见 [OpenWrt 部署指南](docs/openwrt.md)
 - **macOS**：原生 DMG 拖拽安装包与便携归档（Apple Silicon 与 Intel 架构支持）
@@ -61,7 +61,16 @@ cargo run --release                 # 直接跑
 cargo build --release               # 编译 release 二进制
 ```
 
-### Windows 安装包
+### Windows 安装 (Scoop 一键安装)
+```powershell
+# 无需添加 bucket，直接通过 GitHub Raw 安装并自动配置便携数据持久化
+scoop install https://raw.githubusercontent.com/mateo-ki/vpn-parser/main/vpn-parser.json
+
+# 后续升级
+scoop update vpn-parser
+```
+
+### Windows 安装包 (Inno Setup)
 ```powershell
 # 编译 Inno Setup 安装向导，产物输出至 dist/
 "<Inno Setup>\ISCC.exe" installer/vpn-parser.iss

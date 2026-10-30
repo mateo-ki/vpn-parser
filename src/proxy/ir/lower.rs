@@ -379,10 +379,20 @@ pub fn parse_clash_rules_yaml_to_ir(rules_yaml: Option<&str>, source: RuleSource
             "DOMAIN-KEYWORD" => IRMatcher::DomainKeyword(target.to_string()),
             "DOMAIN-REGEX" => IRMatcher::DomainRegex(target.to_string()),
             "GEOSITE" => {
-                IRMatcher::GeoSite(crate::geo::normalize_geo_code(target).to_ascii_lowercase())
+                let code = crate::geo::normalize_geo_code(target).to_ascii_lowercase();
+                if !crate::geo::has_geosite_category(&code) {
+                    tracing::warn!(category = %target, "订阅 rules_yaml 含有本地不存在的 GEOSITE 分类，入口已自动清洗跳过");
+                    continue;
+                }
+                IRMatcher::GeoSite(code)
             }
             "GEOIP" => {
-                IRMatcher::GeoIp(crate::geo::normalize_geo_code(target).to_ascii_uppercase())
+                let code = crate::geo::normalize_geo_code(target).to_ascii_uppercase();
+                if !crate::geo::has_geoip_category(&code) {
+                    tracing::warn!(country = %target, "订阅 rules_yaml 含有本地不存在的 GEOIP 分类，入口已自动清洗跳过");
+                    continue;
+                }
+                IRMatcher::GeoIp(code)
             }
             "IP-CIDR" | "IP-CIDR6" => IRMatcher::IpCidr(target.to_string()),
             "DST-PORT" | "PORT" => {

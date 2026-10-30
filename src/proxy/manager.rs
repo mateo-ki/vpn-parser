@@ -946,10 +946,21 @@ impl ProxyManager {
                             || lower.contains("failed")
                     });
 
-                let message = if detail.contains("failed to decode geodata file")
+                let is_not_found = detail.contains("not found in geosite.dat")
+                    || detail.contains("not found in geoip.dat")
+                    || detail.contains("not found in")
+                    || (detail.contains("category") && detail.contains("not found"));
+
+                let message = if is_not_found {
+                    format!(
+                        "{} 启动失败：分流规则中引用了不存在的分类（已保留规则库，无需重新下载）。请检查自定义规则或切换默认推荐规则。",
+                        kernel.display_name()
+                    )
+                } else if (detail.contains("failed to decode geodata file")
                     || detail.contains("Geosite.dat invalid")
                     || detail.contains("GeoIP.dat invalid")
-                    || (detail.contains("cannot parse") && detail.contains("geo"))
+                    || (detail.contains("cannot parse") && detail.contains("geo")))
+                    && !is_not_found
                 {
                     crate::geo::purge_corrupt_geo_files(&crate::geo::mihomo_dir());
                     "Mihomo 分流规则文件 (GeoSite/GeoIP) 损坏，已自动清理损坏文件。请在「规则设置」点击「更新规则文件」重新同步完整库后再启动代理。".to_string()

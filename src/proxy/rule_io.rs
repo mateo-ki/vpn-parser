@@ -396,8 +396,14 @@ fn parse_rule_line(line: &str) -> Parsed {
         "DOMAIN-KEYWORD" if !payload.is_empty() => {
             RuleMatcher::DomainKeyword(payload.to_string())
         }
-        "GEOSITE" if !payload.is_empty() => RuleMatcher::GeoSite(payload.to_string()),
-        "GEOIP" if !payload.is_empty() => RuleMatcher::GeoIp(payload.to_string()),
+        "GEOSITE" if !payload.is_empty() => {
+            let code = crate::geo::normalize_geo_code(payload);
+            RuleMatcher::GeoSite(code.to_string())
+        }
+        "GEOIP" if !payload.is_empty() => {
+            let code = crate::geo::normalize_geo_code(payload);
+            RuleMatcher::GeoIp(code.to_string())
+        }
         "IP-CIDR" if !payload.is_empty() => RuleMatcher::IpCidr(payload.to_string()),
         "DST-PORT" | "DEST-PORT" if !payload.is_empty() => {
             RuleMatcher::DestinationPort(payload.to_string())

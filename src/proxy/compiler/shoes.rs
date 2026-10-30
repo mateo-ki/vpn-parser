@@ -307,41 +307,12 @@ impl BackendCompiler for ShoesCompiler {
 }
 
 pub(crate) fn find_geo_file(name: &str) -> Option<std::path::PathBuf> {
-    let candidate_dirs = [
-        crate::geo::mihomo_dir(),
-        crate::kernel::managed_kernel_root().join("xray"),
-        crate::kernel::managed_kernel_root().join("shoes"),
-        std::path::PathBuf::from("data/kernels/mihomo"),
-        std::path::PathBuf::from("data/kernels/xray"),
-    ];
-    for dir in candidate_dirs {
-        let p = dir.join(name);
-        if p.exists() {
-            return Some(p);
-        }
-        let cap_name = if name == "geosite.dat" {
-            "GeoSite.dat"
-        } else if name == "geoip.dat" {
-            "GeoIP.dat"
-        } else {
-            name
-        };
-        let p_cap = dir.join(cap_name);
-        if p_cap.exists() {
-            return Some(p_cap);
-        }
-    }
-    None
+    crate::geo::find_geo_dat_file(name)
 }
 
 #[allow(dead_code)]
 pub(crate) fn has_geosite_category(code: &str) -> bool {
-    if let Some(p) = find_geo_file("geosite.dat") {
-        let normalized = crate::geo::normalize_geo_code(code);
-        crate::geo::dat_has_category(&p, normalized)
-    } else {
-        false
-    }
+    crate::geo::has_geosite_category(code)
 }
 
 /// 将统一 IR 规则转为 Shoes 规则映射列表。

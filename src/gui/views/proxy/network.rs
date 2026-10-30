@@ -466,8 +466,7 @@ impl VpnApp {
                                                 .color(theme::text_secondary()),
                                         )
                                         .truncate(),
-                                    )
-                                    .on_hover_text(features);
+                                    );
 
                                     ui.add_space(6.0);
                                     ui.separator();

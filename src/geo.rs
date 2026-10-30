@@ -550,6 +550,60 @@ pub fn dat_has_category(path: &Path, code: &str) -> bool {
     false
 }
 
+/// 查找本地存在的 geo 数据文件路径（支持大小写兼容与各内核目录查找）
+pub fn find_geo_dat_file(name: &str) -> Option<PathBuf> {
+    let candidate_dirs = [
+        mihomo_dir(),
+        crate::kernel::managed_kernel_root().join("vpcore"),
+        crate::kernel::managed_kernel_root().join("vp_core"),
+        crate::kernel::managed_kernel_root().join("meow"),
+        crate::kernel::managed_kernel_root().join("xray"),
+        crate::kernel::managed_kernel_root().join("shoes"),
+        crate::data_root().join("kernels").join("mihomo"),
+    ];
+    for dir in candidate_dirs {
+        let p = dir.join(name);
+        if p.exists() {
+            return Some(p);
+        }
+        let cap_name = if name.eq_ignore_ascii_case("geosite.dat") {
+            "GeoSite.dat"
+        } else if name.eq_ignore_ascii_case("geoip.dat") {
+            "GeoIP.dat"
+        } else {
+            name
+        };
+        let p_cap = dir.join(cap_name);
+        if p_cap.exists() {
+            return Some(p_cap);
+        }
+    }
+    None
+}
+
+/// 检查 geosite.dat 中是否包含该类别；若本地暂无该库文件则默认放行（true），交由内核处理
+pub fn has_geosite_category(code: &str) -> bool {
+    let normalized = normalize_geo_code(code);
+    if let Some(p) = find_geo_dat_file("geosite.dat") {
+        dat_has_category(&p, normalized)
+    } else {
+        true
+    }
+}
+
+/// 检查 geoip.dat 中是否包含该国家码/类别（2字母ISO代码及常规国家码直接放行，自定义分类如 telegram/private 做 dat 检索）
+pub fn has_geoip_category(code: &str) -> bool {
+    let normalized = normalize_geo_code(code);
+    if normalized.len() == 2 && normalized.chars().all(|c| c.is_ascii_alphabetic()) {
+        return true;
+    }
+    if let Some(p) = find_geo_dat_file("geoip.dat") {
+        dat_has_category(&p, normalized)
+    } else {
+        true
+    }
+}
+
 fn host_of(url: &str) -> String {
     url.split('/')
         .nth(2)

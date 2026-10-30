@@ -306,8 +306,7 @@ impl VpnApp {
                                                         .show(ui, |ui| {
                                                             ui.horizontal(|ui| {
                                                                 icon_label(ui, Icon::Terminal, 10.0, theme::muted());
-                                                                ui.add(egui::Label::new(RichText::new(&c.process).strong().small().color(theme::text_primary())).truncate())
-                                                                    .on_hover_text(&c.process);
+                                                                ui.add(egui::Label::new(RichText::new(&c.process).strong().small().color(theme::text_primary())).truncate());
                                                             });
                                                         });
                                                 },
@@ -353,8 +352,7 @@ impl VpnApp {
                                                         .corner_radius(CornerRadius::same(6))
                                                         .inner_margin(Margin::symmetric(6, 2))
                                                         .show(ui, |ui| {
-                                                            ui.add(egui::Label::new(RichText::new(&c.rule).small().strong().color(rule_color)).truncate())
-                                                                .on_hover_text(&c.rule);
+                                                            ui.add(egui::Label::new(RichText::new(&c.rule).small().strong().color(rule_color)).truncate());
                                                         });
                                                 },
                                             );
@@ -508,8 +506,7 @@ impl VpnApp {
                                                         .show(ui, |ui| {
                                                             ui.horizontal(|ui| {
                                                                 icon_label(ui, Icon::Terminal, 11.0, theme::accent());
-                                                                ui.add(egui::Label::new(RichText::new(proc_name).strong().color(theme::text_primary())).truncate())
-                                                                    .on_hover_text(proc_name);
+                                                                ui.add(egui::Label::new(RichText::new(proc_name).strong().color(theme::text_primary())).truncate());
                                                             });
                                                         });
                                                 },
@@ -708,8 +705,7 @@ impl VpnApp {
                                                             RichText::new(&r.host).strong().small().color(theme::text_primary()),
                                                         )
                                                         .truncate(),
-                                                    )
-                                                    .on_hover_text(&r.host);
+                                                    );
                                                 },
                                             );
 
@@ -725,8 +721,7 @@ impl VpnApp {
                                                             RichText::new(&r.ip).small().monospace().color(theme::text_secondary()),
                                                         )
                                                         .truncate(),
-                                                    )
-                                                    .on_hover_text(&r.ip);
+                                                    );
                                                 },
                                             );
 
@@ -744,8 +739,7 @@ impl VpnApp {
                                                         .show(ui, |ui| {
                                                             ui.horizontal(|ui| {
                                                                 icon_label(ui, Icon::Terminal, 9.0, theme::muted());
-                                                                ui.add(egui::Label::new(RichText::new(&r.process).small().color(theme::text_primary())).truncate())
-                                                                    .on_hover_text(&r.process);
+                                                                ui.add(egui::Label::new(RichText::new(&r.process).small().color(theme::text_primary())).truncate());
                                                             });
                                                         });
                                                 },
@@ -783,8 +777,7 @@ impl VpnApp {
                                                         .corner_radius(CornerRadius::same(6))
                                                         .inner_margin(Margin::symmetric(6, 2))
                                                         .show(ui, |ui| {
-                                                            ui.add(egui::Label::new(RichText::new(&r.rule).small().strong().color(rule_color)).truncate())
-                                                                .on_hover_text(&r.rule);
+                                                            ui.add(egui::Label::new(RichText::new(&r.rule).small().strong().color(rule_color)).truncate());
                                                         });
                                                 },
                                             );

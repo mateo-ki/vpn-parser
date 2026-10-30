@@ -64,7 +64,16 @@ Ensure you have Rust stable installed:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-### Windows
+### Windows (Scoop One-Line Install)
+```powershell
+# Install directly via GitHub Raw manifest without adding extra buckets
+scoop install https://raw.githubusercontent.com/mateo-ki/vpn-parser/main/vpn-parser.json
+
+# Update in the future
+scoop update vpn-parser
+```
+
+### Windows Build
 ```bash
 cargo build --release
 ```

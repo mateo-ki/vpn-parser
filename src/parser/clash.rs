@@ -43,54 +43,126 @@ pub fn extract_clash_rules(content: &str) -> Vec<crate::proxy::TrafficRule> {
             continue;
         };
         if let Some(mut rule) = crate::proxy::rule_io::parse_single_rule(line) {
-            if let crate::proxy::RuleMatcher::RuleSet(ref tag) = rule.matcher {
-                let lower = tag.to_ascii_lowercase();
-                match lower.as_str() {
-                    "reject" | "reject-list" | "ad" | "ads" | "advertising" => {
-                        rule.matcher = crate::proxy::RuleMatcher::GeoSite("category-ads-all".into());
-                    }
-                    "direct" | "direct-list" | "cn" | "china" => {
-                        rule.matcher = crate::proxy::RuleMatcher::GeoSite("cn".into());
-                    }
-                    "proxy" | "proxy-list" => {
-                        rule.matcher = crate::proxy::RuleMatcher::GeoSite("geolocation-!cn".into());
-                    }
-                    "gfw" | "gfwlist" => {
-                        rule.matcher = crate::proxy::RuleMatcher::GeoSite("gfw".into());
-                    }
-                    "cncidr" => {
-                        rule.matcher = crate::proxy::RuleMatcher::GeoIp("CN".into());
-                    }
-                    "telegramcidr" => {
-                        rule.matcher = crate::proxy::RuleMatcher::GeoIp("telegram".into());
-                    }
-                    "lancidr" | "private" => {
-                        rule.matcher = crate::proxy::RuleMatcher::GeoSite("private".into());
-                    }
-                    "google" | "youtube" | "telegram" | "netflix" | "openai" | "chatgpt"
-                    | "microsoft" | "github" | "twitter" | "facebook" | "apple"
-                    | "speedtest" | "steam" => {
-                        rule.matcher = crate::proxy::RuleMatcher::GeoSite(lower);
-                    }
-                    _ => {
-                        // 未知外部规则集（通常依赖外部独立 rule-provider），本地无对应数据库时跳过，避免内核崩溃
-                        continue;
+            let keep = match &mut rule.matcher {
+                crate::proxy::RuleMatcher::GeoSite(ref mut s) => {
+                    let norm = crate::geo::normalize_geo_code(s).to_string();
+                    if !crate::geo::has_geosite_category(&norm) {
+                        tracing::warn!(category = %s, "订阅规则中含有本地不存在的 GEOSITE 分类，入口已自动清洗跳过");
+                        false
+                    } else {
+                        *s = norm;
+                        true
                     }
                 }
+                crate::proxy::RuleMatcher::GeoIp(ref mut c) => {
+                    let norm = crate::geo::normalize_geo_code(c).to_string();
+                    if !crate::geo::has_geoip_category(&norm) {
+                        tracing::warn!(country = %c, "订阅规则中含有本地不存在的 GEOIP 分类，入口已自动清洗跳过");
+                        false
+                    } else {
+                        *c = norm;
+                        true
+                    }
+                }
+                crate::proxy::RuleMatcher::RuleSet(ref tag) => {
+                    let lower = tag.to_ascii_lowercase();
+                    match lower.as_str() {
+                        "reject" | "reject-list" | "ad" | "ads" | "advertising" => {
+                            rule.matcher = crate::proxy::RuleMatcher::GeoSite("category-ads-all".into());
+                            true
+                        }
+                        "direct" | "direct-list" | "cn" | "china" => {
+                            rule.matcher = crate::proxy::RuleMatcher::GeoSite("cn".into());
+                            true
+                        }
+                        "proxy" | "proxy-list" => {
+                            rule.matcher = crate::proxy::RuleMatcher::GeoSite("geolocation-!cn".into());
+                            true
+                        }
+                        "gfw" | "gfwlist" => {
+                            rule.matcher = crate::proxy::RuleMatcher::GeoSite("gfw".into());
+                            true
+                        }
+                        "cncidr" => {
+                            rule.matcher = crate::proxy::RuleMatcher::GeoIp("CN".into());
+                            true
+                        }
+                        "telegramcidr" => {
+                            rule.matcher = crate::proxy::RuleMatcher::GeoIp("telegram".into());
+                            true
+                        }
+                        "lancidr" | "private" => {
+                            rule.matcher = crate::proxy::RuleMatcher::GeoSite("private".into());
+                            true
+                        }
+                        "google" | "youtube" | "telegram" | "netflix" | "openai" | "chatgpt"
+                        | "microsoft" | "github" | "twitter" | "facebook" | "apple"
+                        | "speedtest" | "steam" => {
+                            if crate::geo::has_geosite_category(&lower) {
+                                rule.matcher = crate::proxy::RuleMatcher::GeoSite(lower);
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        other => {
+                            if crate::geo::has_geosite_category(other) {
+                                rule.matcher = crate::proxy::RuleMatcher::GeoSite(other.to_string());
+                                true
+                            } else {
+                                // 未知外部规则集（通常依赖外部独立 rule-provider），本地无对应数据库时跳过，避免内核崩溃
+                                false
+                            }
+                        }
+                    }
+                }
+                _ => true,
+            };
+            if keep {
+                rules.push(rule);
             }
-            rules.push(rule);
         }
     }
     crate::proxy::optimize_traffic_rules(&rules)
 }
 
-/// 从 Clash YAML 中提取原生分流规则的 YAML 文本（rules: [...] 块）
+/// 从 Clash YAML 中提取原生分流规则的 YAML 文本（rules: [...] 块），并在入口处进行分类安全清洗与规范化。
 pub fn extract_clash_rules_yaml(content: &str) -> Option<String> {
     let root = serde_yaml::from_str::<serde_yaml::Value>(content).ok()?;
     let rules = root.get("rules")?;
     if let Some(arr) = rules.as_sequence() {
         if !arr.is_empty() {
-            return serde_yaml::to_string(rules).ok();
+            let mut cleaned = Vec::with_capacity(arr.len());
+            for item in arr {
+                if let Some(line) = item.as_str() {
+                    let parts: Vec<&str> = line.split(',').map(str::trim).collect();
+                    if parts.len() >= 2 {
+                        let ty = parts[0].to_ascii_uppercase();
+                        let payload = parts[1];
+                        if ty == "GEOSITE" && !crate::geo::has_geosite_category(payload) {
+                            tracing::warn!(category = %payload, "订阅 rules_yaml 含有本地不存在的 GEOSITE 分类，入口已自动清洗跳过");
+                            continue;
+                        }
+                        if ty == "GEOIP" {
+                            let norm = crate::geo::normalize_geo_code(payload);
+                            if !crate::geo::has_geoip_category(norm) {
+                                tracing::warn!(country = %payload, "订阅 rules_yaml 含有本地不存在的 GEOIP 分类，入口已自动清洗跳过");
+                                continue;
+                            }
+                            if norm != payload {
+                                let mut new_parts = parts.clone();
+                                new_parts[1] = norm;
+                                cleaned.push(serde_yaml::Value::String(new_parts.join(",")));
+                                continue;
+                            }
+                        }
+                    }
+                    cleaned.push(item.clone());
+                } else {
+                    cleaned.push(item.clone());
+                }
+            }
+            return serde_yaml::to_string(&cleaned).ok();
         }
     }
     None
@@ -298,5 +370,23 @@ proxies:
         let empty_yaml = "port: 7890\nproxies: []";
         assert!(extract_clash_rules_yaml(empty_yaml).is_none());
         assert!(extract_clash_groups_yaml(empty_yaml).is_none());
+    }
+
+    #[test]
+    fn extracts_clash_rules_cleans_lan_and_normalizes() {
+        let yaml = r#"
+rules:
+  - "GEOIP,LAN,DIRECT"
+  - "GEOIP,CN,DIRECT"
+  - "DOMAIN,test.com,PROXY"
+"#;
+        let rules = extract_clash_rules(yaml);
+        assert_eq!(rules.len(), 3);
+        assert_eq!(rules[0].matcher, RuleMatcher::GeoIp("private".into()));
+        assert_eq!(rules[1].matcher, RuleMatcher::GeoIp("CN".into()));
+        assert_eq!(rules[2].matcher, RuleMatcher::Domain("test.com".into()));
+
+        let yaml_rules = extract_clash_rules_yaml(yaml).expect("should extract rules_yaml");
+        assert!(yaml_rules.contains("GEOIP,private,DIRECT"));
     }
 }

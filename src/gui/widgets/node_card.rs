@@ -75,7 +75,9 @@ pub fn compact_node_card(
                     )
                     .truncate(),
                 );
-                name_label.on_hover_text(&node.name);
+                if clean_name != node.name {
+                    name_label.on_hover_text(&node.name);
+                }
 
                 if is_active {
                     let active_green = Color32::from_rgb(52, 199, 89);

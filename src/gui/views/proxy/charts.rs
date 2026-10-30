@@ -1842,8 +1842,7 @@ impl VpnApp {
                                         .color(theme::text_primary()),
                                 )
                                 .truncate(),
-                            )
-                            .on_hover_text(&display_title);
+                            );
                         });
 
                         // 两处区块间距吃掉大半空余，让 国旗行 / 药丸行 / 元信息行 撑满整张卡
@@ -1965,8 +1964,7 @@ impl VpnApp {
                                             .color(theme::text_primary()),
                                     )
                                     .truncate(),
-                                )
-                                .on_hover_text(org_str);
+                                );
                             });
 
                             // 3. 协议

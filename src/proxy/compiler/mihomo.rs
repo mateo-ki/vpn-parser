@@ -798,10 +798,19 @@ impl BackendCompiler for MihomoCompiler {
                     IRMatcher::Port(p) => format!("DST-PORT,{p},{target}"),
                     IRMatcher::PortRange(s, e) => format!("DST-PORT,{s}-{e},{target}"),
                     IRMatcher::GeoSite(s) => {
-                        format!("GEOSITE,{},{}", crate::geo::normalize_geo_code(s), target)
+                        let normalized = crate::geo::normalize_geo_code(s);
+                        if !crate::geo::has_geosite_category(normalized) {
+                            tracing::warn!(category = %s, "本地 geosite.dat 缺少该分类，已自动跳过此规则以防止 Mihomo 拒绝启动");
+                            continue;
+                        }
+                        format!("GEOSITE,{normalized},{target}")
                     }
                     IRMatcher::GeoIp(c) => {
                         let c = crate::geo::normalize_geo_code(c);
+                        if !crate::geo::has_geoip_category(c) {
+                            tracing::warn!(country = %c, "本地 geoip.dat 缺少该分类，已自动跳过此规则以防止 Mihomo 拒绝启动");
+                            continue;
+                        }
                         if ir_rule.no_resolve {
                             format!("GEOIP,{c},{target},no-resolve")
                         } else {
@@ -811,32 +820,41 @@ impl BackendCompiler for MihomoCompiler {
                     IRMatcher::ProcessName(p) => format!("PROCESS-NAME,{p},{target}"),
                     IRMatcher::RuleSet(s) => {
                         let lower = s.to_ascii_lowercase();
-                        match lower.as_str() {
+                        let mapped = match lower.as_str() {
                             "reject" | "reject-list" | "ad" | "ads" | "advertising" => {
-                                format!("GEOSITE,category-ads-all,{target}")
+                                Some(format!("GEOSITE,category-ads-all,{target}"))
                             }
                             "direct" | "direct-list" | "cn" | "china" => {
-                                format!("GEOSITE,cn,{target}")
+                                Some(format!("GEOSITE,cn,{target}"))
                             }
                             "proxy" | "proxy-list" => {
-                                format!("GEOSITE,geolocation-!cn,{target}")
+                                Some(format!("GEOSITE,geolocation-!cn,{target}"))
                             }
                             "gfw" | "gfwlist" => {
-                                format!("GEOSITE,gfw,{target}")
+                                Some(format!("GEOSITE,gfw,{target}"))
                             }
                             "cncidr" => {
-                                format!("GEOIP,CN,{target}")
+                                Some(format!("GEOIP,CN,{target}"))
                             }
                             "telegramcidr" => {
-                                format!("GEOIP,telegram,{target}")
+                                Some(format!("GEOIP,telegram,{target}"))
                             }
                             "lancidr" | "private" => {
-                                format!("GEOSITE,private,{target}")
+                                Some(format!("GEOSITE,private,{target}"))
                             }
                             other => {
-                                format!("GEOSITE,{other},{target}")
+                                if crate::geo::has_geosite_category(other) {
+                                    Some(format!("GEOSITE,{other},{target}"))
+                                } else {
+                                    tracing::warn!(ruleset = %other, "本地未预置且未找到该规则集分类，已自动跳过以保代理平稳启动");
+                                    None
+                                }
                             }
-                        }
+                        };
+                        let Some(rule_str) = mapped else {
+                            continue;
+                        };
+                        rule_str
                     }
                     IRMatcher::Network(proto) => {
                         format!("NETWORK,{},{target}", match proto {
@@ -919,6 +937,19 @@ impl BackendCompiler for MihomoCompiler {
                         let mut user_r = Vec::new();
                         for r in user_rules {
                             if let Some(s) = r.as_str() {
+                                let parts: Vec<&str> = s.split(',').map(|p| p.trim()).collect();
+                                if parts.len() >= 2 {
+                                    let rule_type = parts[0].to_ascii_uppercase();
+                                    let payload = parts[1];
+                                    if rule_type == "GEOSITE" && !crate::geo::has_geosite_category(payload) {
+                                        tracing::warn!(category = %payload, "自定义规则中的 GEOSITE 分类在本地不存在，已自动跳过");
+                                        continue;
+                                    }
+                                    if rule_type == "GEOIP" && !crate::geo::has_geoip_category(payload) {
+                                        tracing::warn!(country = %payload, "自定义规则中的 GEOIP 分类在本地不存在，已自动跳过");
+                                        continue;
+                                    }
+                                }
                                 if !final_rules.iter().any(|existing| existing == s) {
                                     user_r.push(s.to_string());
                                 }
@@ -937,23 +968,27 @@ impl BackendCompiler for MihomoCompiler {
         final_rules.push(format!("MATCH,{match_target}"));
 
         let mut nameserver_policy = serde_json::Map::new();
-        nameserver_policy.insert(
-            "geosite:cn".to_string(),
-            json!([
-                "223.5.5.5",
-                "119.29.29.29",
-                "https://doh.pub/dns-query",
-                "https://dns.alidns.com/dns-query"
-            ]),
-        );
-        nameserver_policy.insert(
-            "geosite:geolocation-!cn".to_string(),
-            json!([
-                "https://1.1.1.1/dns-query",
-                "https://8.8.8.8/dns-query",
-                "https://dns.google/dns-query"
-            ]),
-        );
+        if crate::geo::has_geosite_category("cn") {
+            nameserver_policy.insert(
+                "geosite:cn".to_string(),
+                json!([
+                    "223.5.5.5",
+                    "119.29.29.29",
+                    "https://doh.pub/dns-query",
+                    "https://dns.alidns.com/dns-query"
+                ]),
+            );
+        }
+        if crate::geo::has_geosite_category("geolocation-!cn") {
+            nameserver_policy.insert(
+                "geosite:geolocation-!cn".to_string(),
+                json!([
+                    "https://1.1.1.1/dns-query",
+                    "https://8.8.8.8/dns-query",
+                    "https://dns.google/dns-query"
+                ]),
+            );
+        }
 
         let proxy_server_dns = if !plan.dns.proxy_server_nameservers.is_empty() {
             plan.dns.proxy_server_nameservers.clone()

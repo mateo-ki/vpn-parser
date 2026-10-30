@@ -672,8 +672,7 @@ impl VpnApp {
                                                         .color(name_color),
                                                 )
                                                 .truncate();
-                                                ui.add(name_label)
-                                                    .on_hover_text(&item.node_name);
+                                                ui.add(name_label);
 
                                                 if is_active {
                                                     render_status_pill(ui, "运行中", theme::success());

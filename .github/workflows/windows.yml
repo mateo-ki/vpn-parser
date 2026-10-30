@@ -144,3 +144,43 @@ jobs:
               gh release create "$env:TAG" @assets --title "VPN Parser $env:TAG" --generate-notes
             }
           }
+
+      - name: 同步更新 Scoop Manifest (vpn-parser.json)
+        if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, 'alpha') && !contains(github.ref_name, 'beta') && !contains(github.ref_name, 'rc')
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $version = $env:TAG.TrimStart('v')
+          $zipName = "vpn-parser-$version-windows-x64-portable.zip"
+          $shaLine = Get-Content dist/sha256.txt | Where-Object { $_ -match [regex]::Escape($zipName) } | Select-Object -First 1
+          if (!$shaLine) {
+            Write-Warning "未在 dist/sha256.txt 中找到 $zipName 的校验值，跳过 Scoop Manifest 同步"
+            exit 0
+          }
+          $hash = ($shaLine -split '\s+')[0].Trim().ToLower()
+          Write-Host "同步 Scoop Manifest: version=$version, hash=$hash"
+
+          $manifestPath = "vpn-parser.json"
+          if (Test-Path $manifestPath) {
+            $json = Get-Content $manifestPath -Raw -Encoding utf8 | ConvertFrom-Json
+            $json.version = $version
+            $json.architecture.'64bit'.url = "https://github.com/mateo-ki/vpn-parser/releases/download/v$version/vpn-parser-$version-windows-x64-portable.zip"
+            $json.architecture.'64bit'.hash = $hash
+            $json | ConvertTo-Json -Depth 10 | Set-Content $manifestPath -Encoding utf8
+            Write-Host "已更新 $manifestPath"
+
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git fetch origin main:main
+            git checkout main
+            git add $manifestPath
+            $status = git status --porcelain
+            if ($status) {
+              git commit -m "chore(scoop): 自动同步 vpn-parser.json 至 v$version"
+              git push origin main
+              Write-Host "已推送最新 Scoop Manifest 到 main 分支"
+            } else {
+              Write-Host "vpn-parser.json 内容未变，无需提交"
+            }
+          }
