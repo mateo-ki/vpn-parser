@@ -208,11 +208,9 @@ pub fn render_signal_bars_with_status(
     let red = Color32::from_rgb(255, 59, 48);
 
     let (active_bars, bar_color) = match (latency_ms, latency_ok) {
-        (Some(ms), _) if ms <= 700 => {
-            let bars = if ms <= 350 { 4 } else { 3 };
-            (bars, green)
-        }
-        (Some(ms), _) if ms < 1500 => (2, yellow),
+        (Some(ms), _) if ms <= 200 => (4, green),
+        (Some(ms), _) if ms <= 400 => (3, green),
+        (Some(ms), _) if ms <= 800 => (2, yellow),
         (Some(_), _) => (1, red),
         (None, Some(false)) => (1, red),
         (None, _) => (0, theme::border_subtle()),

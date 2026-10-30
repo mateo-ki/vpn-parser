@@ -1919,8 +1919,8 @@ impl VpnApp {
                             // "质度差"，与实际可用性脱节 —— 按隧道链路常见分布放宽到 300/800。
                             let latency = selected_node.as_ref().and_then(|n| n.latency_ms);
                             let (tag_q, q_bg, q_fg) = match latency {
-                                Some(ms) if ms <= 700 => ("质度优", good_bg, good_fg),
-                                Some(ms) if ms < 1500 => ("质度良", mid_bg, mid_fg),
+                                Some(ms) if ms <= 300 => ("质度优", good_bg, good_fg),
+                                Some(ms) if ms <= 800 => ("质度良", mid_bg, mid_fg),
                                 Some(_) => ("质度差", bad_bg, bad_fg),
                                 None => ("未测速", apple_sub_bg(), theme::muted()),
                             };
@@ -2896,8 +2896,8 @@ impl VpnApp {
                                     .and_then(|n| n.latency_ms)
                             });
                         let (status_str, dot_col, text_col) = match latency {
-                            Some(ms) if ms <= 700 => (format!("{ms} ms"), apple_green_dot(), ok_fg),
-                            Some(ms) if ms < 1500 => (format!("{ms} ms"), apple_amber_dot(), warn_fg),
+                            Some(ms) if ms <= 300 => (format!("{ms} ms"), apple_green_dot(), ok_fg),
+                            Some(ms) if ms <= 800 => (format!("{ms} ms"), apple_amber_dot(), warn_fg),
                             Some(ms) => (format!("{ms} ms"), apple_red_dot(), bad_fg),
                             None => ("—".into(), theme::muted(), theme::muted()),
                         };

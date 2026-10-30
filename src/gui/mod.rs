@@ -142,6 +142,8 @@ pub struct VpnApp {
     pub(crate) available_releases: Vec<crate::app_update::ReleaseItem>,
     pub(crate) selected_release_tag: Option<String>,
     pub(crate) fetching_releases: bool,
+    pub(crate) show_release_notes_modal: bool,
+    pub(crate) release_notes_content: Option<(String, String)>,
     pub(crate) proxy_status: ProxyRuntimeStatus,
     pub(crate) proxy_config: MihomoConfigOptions,
     pub(crate) proxy_log: String,
@@ -622,6 +624,8 @@ impl VpnApp {
             available_releases: Vec::new(),
             selected_release_tag: None,
             fetching_releases: false,
+            show_release_notes_modal: false,
+            release_notes_content: None,
             proxy_log: String::new(),
             selected_proxy_node_id: initial_proxy_node.as_ref().map(|node| node.0.clone()),
             selected_proxy_node_name: initial_proxy_node.map(|node| node.1),
@@ -4920,6 +4924,7 @@ impl eframe::App for VpnApp {
         self.ui_paste_dialog(ctx);
         self.ui_source_nodes_modal(ctx);
         self.ui_node_picker_modal(ctx);
+        self.ui_release_notes_modal(ctx);
         self.render_dashboard_drawer(ctx);
         self.render_group_drawer(ctx);
 

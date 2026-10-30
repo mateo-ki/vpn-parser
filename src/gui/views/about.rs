@@ -4,7 +4,7 @@ use crate::gui::theme;
 use crate::gui::types::BgMsg;
 use crate::gui::widgets::{card_frame, fold_title, icon_tile, pill, primary_btn, section_title};
 use crate::gui::VpnApp;
-use eframe::egui::{self, CornerRadius, ProgressBar, RichText, Stroke, Ui, Vec2};
+use eframe::egui::{self, CornerRadius, Frame, Margin, ProgressBar, RichText, Stroke, Ui, Vec2};
 
 const REPO_URL: &str = "https://github.com/mateo-ki/vpn-parser";
 const RELEASES_URL: &str = "https://github.com/mateo-ki/vpn-parser/releases";
@@ -189,6 +189,8 @@ impl VpnApp {
             {
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
+                    let mut action_download = false;
+                    let mut action_show_notes = None;
                     if let Some(info) = &self.app_release {
                         let can_install = info.can_install();
                         let is_current = info.tag.trim_start_matches('v')
@@ -212,8 +214,30 @@ impl VpnApp {
                             .on_hover_text(tooltip)
                             .clicked()
                         {
-                            self.download_app_update();
+                            action_download = true;
                         }
+
+                        // 新版本说明按钮：检查到更新后，在「下载更新」旁边呈现
+                        if info.update_available || info.body.is_some() {
+                            if ui
+                                .button("新版本说明")
+                                .on_hover_text("查看新版本的 Release 说明与详细更新日志")
+                                .clicked()
+                            {
+                                let tag_title = format!("{} {}", info.tag, if info.update_available { "（最新版本）" } else { "" });
+                                let content = info.body.clone().unwrap_or_else(|| {
+                                    format!("版本 {}\n\n暂无内嵌更新说明，可点击右下角按钮直接在 GitHub Releases 查看完整发布日志。", info.tag)
+                                });
+                                action_show_notes = Some((tag_title, content));
+                            }
+                        }
+                    }
+                    if action_download {
+                        self.download_app_update();
+                    }
+                    if let Some((tag, content)) = action_show_notes {
+                        self.release_notes_content = Some((tag, content));
+                        self.show_release_notes_modal = true;
                     }
                     if let Some(path) = self.app_installer_path.clone() {
                         // 这行提示按平台分叉：Linux 上没有"向导接管"这回事（本程序不会去拿
@@ -404,7 +428,13 @@ impl VpnApp {
                                             let clean = body.lines().filter(|l| !l.trim().is_empty()).take(3).collect::<Vec<_>>().join(" · ");
                                             if !clean.is_empty() {
                                                 ui.add_space(2.0);
-                                                ui.label(RichText::new(format!("更新说明：{clean}")).size(11.0).color(theme::muted()));
+                                                ui.horizontal(|ui| {
+                                                    ui.label(RichText::new(format!("更新说明：{clean}")).size(11.0).color(theme::muted()));
+                                                    if ui.small_button("查看全文").clicked() {
+                                                        self.release_notes_content = Some((item.tag.clone(), body.clone()));
+                                                        self.show_release_notes_modal = true;
+                                                    }
+                                                });
                                             }
                                         }
                                     });
@@ -677,6 +707,61 @@ impl VpnApp {
             self.app_installer_path = None;
             self.app_update_progress = None;
             self.status = format!("已选中版本 {tag}，可点击上方「下载」进行安装/回退");
+        }
+    }
+
+    pub(crate) fn ui_release_notes_modal(&mut self, ctx: &egui::Context) {
+        if !self.show_release_notes_modal {
+            return;
+        }
+        let Some((tag, notes)) = &self.release_notes_content else {
+            self.show_release_notes_modal = false;
+            return;
+        };
+
+        let mut open = true;
+        let title = format!("Release 版本说明 · {tag}");
+        egui::Window::new(title)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .collapsible(false)
+            .resizable(true)
+            .default_width(580.0)
+            .default_height(420.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        Frame::NONE
+                            .fill(theme::sidebar())
+                            .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                            .corner_radius(CornerRadius::same(6))
+                            .inner_margin(Margin::symmetric(14, 12))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new(notes)
+                                        .size(13.0)
+                                        .color(theme::text_primary()),
+                                );
+                            });
+                    });
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("关闭").clicked() {
+                        self.show_release_notes_modal = false;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("在 GitHub 查看 ↗").clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(RELEASES_URL));
+                        }
+                    });
+                });
+            });
+
+        if !open {
+            self.show_release_notes_modal = false;
         }
     }
 }

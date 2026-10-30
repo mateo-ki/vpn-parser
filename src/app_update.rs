@@ -131,6 +131,8 @@ pub struct AppReleaseInfo {
     /// 取到的这条 Release 本身是不是预发版（界面上要标出来，别让人以为拿到的是稳定版）。
     pub prerelease: bool,
     pub message: String,
+    /// Release 说明文档（GitHub Releases 正文）
+    pub body: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,6 +255,7 @@ impl ReleaseItem {
             hash_index_url: self.hash_index_url.clone(),
             prerelease: self.prerelease,
             message,
+            body: self.body.clone(),
         }
     }
 }
@@ -1027,6 +1030,7 @@ fn summarize(release: ReleaseJson, current: &str, channel: UpdateChannel) -> App
         prerelease: release.prerelease,
         asset,
         message,
+        body: release.body,
     }
 }
 
@@ -1732,6 +1736,7 @@ ID-LIKE=\"debian\"
             hash_index_url: None,
             prerelease: false,
             message: "发现新版本 v1.4.1".into(),
+            body: None,
         };
         assert_eq!(base.marker(), Some("v1.4.1"));
         let same = AppReleaseInfo {

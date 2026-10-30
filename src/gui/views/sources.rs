@@ -715,6 +715,7 @@ impl VpnApp {
         } else {
             "新增订阅源"
         })
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .collapsible(false)
         .resizable(true)
         .default_width(520.0)

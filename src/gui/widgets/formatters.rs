@@ -186,9 +186,9 @@ pub fn latency_text(n: &NodeSummary) -> RichText {
     match (n.latency_ok, n.latency_test_kind.as_deref()) {
         (Some(true), Some(GOOGLE_PROXY_TEST_KIND)) => {
             let ms = n.latency_ms.unwrap_or(0);
-            let color = if ms <= 700 {
+            let color = if ms <= 300 {
                 green
-            } else if ms < 1500 {
+            } else if ms <= 800 {
                 yellow
             } else {
                 red
@@ -200,9 +200,9 @@ pub fn latency_text(n: &NodeSummary) -> RichText {
         }
         (Some(true), _) => {
             let ms = n.latency_ms.unwrap_or(0);
-            let color = if ms <= 700 {
+            let color = if ms <= 300 {
                 green
-            } else if ms < 1500 {
+            } else if ms <= 800 {
                 yellow
             } else {
                 red
