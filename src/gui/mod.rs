@@ -473,8 +473,9 @@ pub struct VpnApp {
     pub(crate) applied_ui_dark: bool,
     /// 只在第一次拿到库里的设置时把编辑态灌成它（见 `BgMsg::Settings` 那段）。
     pub(crate) settings_seeded: bool,
-    /// 系统设置页当前分区（通用 / 外观），只活在这次运行里。
+    /// 系统设置页当前分区（通用 / 外观 / 清理等），只活在这次运行里。
     pub(crate) settings_tab: SettingsTab,
+    pub(crate) cleanup_state: crate::gui::views::settings::cleanup::CleanupState,
     pub(crate) frame_count: u64,
     pub(crate) logo_texture: Option<egui::TextureHandle>,
 
@@ -837,6 +838,7 @@ impl VpnApp {
             applied_ui_dark: false,
             settings_seeded: false,
             settings_tab: SettingsTab::default(),
+            cleanup_state: crate::gui::views::settings::cleanup::CleanupState::default(),
             frame_count: 0,
             logo_texture: None,
             tx,

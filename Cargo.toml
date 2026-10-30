@@ -1,6 +1,6 @@
 [package]
 name = "vpn-parser"
-version = "1.15.8"
+version = "1.15.9"
 edition = "2021"
 description = "VPN/proxy subscription collector with desktop GUI and HTTP API"
 license = "MIT"

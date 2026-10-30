@@ -54,6 +54,32 @@ impl BackendCompiler for VpCoreCompiler {
                             po.insert("network".into(), serde_json::json!("tcp"));
                         }
                     }
+                    if let Some(po) = p.as_object_mut() {
+                        // 彻底清理重名 alias 字段，防止 serde 抛出 duplicate field `server_name` 错误
+                        let s1 = po.remove("server_name");
+                        let s2 = po.remove("server-name");
+                        let s3 = po.remove("sni");
+                        let s4 = po.remove("servername");
+                        if let Some(s) = s1.or(s2).or(s3).or(s4) {
+                            po.insert("servername".into(), s);
+                        }
+
+                        let k1 = po.remove("skip-cert-verify");
+                        let k2 = po.remove("skip_cert_verify");
+                        let k3 = po.remove("allowInsecure");
+                        let k4 = po.remove("allow_insecure");
+                        let k5 = po.remove("insecure");
+                        if let Some(s) = k1.or(k2).or(k3).or(k4).or(k5) {
+                            po.insert("skip-cert-verify".into(), s);
+                        }
+
+                        let f1 = po.remove("client-fingerprint");
+                        let f2 = po.remove("client_fingerprint");
+                        let f3 = po.remove("fp");
+                        if let Some(f) = f1.or(f2).or(f3) {
+                            po.insert("client-fingerprint".into(), f);
+                        }
+                    }
                 }
                 proxies.retain(|p| {
                     let keep = vpcore_supports_proxy(p);
@@ -117,7 +143,7 @@ impl BackendCompiler for VpCoreCompiler {
                         "enable": true,
                         "address": "198.18.0.1",
                         "netmask": "255.255.0.0",
-                        "mtu": 1500,
+                        "mtu": 9000,
                         "fake-ip-range": "198.18.0.0/16",
                         "auto-route": plan.inbounds.tun.auto_route,
                         "ring-capacity": 4194304,

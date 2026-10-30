@@ -449,6 +449,12 @@ pub async fn lookup(client: &reqwest::Client, server: &str) -> Result<IpRisk> {
         Ok(ip) => ip,
         Err(_) => resolve_first(server).await?,
     };
+    if let std::net::IpAddr::V4(v4) = address {
+        let octets = v4.octets();
+        if octets[0] == 198 && (octets[1] == 18 || octets[1] == 19) {
+            return Err(anyhow!("节点地址为本地 TUN Fake-IP ({v4})，跳过外部归属查询"));
+        }
+    }
     classify_ip(client, server, address).await
 }
 

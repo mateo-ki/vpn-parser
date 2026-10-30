@@ -25,7 +25,7 @@ pub enum ExtensionsTab {
     PortMappings,
 }
 
-/// 系统设置页的分区标签：通用设置、界面外观、订阅与测速、自愈网络、外部接口。
+/// 系统设置页的分区标签：通用设置、界面外观、订阅与测速、自愈网络、外部接口、系统清理。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsTab {
     #[default]
@@ -34,6 +34,7 @@ pub enum SettingsTab {
     Automation,
     Network,
     Api,
+    Cleanup,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

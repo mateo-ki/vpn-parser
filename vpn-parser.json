@@ -1,12 +1,12 @@
 {
-  "version": "1.15.8",
+  "version": "1.15.9",
   "description": "A modern cross-platform desktop proxy tool for collecting subscriptions, parsing nodes and managing proxy cores.",
   "homepage": "https://github.com/mateo-ki/vpn-parser",
   "license": "MIT",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/mateo-ki/vpn-parser/releases/download/v1.15.8/vpn-parser-1.15.8-windows-x64-portable.zip",
-      "hash": "80a1e2efb80f13638098bd3a62eb48980e2895c5f166a7140aed5ea688bf3aaa"
+      "url": "https://github.com/mateo-ki/vpn-parser/releases/download/v1.15.9/vpn-parser-1.15.9-windows-x64-portable.zip",
+      "hash": "4269a0d12198547edbd91ac4084004acd2d03659e3a84a246a9365dce17a01b1"
     }
   },
   "bin": "vpn-parser.exe",

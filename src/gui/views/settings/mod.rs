@@ -1,6 +1,7 @@
 pub mod appearance;
 pub mod api;
 pub mod automation;
+pub mod cleanup;
 pub mod general;
 pub mod network;
 
@@ -34,6 +35,7 @@ impl VpnApp {
         let tr_automation = self.tr("订阅与测速");
         let tr_network = self.tr("自愈网络");
         let tr_api = self.tr("外部接口");
+        let tr_cleanup = self.tr("清理");
         let tr_save = self.tr("保存设置");
         let tr_reset = self.tr("重置修改");
         let tr_synced = self.tr("已同步");
@@ -77,6 +79,13 @@ impl VpnApp {
                     SettingsTab::Api,
                     Icon::Plug,
                     tr_api,
+                );
+                panel_tab(
+                    ui,
+                    &mut tab,
+                    SettingsTab::Cleanup,
+                    Icon::Trash,
+                    tr_cleanup,
                 );
             },
             |ui| {
@@ -131,6 +140,7 @@ impl VpnApp {
                 SettingsTab::Automation => self.ui_settings_automation(ui),
                 SettingsTab::Network => self.ui_settings_network(ui),
                 SettingsTab::Api => self.ui_api(ui),
+                SettingsTab::Cleanup => self.ui_settings_cleanup(ui),
             });
     }
 

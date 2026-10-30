@@ -293,7 +293,12 @@ fn normalize_vmess(cfg: &mut Value, node: &Node) -> Value {
         obj.insert("skip-cert-verify".into(), json!(insecure));
     }
 
-    if let Some(sni) = first_str(obj, &["servername", "sni"]).filter(|s| !s.is_empty()) {
+    let sni_val = first_str(obj, &["servername", "sni", "server_name", "server-name"])
+        .filter(|s| !s.is_empty());
+    obj.remove("sni");
+    obj.remove("server_name");
+    obj.remove("server-name");
+    if let Some(sni) = sni_val {
         obj.insert("servername".into(), json!(sni));
     }
 
@@ -417,7 +422,12 @@ fn normalize_vless(cfg: &mut Value, node: &Node) -> Value {
         obj.insert("reality-opts".into(), Value::Object(ro));
     }
 
-    if let Some(sni) = first_str(obj, &["servername", "sni"]).filter(|s| !s.is_empty()) {
+    let sni_val = first_str(obj, &["servername", "sni", "server_name", "server-name"])
+        .filter(|s| !s.is_empty());
+    obj.remove("sni");
+    obj.remove("server_name");
+    obj.remove("server-name");
+    if let Some(sni) = sni_val {
         obj.insert("servername".into(), json!(sni));
     }
     if let Some(fp) = first_str(obj, &["fp", "client-fingerprint"]).filter(|s| !s.is_empty()) {
@@ -549,7 +559,12 @@ fn normalize_trojan(cfg: &mut Value, node: &Node) -> Value {
         obj.insert("network".into(), json!(network.clone()));
     }
 
-    if let Some(sni) = first_str(obj, &["sni", "servername"]).filter(|s| !s.is_empty()) {
+    let sni_val = first_str(obj, &["sni", "servername", "server_name", "server-name"])
+        .filter(|s| !s.is_empty());
+    obj.remove("servername");
+    obj.remove("server_name");
+    obj.remove("server-name");
+    if let Some(sni) = sni_val {
         obj.insert("sni".into(), json!(sni));
     }
 
@@ -658,7 +673,12 @@ fn normalize_hysteria2(cfg: &mut Value, node: &Node) -> Value {
             obj.insert("password".into(), a);
         }
     }
-    if let Some(sni) = first_str(obj, &["sni", "servername"]).filter(|s| !s.is_empty()) {
+    let sni_val = first_str(obj, &["sni", "servername", "server_name", "server-name"])
+        .filter(|s| !s.is_empty());
+    obj.remove("servername");
+    obj.remove("server_name");
+    obj.remove("server-name");
+    if let Some(sni) = sni_val {
         obj.insert("sni".into(), json!(sni));
     }
     let insecure = extract_skip_cert_verify(obj, node);
