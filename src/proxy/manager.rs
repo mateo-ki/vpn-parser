@@ -454,7 +454,7 @@ impl ProxyManager {
         let started = tokio::time::Instant::now();
         let tun_on = options.mode.has_tun();
 
-        let (kernel, config_path, controller_port, controller_secret, mut options, node) = {
+        let (kernel, config_path, controller_port, controller_secret, options, node) = {
             let mut runtime = self.runtime.lock().await;
             if !matches!(
                 runtime.status.state,

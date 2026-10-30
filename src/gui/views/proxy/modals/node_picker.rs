@@ -74,9 +74,15 @@ impl VpnApp {
                                 protocol_pill(ui, &node.protocol.to_uppercase());
 
                                 let clean_name = sanitize_node_name(&node.name);
+                                let shown_name = crate::gui::widgets::ellipsize(
+                                    ui,
+                                    &clean_name,
+                                    350.0,
+                                    egui::FontId::proportional(14.0),
+                                );
                                 let name_label = ui.add_sized(
                                     [350.0, 18.0],
-                                    egui::Label::new(RichText::new(&clean_name).strong()).truncate(),
+                                    egui::Label::new(RichText::new(shown_name).strong()),
                                 );
                                 name_label.on_hover_text(format!(
                                     "{}\n{}:{}",

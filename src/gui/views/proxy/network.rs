@@ -474,19 +474,27 @@ impl VpnApp {
 
                                     // 3. 版本度量
                                     let clean_ver = clean_kernel_version(version);
+                                    let small_mono = egui::FontId::monospace(11.0);
                                     ui.horizontal(|ui| {
                                         ui.label(RichText::new("当前:").small().color(theme::muted()));
-                                        ui.add(
+                                        let shown_ver = crate::gui::widgets::ellipsize(
+                                            ui,
+                                            clean_ver,
+                                            130.0,
+                                            small_mono.clone(),
+                                        );
+                                        let ver_resp = ui.add(
                                             egui::Label::new(
-                                                RichText::new(clean_ver)
+                                                RichText::new(shown_ver)
                                                     .strong()
                                                     .small()
                                                     .monospace()
                                                     .color(theme::text_primary()),
-                                            )
-                                            .truncate(),
-                                        )
-                                        .on_hover_text(format!("完整版本：\n{version}"));
+                                            ),
+                                        );
+                                        if version != "-" && !version.is_empty() {
+                                            ver_resp.on_hover_text(format!("完整版本：\n{version}"));
+                                        }
                                     });
                                     ui.horizontal(|ui| {
                                         ui.label(RichText::new("最新:").small().color(theme::muted()));
@@ -495,16 +503,23 @@ impl VpnApp {
                                         } else {
                                             (format!("{latest} (最新)"), theme::text_secondary())
                                         };
-                                        ui.add(
+                                        let shown_lat = crate::gui::widgets::ellipsize(
+                                            ui,
+                                            &lat_text,
+                                            130.0,
+                                            egui::TextStyle::Small.resolve(ui.style()),
+                                        );
+                                        let lat_resp = ui.add(
                                             egui::Label::new(
-                                                RichText::new(lat_text)
+                                                RichText::new(shown_lat)
                                                     .small()
                                                     .strong()
                                                     .color(lat_color),
-                                            )
-                                            .truncate(),
-                                        )
-                                        .on_hover_text(format!("官方远端版本：{latest}"));
+                                            ),
+                                        );
+                                        if latest != "-" && !latest.is_empty() {
+                                            lat_resp.on_hover_text(format!("官方远端版本：{latest}"));
+                                        }
                                     });
 
                                     ui.add_space(4.0);
@@ -520,16 +535,23 @@ impl VpnApp {
                                                 .map(|name| name.to_string_lossy().to_string())
                                                 .unwrap_or_else(|| path.clone())
                                         };
-                                        ui.add(
+                                        let shown_path = crate::gui::widgets::ellipsize(
+                                            ui,
+                                            &display_path,
+                                            160.0,
+                                            small_mono.clone(),
+                                        );
+                                        let path_resp = ui.add(
                                             egui::Label::new(
-                                                RichText::new(display_path)
+                                                RichText::new(shown_path)
                                                     .small()
                                                     .monospace()
                                                     .color(theme::muted()),
-                                            )
-                                            .truncate(),
-                                        )
-                                        .on_hover_text(format!("文件路径：\n{path}"));
+                                            ),
+                                        );
+                                        if path != "-" && !path.is_empty() {
+                                            path_resp.on_hover_text(format!("文件路径：\n{path}"));
+                                        }
                                     });
 
                                     ui.add_space(8.0);

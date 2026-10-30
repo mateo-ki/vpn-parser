@@ -375,21 +375,29 @@ impl VpnApp {
                                 let is_focused = self.focused_node_id.as_deref() == Some(&node.id);
                                 let is_switching = switching_id.as_deref() == Some(&node.id);
 
-                                let card_tip = if is_active {
-                                    format!("{}:{}\n当前活动出口（右键管理）", node.server, node.port)
-                                } else if self.proxy_selected_group != "全部" && self.proxy_selected_group != "PROXY" {
-                                    format!(
-                                        "{}:{}\n左键点击选中，右键设为「{}」活动出口（双击亦可）",
-                                        node.server, node.port, self.proxy_selected_group
-                                    )
-                                } else {
-                                    format!(
-                                        "{}:{}\n左键点击选中，右键设为活动节点（双击亦可）",
-                                        node.server, node.port
-                                    )
-                                };
-
                                 let source_name = self.source_name_for_id(node.source_id.as_deref());
+                                let card_tip = {
+                                    let mut tip = format!("{}\n{}:{}", node.name, node.server, node.port);
+                                    if let Some(src) = source_name {
+                                        if !src.is_empty() {
+                                            tip.push_str(&format!("\n订阅源: {src}"));
+                                        }
+                                    }
+                                    if let Some(ms) = node.latency_ms {
+                                        tip.push_str(&format!("\n延迟: {ms} ms"));
+                                    }
+                                    if is_active {
+                                        tip.push_str("\n当前活动出口（右键管理）");
+                                    } else if self.proxy_selected_group != "全部" && self.proxy_selected_group != "PROXY" {
+                                        tip.push_str(&format!(
+                                            "\n左键点击选中，右键设为「{}」活动出口（双击亦可）",
+                                            self.proxy_selected_group
+                                        ));
+                                    } else {
+                                        tip.push_str("\n左键点击选中，右键设为活动节点（双击亦可）");
+                                    }
+                                    tip
+                                };
                                 let response = compact_node_card(
                                     column_ui,
                                     node,

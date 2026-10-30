@@ -324,13 +324,24 @@ impl VpnApp {
                                                 |ui| {
                                                     ui.set_min_width(dest_w);
                                                     ui.set_max_width(dest_w);
+                                                    let small_font = egui::TextStyle::Small.resolve(ui.style());
+                                                    let shown_target = crate::gui::widgets::ellipsize(
+                                                        ui,
+                                                        &full_target,
+                                                        dest_w,
+                                                        small_font,
+                                                    );
+                                                    let hover_text = if !c.host.is_empty() {
+                                                        format!("主机: {}\n目标: {}", c.host, c.destination)
+                                                    } else {
+                                                        format!("目标: {}", c.destination)
+                                                    };
                                                     ui.add(
                                                         egui::Label::new(
-                                                            RichText::new(&full_target).small().color(theme::text_primary()),
-                                                        )
-                                                        .truncate(),
+                                                            RichText::new(shown_target).small().color(theme::text_primary()),
+                                                        ),
                                                     )
-                                                    .on_hover_text(format!("{}\n目标: {}", full_target, c.destination));
+                                                    .on_hover_text(hover_text);
                                                 },
                                             );
 

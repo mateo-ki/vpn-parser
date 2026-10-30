@@ -252,14 +252,24 @@ impl VpnApp {
                                 let name_resp = ui.vertical(|ui| {
                                     ui.set_min_width(w0);
                                     ui.set_max_width(w0);
+                                    let shown_name = crate::gui::widgets::ellipsize(
+                                        ui,
+                                        &s.name,
+                                        w0,
+                                        egui::FontId::proportional(14.0),
+                                    );
+                                    let hover_msg = if shown_name != s.name {
+                                        format!("{}\n\n点击查看此订阅源的节点列表（右键弹出操作菜单）", s.name)
+                                    } else {
+                                        "点击查看此订阅源的节点列表（右键弹出操作菜单）".to_string()
+                                    };
                                     ui.add(
                                         egui::Label::new(
-                                            RichText::new(&s.name).strong().color(theme::accent()),
+                                            RichText::new(shown_name).strong().color(theme::accent()),
                                         )
-                                        .truncate()
                                         .sense(egui::Sense::click()),
                                     )
-                                    .on_hover_text("点击查看此订阅源的节点列表（右键弹出操作菜单）")
+                                    .on_hover_text(hover_msg)
                                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                                 }).inner;
                                 if name_resp.clicked() {
@@ -270,14 +280,25 @@ impl VpnApp {
                                 let url_resp = ui.vertical(|ui| {
                                     ui.set_min_width(w1);
                                     ui.set_max_width(w1);
+                                    let small_font = egui::TextStyle::Small.resolve(ui.style());
+                                    let shown_url = crate::gui::widgets::ellipsize(
+                                        ui,
+                                        &s.url_template,
+                                        w1,
+                                        small_font,
+                                    );
+                                    let url_hover = if shown_url != s.url_template {
+                                        format!("{}\n\n点击编辑此订阅源配置（右键弹出操作菜单）", s.url_template)
+                                    } else {
+                                        "点击编辑此订阅源配置（右键弹出操作菜单）".to_string()
+                                    };
                                     ui.add(
                                         egui::Label::new(
-                                            RichText::new(&s.url_template).small().color(theme::accent()),
+                                            RichText::new(shown_url).small().color(theme::accent()),
                                         )
-                                        .truncate()
                                         .sense(egui::Sense::click()),
                                     )
-                                    .on_hover_text(format!("{}\n\n点击编辑此订阅源配置（右键弹出操作菜单）", s.url_template))
+                                    .on_hover_text(url_hover)
                                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                                 }).inner;
                                 if url_resp.clicked() {

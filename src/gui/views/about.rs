@@ -726,7 +726,7 @@ fn kv_row(ui: &mut Ui, label: &str, value: &str, action: Option<&str>) -> bool {
             ui.label(RichText::new(label).size(11.5).color(theme::muted()));
         },
     );
-    ui.allocate_new_ui(
+    let val_resp = ui.allocate_new_ui(
         egui::UiBuilder::new()
             .id_salt(("about:kv", label, "value"))
             .max_rect(cell),
@@ -734,15 +734,17 @@ fn kv_row(ui: &mut Ui, label: &str, value: &str, action: Option<&str>) -> bool {
             ui.set_clip_rect(cell);
             ui.add_space(3.0);
             ui.label(
-                RichText::new(shown)
+                RichText::new(&shown)
                     .monospace()
                     .size(VALUE_SIZE)
                     .color(theme::text_secondary()),
             );
         },
     )
-    .response
-    .on_hover_text(value);
+    .response;
+    if shown != value {
+        val_resp.on_hover_text(value);
+    }
     let mut clicked = false;
     if let Some(text) = action {
         clicked = ui

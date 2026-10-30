@@ -65,19 +65,22 @@ pub fn compact_node_card(
                 let reserve_right = if is_active || is_switching { 46.0 } else { 0.0 };
                 let available_text_w = (ui.available_width() - reserve_right).max(50.0);
 
-                let name_label = ui.add_sized(
+                let shown_name = crate::gui::widgets::ellipsize(
+                    ui,
+                    &clean_name,
+                    available_text_w,
+                    egui::FontId::proportional(12.5),
+                );
+
+                ui.add_sized(
                     [available_text_w, 18.0],
                     egui::Label::new(
-                        RichText::new(&clean_name)
+                        RichText::new(shown_name)
                             .strong()
                             .size(12.5)
                             .color(name_color),
-                    )
-                    .truncate(),
+                    ),
                 );
-                if clean_name != node.name {
-                    name_label.on_hover_text(&node.name);
-                }
 
                 if is_active {
                     let active_green = Color32::from_rgb(52, 199, 89);

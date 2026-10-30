@@ -204,10 +204,17 @@ impl VpnApp {
                         } else {
                             mapping.node_name.clone()
                         };
+                        let raw_btn_text = format!("🎯 {display_name}");
+                        let shown_btn_text = crate::gui::widgets::ellipsize(
+                            ui,
+                            &raw_btn_text,
+                            target_width,
+                            egui::TextStyle::Button.resolve(ui.style()),
+                        );
                         let btn = ui.add(
-                            egui::Button::new(RichText::new(format!("🎯 {display_name}"))).truncate(),
+                            egui::Button::new(RichText::new(shown_btn_text)),
                         )
-                        .on_hover_text("点击更换该端口绑定的目标节点");
+                        .on_hover_text(format!("目标节点：{display_name}\n\n点击更换该端口绑定的目标节点"));
                         if btn.clicked() {
                             pick_for_index = Some(idx);
                         }

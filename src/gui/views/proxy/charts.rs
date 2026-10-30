@@ -263,6 +263,7 @@ fn dash_svc_card(
     };
     // 名称强制单行 + 省略号，永不折行重叠
     let name_text = svc_truncate(painter, name, name_font.clone(), name_max);
+    let is_truncated = name_text != name || !show_status;
     let name_color = if selected { apple_blue() } else { theme::text_primary() };
     let name_galley = painter.layout_no_wrap(name_text, name_font, name_color);
     painter.galley(
@@ -282,7 +283,11 @@ fn dash_svc_card(
         );
     }
 
-    resp.on_hover_text(format!("{name} · {status_text}"))
+    if is_truncated {
+        resp.on_hover_text(format!("{name} · {status_text}"))
+    } else {
+        resp
+    }
 }
 
 /// iOS 风格开关（40x22），返回点击响应。
@@ -371,6 +376,7 @@ fn dash_bottom_proxy_item(
                 let sub_font = egui::FontId::proportional(10.5);
                 let title_text = svc_truncate(&painter, title, title_font.clone(), text_w);
                 let sub_text = svc_truncate(&painter, sub, sub_font.clone(), text_w);
+                let is_truncated = title_text != title || sub_text != sub;
                 let title_galley = painter.layout_no_wrap(title_text, title_font, theme::text_primary());
                 let sub_galley = painter.layout_no_wrap(sub_text, sub_font, theme::muted());
                 let line_gap = 2.0_f32;
@@ -395,7 +401,9 @@ fn dash_bottom_proxy_item(
                     sub_galley,
                     theme::muted(),
                 );
-                text_resp.on_hover_text(sub);
+                if is_truncated {
+                    text_resp.on_hover_text(format!("{title}\n{sub}"));
+                }
 
                 // 右侧操作小部件（开关或状态圆点，统一留 6px 右边距）
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1373,6 +1381,15 @@ impl VpnApp {
                                         let is_switching = switching_id.as_deref() == Some(&node.id);
 
                                         let source_name = self.source_name_for_id(node.source_id.as_deref());
+                                        let mut tip = format!("{}\n{}:{}", node.name, node.server, node.port);
+                                        if let Some(src) = source_name {
+                                            if !src.is_empty() {
+                                                tip.push_str(&format!("\n订阅源: {src}"));
+                                            }
+                                        }
+                                        if let Some(ms) = node.latency_ms {
+                                            tip.push_str(&format!("\n延迟: {ms} ms"));
+                                        }
                                         let resp = crate::gui::widgets::node_card::compact_node_card(
                                             column_ui,
                                             node,
@@ -1380,7 +1397,8 @@ impl VpnApp {
                                             is_active,
                                             is_focused,
                                             is_switching,
-                                        );
+                                        )
+                                        .on_hover_text(tip);
 
                                         if resp.clicked() {
                                             if !is_active && manual_mode {
@@ -3024,14 +3042,19 @@ impl VpnApp {
                                             } else {
                                                 &c.destination
                                             };
+                                            let shown_title = crate::gui::widgets::ellipsize(
+                                                ui,
+                                                title,
+                                                ui.available_width().max(40.0),
+                                                egui::FontId::proportional(10.5),
+                                            );
                                             let resp = ui.add(
                                                 egui::Label::new(
-                                                    RichText::new(title)
+                                                    RichText::new(shown_title)
                                                         .size(10.5)
                                                         .strong()
                                                         .color(theme::text_primary()),
-                                                )
-                                                .truncate(),
+                                                ),
                                             ).on_hover_text(format!(
                                                 "主机: {}\n目标: {}\n进程: {}\n规则: {}\n出口: {}",
                                                 c.host, c.destination, c.process, c.rule, c.target

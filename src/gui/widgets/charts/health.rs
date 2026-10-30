@@ -244,8 +244,11 @@ pub fn render_top_processes_card(
                     proc.to_string()
                 };
 
-                ui.label(RichText::new(clean_proc).small().strong().color(theme::text_primary()))
-                    .on_hover_text(*proc);
+                let is_elided = clean_proc != *proc;
+                let proc_resp = ui.label(RichText::new(clean_proc).small().strong().color(theme::text_primary()));
+                if is_elided {
+                    proc_resp.on_hover_text(*proc);
+                }
 
                 let bar_width = 80.0_f32;
                 let (bar_rect, bar_resp) = ui.allocate_exact_size(Vec2::new(bar_width, 6.0), Sense::hover());

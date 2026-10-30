@@ -195,7 +195,7 @@ pub fn render_signal_bars_with_status(
     latency_ok: Option<bool>,
 ) {
     let size = egui::vec2(16.0, 13.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    let (rect, _response) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter_at(rect);
 
     let baseline = rect.max.y;
@@ -234,12 +234,5 @@ pub fn render_signal_bars_with_status(
         };
         painter.rect_filled(bar_rect, CornerRadius::same(1), fill);
     }
-
-    let tooltip = match (latency_ms, latency_ok) {
-        (Some(ms), _) => format!("延迟: {ms} ms (信号: {active_bars}/4 格)"),
-        (None, Some(false)) => "测速超时 / 失败 (1 格)".to_string(),
-        (None, _) => "未测速 / 离线".to_string(),
-    };
-    response.on_hover_text(tooltip);
 }
 

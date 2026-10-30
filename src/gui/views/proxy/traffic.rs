@@ -401,7 +401,7 @@ impl VpnApp {
         rank: usize,
         icon: &str,
         title: &str,
-        hover: &str,
+        _hover: &str,
         active_conns: usize,
         down_rate: u64,
         up_rate: u64,
@@ -461,7 +461,7 @@ impl VpnApp {
                                             .color(name_color),
                                     )
                                     .truncate();
-                                    ui.add(name_label).on_hover_text(hover);
+                                    ui.add(name_label);
                                 });
 
                                 ui.add_space(2.0);

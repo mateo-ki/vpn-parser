@@ -158,18 +158,29 @@ impl VpnApp {
                 |ui| {
                     icon_label(ui, Icon::Radar, 16.0, theme::accent());
                     ui.label(RichText::new("规则命中记录").strong().size(15.0));
+                    let summary_text = format!(
+                        "{total} 条连接 · 兜底 MATCH {matched} 条（{pct}%） · \
+                         占比按连接数算，一条连接只计一次"
+                    );
+                    let shown_summary = crate::gui::widgets::ellipsize(
+                        ui,
+                        &summary_text,
+                        (ui.available_width() - 90.0).max(80.0),
+                        egui::TextStyle::Small.resolve(ui.style()),
+                    );
+                    let tip = if shown_summary != summary_text {
+                        format!("{}\n\n统计从本进程启动开始；命中每 30 秒自动落库一次。", summary_text)
+                    } else {
+                        "统计从本进程启动开始；命中每 30 秒自动落库一次。".to_string()
+                    };
                     ui.add(
                         egui::Label::new(
-                            RichText::new(format!(
-                                "{total} 条连接 · 兜底 MATCH {matched} 条（{pct}%） · \
-                                 占比按连接数算，一条连接只计一次"
-                            ))
-                            .small()
-                            .color(theme::text_secondary()),
-                        )
-                        .truncate(),
+                            RichText::new(shown_summary)
+                                .small()
+                                .color(theme::text_secondary()),
+                        ),
                     )
-                    .on_hover_text("统计从本进程启动开始；命中每 30 秒自动落库一次。");
+                    .on_hover_text(tip);
                 },
                 |ui| {
                     if ui

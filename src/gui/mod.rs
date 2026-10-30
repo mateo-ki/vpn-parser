@@ -4860,8 +4860,11 @@ impl eframe::App for VpnApp {
                     let status = self.status.clone();
                     let small = egui::TextStyle::Small.resolve(ui.style());
                     let shown = crate::gui::widgets::ellipsize(ui, &status, room, small);
-                    ui.label(RichText::new(shown).color(theme::text_primary()).small())
-                        .on_hover_text(status);
+                    let is_truncated = shown != status;
+                    let resp = ui.label(RichText::new(shown).color(theme::text_primary()).small());
+                    if is_truncated {
+                        resp.on_hover_text(status);
+                    }
                     let mut group_width = 0.0_f32;
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // 控制按钮（启动/停止代理 · 测速全部等）

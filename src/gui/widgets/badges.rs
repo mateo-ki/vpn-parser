@@ -62,20 +62,23 @@ pub fn subscription_pill(ui: &mut Ui, source_name: &str, max_text_width: f32) {
                         .x
                 });
                 let alloc_w = text_w.clamp(14.0, max_text_width);
+                let shown_text = crate::gui::widgets::ellipsize(
+                    ui,
+                    text,
+                    alloc_w,
+                    egui::FontId::proportional(10.5),
+                );
                 ui.add_sized(
                     [alloc_w, 15.0],
                     egui::Label::new(
-                        RichText::new(text)
+                        RichText::new(shown_text)
                             .small()
                             .size(10.5)
                             .color(theme::text_secondary()),
-                    )
-                    .truncate(),
+                    ),
                 );
             });
-        })
-        .response
-        .on_hover_text(format!("订阅源: {text}"));
+        });
 }
 
 
@@ -343,7 +346,6 @@ pub fn country_code_and_color(code: &str) -> (&'static str, Color32) {
 /// 方案 B：极简双色无框字母国旗标识 (Pure Typography Country Code)
 pub fn render_country_code_badge(ui: &mut Ui, code: &str) -> egui::Response {
     let (code_str, color) = country_code_and_color(code);
-    let (_flag, country_name) = country_flag_and_name(code);
     ui.add(
         egui::Label::new(
             RichText::new(code_str)
@@ -352,6 +354,5 @@ pub fn render_country_code_badge(ui: &mut Ui, code: &str) -> egui::Response {
                 .color(color),
         ),
     )
-    .on_hover_text(format!("地区: {country_name} ({code_str})"))
 }
 
