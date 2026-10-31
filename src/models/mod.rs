@@ -509,7 +509,8 @@ impl Default for AppSettings {
             speedtest_auto_refill: false,
             auto_rearm_system_proxy: false,
             auto_prepare_kernel: true,
-            launch_as_admin: false,
+            // 新装默认管理员启动（TUN 模式需要）；main.rs 启动时才请求提权，headless/诊断壳不受影响。
+            launch_as_admin: true,
             launch_at_startup: false,
             speedtest_added_source: true,
             gist_pages: default_gist_pages(),

@@ -2401,11 +2401,9 @@ impl VpnApp {
                                 self.status = "系统代理已启用".into();
                             }
                             self.save_proxy_config();
-                            if running && !self.proxy_busy {
-                                // 系统代理开关：若同时动了 TUN（Both→System）走内核热切换，
-                                // TUN 未变（System↔None / Tun↔Both）保持原重启语义
-                                self.apply_proxy_mode_change(tun_on);
-                            }
+                            // 模式变化的应用由 save_proxy_config 登记 pending、在
+                            // ProxyConfigSaved 回调里执行（此处同步 apply 会撞上刚置位的
+                            // proxy_busy 死守卫，TUN 开关曾因此只落库不生效）
                         }
                     });
                     if let Some(resp) = icon_resp {
@@ -2428,10 +2426,8 @@ impl VpnApp {
                                 self.status = "TUN 模式已启用".into();
                             }
                             self.save_proxy_config();
-                            if running && !self.proxy_busy {
-                                // TUN 热切换优先（毫秒级生效、不断连接），不支持再回退重启
-                                self.apply_proxy_mode_change(tun_on);
-                            }
+                            // 模式变化的应用由 save_proxy_config 登记 pending、在
+                            // ProxyConfigSaved 回调里执行（同上，同步 apply 会撞死守卫）
                         }
                     });
                     if let Some(resp) = icon_resp {

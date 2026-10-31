@@ -893,12 +893,19 @@ impl VpnApp {
                                 Ok(config) => {
                                     self.set_proxy_config(config);
                                     self.status = "代理配置已保存".into();
+                                    self.reload_proxy();
+                                    // 模式开关（系统代理/TUN）在保存期间登记的待应用变更：
+                                    // busy 已清、配置已落库，此时才能真正走热切换/重启。
+                                    // 保存失败时丢弃标记（未落库的模式不应被应用）。
+                                    if let Some(was_tun) = self.pending_mode_apply.take() {
+                                        self.apply_proxy_mode_change(was_tun);
+                                    }
                                 }
                                 Err(error) => {
+                                    self.pending_mode_apply = None;
                                     self.status = format!("保存代理配置失败: {error}");
                                 }
                             }
-                            self.reload_proxy();
                         }
                         BgMsg::ProxyConfigQuietSaved(result) => {
                             if let Err(error) = result {

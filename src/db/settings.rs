@@ -157,8 +157,9 @@ impl Database {
             auto_prepare_kernel: sqlx::Row::try_get::<i64, _>(&row, "auto_prepare_kernel")
                 .unwrap_or(1)
                 != 0,
+            // 缺列时按"开"读：新装默认管理员启动，不能因为列暂时不在就变成关。
             launch_as_admin: sqlx::Row::try_get::<i64, _>(&row, "launch_as_admin")
-                .unwrap_or(0)
+                .unwrap_or(1)
                 != 0,
             launch_at_startup: sqlx::Row::try_get::<i64, _>(&row, "launch_at_startup")
                 .unwrap_or(0)

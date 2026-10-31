@@ -81,6 +81,11 @@ pub struct VpnApp {
     pub(crate) status_bar_top_y: f32,
     pub(crate) busy: bool,
     pub(crate) proxy_busy: bool,
+    /// 模式开关（系统代理/TUN）拨动后待应用的工作模式：Some(改动前的 TUN 状态)。
+    /// `save_proxy_config` 检测到运行模式变化时置位，保存完成（ProxyConfigSaved 回清
+    /// proxy_busy）后再真正应用 —— 不能在 save 之前同步调 apply：save 同步置 busy，
+    /// 紧跟其后的 `!self.proxy_busy` 守卫永远为假，TUN 开关曾经因此只落库不生效。
+    pub(crate) pending_mode_apply: Option<bool>,
     /// 上一次写进 startup.log 的代理状态 + 它开始的时间 + 卡住告警是否已发过。
     /// 启动按钮灰掉的三种原因里，只有「卡在 Starting/Stopping」是用户看不到解释的那种，
     /// 所以状态每变一次记一行，卡满 30 秒再补一行。
@@ -541,6 +546,7 @@ impl VpnApp {
             status_bar_top_y: 0.0,
             busy: false,
             proxy_busy: false,
+            pending_mode_apply: None,
             last_proxy_state_log: None,
             proxy_started_at: None,
             service_checks: None,
@@ -2816,6 +2822,17 @@ impl VpnApp {
         let manager = self.proxy_manager.clone();
         let db = self.db.clone();
         let options = self.prepare_proxy_config_options();
+        // 运行中改了工作模式（系统代理/TUN 组合变化）：登记待应用标记，等保存完成
+        // （ProxyConfigSaved 回清 proxy_busy）后再走 apply_proxy_mode_change —— 热切换
+        // 或整进程重启。调用方不能在 save 之后同步 apply：这里同步置 busy，其后的
+        // `!self.proxy_busy` 守卫必然为假，TUN 开关曾经因此只落库、内核毫不知情。
+        let mode_changed = matches!(
+            self.proxy_status.state,
+            ProxyState::Running | ProxyState::Degraded
+        ) && options.mode != self.proxy_status.mode;
+        if mode_changed {
+            self.pending_mode_apply = Some(self.proxy_status.mode.has_tun());
+        }
         let tx = self.tx.clone();
         self.proxy_busy = true;
         self.status = "正在保存分流配置并应用...".into();

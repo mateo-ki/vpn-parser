@@ -259,8 +259,9 @@ impl Database {
             self.ensure_column("settings", column, "INTEGER NOT NULL DEFAULT 1")
                 .await?;
         }
-        // 以管理员方式启动软件：默认关（老库升级不打扰现有用户）。
-        self.ensure_column("settings", "launch_as_admin", "INTEGER NOT NULL DEFAULT 0")
+        // 以管理员方式启动软件：默认开（TUN 虚拟网卡模式需要管理员权限）；
+        // 老库里该列已存在（ensure_column 不会重复加列），用户自己的选择原样保留。
+        self.ensure_column("settings", "launch_as_admin", "INTEGER NOT NULL DEFAULT 1")
             .await?;
         // 开机自启动：默认关（写的是用户注册表，不能擅自开）。
         self.ensure_column("settings", "launch_at_startup", "INTEGER NOT NULL DEFAULT 0")

@@ -370,9 +370,14 @@ pub async fn perform_network_diagnosis(
             #[cfg(windows)]
             {
                 let check_tun = tokio::task::spawn_blocking(|| {
-                    let out = std::process::Command::new("powershell")
-                        .args(["-NoProfile", "-Command", "Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like '*Wintun*' -or $_.InterfaceAlias -in @('Meta','meow','sing-box') } | Select-Object -ExpandProperty InterfaceAlias"])
-                        .output();
+                    // CREATE_NO_WINDOW：网络检测在 GUI 会话里跑，不能闪 PowerShell 控制台窗
+                    #[cfg(windows)]
+                    use std::os::windows::process::CommandExt;
+                    let mut cmd = std::process::Command::new("powershell");
+                    cmd.args(["-NoProfile", "-Command", "Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like '*Wintun*' -or $_.InterfaceAlias -in @('Meta','meow','sing-box') } | Select-Object -ExpandProperty InterfaceAlias"]);
+                    #[cfg(windows)]
+                    cmd.creation_flags(0x0800_0000);
+                    let out = cmd.output();
                     out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
                 }).await.unwrap_or_default();
 
