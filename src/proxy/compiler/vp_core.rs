@@ -143,7 +143,7 @@ impl BackendCompiler for VpCoreCompiler {
                         "enable": true,
                         "address": "198.18.0.1",
                         "netmask": "255.255.0.0",
-                        "mtu": 9000,
+                        "mtu": 1500,
                         "fake-ip-range": "198.18.0.0/16",
                         "auto-route": plan.inbounds.tun.auto_route,
                         "ring-capacity": 4194304,
@@ -219,6 +219,48 @@ impl BackendCompiler for VpCoreCompiler {
                                         "VP-Core 的 GeoIP 数据库仅支持双字母国家码与 LAN/PRIVATE，已自动过滤/忽略非法规则: {s}"
                                     );
                                 }
+                            }
+                        } else if parts.len() >= 3
+                            && (parts[0].eq_ignore_ascii_case("IP-CIDR")
+                                || parts[0].eq_ignore_ascii_case("IP-CIDR6"))
+                        {
+                            let cidr = parts[1];
+                            let is_private = crate::hostutil::is_private_cidr(cidr)
+                                || cidr == "0.0.0.0/8"
+                                || cidr.starts_with("127.")
+                                || cidr.starts_with("198.18.")
+                                || cidr.starts_with("224.")
+                                || cidr.starts_with("240.")
+                                || cidr.starts_with("255.255.");
+                            if is_private {
+                                let prefix = parts[0];
+                                new_rules.push(serde_json::Value::String(format!(
+                                    "{prefix},{cidr},DIRECT,no-resolve"
+                                )));
+                            } else {
+                                new_rules.push(r);
+                            }
+                        } else if parts.len() >= 3
+                            && (parts[0].eq_ignore_ascii_case("DOMAIN")
+                                || parts[0].eq_ignore_ascii_case("DOMAIN-SUFFIX"))
+                        {
+                            let d = parts[1].to_ascii_lowercase();
+                            if matches!(
+                                d.as_str(),
+                                "localhost"
+                                    | "lan"
+                                    | "local"
+                                    | "internal"
+                                    | "ip6-localhost"
+                                    | "ip6-loopback"
+                            ) {
+                                let prefix = parts[0];
+                                new_rules.push(serde_json::Value::String(format!(
+                                    "{prefix},{},DIRECT",
+                                    parts[1]
+                                )));
+                            } else {
+                                new_rules.push(r);
                             }
                         } else {
                             new_rules.push(r);
@@ -375,6 +417,36 @@ mod tests {
         assert!(yaml.contains("enable: true"));
         assert!(yaml.contains("198.18.0.1"));
         assert!(yaml.contains("auto-route: true"));
+    }
+
+    #[test]
+    fn test_vpcore_compiler_hy2_tun_full() {
+        let node = test_node(
+            "hysteria2",
+            json!({
+                "mport": "20000-30000",
+                "name": "test-hy2-node",
+                "password": "test-password-12345",
+                "port": 20000,
+                "ports": "20000-30000",
+                "server": "203.0.113.1",
+                "skip-cert-verify": true,
+                "sni": "example.com",
+                "type": "hysteria2",
+                "udp": true
+            }),
+        );
+        let mut options = MihomoConfigOptions::default();
+        options.mode = ProxyMode::Tun;
+        let plan = crate::proxy::ir::lower_options_to_ir(&options, Some(&node));
+        let artifact = VpCoreCompiler.compile(&plan).expect("compile success");
+        let yaml = match artifact {
+            CompiledArtifact::Yaml(y) => y,
+            _ => panic!("expected Yaml artifact"),
+        };
+        assert!(yaml.contains("type: hysteria2"));
+        assert!(yaml.contains("server: 203.0.113.1"));
+        assert!(yaml.contains("tun:"));
     }
 
     /// 境内 DoH 污染免疫注入对 VP-Core 同样生效：VP-Core 编译器复用 Mihomo 编译器

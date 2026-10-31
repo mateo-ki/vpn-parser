@@ -2389,16 +2389,15 @@ impl VpnApp {
                     let sys_sub = format!("{}:{}", sub, self.proxy_status.mixed_port);
                     let icon_resp = dash_bottom_proxy_item(ui, item_w, card_h, icon, icon_col, title, &sys_sub, true, |ui| {
                         let resp = dash_switch(ui, sys_on);
-                        if resp.clicked() {
+                        if resp.clicked() && !self.proxy_busy {
                             if sys_on {
                                 // 关系统代理：若 tun 开着则切到 Tun，否则切到 None（纯端口模式）
                                 self.proxy_config.mode = if tun_on { ProxyMode::Tun } else { ProxyMode::None };
-                                let _ = crate::system_proxy::direct_disable_wininet_proxy_atomic();
-                                self.status = "系统代理已即时关闭并重置注册表".into();
+                                self.status = "正在关闭系统代理...".into();
                             } else {
                                 // 开系统代理：若同时开 TUN 则为 Both，否则为 System
                                 self.proxy_config.mode = if tun_on { ProxyMode::Both } else { ProxyMode::System };
-                                self.status = "系统代理已启用".into();
+                                self.status = "正在启用系统代理...".into();
                             }
                             self.save_proxy_config();
                             // 模式变化的应用由 save_proxy_config 登记 pending、在
@@ -2415,7 +2414,7 @@ impl VpnApp {
                 ProxyItemKind::Tun => {
                     let icon_resp = dash_bottom_proxy_item(ui, item_w, card_h, icon, icon_col, title, sub, true, |ui| {
                         let resp = dash_switch(ui, tun_on);
-                        if resp.clicked() {
+                        if resp.clicked() && !self.proxy_busy {
                             if tun_on {
                                 // 关 TUN：若 sys 开着则切到 System，否则切到 None（纯端口模式）
                                 self.proxy_config.mode = if sys_on { ProxyMode::System } else { ProxyMode::None };

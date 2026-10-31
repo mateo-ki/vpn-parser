@@ -1044,6 +1044,50 @@ use std::time::Duration;
     }
 
     #[tokio::test]
+    async fn test_hot_toggle_system_proxy_transitions() {
+        let controller = Arc::new(FakeSystemProxy::default());
+        let mut opts = MihomoConfigOptions::default();
+        opts.mode = ProxyMode::Tun;
+        let manager = ProxyManager::with_system_proxy(opts, controller.clone());
+        {
+            let mut rt = manager.runtime.lock().await;
+            rt.status.state = ProxyState::Running;
+            rt.status.mode = ProxyMode::Tun;
+        }
+
+        // 1. 在 Tun 模式下热开启系统代理 -> Both
+        let msg = manager.hot_toggle_system_proxy(true).await.unwrap();
+        assert!(msg.contains("系统代理已即时开启"));
+        assert_eq!(manager.status().await.mode, ProxyMode::Both);
+        assert!(manager.status().await.system_proxy_enabled);
+        assert_eq!(manager.config().await.mode, ProxyMode::Both);
+
+        // 2. 在 Both 模式下热关闭系统代理 -> Tun
+        let msg = manager.hot_toggle_system_proxy(false).await.unwrap();
+        assert!(msg.contains("系统代理已即时关闭"));
+        assert_eq!(manager.status().await.mode, ProxyMode::Tun);
+        assert!(!manager.status().await.system_proxy_enabled);
+        assert_eq!(manager.config().await.mode, ProxyMode::Tun);
+
+        // 3. 在 None 模式下热开启系统代理 -> System
+        {
+            let mut rt = manager.runtime.lock().await;
+            rt.options.mode = ProxyMode::None;
+            rt.status.mode = ProxyMode::None;
+        }
+        let msg = manager.hot_toggle_system_proxy(true).await.unwrap();
+        assert!(msg.contains("系统代理已即时开启"));
+        assert_eq!(manager.status().await.mode, ProxyMode::System);
+        assert!(manager.status().await.system_proxy_enabled);
+
+        // 4. 在 System 模式下热关闭系统代理 -> None
+        let msg = manager.hot_toggle_system_proxy(false).await.unwrap();
+        assert!(msg.contains("系统代理已即时关闭"));
+        assert_eq!(manager.status().await.mode, ProxyMode::None);
+        assert!(!manager.status().await.system_proxy_enabled);
+    }
+
+    #[tokio::test]
     async fn switch_node_falls_back_when_not_running() {
         let manager = ProxyManager::new(MihomoConfigOptions::default());
         let test_node = node(

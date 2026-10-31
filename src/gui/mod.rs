@@ -3059,9 +3059,28 @@ impl VpnApp {
             return;
         }
         let tun_on = self.proxy_config.mode.has_tun();
+        let sys_on = self.proxy_config.mode.has_system();
         if tun_on == was_tun {
-            // TUN 没变（纯系统代理开关）：保持原重启语义，系统代理归 manager 统一收放
-            self.start_proxy();
+            // TUN 没变（纯系统代理开关）：免停热切 Windows 注册表与 WinINET，无需重启内核
+            let manager = self.proxy_manager.clone();
+            let tx = self.tx.clone();
+            self.proxy_busy = true;
+            self.status = if sys_on {
+                "正在免停即时开启系统代理...".to_string()
+            } else {
+                "正在免停即时关闭系统代理...".to_string()
+            };
+            self.rt.spawn(async move {
+                match manager.hot_toggle_system_proxy(sys_on).await {
+                    Ok(message) => {
+                        let _ = tx.send(BgMsg::SystemProxyHotToggled { ok: true, message });
+                    }
+                    Err(error) => {
+                        let message = format!("切换系统代理失败: {error}");
+                        let _ = tx.send(BgMsg::SystemProxyHotToggled { ok: false, message });
+                    }
+                }
+            });
             return;
         }
         if tun_on && !crate::platform::is_elevated() {

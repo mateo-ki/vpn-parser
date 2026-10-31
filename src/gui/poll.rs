@@ -851,12 +851,13 @@ impl VpnApp {
                             self.proxy_status = status;
                         }
                         BgMsg::ProxyModeHotToggled { ok, message } => {
+                            self.proxy_busy = false;
                             if ok {
                                 // 热切换已生效：就地更新运行状态，进程未重启、连接未中断
-                                self.proxy_busy = false;
                                 self.note_proxy_state_transition(ProxyState::Running);
                                 self.proxy_status.state = ProxyState::Running;
                                 self.proxy_status.mode = self.proxy_config.mode;
+                                self.proxy_status.system_proxy_enabled = self.proxy_config.mode.has_system();
                                 self.proxy_status.last_error = None;
                                 self.status = message;
                                 // TUN 状态变了，出口归属立刻静默复核一遍
@@ -864,6 +865,18 @@ impl VpnApp {
                             } else {
                                 // 内核不支持热切换：回退整进程重启（start_proxy 内部
                                 // 会处理提权交接与非 TUN 内核拦截）
+                                self.status = message;
+                                self.start_proxy();
+                            }
+                        }
+                        BgMsg::SystemProxyHotToggled { ok, message } => {
+                            self.proxy_busy = false;
+                            if ok {
+                                self.proxy_status.system_proxy_enabled = self.proxy_config.mode.has_system();
+                                self.proxy_status.mode = self.proxy_config.mode;
+                                self.status = message;
+                                self.refresh_egress_silently();
+                            } else {
                                 self.status = message;
                                 self.start_proxy();
                             }
@@ -893,12 +906,14 @@ impl VpnApp {
                                 Ok(config) => {
                                     self.set_proxy_config(config);
                                     self.status = "代理配置已保存".into();
-                                    self.reload_proxy();
                                     // 模式开关（系统代理/TUN）在保存期间登记的待应用变更：
                                     // busy 已清、配置已落库，此时才能真正走热切换/重启。
-                                    // 保存失败时丢弃标记（未落库的模式不应被应用）。
+                                    // 关键：有模式变更待执行时，绝不能在此处提前调用 reload_proxy，
+                                    // 否则会从尚未完成热切的内核读到旧 mode 重新覆盖 UI 造成开关跳回！
                                     if let Some(was_tun) = self.pending_mode_apply.take() {
                                         self.apply_proxy_mode_change(was_tun);
+                                    } else {
+                                        self.reload_proxy();
                                     }
                                 }
                                 Err(error) => {

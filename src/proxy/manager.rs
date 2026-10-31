@@ -225,6 +225,41 @@ impl ProxyManager {
         Ok(format!("已把系统代理写回 {server}"))
     }
 
+    /// 运行中免停热切换系统代理开关（修改 Windows 注册表，无需重启内核进程、不断开已有连接）
+    pub async fn hot_toggle_system_proxy(&self, enable: bool) -> Result<String> {
+        let _operation = self.operation.lock().await;
+        let mut runtime = self.runtime.lock().await;
+        let port = runtime.options.mixed_port;
+        if enable {
+            let server = format!("127.0.0.1:{port}");
+            let terminal_port = runtime
+                .options
+                .terminal_proxy
+                .then_some(port);
+            let snapshot =
+                activate_system_proxy(self.system_proxy.clone(), server.clone(), terminal_port).await?;
+            runtime.system_proxy_snapshot = Some(snapshot);
+            runtime.status.system_proxy_enabled = true;
+            let tun_on = runtime.options.mode.has_tun();
+            runtime.options.mode = if tun_on { ProxyMode::Both } else { ProxyMode::System };
+            runtime.status.mode = runtime.options.mode;
+            tracing::info!(port, "系统代理免停热开启成功");
+            Ok(format!("系统代理已即时开启 (指向 {server})，未重启内核"))
+        } else {
+            if let Some(snapshot) = runtime.system_proxy_snapshot.take() {
+                let _ = restore_system_proxy(self.system_proxy.clone(), snapshot, false).await;
+            } else {
+                let _ = crate::system_proxy::direct_disable_wininet_proxy_atomic();
+            }
+            runtime.status.system_proxy_enabled = false;
+            let tun_on = runtime.options.mode.has_tun();
+            runtime.options.mode = if tun_on { ProxyMode::Tun } else { ProxyMode::None };
+            runtime.status.mode = runtime.options.mode;
+            tracing::info!("系统代理免停热关闭成功");
+            Ok("系统代理已即时关闭，未重启内核".to_string())
+        }
+    }
+
     pub async fn status(&self) -> ProxyRuntimeStatus {
         let cleanup = {
             let mut runtime = self.runtime.lock().await;
@@ -593,6 +628,24 @@ impl ProxyManager {
 
         let elapsed_ms = started.elapsed().as_millis() as u64;
         let mut runtime = self.runtime.lock().await;
+
+        // 同步系统代理状态：避免开关 TUN 时丢失原先并行的系统代理状态
+        if options.mode.has_system() && runtime.system_proxy_snapshot.is_none() {
+            let server = format!("127.0.0.1:{}", runtime.options.mixed_port);
+            let terminal_port = runtime.options.terminal_proxy.then_some(runtime.options.mixed_port);
+            if let Ok(snapshot) = activate_system_proxy(self.system_proxy.clone(), server, terminal_port).await {
+                runtime.system_proxy_snapshot = Some(snapshot);
+                runtime.status.system_proxy_enabled = true;
+            }
+        } else if !options.mode.has_system() && runtime.system_proxy_snapshot.is_some() {
+            if let Some(snapshot) = runtime.system_proxy_snapshot.take() {
+                let _ = restore_system_proxy(self.system_proxy.clone(), snapshot, false).await;
+            } else {
+                let _ = crate::system_proxy::direct_disable_wininet_proxy_atomic();
+            }
+            runtime.status.system_proxy_enabled = false;
+        }
+
         runtime.apply_options(options.clone());
         runtime.status.mode = options.mode;
         runtime.status.routing_mode = options.routing_mode;
@@ -1277,7 +1330,7 @@ impl ProxyManager {
             tokio::spawn(async move {
                 // 等待内核加载并与远程服务器建立初始连接
                 tokio::time::sleep(Duration::from_millis(250)).await;
-                if let Err(error) = verify_local_proxy(mixed_port, STARTUP_PROXY_VERIFY_TIMEOUT.max(Duration::from_secs(3))).await {
+                if let Err(error) = verify_local_proxy(mixed_port, STARTUP_PROXY_VERIFY_TIMEOUT.max(Duration::from_secs(6))).await {
                     let detail = tokio::fs::read_to_string(&log_path)
                         .await
                         .unwrap_or_default();
@@ -1287,7 +1340,7 @@ impl ProxyManager {
                         || diagnostic.contains("start initial configuration")
                     {
                         tokio::time::sleep(Duration::from_secs(1)).await;
-                        if verify_local_proxy(mixed_port, Duration::from_secs(2)).await.is_ok() {
+                        if verify_local_proxy(mixed_port, Duration::from_secs(3)).await.is_ok() {
                             tracing::info!(kernel = %kernel_name, "内核初始握手完成，连通性验证通过");
                             return;
                         }

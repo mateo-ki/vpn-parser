@@ -413,19 +413,37 @@ pub fn parse_clash_rules_yaml_to_ir(rules_yaml: Option<&str>, source: RuleSource
             _ => continue,
         };
 
-        let action = match action_str.to_ascii_uppercase().as_str() {
-            "DIRECT" => IRAction::Direct,
-            "REJECT" => IRAction::Reject,
-            "PROXY" => IRAction::Proxy(None),
-            _ => IRAction::Proxy(Some(action_str.to_string())),
+        let action_upper = action_str.to_ascii_uppercase();
+        let mut action = if action_upper == "DIRECT"
+            || action_upper == "PASS"
+            || action_str.contains("直连")
+        {
+            IRAction::Direct
+        } else if action_upper == "REJECT"
+            || action_upper == "REJECT-DROP"
+            || action_upper == "DROP"
+            || action_str.contains("拦截")
+            || action_str.contains("广告")
+            || action_str.contains("丢弃")
+        {
+            IRAction::Reject
+        } else if action_upper == "PROXY" {
+            IRAction::Proxy(None)
+        } else {
+            IRAction::Proxy(Some(action_str.to_string()))
         };
+
+        let is_private_ip = matches!(matcher_type.as_str(), "IP-CIDR" | "IP-CIDR6")
+            && crate::hostutil::is_private_cidr(target);
+        if is_private_ip {
+            // 私有局域网、本机环路与保留 CIDR 永远强制直连
+            action = IRAction::Direct;
+        }
 
         rules.push(IRRule {
             matchers: vec![matcher],
             action,
-            no_resolve: no_resolve
-                || (matches!(matcher_type.as_str(), "IP-CIDR" | "IP-CIDR6")
-                    && crate::hostutil::is_private_cidr(target)),
+            no_resolve: no_resolve || is_private_ip,
             source,
         });
     }

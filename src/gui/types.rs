@@ -467,6 +467,8 @@ pub enum BgMsg {
     ProxyStatus(ProxyRuntimeStatus),
     /// TUN 热切换结果：ok=true 已生效（message 为状态栏文案）；false 时界面回退整进程重启。
     ProxyModeHotToggled { ok: bool, message: String },
+    /// 系统代理热切换结果：ok=true 已生效，未重启进程
+    SystemProxyHotToggled { ok: bool, message: String },
     /// 分流出站模式（规则 / 全局 / 直连）免停热切结果
     ProxyRoutingModeHotSwitched {
         ok: bool,

@@ -333,13 +333,28 @@ fn bump_unsupported(list: &mut Vec<(String, usize)>, kind: String) {
 }
 
 fn action_for_target(target: &str) -> (RuleAction, bool) {
-    match target.to_ascii_uppercase().as_str() {
-        "DIRECT" => (RuleAction::Direct, false),
-        "REJECT" => (RuleAction::Reject, false),
-        "PROXY" => (RuleAction::Proxy, false),
-        // 自定义组名：本程序只有一个代理组出口，落到它。
-        _ => (RuleAction::Proxy, true),
+    let raw = target.trim();
+    let upper = raw.to_ascii_uppercase();
+    if upper == "DIRECT" || upper == "PASS" {
+        return (RuleAction::Direct, false);
     }
+    if upper == "REJECT" || upper == "REJECT-DROP" || upper == "DROP" {
+        return (RuleAction::Reject, false);
+    }
+    if upper == "PROXY" {
+        return (RuleAction::Proxy, false);
+    }
+    // 识别常见中文策略组名称：
+    // 直连类（"🎯 全球直连", "全球直连", "直连" 等）
+    if raw.contains("直连") {
+        return (RuleAction::Direct, true);
+    }
+    // 拦截类（"🛑 全球拦截", "全球拦截", "广告拦截", "拦截", "丢弃" 等）
+    if raw.contains("拦截") || raw.contains("广告") || raw.contains("丢弃") {
+        return (RuleAction::Reject, true);
+    }
+    // 其余代理类策略组（"🚀 节点选择", "🐟 漏网之鱼", "PROXY", "PROXIES" 等）统一映射到主代理出口
+    (RuleAction::Proxy, true)
 }
 
 fn parse_rule_line(line: &str) -> Parsed {
