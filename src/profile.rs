@@ -103,6 +103,7 @@ pub async fn export_unified_profile(
     let sources_raw = db.list_sources().await?;
     let sources = sources_raw
         .into_iter()
+        .filter(|s| !s.is_imported())
         .map(|s| ProfileSource {
             name: s.name,
             url: s.url_template,
@@ -484,7 +485,13 @@ mod tests {
         assert_eq!(summary.custom_nodes_imported, 1);
 
         // 验证 db2 中的订阅源和节点
-        let db2_sources = db2.list_sources().await.unwrap();
+        let db2_sources = db2
+            .list_sources()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|s| !s.is_imported())
+            .collect::<Vec<_>>();
         assert_eq!(db2_sources.len(), 1);
         assert_eq!(db2_sources[0].name, "主订阅-日本专线");
         assert_eq!(db2_sources[0].url_template, "https://example.com/jp.yaml");

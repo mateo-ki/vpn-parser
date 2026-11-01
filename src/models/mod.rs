@@ -87,6 +87,14 @@ impl Source {
             updated_at: now,
         }
     }
+
+    /// 是否为本地导入/剪贴板自建节点源（无需网络拉取）
+    pub fn is_imported(&self) -> bool {
+        self.id == crate::db::UNGROUPED_SOURCE_ID
+            || self.url_template.starts_with("local://")
+            || self.url_template.starts_with("clipboard://")
+            || self.url_template.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

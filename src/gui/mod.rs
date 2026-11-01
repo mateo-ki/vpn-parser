@@ -877,6 +877,9 @@ impl VpnApp {
             app.settings.ui_dark = dark;
             app.edit_ui_dark = dark;
         }
+        if let Some(ref node_id) = app.selected_proxy_node_id {
+            app.router.set_active(node_id);
+        }
         app.reload_all();
         app
     }
@@ -1251,15 +1254,24 @@ impl VpnApp {
     }
 
     pub(crate) fn save_source_form(&mut self) {
-        if self.form_name.trim().is_empty() || self.form_url.trim().is_empty() {
-            self.status = "名称和 URL 不能为空".into();
+        let is_ungrouped = self.editing_id.as_deref() == Some(crate::db::UNGROUPED_SOURCE_ID);
+        if self.form_name.trim().is_empty() {
+            self.status = "名称不能为空".into();
+            return;
+        }
+        if !is_ungrouped && self.form_url.trim().is_empty() {
+            self.status = "订阅链接或本地文件路径不能为空".into();
             return;
         }
         let db = self.db.clone();
         let tx = self.tx.clone();
         let editing = self.editing_id.clone();
         let name = self.form_name.trim().to_string();
-        let url = self.form_url.trim().to_string();
+        let url = if is_ungrouped && self.form_url.trim().is_empty() {
+            "local://ungrouped".to_string()
+        } else {
+            self.form_url.trim().to_string()
+        };
         let enabled = self.form_enabled;
         let remark = nonempty_opt(&self.form_remark);
         let user_agent = nonempty_opt(&self.form_user_agent);
@@ -1465,6 +1477,24 @@ impl VpnApp {
         });
     }
 
+    pub(crate) fn clear_ungrouped_nodes(&mut self) {
+        let db = self.db.clone();
+        let tx = self.tx.clone();
+        self.busy = true;
+        self.status = "正在清空导入节点...".into();
+        self.rt.spawn(async move {
+            let res = db
+                .clear_ungrouped_nodes()
+                .await
+                .map(|count| format!("已清空导入节点（共清理 {count} 个）"))
+                .map_err(|e| e.to_string());
+            let _ = tx.send(BgMsg::OpDone {
+                result: res,
+                unlock: true,
+            });
+        });
+    }
+
     pub(crate) fn clear_all_sources(&mut self) {
         let db = self.db.clone();
         let tx = self.tx.clone();
@@ -1561,6 +1591,7 @@ impl VpnApp {
         let sources: Vec<CreateSource> = self
             .sources
             .iter()
+            .filter(|source| !source.is_imported())
             .map(|source| CreateSource {
                 name: source.name.clone(),
                 url_template: source.url_template.clone(),
@@ -2500,10 +2531,24 @@ impl VpnApp {
         });
     }
 
+    pub(crate) fn set_and_persist_selected_node(&mut self, id: String, name: String) {
+        self.selected_proxy_node_id = Some(id.clone());
+        self.selected_proxy_node_name = Some(name.clone());
+        self.proxy_config.selected_node_id = Some(id.clone());
+        self.proxy_config.selected_node_name = Some(name.clone());
+        let db = self.db.clone();
+        self.rt.spawn(async move {
+            if let Ok(mut cfg) = db.get_proxy_config().await {
+                cfg.selected_node_id = Some(id);
+                cfg.selected_node_name = Some(name);
+                let _ = db.update_proxy_config(&cfg).await;
+            }
+        });
+    }
+
     #[allow(dead_code)]
     pub(crate) fn select_proxy_node(&mut self, id: String, name: String) {
-        self.selected_proxy_node_id = Some(id);
-        self.selected_proxy_node_name = Some(name);
+        self.set_and_persist_selected_node(id, name);
         self.tab = Tab::Proxy;
         self.status = "已选择代理节点".into();
     }
@@ -2542,8 +2587,7 @@ impl VpnApp {
             self.proxy_status.state,
             ProxyState::Running | ProxyState::Degraded
         );
-        self.selected_proxy_node_id = Some(id.clone());
-        self.selected_proxy_node_name = Some(name.clone());
+        self.set_and_persist_selected_node(id.clone(), name.clone());
         self.router.set_active(&id);
 
         // 如果代理未运行：仅设为活动节点，不要启动代理！
@@ -2774,7 +2818,7 @@ impl VpnApp {
     }
 
     /// 代理配置进 UI 状态的唯一入口。
-    fn set_proxy_config(&mut self, config: MihomoConfigOptions) {
+    fn set_proxy_config(&mut self, mut config: MihomoConfigOptions) {
         if self.custom_rules_text.trim().is_empty() && !config.rules.is_empty() {
             self.custom_rules_text = crate::proxy::rule_io::export_lines(&config.rules)
                 .map(|lines| {
@@ -2785,6 +2829,17 @@ impl VpnApp {
                         .join("\n")
                 })
                 .unwrap_or_default();
+        }
+        if self.selected_proxy_node_id.is_none() {
+            if let Some(ref id) = config.selected_node_id {
+                self.selected_proxy_node_id = Some(id.clone());
+            }
+            if let Some(ref name) = config.selected_node_name {
+                self.selected_proxy_node_name = Some(name.clone());
+            }
+        } else {
+            config.selected_node_id = self.selected_proxy_node_id.clone();
+            config.selected_node_name = self.selected_proxy_node_name.clone();
         }
         self.proxy_config = config;
     }
@@ -2805,6 +2860,12 @@ impl VpnApp {
                     options.subscription_groups_yaml = src.groups_yaml.clone();
                 }
             }
+        }
+        if let Some(ref id) = self.selected_proxy_node_id {
+            options.selected_node_id = Some(id.clone());
+        }
+        if let Some(ref name) = self.selected_proxy_node_name {
+            options.selected_node_name = Some(name.clone());
         }
         options
     }
@@ -3167,13 +3228,18 @@ impl VpnApp {
     pub(crate) fn start_proxy(&mut self) {
         if self.selected_proxy_node_id.is_none() {
             if let Some(ref focused) = self.focused_node_id {
-                self.selected_proxy_node_id = Some(focused.clone());
+                let name = self
+                    .proxy_nodes
+                    .iter()
+                    .chain(self.nodes.iter())
+                    .find(|n| &n.id == focused)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_default();
+                self.set_and_persist_selected_node(focused.clone(), name);
             } else if let Some(n) = self.nodes.first() {
-                self.selected_proxy_node_id = Some(n.id.clone());
-                self.selected_proxy_node_name = Some(n.name.clone());
+                self.set_and_persist_selected_node(n.id.clone(), n.name.clone());
             } else if let Some(n) = self.proxy_nodes.first() {
-                self.selected_proxy_node_id = Some(n.id.clone());
-                self.selected_proxy_node_name = Some(n.name.clone());
+                self.set_and_persist_selected_node(n.id.clone(), n.name.clone());
             }
         }
         if self.selected_proxy_node_id.is_none() && self.proxy_config.url_test {
@@ -4034,6 +4100,20 @@ impl VpnApp {
     }
 
     pub(crate) fn delete_node(&mut self, id: String) {
+        if self.selected_proxy_node_id.as_deref() == Some(&id) {
+            self.selected_proxy_node_id = None;
+            self.selected_proxy_node_name = None;
+            self.proxy_config.selected_node_id = None;
+            self.proxy_config.selected_node_name = None;
+            let db_cfg = self.db.clone();
+            self.rt.spawn(async move {
+                if let Ok(mut cfg) = db_cfg.get_proxy_config().await {
+                    cfg.selected_node_id = None;
+                    cfg.selected_node_name = None;
+                    let _ = db_cfg.update_proxy_config(&cfg).await;
+                }
+            });
+        }
         let db = self.db.clone();
         let tx = self.tx.clone();
         self.status = "正在删除节点...".into();
@@ -4059,10 +4139,22 @@ impl VpnApp {
     pub(crate) fn source_name_for_id<'a>(&'a self, source_id: Option<&str>) -> Option<&'a str> {
         let sid = match source_id {
             Some(s) if !s.is_empty() => s,
-            _ => return Some("未分组"),
+            _ => {
+                return self
+                    .sources
+                    .iter()
+                    .find(|s| s.id == crate::db::UNGROUPED_SOURCE_ID)
+                    .map(|s| s.name.as_str())
+                    .or(Some("导入节点"));
+            }
         };
         if sid == crate::db::UNGROUPED_SOURCE_ID {
-            return Some("未分组");
+            return self
+                .sources
+                .iter()
+                .find(|s| s.id == crate::db::UNGROUPED_SOURCE_ID)
+                .map(|s| s.name.as_str())
+                .or(Some("导入节点"));
         }
         if let Some(src) = self.sources.iter().find(|s| s.id == sid) {
             return Some(&src.name);
@@ -4073,7 +4165,11 @@ impl VpnApp {
         if let Some(grp) = self.proxy_node_groups.iter().find(|g| g.source_id.as_deref() == Some(sid)) {
             return Some(&grp.source_name);
         }
-        Some("未分组")
+        self.sources
+            .iter()
+            .find(|s| s.id == crate::db::UNGROUPED_SOURCE_ID)
+            .map(|s| s.name.as_str())
+            .or(Some("导入节点"))
     }
 
     pub(crate) fn handle_node_card_action(&mut self, action: NodeCardAction) {
@@ -4086,8 +4182,7 @@ impl VpnApp {
                 );
                 if !running {
                     // 代理未运行时，点击选中节点直接定为待启动的目标活动节点，但不自动启动代理
-                    self.selected_proxy_node_id = Some(id);
-                    self.selected_proxy_node_name = Some(name.clone());
+                    self.set_and_persist_selected_node(id, name.clone());
                     self.status = format!("已选中节点: {name}（点击「启动代理」即可开启）");
                 } else {
                     self.status = format!("已聚焦节点: {name}（右键设为活动节点）");
@@ -5512,11 +5607,11 @@ mod tests {
         assert_eq!(app.source_name_for_id(Some("src-1")), Some("主力优质机场"));
         // 匹配已注册分组
         assert_eq!(app.source_name_for_id(Some("src-2")), Some("备用订阅源"));
-        // 未分组 / 空 ID / __ungrouped__
-        assert_eq!(app.source_name_for_id(None), Some("未分组"));
-        assert_eq!(app.source_name_for_id(Some("")), Some("未分组"));
-        assert_eq!(app.source_name_for_id(Some(crate::db::UNGROUPED_SOURCE_ID)), Some("未分组"));
-        assert_eq!(app.source_name_for_id(Some("non-existent-src")), Some("未分组"));
+        // 导入节点 / 空 ID / __ungrouped__
+        assert_eq!(app.source_name_for_id(None), Some("导入节点"));
+        assert_eq!(app.source_name_for_id(Some("")), Some("导入节点"));
+        assert_eq!(app.source_name_for_id(Some(crate::db::UNGROUPED_SOURCE_ID)), Some("导入节点"));
+        assert_eq!(app.source_name_for_id(Some("non-existent-src")), Some("导入节点"));
     }
 
     /// 跑一遍标题栏那种"exact_height 面板 + 右上角三个格子"的写法，返回面板真正占掉的

@@ -990,6 +990,17 @@ impl Collector {
     }
 
     pub async fn fetch_source(&self, source: &Source) -> FetchResult {
+        if source.is_imported() {
+            return FetchResult {
+                source_id: source.id.clone(),
+                source_name: source.name.clone(),
+                resolved_url: source.url_template.clone(),
+                success: true,
+                message: "本地导入源无需拉取".to_string(),
+                node_count: source.last_node_count.max(0) as usize,
+                extracted_rules: Vec::new(),
+            };
+        }
         let task_id = self
             .tasks
             .start(TaskKind::Fetch, [(source.id.clone(), source.name.clone())]);
@@ -1016,9 +1027,12 @@ impl Collector {
             .list_sources()
             .await?
             .into_iter()
-            .filter(|source| source.enabled)
+            .filter(|source| source.enabled && !source.is_imported())
             .collect();
         let total = sources.len();
+        if total == 0 {
+            return Ok(Vec::new());
+        }
         let settings = self.db.get_settings().await.unwrap_or_default();
         let fetch_concurrency = settings.fetch_concurrency.clamp(1, 8) as usize;
         let request_timeout =
@@ -2027,6 +2041,7 @@ mod tests {
             .await
             .unwrap()
             .into_iter()
+            .filter(|s| !s.is_imported() && s.enabled)
             .map(|source| source.id)
             .collect();
         let collector = Collector::new(db.clone(), TaskTracker::default()).unwrap();

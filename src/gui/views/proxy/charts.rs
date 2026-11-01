@@ -648,8 +648,7 @@ impl VpnApp {
 
     /// 把某个节点设为"启动节点"：点击启动代理时就启动它。
     fn set_start_node(&mut self, node: &crate::models::NodeSummary) {
-        self.selected_proxy_node_id = Some(node.id.clone());
-        self.selected_proxy_node_name = Some(node.name.clone());
+        self.set_and_persist_selected_node(node.id.clone(), node.name.clone());
     }
 
     // -----------------------------------------------------------------
@@ -1771,6 +1770,8 @@ impl VpnApp {
                         dash_dot(ui, dot_color);
                         let sub_title = if let Some(node) = selected_node {
                             format!("{state_text} · {}", crate::gui::widgets::clean_node_display_name(&node.name))
+                        } else if let Some(ref name) = self.selected_proxy_node_name {
+                            format!("{state_text} · {}", crate::gui::widgets::clean_node_display_name(name))
                         } else {
                             state_text.to_string()
                         };
@@ -1848,6 +1849,8 @@ impl VpnApp {
                                 ip.clone()
                             } else if let Some(node) = selected_node {
                                 crate::gui::widgets::clean_node_display_name(&node.name).to_string()
+                            } else if let Some(ref name) = self.selected_proxy_node_name {
+                                crate::gui::widgets::clean_node_display_name(name).to_string()
                             } else {
                                 "未连接出口".into()
                             };

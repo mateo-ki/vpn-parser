@@ -436,7 +436,7 @@ fn main() -> Result<()> {
         .unwrap_or(false);
     let (startup_url_test, startup_url_test_size) =
         (proxy_options.url_test, proxy_options.url_test_size);
-    let proxy_manager = ProxyManager::new(proxy_options);
+    let proxy_manager = ProxyManager::new(proxy_options.clone());
     #[allow(unused_variables)]
     let initial_proxy_node = if let Some(node_id) = cli.start_proxy_node.as_deref() {
         rt.block_on(async {
@@ -466,11 +466,34 @@ fn main() -> Result<()> {
                     }
                     let selected = Some((node.id.clone(), node.name.clone()));
                     proxy_manager.start(&node).await?;
+                    // 持久化当前启动节点至代理配置，保证后续重启记忆
+                    let mut options_to_save = proxy_options.clone();
+                    options_to_save.selected_node_id = Some(node.id.clone());
+                    options_to_save.selected_node_name = Some(node.name.clone());
+                    let _ = db.update_proxy_config(&options_to_save).await;
                     Ok::<_, anyhow::Error>(selected)
                 }
                 None => anyhow::bail!("提权启动节点不存在: {node_id}"),
             }
         })?
+    } else if let Some(ref node_id) = proxy_options.selected_node_id {
+        // 从持久化代理配置中恢复上次选中的节点记忆
+        rt.block_on(async {
+            match db.get_node(node_id).await {
+                Ok(Some(node)) => {
+                    tracing::info!(id = %node.id, name = %node.name, "已恢复上次选中的代理节点记忆");
+                    Some((node.id, node.name))
+                }
+                Ok(None) => {
+                    tracing::warn!(node_id, "上次记忆的代理节点在库中已不存在，回退到未选");
+                    None
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "查询上次记忆的代理节点失败");
+                    None
+                }
+            }
+        })
     } else {
         None
     };

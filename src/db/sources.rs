@@ -23,7 +23,37 @@ impl Database {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().map(row_to_source).collect())
+        let mut sources: Vec<Source> = rows.into_iter().map(row_to_source).collect();
+
+        // 确保“导入节点 / 本地自建节点池”订阅源始终常驻
+        if !sources.iter().any(|s| s.id == super::UNGROUPED_SOURCE_ID) {
+            let _ = sqlx::query(
+                r#"INSERT OR IGNORE INTO sources
+                   (id, name, url_template, enabled, remark, last_fetch_at, last_status,
+                    last_node_count, created_at, updated_at)
+                   VALUES ('__ungrouped__', '导入节点', 'local://ungrouped', 1, '本地导入 / 剪贴板自建节点池',
+                           NULL, 'local', 0, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z')"#,
+            )
+            .execute(&self.pool)
+            .await;
+            if let Ok(Some(s)) = self.get_source(super::UNGROUPED_SOURCE_ID).await {
+                sources.push(s);
+            }
+        }
+
+        // 动态校准未分组/导入源的当前真实节点总数（若节点分片库已落盘）
+        if let Some(ungrouped) = sources.iter_mut().find(|s| s.id == super::UNGROUPED_SOURCE_ID) {
+            let ungrouped_path = self.node_db_path(None);
+            if ungrouped_path.exists() {
+                if let Ok(pool) = self.open_node_pool(None).await {
+                    if let Ok(count) = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM nodes").fetch_one(&pool).await {
+                        ungrouped.last_node_count = count;
+                    }
+                }
+            }
+        }
+
+        Ok(sources)
     }
 
     pub async fn get_source(&self, id: &str) -> Result<Option<Source>> {
@@ -142,6 +172,12 @@ impl Database {
     }
 
     pub async fn delete_source(&self, id: &str) -> Result<bool> {
+        if id == super::UNGROUPED_SOURCE_ID {
+            // 未分组/本地导入源不可彻底删除定义，执行删除操作时语义等价于清空其包含的所有节点
+            self.clear_ungrouped_nodes().await?;
+            return Ok(true);
+        }
+
         let res = sqlx::query("DELETE FROM sources WHERE id = ?")
             .bind(id)
             .execute(&self.pool)
@@ -168,12 +204,16 @@ impl Database {
         Ok(true)
     }
 
-    /// 清空全部订阅源及关联节点数据库分片与 Gist 历史
+    /// 清空全部订阅源及关联节点数据库分片与 Gist 历史（保留未分组源但清空其节点）
     pub async fn clear_all_sources(&self) -> Result<usize> {
         let sources = self.list_sources().await?;
         let count = sources.len();
         for s in &sources {
-            let _ = self.delete_source(&s.id).await;
+            if s.id == super::UNGROUPED_SOURCE_ID {
+                let _ = self.clear_ungrouped_nodes().await;
+            } else {
+                let _ = self.delete_source(&s.id).await;
+            }
         }
         Ok(count)
     }
@@ -317,7 +357,12 @@ impl Database {
 
     /// 分析所有订阅源之间的重合度与同质化水平
     pub async fn analyze_source_homogeneity(&self) -> Result<Vec<SourceHomogeneityReport>> {
-        let sources = self.list_sources().await?;
+        let sources: Vec<Source> = self
+            .list_sources()
+            .await?
+            .into_iter()
+            .filter(|s| !s.is_imported())
+            .collect();
         if sources.is_empty() {
             return Ok(Vec::new());
         }
@@ -438,6 +483,9 @@ impl Database {
     ) -> Result<PruneHomogeneityResult> {
         let mut affected_names = Vec::new();
         for id in source_ids {
+            if id == super::UNGROUPED_SOURCE_ID {
+                continue;
+            }
             if let Some(src) = self.get_source(id).await? {
                 affected_names.push(src.name);
                 if delete_records {

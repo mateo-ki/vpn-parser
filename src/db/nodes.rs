@@ -1006,6 +1006,29 @@ impl Database {
         Ok(deleted)
     }
 
+    /// 清空未分组/本地导入节点分片（保留 sources 表中的未分组订阅源记录）
+    pub async fn clear_ungrouped_nodes(&self) -> Result<u64> {
+        let pool = self.open_node_pool(None).await?;
+        let mut tx = pool.begin().await?;
+        let deleted = sqlx::query("DELETE FROM nodes")
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        let _ = sqlx::query("DELETE FROM node_payloads")
+            .execute(&mut *tx)
+            .await;
+        tx.commit().await?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let _ = sqlx::query("UPDATE sources SET last_node_count = 0, updated_at = ? WHERE id = ?")
+            .bind(&now)
+            .bind(UNGROUPED_SOURCE_ID)
+            .execute(&self.pool)
+            .await;
+        self.invalidate_node_index().await;
+        self.invalidate_node_cache().await;
+        Ok(deleted)
+    }
+
     pub async fn dedupe_nodes(&self) -> Result<u64> {
         let mut deleted = 0u64;
         for (_scope, pool) in self.active_node_pools(None).await? {
@@ -1597,6 +1620,15 @@ impl Database {
             stored += 1;
         }
         tx.commit().await?;
+        if let Ok(count) = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM nodes").fetch_one(&pool).await {
+            let now = chrono::Utc::now().to_rfc3339();
+            let _ = sqlx::query("UPDATE sources SET last_node_count = ?, updated_at = ? WHERE id = ?")
+                .bind(count)
+                .bind(&now)
+                .bind(UNGROUPED_SOURCE_ID)
+                .execute(&self.pool)
+                .await;
+        }
         self.invalidate_node_index().await;
         Ok(stored)
     }

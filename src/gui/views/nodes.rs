@@ -343,6 +343,15 @@ impl VpnApp {
         ui.label(RichText::new(format!("{tr_sources_label}:")).small().color(theme::muted()));
         let source_label = if self.source_filter.is_empty() {
             tr_all_sources.to_string()
+        } else if self.source_filter == crate::db::UNGROUPED_SOURCE_ID {
+            let ungrouped_name = self.sources.iter().find(|s| s.id == crate::db::UNGROUPED_SOURCE_ID)
+                .map(|s| s.name.as_str())
+                .unwrap_or("导入节点");
+            if ungrouped_name == "导入节点" {
+                format!("{tr_sources_label}: 导入节点")
+            } else {
+                format!("{tr_sources_label}: {ungrouped_name}")
+            }
         } else if let Some(s) = self.sources.iter().find(|s| s.id == self.source_filter) {
             let name = &s.name;
             if name.chars().count() > 8 {
@@ -379,6 +388,7 @@ impl VpnApp {
                     .id_salt("nodes_source_filter_popup_scroll")
                     .max_height(220.0)
                     .show(ui, |ui| {
+                        let q = self.source_search_query.trim().to_lowercase();
                         if ui.selectable_label(self.source_filter.is_empty(), tr_all_sources).clicked() {
                             if !self.source_filter.is_empty() {
                                 self.source_filter.clear();
@@ -387,9 +397,36 @@ impl VpnApp {
                             ui.memory_mut(|m| m.close_popup());
                         }
 
-                        let q = self.source_search_query.trim().to_lowercase();
+                        let ungrouped_src = self.sources.iter().find(|s| s.id == crate::db::UNGROUPED_SOURCE_ID);
+                        let ungrouped_name = ungrouped_src.map(|s| s.name.as_str()).unwrap_or("导入节点");
+                        let ungrouped_count = ungrouped_src.map(|s| s.last_node_count).unwrap_or(0);
+                        let match_ungrouped = q.is_empty()
+                            || ungrouped_name.to_lowercase().contains(&q)
+                            || "导入节点".contains(&q)
+                            || "未分组".contains(&q)
+                            || "自建".contains(&q)
+                            || "剪贴板".contains(&q);
+                        if match_ungrouped {
+                            let is_ungrouped = self.source_filter == crate::db::UNGROUPED_SOURCE_ID;
+                            let label = if ungrouped_name == "导入节点" {
+                                format!("导入节点 ({ungrouped_count})")
+                            } else {
+                                format!("{ungrouped_name} ({ungrouped_count})")
+                            };
+                            if ui.selectable_label(is_ungrouped, label).clicked() {
+                                if self.source_filter != crate::db::UNGROUPED_SOURCE_ID {
+                                    self.source_filter = crate::db::UNGROUPED_SOURCE_ID.to_string();
+                                    *filter_changed = true;
+                                }
+                                ui.memory_mut(|m| m.close_popup());
+                            }
+                        }
+
                         let mut matched = 0;
                         for s in &self.sources {
+                            if s.id == crate::db::UNGROUPED_SOURCE_ID {
+                                continue;
+                            }
                             if !q.is_empty() {
                                 let match_name = s.name.to_lowercase().contains(&q);
                                 let match_remark = s.remark.as_deref().unwrap_or("").to_lowercase().contains(&q);

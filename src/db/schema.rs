@@ -328,6 +328,24 @@ impl Database {
         self.ensure_column("sources", "rules_yaml", "TEXT").await?;
         self.ensure_column("sources", "groups_yaml", "TEXT").await?;
 
+        // 确保“导入节点 / 本地自建节点池”作为一等公民订阅源存在
+        sqlx::query(
+            r#"INSERT OR IGNORE INTO sources
+               (id, name, url_template, enabled, remark, last_fetch_at, last_status,
+                last_node_count, created_at, updated_at)
+               VALUES ('__ungrouped__', '导入节点', 'local://ungrouped', 1, '本地导入 / 剪贴板自建节点池',
+                       NULL, 'local', 0, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z')"#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // 兼容迁移：若历史默认名为“未分组”，自动更新为“导入节点”
+        let _ = sqlx::query(
+            "UPDATE sources SET name = '导入节点' WHERE id = '__ungrouped__' AND name = '未分组'",
+        )
+        .execute(&self.pool)
+        .await;
+
         self.migrate_legacy_nodes().await?;
 
         Ok(())

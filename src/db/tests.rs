@@ -25,6 +25,27 @@
     }
 
     #[tokio::test]
+    async fn persists_selected_node_on_restart() {
+        let path =
+            std::env::temp_dir().join(format!("vpn-parser-proxy-node-{}.db", Uuid::new_v4()));
+        let db = Database::connect(path.to_str().unwrap()).await.unwrap();
+        let mut config = crate::proxy::MihomoConfigOptions::default();
+        config.selected_node_id = Some("test-node-123".to_string());
+        config.selected_node_name = Some("香港01 - 高速专线".to_string());
+
+        db.update_proxy_config(&config).await.unwrap();
+
+        let loaded = db.get_proxy_config().await.unwrap();
+        assert_eq!(loaded.selected_node_id.as_deref(), Some("test-node-123"));
+        assert_eq!(loaded.selected_node_name.as_deref(), Some("香港01 - 高速专线"));
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[tokio::test]
     async fn persists_custom_mixed_port_including_7890() {
         let path =
             std::env::temp_dir().join(format!("vpn-parser-proxy-port-{}.db", Uuid::new_v4()));
@@ -507,7 +528,7 @@
             .iter()
             .find(|group| group.source_id.is_none())
             .unwrap();
-        assert_eq!(ungrouped.source_name, "未分组");
+        assert_eq!(ungrouped.source_name, "导入节点");
         assert_eq!((ungrouped.alive, ungrouped.total), (1, 1));
 
         let source_a_ss = db
@@ -1628,6 +1649,86 @@ async fn persists_launch_at_startup_and_defaults_to_off() {
         .await
         .unwrap();
     assert!(!off.launch_at_startup);
+
+    drop(reopened);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+    let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+}
+
+#[tokio::test]
+async fn ungrouped_source_is_first_class_editable_and_exempt_from_fetch() {
+    let path = std::env::temp_dir().join(format!(
+        "vpn-parser-ungrouped-{}.db",
+        Uuid::new_v4()
+    ));
+    let db = Database::connect(path.to_str().unwrap()).await.unwrap();
+
+    // 1. 订阅源列表中包含未分组/导入源，且标记为本地导入
+    let sources = db.list_sources().await.unwrap();
+    let ungrouped = sources.iter().find(|s| s.id == UNGROUPED_SOURCE_ID).expect("导入节点源常驻");
+    assert_eq!(ungrouped.name, "导入节点");
+    assert!(ungrouped.is_imported());
+
+    // 2. 导入单节点后，未分组源的节点计数动态校准
+    let node = Node {
+        id: Uuid::new_v4().to_string(),
+        source_id: None,
+        protocol: "vless".to_string(),
+        name: "自建-美国落地".to_string(),
+        server: "8.8.8.8".to_string(),
+        port: 443,
+        raw: "vless://user@8.8.8.8:443".to_string(),
+        config: serde_json::json!({ "uuid": "user" }),
+        country: Some("US".to_string()),
+        latency_ms: Some(150),
+        latency_ok: Some(true),
+        download_kbps: Some(5000.0),
+        latency_kernel: Some("mihomo".to_string()),
+        latency_test_kind: Some("google_proxy".to_string()),
+        latency_tested_at: None,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    db.import_nodes(&[node]).await.unwrap();
+
+    let sources_after_import = db.list_sources().await.unwrap();
+    let ungrouped_after_import = sources_after_import.iter().find(|s| s.id == UNGROUPED_SOURCE_ID).unwrap();
+    assert_eq!(ungrouped_after_import.last_node_count, 1);
+
+    // 3. 支持编辑未分组源的名称和备注，并持久化到库中，重启后保留
+    db.update_source(
+        UNGROUPED_SOURCE_ID,
+        crate::models::UpdateSource {
+            name: Some("我的自建节点池".to_string()),
+            url_template: None,
+            enabled: Some(true),
+            remark: Some("从剪贴板导入的自用节点".to_string()),
+            push_disabled: None,
+            user_agent: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let updated = db.get_source(UNGROUPED_SOURCE_ID).await.unwrap().expect("获取未分组源");
+    assert_eq!(updated.name, "我的自建节点池");
+    assert_eq!(updated.remark.as_deref(), Some("从剪贴板导入的自用节点"));
+
+    // 4. 重启数据库验证持久化
+    drop(db);
+    let reopened = Database::connect(path.to_str().unwrap()).await.unwrap();
+    let reopened_sources = reopened.list_sources().await.unwrap();
+    let reopened_ungrouped = reopened_sources.iter().find(|s| s.id == UNGROUPED_SOURCE_ID).expect("重启后依然存在");
+    assert_eq!(reopened_ungrouped.name, "我的自建节点池");
+    assert_eq!(reopened_ungrouped.remark.as_deref(), Some("从剪贴板导入的自用节点"));
+    assert_eq!(reopened_ungrouped.last_node_count, 1);
+
+    // 5. 验证删除未分组源时仅清空节点而不销毁记录
+    reopened.delete_source(UNGROUPED_SOURCE_ID).await.unwrap();
+    let cleared_sources = reopened.list_sources().await.unwrap();
+    let cleared_ungrouped = cleared_sources.iter().find(|s| s.id == UNGROUPED_SOURCE_ID).expect("删除后记录依然保留");
+    assert_eq!(cleared_ungrouped.last_node_count, 0);
 
     drop(reopened);
     let _ = std::fs::remove_file(&path);

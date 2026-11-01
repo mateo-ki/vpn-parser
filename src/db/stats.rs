@@ -186,8 +186,9 @@ impl Database {
                 let source_name = scope
                     .as_ref()
                     .and_then(|id| names.get(id))
+                    .or_else(|| names.get(crate::db::UNGROUPED_SOURCE_ID))
                     .cloned()
-                    .unwrap_or_else(|| "未分组".to_owned());
+                    .unwrap_or_else(|| "导入节点".to_owned());
                 groups.push(NodeGroupSummary {
                     source_id: scope,
                     source_name,
@@ -238,8 +239,9 @@ impl Database {
                 source_name: scope
                     .as_ref()
                     .and_then(|id| names.get(id))
+                    .or_else(|| names.get(crate::db::UNGROUPED_SOURCE_ID))
                     .cloned()
-                    .unwrap_or_else(|| "未分组".to_owned()),
+                    .unwrap_or_else(|| "导入节点".to_owned()),
                 total,
                 alive,
             });

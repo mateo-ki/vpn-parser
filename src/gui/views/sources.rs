@@ -200,6 +200,7 @@ impl VpnApp {
                     let mut action_open_nodes: Option<(String, String)> = None;
                     let mut action_copy_url: Option<String> = None;
                     let mut action_delete: Option<String> = None;
+                    let mut action_clear_ungrouped: bool = false;
 
                     let grid_spacing = 10.0_f32;
                     let avail_w = ui.available_width() - 4.0;
@@ -281,13 +282,21 @@ impl VpnApp {
                                     ui.set_min_width(w1);
                                     ui.set_max_width(w1);
                                     let small_font = egui::TextStyle::Small.resolve(ui.style());
+                                    let is_imported = s.is_imported();
+                                    let url_display = if is_imported {
+                                        "本地导入 / 剪贴板".to_string()
+                                    } else {
+                                        s.url_template.clone()
+                                    };
                                     let shown_url = crate::gui::widgets::ellipsize(
                                         ui,
-                                        &s.url_template,
+                                        &url_display,
                                         w1,
                                         small_font,
                                     );
-                                    let url_hover = if shown_url != s.url_template {
+                                    let url_hover = if is_imported {
+                                        "本地导入 / 剪贴板自建节点池（点击编辑配置，右键弹出操作菜单）".to_string()
+                                    } else if shown_url != s.url_template {
                                         format!("{}\n\n点击编辑此订阅源配置（右键弹出操作菜单）", s.url_template)
                                     } else {
                                         "点击编辑此订阅源配置（右键弹出操作菜单）".to_string()
@@ -312,6 +321,9 @@ impl VpnApp {
                                     let badge = if s.enabled { self.tr("启用") } else { self.tr("停用") };
                                     let color = if s.enabled { theme::accent_strong() } else { theme::muted() };
                                     ui.label(RichText::new(badge).color(color));
+                                    if s.is_imported() {
+                                        ui.label(RichText::new("本地源").small().color(theme::accent_strong()));
+                                    }
                                     if s.push_disabled {
                                         ui.label(RichText::new(self.tr("不推送")).small().color(theme::warning()));
                                     }
@@ -337,27 +349,42 @@ impl VpnApp {
                                 let fetch_resp = ui.vertical(|ui| {
                                     ui.set_min_width(w3);
                                     ui.set_max_width(w3);
-                                    ui.label(
-                                        RichText::new(
-                                            s.last_fetch_at
-                                                .map(|t| {
-                                                    t.with_timezone(&chrono::Local)
-                                                        .format("%m-%d %H:%M")
-                                                        .to_string()
-                                                })
-                                                .unwrap_or_else(|| "-".into()),
-                                        )
-                                        .small(),
-                                    );
-                                    render_fetch_ticks(ui, self.fetch_history.get(&s.id));
+                                    if s.is_imported() {
+                                        ui.label(
+                                            RichText::new("无需拉取")
+                                                .small()
+                                                .color(theme::muted()),
+                                        );
+                                        ui.label(
+                                            RichText::new("本地自建")
+                                                .size(10.0)
+                                                .color(theme::muted()),
+                                        );
+                                    } else {
+                                        ui.label(
+                                            RichText::new(
+                                                s.last_fetch_at
+                                                    .map(|t| {
+                                                        t.with_timezone(&chrono::Local)
+                                                            .format("%m-%d %H:%M")
+                                                            .to_string()
+                                                    })
+                                                    .unwrap_or_else(|| "-".into()),
+                                            )
+                                            .small(),
+                                        );
+                                        render_fetch_ticks(ui, self.fetch_history.get(&s.id));
+                                    }
                                 }).response.interact(egui::Sense::click())
-                                .on_hover_text(if source_active {
+                                .on_hover_text(if s.is_imported() {
+                                    "本地导入自建节点池，无需网络拉取（右键弹出操作菜单）"
+                                } else if source_active {
                                     "正在拉取中...（右键弹出操作菜单）"
                                 } else {
                                     "点击立即拉取此订阅源（右键弹出操作菜单）"
                                 })
                                 .on_hover_cursor(egui::CursorIcon::PointingHand);
-                                if fetch_resp.clicked() && fetch_operation_allowed && !source_active {
+                                if fetch_resp.clicked() && fetch_operation_allowed && !source_active && !s.is_imported() {
                                     action_fetch = Some(s.id.clone());
                                 }
 
@@ -365,15 +392,15 @@ impl VpnApp {
                                 let health_resp = ui.vertical(|ui| {
                                     ui.set_min_width(w4);
                                     ui.set_max_width(w4);
-                                    let total = s.last_node_count.max(0);
-                                    let alive = self
-                                        .node_groups
-                                        .iter()
-                                        .find(|group| {
-                                            group.source_id.as_deref() == Some(s.id.as_str())
-                                        })
-                                        .map(|group| group.alive)
-                                        .unwrap_or(0);
+                                    let (total, alive) = if let Some(grp) = self.node_groups.iter().find(|group| {
+                                        group.source_id.as_deref() == Some(s.id.as_str())
+                                            || (s.id == crate::db::UNGROUPED_SOURCE_ID
+                                                && (group.source_id.is_none() || group.source_id.as_deref() == Some(crate::db::UNGROUPED_SOURCE_ID)))
+                                    }) {
+                                        (grp.total.max(s.last_node_count.max(0)), grp.alive)
+                                    } else {
+                                        (s.last_node_count.max(0), 0)
+                                    };
                                     if total == 0 {
                                         ui.horizontal(|ui| {
                                             Frame::NONE
@@ -539,32 +566,41 @@ impl VpnApp {
                                 let has_proxy = self.subscription_proxy_url().is_some();
                                 row_resp.context_menu(|ui| {
                                     ui.set_min_width(160.0);
-                                    let fetch_label = match (source_active, retry) {
-                                        (true, true) => "🔄 重试中...",
-                                        (true, false) => "🔄 拉取中...",
-                                        (false, true) => "🔄 重试拉取",
-                                        (false, false) => "🔄 立即拉取",
-                                    };
-                                    if ui
-                                        .add_enabled(
-                                            fetch_operation_allowed && !source_active,
-                                            egui::Button::new(fetch_label),
+                                    let is_imported = s.is_imported();
+                                    if is_imported {
+                                        ui.add_enabled(
+                                            false,
+                                            egui::Button::new("🔄 本地源无需拉取"),
                                         )
-                                        .clicked()
-                                    {
-                                        action_fetch = Some(s.id.clone());
-                                        ui.close_menu();
-                                    }
-                                    if ui
-                                        .add_enabled(
-                                            fetch_operation_allowed && !source_active && has_proxy,
-                                            egui::Button::new(self.tr("代理拉取")),
-                                        )
-                                        .on_hover_text("通过当前运行中的本地代理拉取此订阅源")
-                                        .clicked()
-                                    {
-                                        action_proxy_fetch = Some(s.id.clone());
-                                        ui.close_menu();
+                                        .on_hover_text("本地导入自建节点池无需网络拉取");
+                                    } else {
+                                        let fetch_label = match (source_active, retry) {
+                                            (true, true) => "🔄 重试中...",
+                                            (true, false) => "🔄 拉取中...",
+                                            (false, true) => "🔄 重试拉取",
+                                            (false, false) => "🔄 立即拉取",
+                                        };
+                                        if ui
+                                            .add_enabled(
+                                                fetch_operation_allowed && !source_active,
+                                                egui::Button::new(fetch_label),
+                                            )
+                                            .clicked()
+                                        {
+                                            action_fetch = Some(s.id.clone());
+                                            ui.close_menu();
+                                        }
+                                        if ui
+                                            .add_enabled(
+                                                fetch_operation_allowed && !source_active && has_proxy,
+                                                egui::Button::new(self.tr("代理拉取")),
+                                            )
+                                            .on_hover_text("通过当前运行中的本地代理拉取此订阅源")
+                                            .clicked()
+                                        {
+                                            action_proxy_fetch = Some(s.id.clone());
+                                            ui.close_menu();
+                                        }
                                     }
                                     ui.separator();
                                     if ui.button(self.tr("编辑")).clicked() {
@@ -608,14 +644,23 @@ impl VpnApp {
                                         action_open_nodes = Some((s.id.clone(), s.name.clone()));
                                         ui.close_menu();
                                     }
-                                    if ui.button("📄 复制订阅链接").clicked() {
-                                        action_copy_url = Some(s.url_template.clone());
-                                        ui.close_menu();
+                                    if !is_imported {
+                                        if ui.button("📄 复制订阅链接").clicked() {
+                                            action_copy_url = Some(s.url_template.clone());
+                                            ui.close_menu();
+                                        }
                                     }
                                     ui.separator();
-                                    if ui.button(RichText::new("🗑️ 删除订阅源").color(theme::danger())).clicked() {
-                                        action_delete = Some(s.id.clone());
-                                        ui.close_menu();
+                                    if s.id == crate::db::UNGROUPED_SOURCE_ID {
+                                        if ui.button(RichText::new("🗑️ 清空导入节点").color(theme::danger())).clicked() {
+                                            action_clear_ungrouped = true;
+                                            ui.close_menu();
+                                        }
+                                    } else {
+                                        if ui.button(RichText::new("🗑️ 删除订阅源").color(theme::danger())).clicked() {
+                                            action_delete = Some(s.id.clone());
+                                            ui.close_menu();
+                                        }
                                     }
                                 });
 
@@ -650,6 +695,9 @@ impl VpnApp {
                     }
                     if let Some(id) = action_delete {
                         self.delete_source(id);
+                    }
+                    if action_clear_ungrouped {
+                        self.clear_ungrouped_nodes();
                     }
                 });
         });
@@ -709,12 +757,16 @@ impl VpnApp {
         if !self.show_source_form {
             return;
         }
+        let is_ungrouped = self.editing_id.as_deref() == Some(crate::db::UNGROUPED_SOURCE_ID);
         let mut open = true;
-        egui::Window::new(if self.editing_id.is_some() {
+        let window_title = if is_ungrouped {
+            "编辑导入节点 / 本地节点池"
+        } else if self.editing_id.is_some() {
             "编辑订阅源"
         } else {
             "新增订阅源"
-        })
+        };
+        egui::Window::new(window_title)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .collapsible(false)
         .resizable(true)
@@ -726,57 +778,71 @@ impl VpnApp {
                 let name_field = ui.text_edit_singleline(&mut self.form_name);
                 crate::gui::widgets::note_text_field(ui, &name_field);
             });
-            ui.horizontal(|ui| {
-                ui.label("订阅链接或本地文件路径");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add(icons::button_with_icon(
-                            Icon::Folder,
-                            "选择本地文件",
-                            theme::accent(),
-                        ))
-                        .on_hover_text("浏览并选择本地配置文件（.yaml, .yml, .txt, .json, .conf 等）")
-                        .clicked()
-                    {
-                        self.pick_local_file_for_source();
-                    }
+            if is_ungrouped {
+                ui.horizontal(|ui| {
+                    ui.label("类型");
+                    ui.label(RichText::new("本地导入 / 剪贴板自建节点池（无需远程拉取）").color(theme::accent_strong()));
                 });
-            });
-            let url_field = ui.add(
-                egui::TextEdit::multiline(&mut self.form_url)
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(3),
-            );
-            crate::gui::widgets::note_text_field(ui, &url_field);
-            // 两种来源形态一眼可知；认出来再当场说明那一类的具体规矩。
-            ui.label(
-                RichText::new(
-                    "支持两种来源：远程订阅链接（https://…，也可用 {Ymd} 等日期占位符）\
-                     或本地文件路径（如 C:\\subs\\clash.yaml，改完文件等下一轮拉取即生效）。",
-                )
-                .small()
-                .color(theme::muted()),
-            );
-            // 认出来就当场说明这一类源的规矩，别等拉取失败才发现要挂代理。
-            if let Some(channel) = crate::collector::telegram::channel_name(&self.form_url) {
-                    ui.label(
-                        RichText::new(format!(
-                            "Telegram 频道 · @{channel} —— 读公开网页预览；节点只增不删，\
-                             旧节点交给测速淘汰。t.me 直连不通，拉取时得挂着代理。"
-                        ))
-                        .small()
-                        .color(theme::accent_strong()),
-                    );
-            } else if crate::collector::local_file_path(self.form_url.trim()).is_some() {
-                    ui.label(
-                        RichText::new(
-                            "本地文件源 —— 直接读取该文件，格式自动识别 \
-                             （Clash YAML / 节点链接 / base64）。改完文件等下一轮拉取即可，\
-                             内容没变不会重复解析，不联网也能用。",
-                        )
-                        .small()
-                        .color(theme::accent_strong()),
-                    );
+                ui.label(
+                    RichText::new(
+                        "此源承载从剪贴板粘贴（Ctrl+V）或手动导入的本地独立节点，数据保存在本地数据库中，无需网络拉取。",
+                    )
+                    .small()
+                    .color(theme::muted()),
+                );
+            } else {
+                ui.horizontal(|ui| {
+                    ui.label("订阅链接或本地文件路径");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(icons::button_with_icon(
+                                Icon::Folder,
+                                "选择本地文件",
+                                theme::accent(),
+                            ))
+                            .on_hover_text("浏览并选择本地配置文件（.yaml, .yml, .txt, .json, .conf 等）")
+                            .clicked()
+                        {
+                            self.pick_local_file_for_source();
+                        }
+                    });
+                });
+                let url_field = ui.add(
+                    egui::TextEdit::multiline(&mut self.form_url)
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(3),
+                );
+                crate::gui::widgets::note_text_field(ui, &url_field);
+                // 两种来源形态一眼可知；认出来再当场说明那一类的具体规矩。
+                ui.label(
+                    RichText::new(
+                        "支持两种来源：远程订阅链接（https://…，也可用 {Ymd} 等日期占位符）\
+                         或本地文件路径（如 C:\\subs\\clash.yaml，改完文件等下一轮拉取即生效）。",
+                    )
+                    .small()
+                    .color(theme::muted()),
+                );
+                // 认出来就当场说明这一类源的规矩，别等拉取失败才发现要挂代理。
+                if let Some(channel) = crate::collector::telegram::channel_name(&self.form_url) {
+                        ui.label(
+                            RichText::new(format!(
+                                "Telegram 频道 · @{channel} —— 读公开网页预览；节点只增不删，\
+                                 旧节点交给测速淘汰。t.me 直连不通，拉取时得挂着代理。"
+                            ))
+                            .small()
+                            .color(theme::accent_strong()),
+                        );
+                } else if crate::collector::local_file_path(self.form_url.trim()).is_some() {
+                        ui.label(
+                            RichText::new(
+                                "本地文件源 —— 直接读取该文件，格式自动识别 \
+                                 （Clash YAML / 节点链接 / base64）。改完文件等下一轮拉取即可，\
+                                 内容没变不会重复解析，不联网也能用。",
+                            )
+                            .small()
+                            .color(theme::accent_strong()),
+                        );
+                }
             }
             ui.checkbox(&mut self.form_enabled, "启用");
             ui.horizontal(|ui| {
@@ -784,89 +850,91 @@ impl VpnApp {
                 let remark_field = ui.text_edit_singleline(&mut self.form_remark);
                 crate::gui::widgets::note_text_field(ui, &remark_field);
             });
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("User-Agent").strong());
-                let current_ua = self.form_user_agent.trim();
-                let display_title = match current_ua {
-                    "" | "clash.meta" => "clash.meta (推荐 · 协议最全)",
-                    "clash-verge/v1.7.7" => "clash-verge (Clash Verge)",
-                    "ClashforWindows/0.20.39" => "ClashforWindows (CFW)",
-                    "sing-box/1.9.0" => "sing-box (Sing-box)",
-                    "v2rayN/6.42" => "v2rayN (v2rayN)",
-                    "vpn-parser/1.0" => "vpn-parser/1.0 (原生默认)",
-                    _ => "自定义 UA",
-                };
-                egui::ComboBox::from_id_salt("source_ua_presets")
-                    .selected_text(display_title)
-                    .show_ui(ui, |ui| {
-                        if ui
-                            .selectable_label(
-                                self.form_user_agent == "clash.meta" || self.form_user_agent.is_empty(),
-                                "clash.meta (推荐 · 协议最全)",
-                            )
-                            .clicked()
-                        {
-                            self.form_user_agent = "clash.meta".to_string();
-                        }
-                        if ui
-                            .selectable_label(
-                                self.form_user_agent == "clash-verge/v1.7.7",
-                                "clash-verge/v1.7.7 (Clash Verge)",
-                            )
-                            .clicked()
-                        {
-                            self.form_user_agent = "clash-verge/v1.7.7".to_string();
-                        }
-                        if ui
-                            .selectable_label(
-                                self.form_user_agent == "ClashforWindows/0.20.39",
-                                "ClashforWindows/0.20.39 (CFW)",
-                            )
-                            .clicked()
-                        {
-                            self.form_user_agent = "ClashforWindows/0.20.39".to_string();
-                        }
-                        if ui
-                            .selectable_label(
-                                self.form_user_agent == "sing-box/1.9.0",
-                                "sing-box/1.9.0 (Sing-box)",
-                            )
-                            .clicked()
-                        {
-                            self.form_user_agent = "sing-box/1.9.0".to_string();
-                        }
-                        if ui
-                            .selectable_label(
-                                self.form_user_agent == "v2rayN/6.42",
-                                "v2rayN/6.42 (v2rayN)",
-                            )
-                            .clicked()
-                        {
-                            self.form_user_agent = "v2rayN/6.42".to_string();
-                        }
-                        if ui
-                            .selectable_label(
-                                self.form_user_agent == "vpn-parser/1.0",
-                                "vpn-parser/1.0 (原生默认)",
-                            )
-                            .clicked()
-                        {
-                            self.form_user_agent = "vpn-parser/1.0".to_string();
-                        }
-                    });
-            });
-            let ua_field = ui.add(
-                egui::TextEdit::singleline(&mut self.form_user_agent)
-                    .hint_text("默认 clash.meta，留空或手动输入自定义 UA")
-                    .desired_width(f32::INFINITY),
-            );
-            crate::gui::widgets::note_text_field(ui, &ua_field);
-            ui.label(
-                RichText::new("许多机场与转换面板根据 User-Agent 决定返回哪些格式与协议的节点，默认 clash.meta 兼容性最佳。")
-                    .small()
-                    .color(theme::muted()),
-            );
+            if !is_ungrouped {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("User-Agent").strong());
+                    let current_ua = self.form_user_agent.trim();
+                    let display_title = match current_ua {
+                        "" | "clash.meta" => "clash.meta (推荐 · 协议最全)",
+                        "clash-verge/v1.7.7" => "clash-verge (Clash Verge)",
+                        "ClashforWindows/0.20.39" => "ClashforWindows (CFW)",
+                        "sing-box/1.9.0" => "sing-box (Sing-box)",
+                        "v2rayN/6.42" => "v2rayN (v2rayN)",
+                        "vpn-parser/1.0" => "vpn-parser/1.0 (原生默认)",
+                        _ => "自定义 UA",
+                    };
+                    egui::ComboBox::from_id_salt("source_ua_presets")
+                        .selected_text(display_title)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(
+                                    self.form_user_agent == "clash.meta" || self.form_user_agent.is_empty(),
+                                    "clash.meta (推荐 · 协议最全)",
+                                )
+                                .clicked()
+                            {
+                                self.form_user_agent = "clash.meta".to_string();
+                            }
+                            if ui
+                                .selectable_label(
+                                    self.form_user_agent == "clash-verge/v1.7.7",
+                                    "clash-verge/v1.7.7 (Clash Verge)",
+                                )
+                                .clicked()
+                            {
+                                self.form_user_agent = "clash-verge/v1.7.7".to_string();
+                            }
+                            if ui
+                                .selectable_label(
+                                    self.form_user_agent == "ClashforWindows/0.20.39",
+                                    "ClashforWindows/0.20.39 (CFW)",
+                                )
+                                .clicked()
+                            {
+                                self.form_user_agent = "ClashforWindows/0.20.39".to_string();
+                            }
+                            if ui
+                                .selectable_label(
+                                    self.form_user_agent == "sing-box/1.9.0",
+                                    "sing-box/1.9.0 (Sing-box)",
+                                )
+                                .clicked()
+                            {
+                                self.form_user_agent = "sing-box/1.9.0".to_string();
+                            }
+                            if ui
+                                .selectable_label(
+                                    self.form_user_agent == "v2rayN/6.42",
+                                    "v2rayN/6.42 (v2rayN)",
+                                )
+                                .clicked()
+                            {
+                                self.form_user_agent = "v2rayN/6.42".to_string();
+                            }
+                            if ui
+                                .selectable_label(
+                                    self.form_user_agent == "vpn-parser/1.0",
+                                    "vpn-parser/1.0 (原生默认)",
+                                )
+                                .clicked()
+                            {
+                                self.form_user_agent = "vpn-parser/1.0".to_string();
+                            }
+                        });
+                });
+                let ua_field = ui.add(
+                    egui::TextEdit::singleline(&mut self.form_user_agent)
+                        .hint_text("默认 clash.meta，留空或手动输入自定义 UA")
+                        .desired_width(f32::INFINITY),
+                );
+                crate::gui::widgets::note_text_field(ui, &ua_field);
+                ui.label(
+                    RichText::new("许多机场与转换面板根据 User-Agent 决定返回哪些格式与协议的节点，默认 clash.meta 兼容性最佳。")
+                        .small()
+                        .color(theme::muted()),
+                );
+            }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 if ui.add(primary_btn("保存")).clicked() {

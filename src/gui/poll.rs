@@ -143,6 +143,11 @@ impl VpnApp {
                             if req_id == self.nodes_req_id {
                                 match result {
                                     Ok((items, total)) => {
+                                        if let Some(ref sel_id) = self.selected_proxy_node_id {
+                                            if let Some(matching) = items.iter().find(|n| &n.id == sel_id) {
+                                                self.selected_proxy_node_name = Some(matching.name.clone());
+                                            }
+                                        }
                                         self.nodes = items;
                                         self.node_total = total;
                                     }
@@ -186,13 +191,17 @@ impl VpnApp {
                             self.status = format!("加载可用订阅失败: {e}")
                         }
                         BgMsg::ProxyNodes(Ok(nodes)) => {
+                            if let Some(ref sel_id) = self.selected_proxy_node_id {
+                                if let Some(matching) = nodes.iter().find(|n| &n.id == sel_id) {
+                                    self.selected_proxy_node_name = Some(matching.name.clone());
+                                }
+                            }
                             self.proxy_nodes = nodes;
                             self.proxy_nodes_rev = self.proxy_nodes_rev.wrapping_add(1);
                         }
                         BgMsg::ProxyNodes(Err(e)) => self.status = format!("加载可用节点失败: {e}"),
                         BgMsg::AutoAnchorStart(Ok((id, name))) => {
-                            self.selected_proxy_node_id = Some(id);
-                            self.selected_proxy_node_name = Some(name);
+                            self.set_and_persist_selected_node(id, name);
                             self.start_proxy();
                         }
                         BgMsg::AutoAnchorStart(Err(e)) => {

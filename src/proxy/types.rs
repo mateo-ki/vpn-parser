@@ -167,6 +167,12 @@ pub struct MihomoConfigOptions {
     /// UDP 端口跳跃范围（默认 20000-40000）
     #[serde(default = "default_hop_ports")]
     pub hop_ports: String,
+    /// 上次选中的活动代理节点 ID（重启后自动恢复并记忆）
+    #[serde(default)]
+    pub selected_node_id: Option<String>,
+    /// 上次选中的活动代理节点名称
+    #[serde(default)]
+    pub selected_node_name: Option<String>,
 }
 
 fn default_url_test_size() -> u16 {
@@ -203,6 +209,8 @@ impl Default for MihomoConfigOptions {
             block_trackers: false,
             udp_port_hopping: false,
             hop_ports: default_hop_ports(),
+            selected_node_id: None,
+            selected_node_name: None,
         }
     }
 }

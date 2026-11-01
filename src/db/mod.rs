@@ -289,6 +289,7 @@ impl Database {
                     .list_sources()
                     .await?
                     .into_iter()
+                    .filter(|s| s.id != UNGROUPED_SOURCE_ID)
                     .map(|source| Some(source.id))
                     .collect::<Vec<_>>();
                 scopes.push(None);
