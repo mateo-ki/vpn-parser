@@ -1788,7 +1788,8 @@ pub async fn verify_local_proxy(port: u16, timeout: Duration) -> Result<()> {
 
 pub async fn ensure_port_available(port: u16) -> Result<()> {
     let mut last_err = None;
-    for attempt in 0..4 {
+    let max_attempts = if cfg!(test) { 3 } else { 8 };
+    for attempt in 0..max_attempts {
         match TcpListener::bind(("127.0.0.1", port)).await {
             Ok(listener) => {
                 drop(listener);
@@ -1804,11 +1805,21 @@ pub async fn ensure_port_available(port: u16) -> Result<()> {
                             tracing::info!("清理了 {cleaned} 个残留代理内核进程以释放端口 {port}");
                         }
                     }
-                    tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
-                } else if attempt == 1 {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-                } else if attempt == 2 {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(75)).await;
+                }
+                #[cfg(test)]
+                {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+                }
+                #[cfg(not(test))]
+                {
+                    let delay_ms = match attempt {
+                        0 => 50,
+                        1 => 100,
+                        2 => 150,
+                        3 => 200,
+                        _ => 250,
+                    };
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                 }
             }
         }
@@ -1816,7 +1827,17 @@ pub async fn ensure_port_available(port: u16) -> Result<()> {
     let error = last_err
         .map(|e| e.to_string())
         .unwrap_or_else(|| "未知错误".into());
-    Err(anyhow!("代理端口 {port} 已被占用: {error}"))
+
+    #[cfg(windows)]
+    let occupant_hint = crate::platform::query_port_occupant_hint(port);
+    #[cfg(not(windows))]
+    let occupant_hint: Option<String> = None;
+
+    if let Some(hint) = occupant_hint {
+        Err(anyhow!("代理端口 {port} 已被占用 ({hint}): {error}"))
+    } else {
+        Err(anyhow!("代理端口 {port} 已被占用: {error}"))
+    }
 }
 
 pub fn required_startup_ports(kernel: KernelKind, options: &MihomoConfigOptions) -> Vec<u16> {

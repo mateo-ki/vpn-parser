@@ -410,6 +410,20 @@ pub fn recommended_traffic_rules() -> Vec<TrafficRule> {
             matcher: RuleMatcher::GeoSite("category-ads-all".into()),
             action: RuleAction::Reject,
         },
+        // 全量 .cn 顶级域名直连（各大成熟客户端标配，防 no-resolve 漏网与 WAF 握手阻断）
+        TrafficRule {
+            matcher: RuleMatcher::DomainSuffix("cn".into()),
+            action: RuleAction::Direct,
+        },
+        // 常见国内高防/安全/社区直连保底
+        TrafficRule {
+            matcher: RuleMatcher::DomainSuffix("52pojie.cn".into()),
+            action: RuleAction::Direct,
+        },
+        TrafficRule {
+            matcher: RuleMatcher::DomainSuffix("yunaq.com".into()),
+            action: RuleAction::Direct,
+        },
         TrafficRule {
             matcher: RuleMatcher::GeoSite("cn".into()),
             action: RuleAction::Direct,
@@ -787,6 +801,9 @@ mod tests {
                 "IP-CIDR,192.0.0.0/24,DIRECT",
                 "IP-CIDR,198.18.0.0/15,DIRECT",
                 "GEOSITE,category-ads-all,REJECT",
+                "DOMAIN-SUFFIX,cn,DIRECT",
+                "DOMAIN-SUFFIX,52pojie.cn,DIRECT",
+                "DOMAIN-SUFFIX,yunaq.com,DIRECT",
                 "GEOSITE,cn,DIRECT",
                 "GEOIP,CN,DIRECT,no-resolve",
                 "AND,((NETWORK,udp),(DST-PORT,443)),REJECT",

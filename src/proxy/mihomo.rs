@@ -477,6 +477,24 @@ fn build_mihomo_config_legacy(node: &Node, options: MihomoConfigOptions) -> Resu
         ]),
     );
     nameserver_policy.insert(
+        "+.cn".to_string(),
+        json!([
+            "223.5.5.5",
+            "119.29.29.29",
+            "https://doh.pub/dns-query",
+            "https://dns.alidns.com/dns-query"
+        ]),
+    );
+    nameserver_policy.insert(
+        "+.52pojie.cn".to_string(),
+        json!([
+            "223.5.5.5",
+            "119.29.29.29",
+            "https://doh.pub/dns-query",
+            "https://dns.alidns.com/dns-query"
+        ]),
+    );
+    nameserver_policy.insert(
         "geosite:geolocation-!cn".to_string(),
         json!([
             "https://1.1.1.1/dns-query",

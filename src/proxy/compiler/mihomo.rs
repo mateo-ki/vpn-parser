@@ -75,7 +75,11 @@ pub const SMART_ROUTING_PREPEND_RULES: &[&str] = &[
     "DOMAIN-SUFFIX,ai.com,AI分组",
     "DOMAIN-SUFFIX,midjourney.com,美国节点",
     "DOMAIN-SUFFIX,capcut.com,美国节点",
-    // 国内直连
+    // 国内直连与防漏网（全量 .cn 顶级域名与常见高防/社区直连，避免境外机房 IP 被拦截触发 ERR_SSL_VERSION_OR_CIPHER_MISMATCH）
+    "DOMAIN-SUFFIX,cn,DIRECT",
+    "DOMAIN-SUFFIX,52pojie.cn,DIRECT",
+    "DOMAIN-SUFFIX,yunaq.com,DIRECT",
+    "DOMAIN-SUFFIX,jiasule.com,DIRECT",
     "DOMAIN-SUFFIX,bing.com,DIRECT",
     "DOMAIN-SUFFIX,feishu.cn,DIRECT",
     // 系统连通性探测直连与 OCSP/CRL 证书吊销检查直连
@@ -979,6 +983,24 @@ impl BackendCompiler for MihomoCompiler {
                 ]),
             );
         }
+        nameserver_policy.insert(
+            "+.cn".to_string(),
+            json!([
+                "223.5.5.5",
+                "119.29.29.29",
+                "https://doh.pub/dns-query",
+                "https://dns.alidns.com/dns-query"
+            ]),
+        );
+        nameserver_policy.insert(
+            "+.52pojie.cn".to_string(),
+            json!([
+                "223.5.5.5",
+                "119.29.29.29",
+                "https://doh.pub/dns-query",
+                "https://dns.alidns.com/dns-query"
+            ]),
+        );
         if crate::geo::has_geosite_category("geolocation-!cn") {
             nameserver_policy.insert(
                 "geosite:geolocation-!cn".to_string(),

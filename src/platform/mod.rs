@@ -649,26 +649,18 @@ pub fn kill_orphan_proxy_cores() -> usize {
                     if !proc_handle.is_null() {
                         let mut full_path: [u16; 1024] = [0; 1024];
                         let mut size = full_path.len() as u32;
-                        let mut is_ours = false;
-                        if windows_sys::Win32::System::Threading::QueryFullProcessImageNameW(
+                        let is_ours = if windows_sys::Win32::System::Threading::QueryFullProcessImageNameW(
                             proc_handle,
                             0,
                             full_path.as_mut_ptr(),
                             &mut size,
                         ) != 0 {
-                            let path_str = String::from_utf16_lossy(&full_path[..size as usize]).to_ascii_lowercase();
-                            if path_str.contains("vpn-parser") || path_str.contains("vpn_parser") || path_str.contains("vpn-orphan") {
-                                is_ours = true;
-                            } else if let Ok(cwd) = std::env::current_dir() {
-                                let cwd_lower = cwd.to_string_lossy().to_ascii_lowercase();
-                                if path_str.starts_with(&cwd_lower) {
-                                    is_ours = true;
-                                }
-                            }
+                            let path_str = String::from_utf16_lossy(&full_path[..size as usize]);
+                            is_our_proxy_core_path(&path_str)
                         } else {
                             // 无法查询路径（可能受权限保护），为安全起见不盲杀第三方进程
-                            is_ours = false;
-                        }
+                            false
+                        };
 
                         if is_ours {
                             if TerminateProcess(proc_handle, 1) != 0 {
@@ -742,15 +734,8 @@ pub fn count_orphan_proxy_cores() -> usize {
                             full_path.as_mut_ptr(),
                             &mut size,
                         ) != 0 {
-                            let path_str = String::from_utf16_lossy(&full_path[..size as usize]).to_ascii_lowercase();
-                            if path_str.contains("vpn-parser") || path_str.contains("vpn_parser") || path_str.contains("vpn-orphan") {
-                                is_ours = true;
-                            } else if let Ok(cwd) = std::env::current_dir() {
-                                let cwd_lower = cwd.to_string_lossy().to_ascii_lowercase();
-                                if path_str.starts_with(&cwd_lower) {
-                                    is_ours = true;
-                                }
-                            }
+                            let path_str = String::from_utf16_lossy(&full_path[..size as usize]);
+                            is_ours = is_our_proxy_core_path(&path_str);
                         }
                         if is_ours {
                             count += 1;
@@ -834,6 +819,96 @@ pub fn kill_duplicate_vpn_parser_instances() -> usize {
     }
 
     killed_count
+}
+
+#[cfg(windows)]
+pub fn is_our_proxy_core_path(path_str: &str) -> bool {
+    let path_lower = path_str.to_ascii_lowercase();
+    if path_lower.contains("vpn-parser")
+        || path_lower.contains("vpn_parser")
+        || path_lower.contains("vpn parser")
+        || path_lower.contains("vpn-orphan")
+    {
+        return true;
+    }
+    let managed = crate::kernel::managed_kernel_root();
+    let managed_lower = managed.to_string_lossy().to_ascii_lowercase();
+    if path_lower.starts_with(&managed_lower) {
+        return true;
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let cwd_lower = cwd.to_string_lossy().to_ascii_lowercase();
+        if path_lower.starts_with(&cwd_lower) {
+            return true;
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let parent_lower = parent.to_string_lossy().to_ascii_lowercase();
+            if path_lower.starts_with(&parent_lower) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(windows)]
+pub fn get_process_name_by_pid(pid: u32) -> Option<String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let mut full_path: [u16; 1024] = [0; 1024];
+        let mut size = full_path.len() as u32;
+        let res = QueryFullProcessImageNameW(handle, 0, full_path.as_mut_ptr(), &mut size);
+        CloseHandle(handle);
+        if res != 0 {
+            let path_str = String::from_utf16_lossy(&full_path[..size as usize]);
+            let exe_name = std::path::Path::new(&path_str)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&path_str)
+                .to_string();
+            Some(exe_name)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(windows)]
+pub fn query_port_occupant_hint(port: u16) -> Option<String> {
+    use std::process::Command;
+    let output = Command::new("netstat")
+        .args(["-ano", "-p", "tcp"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let port_str = format!(":{port}");
+    for line in text.lines() {
+        let line = line.trim();
+        if (line.starts_with("TCP") || line.starts_with("tcp"))
+            && line.contains(&port_str)
+            && line.contains("LISTENING")
+        {
+            if let Some(pid_str) = line.split_whitespace().last() {
+                if let Ok(pid) = pid_str.parse::<u32>() {
+                    let proc_name = get_process_name_by_pid(pid).unwrap_or_else(|| "未知进程".to_string());
+                    return Some(format!("占用进程: {proc_name} [PID: {pid}]"));
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(not(windows))]
@@ -1054,6 +1129,16 @@ mod tests {
         for name in ["vpn-parser", "vpn-parser.exe", "mihomo-service", "", "mi"] {
             assert!(!is_proxy_core_name(name), "{name} 不该被认出来");
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_is_our_proxy_core_path() {
+        assert!(is_our_proxy_core_path(r"D:\software\VPN Parser\data\kernels\vpcore\vpcore.exe"));
+        assert!(is_our_proxy_core_path(r"C:\Users\admin\vpn-parser\data\kernels\mihomo\mihomo.exe"));
+        assert!(is_our_proxy_core_path(r"C:\Temp\vpn-orphan-123\mihomo.exe"));
+        assert!(!is_our_proxy_core_path(r"C:\Users\admin\Desktop\software\GUI.for.Clash-windows-amd64\data\mihomo\mihomo.exe"));
+        assert!(!is_our_proxy_core_path(r"C:\Program Files\Clash Verge\clash.exe"));
     }
 
     /// 运行时真验一次孤儿清理：起一个名叫 `mihomo` 的进程（用 `sleep` 的副本冒充），

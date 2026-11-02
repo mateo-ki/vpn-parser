@@ -317,13 +317,15 @@ use std::time::Duration;
         let rules = config["rules"].as_array().unwrap();
 
         assert_eq!(config["geodata-mode"], true);
-        // 18 条用户规则 + 镜像钉直连 + MATCH 仍是最后一条。
-        assert_eq!(rules.len(), 18 + crate::geo::MIRROR_DIRECT_HOSTS.len());
+        // 20 条规则（包含 MATCH 兜底） + 镜像钉直连。
+        assert_eq!(rules.len(), 20 + crate::geo::MIRROR_DIRECT_HOSTS.len());
         assert_eq!(rules[11], "GEOSITE,category-ads-all,REJECT");
-        assert_eq!(rules[12], "GEOSITE,cn,DIRECT");
-        assert_eq!(rules[13], "GEOSITE,google,PROXY");
-        assert_eq!(rules[14], "GEOSITE,youtube,PROXY");
-        assert_eq!(rules[15], "GEOIP,CN,DIRECT");
+        assert_eq!(rules[12], "DOMAIN-SUFFIX,cn,DIRECT");
+        assert_eq!(rules[13], "DOMAIN-SUFFIX,yunaq.com,DIRECT");
+        assert_eq!(rules[14], "GEOSITE,cn,DIRECT");
+        assert_eq!(rules[15], "GEOSITE,google,PROXY");
+        assert_eq!(rules[16], "GEOSITE,youtube,PROXY");
+        assert_eq!(rules[17], "GEOIP,CN,DIRECT");
         assert_eq!(rules.last().unwrap(), "MATCH,PROXY");
     }
 
