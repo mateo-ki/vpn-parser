@@ -136,7 +136,7 @@ impl VpnApp {
                                     .color(theme::text_primary()),
                             );
                             ui.label(
-                                RichText::new("启动代理核心后，此处将实时展示各策略组的活跃出口、测速延迟并支持直接切换节点。")
+                                RichText::new("启动内核后，此处将实时展示各策略组的活跃出口、测速延迟并支持直接切换节点。")
                                     .small()
                                     .color(theme::muted()),
                             );
@@ -416,6 +416,41 @@ impl VpnApp {
 
 }
 
+pub fn is_universal_proxy_group(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    matches!(
+        name,
+        "全部"
+            | "PROXY"
+            | "PROXIES"
+            | "自动选择"
+            | "自动选路"
+            | "故障转移"
+            | "负载均衡"
+            | "节点选择"
+            | "漏网之鱼"
+            | "兜底分流"
+            | "全球直连"
+            | "直连"
+            | "多线并发下载"
+            | "下载"
+            | "普通代理"
+    ) || lower == "all"
+        || lower == "auto"
+        || lower == "fallback"
+        || lower == "load-balance"
+        || lower == "loadbalance"
+        || lower == "final"
+        || lower == "match"
+        || lower == "direct"
+        || lower.contains("自动")
+        || lower.contains("故障")
+        || lower.contains("负载")
+        || lower.contains("漏网")
+        || lower.contains("直连")
+        || lower.contains("节点选择")
+}
+
 pub fn node_matches_group(
     node: &NodeSummary,
     group_name: &str,
@@ -443,16 +478,39 @@ fn node_matches_group_depth(
             if group.members.iter().any(|m| m == &node.name || m == &node.server) {
                 return true;
             }
+            if group.members.iter().any(|m| m == "PROXY" || m == "全部" || m.eq_ignore_ascii_case("all")) {
+                return true;
+            }
             // 嵌套策略组展开（例如 AI分组 的 members 包含 "美国节点"）
             let sub_matched = group.members.iter().any(|m| {
-                if m != group_name && m != "DIRECT" && m != "REJECT" && m != "PROXY" && m != "PASS" {
+                if m != group_name && m != "DIRECT" && m != "REJECT" && m != "PASS" {
                     node_matches_group_depth(node, m, kernel_groups, depth + 1)
                 } else {
                     false
                 }
             });
-            return sub_matched;
+            if sub_matched {
+                return true;
+            }
+
+            // 对于通用功能性策略组（如 自动选择、故障转移、负载均衡、全球直连、漏网之鱼），
+            // 如果成员里没有具体配置节点（例如只填了 DIRECT、REJECT 或不存在的组），为保障用户体验兜底展示全部节点
+            if is_universal_proxy_group(group_name) {
+                let has_actual_node = group.members.iter().any(|m| {
+                    m != "DIRECT" && m != "REJECT" && m != "PASS"
+                });
+                if !has_actual_node {
+                    return true;
+                }
+            }
+
+            return false;
         }
+    }
+
+    // 2. 内核无明确成员时的通用语义与功能性组推断
+    if is_universal_proxy_group(group_name) {
+        return true;
     }
 
     let country = node
@@ -540,7 +598,8 @@ fn node_matches_group_depth(
                 || lower_name.contains("telegram")
                 || lower_name.contains("tg");
         }
-        "多线并发下载" | "下载" | "普通代理" => {
+        "多线并发下载" | "下载" | "普通代理" | "自动选择" | "自动选路" | "故障转移" | "负载均衡"
+        | "节点选择" | "漏网之鱼" | "兜底分流" | "全球直连" | "直连" => {
             return true;
         }
         _ => {}

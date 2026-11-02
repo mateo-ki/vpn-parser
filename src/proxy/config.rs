@@ -18,6 +18,7 @@ pub enum RoutingMode {
     Global,
     Direct,
     Subscription,
+    Chain,
 }
 
 impl RoutingMode {
@@ -39,6 +40,7 @@ impl RoutingMode {
             Self::Global => "全局代理",
             Self::Direct => "全部直连",
             Self::Subscription => "订阅规则",
+            Self::Chain => "链式代理",
         }
     }
 }

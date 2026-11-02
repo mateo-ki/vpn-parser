@@ -18,8 +18,6 @@ pub const NO_PROXY_VAR: &str = "NO_PROXY";
 /// 本地与内网一律不走代理，否则局域网打印/开发服务器会被绕进隧道。
 pub const NO_PROXY_VALUE: &str = "localhost;127.0.0.1;::1;<local>;192.168.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*";
 
-const ENVIRONMENT_KEY: &str = "HKCU\\Environment";
-
 /// 我们自己写进去的值长这样，用来区分"用户原有的代理设置"。
 fn is_ours(value: &str) -> bool {
     value.trim().starts_with("http://127.0.0.1:")
@@ -55,63 +53,143 @@ impl TerminalProxyReport {
 
 #[cfg(windows)]
 fn read_env_value(name: &str) -> Option<String> {
-    let output = hidden_command("reg.exe")
-        .args(["query", ENVIRONMENT_KEY, "/v", name])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.lines().find_map(|line| {
-        let mut fields = line.split_whitespace();
-        let key = fields.next()?;
-        let kind = fields.next()?;
-        if kind.to_ascii_uppercase() != "REG_SZ" {
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_CURRENT_USER, KEY_QUERY_VALUE,
+        REG_EXPAND_SZ, REG_SZ,
+    };
+
+    let subkey_w: Vec<u16> = "Environment\0".encode_utf16().collect();
+    let name_w: Vec<u16> = format!("{name}\0").encode_utf16().collect();
+
+    unsafe {
+        let mut hkey = std::ptr::null_mut();
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            subkey_w.as_ptr(),
+            0,
+            KEY_QUERY_VALUE,
+            &mut hkey,
+        ) != 0
+        {
             return None;
         }
-        let value = fields.next()?;
-        (key.to_ascii_uppercase() == name.to_ascii_uppercase()).then(|| value.to_owned())
-    })
+
+        let mut val_type = 0u32;
+        let mut byte_len = 0u32;
+        let status = RegQueryValueExW(
+            hkey,
+            name_w.as_ptr(),
+            std::ptr::null_mut(),
+            &mut val_type,
+            std::ptr::null_mut(),
+            &mut byte_len,
+        );
+
+        if status != 0 || (val_type != REG_SZ && val_type != REG_EXPAND_SZ) || byte_len == 0 {
+            RegCloseKey(hkey);
+            return None;
+        }
+
+        let mut buf = vec![0u8; byte_len as usize + 2];
+        let mut actual_len = byte_len;
+        let status = RegQueryValueExW(
+            hkey,
+            name_w.as_ptr(),
+            std::ptr::null_mut(),
+            &mut val_type,
+            buf.as_mut_ptr(),
+            &mut actual_len,
+        );
+        RegCloseKey(hkey);
+
+        if status != 0 {
+            return None;
+        }
+
+        let u16_slice =
+            std::slice::from_raw_parts(buf.as_ptr() as *const u16, (actual_len as usize) / 2);
+        let end = u16_slice.iter().position(|&c| c == 0).unwrap_or(u16_slice.len());
+        Some(String::from_utf16_lossy(&u16_slice[..end]))
+    }
 }
 
 #[cfg(windows)]
 fn write_env_value(name: &str, value: &str) -> Result<()> {
-    let output = hidden_command("reg.exe")
-        .args([
-            "add",
-            ENVIRONMENT_KEY,
-            "/v",
-            name,
-            "/t",
-            "REG_SZ",
-            "/d",
-            value,
-            "/f",
-        ])
-        .output()?;
-    if output.status.success() {
-        return Ok(());
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_SET_VALUE,
+        REG_OPTION_NON_VOLATILE, REG_SZ,
+    };
+
+    let subkey_w: Vec<u16> = "Environment\0".encode_utf16().collect();
+    let name_w: Vec<u16> = format!("{name}\0").encode_utf16().collect();
+    let val_w: Vec<u16> = format!("{value}\0").encode_utf16().collect();
+
+    unsafe {
+        let mut hkey = std::ptr::null_mut();
+        let status = RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            subkey_w.as_ptr(),
+            0,
+            std::ptr::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            std::ptr::null(),
+            &mut hkey,
+            std::ptr::null_mut(),
+        );
+        if status != 0 {
+            return Err(anyhow!("无法打开注册表 HKCU\\Environment (错误码: {status})"));
+        }
+
+        let write_status = RegSetValueExW(
+            hkey,
+            name_w.as_ptr(),
+            0,
+            REG_SZ,
+            val_w.as_ptr() as *const u8,
+            (val_w.len() * 2) as u32,
+        );
+        RegCloseKey(hkey);
+
+        if write_status != 0 {
+            return Err(anyhow!("写入 {name} 失败 (错误码: {write_status})"));
+        }
+        Ok(())
     }
-    Err(anyhow!(
-        "写入 {name} 失败: {}",
-        String::from_utf8_lossy(&output.stdout)
-    ))
 }
 
 #[cfg(windows)]
 fn delete_env_value(name: &str) -> Result<()> {
-    let output = hidden_command("reg.exe")
-        .args(["delete", ENVIRONMENT_KEY, "/v", name, "/f"])
-        .output()?;
-    // 值不存在时 reg.exe 的中文提示是 GBK，退出码也不统一，所以先查存在性。
-    if output.status.success() || read_env_value(name).is_none() {
-        return Ok(());
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegDeleteValueW, RegOpenKeyExW, HKEY_CURRENT_USER, KEY_SET_VALUE,
+    };
+
+    let subkey_w: Vec<u16> = "Environment\0".encode_utf16().collect();
+    let name_w: Vec<u16> = format!("{name}\0").encode_utf16().collect();
+
+    unsafe {
+        let mut hkey = std::ptr::null_mut();
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            subkey_w.as_ptr(),
+            0,
+            KEY_SET_VALUE,
+            &mut hkey,
+        ) != 0
+        {
+            return Ok(());
+        }
+
+        let status = RegDeleteValueW(hkey, name_w.as_ptr());
+        RegCloseKey(hkey);
+
+        // 0 = ERROR_SUCCESS, 2 = ERROR_FILE_NOT_FOUND (未找到即无需删除，按成功处理)
+        if status == 0 || status == 2 {
+            Ok(())
+        } else {
+            Err(anyhow!("删除 {name} 失败 (错误码: {status})"))
+        }
     }
-    Err(anyhow!(
-        "删除 {name} 失败: {}",
-        String::from_utf8_lossy(&output.stdout)
-    ))
 }
 
 /// 让已经开着的终端也能拿到新值（explorer 会转发 WM_SETTINGCHANGE）。
@@ -178,13 +256,19 @@ pub fn enable(port: u16) -> Result<TerminalProxyReport> {
     }
     broadcast_environment_change();
 
-    // 自动同步 Git 全局代理，确保已有终端和各类 IDE 插件内的 Git 操作立即可用
-    let _ = hidden_command("git")
-        .args(["config", "--global", "http.proxy", &server])
-        .output();
-    let _ = hidden_command("git")
-        .args(["config", "--global", "https.proxy", &server])
-        .output();
+    // 异步同步 Git 全局代理，确保已有终端和各类 IDE 插件内的 Git 操作立即可用，且绝不卡顿 UI 线程
+    let server_clone = server.clone();
+    std::thread::Builder::new()
+        .name("git-proxy-sync".into())
+        .spawn(move || {
+            let _ = hidden_command("git")
+                .args(["config", "--global", "http.proxy", &server_clone])
+                .output();
+            let _ = hidden_command("git")
+                .args(["config", "--global", "https.proxy", &server_clone])
+                .output();
+        })
+        .ok();
 
     Ok(report)
 }
@@ -221,29 +305,34 @@ pub fn disable() -> Result<TerminalProxyReport> {
     }
     broadcast_environment_change();
 
-    // 还原 Git 全局代理（仅清除指向我方 127.0.0.1 的配置）
-    if let Ok(output) = hidden_command("git")
-        .args(["config", "--global", "--get", "http.proxy"])
-        .output()
-    {
-        let current = String::from_utf8_lossy(&output.stdout);
-        if is_ours(&current) {
-            let _ = hidden_command("git")
-                .args(["config", "--global", "--unset", "http.proxy"])
-                .output();
-        }
-    }
-    if let Ok(output) = hidden_command("git")
-        .args(["config", "--global", "--get", "https.proxy"])
-        .output()
-    {
-        let current = String::from_utf8_lossy(&output.stdout);
-        if is_ours(&current) {
-            let _ = hidden_command("git")
-                .args(["config", "--global", "--unset", "https.proxy"])
-                .output();
-        }
-    }
+    // 异步还原 Git 全局代理（仅清除指向我方 127.0.0.1 的配置），绝不阻塞当前线程
+    std::thread::Builder::new()
+        .name("git-proxy-unset".into())
+        .spawn(move || {
+            if let Ok(output) = hidden_command("git")
+                .args(["config", "--global", "--get", "http.proxy"])
+                .output()
+            {
+                let current = String::from_utf8_lossy(&output.stdout);
+                if is_ours(&current) {
+                    let _ = hidden_command("git")
+                        .args(["config", "--global", "--unset", "http.proxy"])
+                        .output();
+                }
+            }
+            if let Ok(output) = hidden_command("git")
+                .args(["config", "--global", "--get", "https.proxy"])
+                .output()
+            {
+                let current = String::from_utf8_lossy(&output.stdout);
+                if is_ours(&current) {
+                    let _ = hidden_command("git")
+                        .args(["config", "--global", "--unset", "https.proxy"])
+                        .output();
+                }
+            }
+        })
+        .ok();
 
     Ok(report)
 }
@@ -280,5 +369,23 @@ mod tests {
         let text = report.summary();
         assert!(text.contains("已写入 HTTP_PROXY"));
         assert!(text.contains("保留你原有的 NO_PROXY"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_win32_registry_roundtrip() {
+        let test_var = "__VPN_PARSER_TEST_VAR__";
+        let test_val = "http://127.0.0.1:54321";
+        // Ensure clean before
+        let _ = delete_env_value(test_var);
+        assert_eq!(read_env_value(test_var), None);
+
+        // Write
+        write_env_value(test_var, test_val).expect("write should succeed");
+        assert_eq!(read_env_value(test_var).as_deref(), Some(test_val));
+
+        // Delete
+        delete_env_value(test_var).expect("delete should succeed");
+        assert_eq!(read_env_value(test_var), None);
     }
 }

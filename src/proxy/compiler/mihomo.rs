@@ -228,7 +228,7 @@ impl BackendCompiler for MihomoCompiler {
         } else {
             false
         };
-        if plan.outbounds.url_test || has_override_groups {
+        if plan.outbounds.url_test || has_override_groups || plan.outbounds.chain_proxy_enabled || plan.routing_mode == RoutingMode::Chain {
             let limit = plan.outbounds.url_test_size.max(2) as usize;
             for candidate in &plan.outbounds.url_test_nodes {
                 if candidate_proxies.len() >= limit {
@@ -612,8 +612,36 @@ impl BackendCompiler for MihomoCompiler {
                 }
                 proxy_members.push("DIRECT".to_string());
             }
+            let opt_entry = plan
+                .outbounds
+                .chain_entry_node_name
+                .as_deref()
+                .filter(|name| candidate_names.iter().any(|c| c == *name));
+            let opt_exit = plan
+                .outbounds
+                .chain_exit_node_name
+                .as_deref()
+                .filter(|name| candidate_names.iter().any(|c| c == *name));
+
+            let (is_chain_active, chain_entry, chain_exit) = match (opt_entry, opt_exit) {
+                (Some(entry), Some(exit)) if entry != exit => (
+                    plan.routing_mode == RoutingMode::Chain || plan.outbounds.chain_proxy_enabled,
+                    entry,
+                    exit,
+                ),
+                (None, None) if plan.routing_mode == RoutingMode::Chain && candidate_names.len() >= 2 => (
+                    true,
+                    candidate_names[1].as_str(),
+                    candidate_names[0].as_str(),
+                ),
+                _ => (false, "", ""),
+            };
+
+            if is_chain_active {
+                proxy_members.insert(0, "链式代理".to_string());
+            }
             proxy_members.extend(candidate_names.iter().cloned());
-            vec![
+            let mut groups = vec![
                 json!({ "name": "PROXY", "type": "select", "proxies": proxy_members }),
                 auto_group,
                 json!({
@@ -621,15 +649,59 @@ impl BackendCompiler for MihomoCompiler {
                     "type": "select",
                     "proxies": ["PROXY", URL_TEST_GROUP, "DIRECT", "REJECT"],
                 }),
-            ]
+            ];
+            if is_chain_active {
+                groups.push(json!({
+                    "name": "链式代理",
+                    "type": "relay",
+                    "proxies": [chain_entry, chain_exit],
+                }));
+            }
+            groups
         } else {
             let mut proxy_members = Vec::new();
+            let opt_entry = plan
+                .outbounds
+                .chain_entry_node_name
+                .as_deref()
+                .filter(|name| candidate_names.iter().any(|c| c == *name));
+            let opt_exit = plan
+                .outbounds
+                .chain_exit_node_name
+                .as_deref()
+                .filter(|name| candidate_names.iter().any(|c| c == *name));
+
+            let (is_chain_active, chain_entry, chain_exit) = match (opt_entry, opt_exit) {
+                (Some(entry), Some(exit)) if entry != exit => (
+                    plan.routing_mode == RoutingMode::Chain || plan.outbounds.chain_proxy_enabled,
+                    entry,
+                    exit,
+                ),
+                (None, None) if plan.routing_mode == RoutingMode::Chain && candidate_names.len() >= 2 => (
+                    true,
+                    candidate_names[1].as_str(),
+                    candidate_names[0].as_str(),
+                ),
+                _ => (false, "", ""),
+            };
+
+            if is_chain_active {
+                proxy_members.push("链式代理".to_string());
+            }
             if plan.outbounds.smart_routing {
                 proxy_members.extend(regional_group_names.iter().cloned());
                 proxy_members.push("DIRECT".to_string());
             }
             proxy_members.extend(candidate_names.iter().cloned());
-            vec![json!({ "name": "PROXY", "type": "select", "proxies": proxy_members })]
+            let mut groups = vec![json!({ "name": "PROXY", "type": "select", "proxies": proxy_members })];
+            if is_chain_active {
+                groups.push(json!({
+                    "name": "链式代理",
+                    "type": "relay",
+                    "proxies": [chain_entry, chain_exit],
+                }));
+            }
+            groups
         };
 
         if plan.outbounds.smart_routing {

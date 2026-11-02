@@ -89,6 +89,11 @@ pub fn lower_options_to_ir(options: &MihomoConfigOptions, primary_node: Option<&
         client_fingerprint: options.client_fingerprint.clone(),
         udp_port_hopping: options.udp_port_hopping,
         hop_ports: options.hop_ports.clone(),
+        chain_proxy_enabled: options.chain_proxy_enabled,
+        chain_entry_node_id: options.chain_entry_node_id.clone(),
+        chain_entry_node_name: options.chain_entry_node_name.clone(),
+        chain_exit_node_id: options.chain_exit_node_id.clone(),
+        chain_exit_node_name: options.chain_exit_node_name.clone(),
     };
 
     // 3. 构建 DnsPlan
@@ -190,7 +195,7 @@ pub fn lower_options_to_ir(options: &MihomoConfigOptions, primary_node: Option<&
         }
         RoutingMode::ChinaDirect => (recommended_traffic_rules(), 0),
         RoutingMode::GfwList => (gfwlist_traffic_rules(), 0),
-        RoutingMode::Global | RoutingMode::Direct => (Vec::new(), 0),
+        RoutingMode::Global | RoutingMode::Direct | RoutingMode::Chain => (Vec::new(), 0),
         RoutingMode::Subscription => {
             let user_count = options.rules.len();
             (options.rules.clone(), user_count)
@@ -256,7 +261,7 @@ pub fn lower_options_to_ir(options: &MihomoConfigOptions, primary_node: Option<&
 
     // 5. 兜底动作 (Default Action)
     let default_action = match options.routing_mode {
-        RoutingMode::Rule | RoutingMode::ChinaDirect | RoutingMode::Global => IRAction::Proxy(None),
+        RoutingMode::Rule | RoutingMode::ChinaDirect | RoutingMode::Global | RoutingMode::Chain => IRAction::Proxy(None),
         RoutingMode::GfwList | RoutingMode::Direct => IRAction::Direct,
         RoutingMode::Subscription => {
             if let Some(ref text) = options.subscription_rules_yaml {

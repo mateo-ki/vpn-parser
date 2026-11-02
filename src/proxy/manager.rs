@@ -366,7 +366,7 @@ impl ProxyManager {
         let _operation = self.operation.lock().await;
         let mut runtime = self.runtime.lock().await;
         if !runtime.status.config_editable() {
-            return Err(anyhow!("请先停止代理再修改运行配置"));
+            return Err(anyhow!("请先关闭内核再修改运行配置"));
         }
         runtime.apply_options(options.clone());
         runtime.status.mode = options.mode;
@@ -381,7 +381,7 @@ impl ProxyManager {
         options.validate()?;
         let _operation = self.operation.lock().await;
 
-        let (config_path, controller_port, node) = {
+        let (kernel, config_path, controller_port, node) = {
             let mut runtime = self.runtime.lock().await;
             if !matches!(
                 runtime.status.state,
@@ -395,10 +395,13 @@ impl ProxyManager {
                 runtime.status.controller_secret = options.controller_secret.clone();
                 return Ok(true);
             }
-            if runtime.status.kernel != Some(KernelKind::Mihomo) {
-                runtime.apply_options(options.clone());
-                return Ok(false);
-            }
+            let kernel = match runtime.status.kernel {
+                Some(k @ (KernelKind::Mihomo | KernelKind::VpCore)) => k,
+                _ => {
+                    runtime.apply_options(options.clone());
+                    return Ok(false);
+                }
+            };
             let alive = match runtime.child.as_mut() {
                 Some(child) => child.try_wait().ok().flatten().is_none(),
                 None => false,
@@ -416,6 +419,7 @@ impl ProxyManager {
                 return Ok(false);
             };
             (
+                kernel,
                 work_dir.config_path(),
                 runtime.options.controller_port,
                 node,
@@ -423,14 +427,14 @@ impl ProxyManager {
         };
 
         let started = tokio::time::Instant::now();
-        let config = match build_kernel_config(KernelKind::Mihomo, &node, options.clone()) {
+        let config = match build_kernel_config(kernel, &node, options.clone()) {
             Ok(config) => config,
             Err(error) => {
                 tracing::warn!("构建热重载分流规则配置失败: {error}");
                 return Ok(false);
             }
         };
-        let config_text = match serialize_kernel_config(KernelKind::Mihomo, &config) {
+        let config_text = match serialize_kernel_config(kernel, &config) {
             Ok(text) => text,
             Err(error) => {
                 tracing::warn!("序列化热重载分流规则配置失败: {error}");
@@ -466,17 +470,22 @@ impl ProxyManager {
                 let elapsed_ms = started.elapsed().as_millis() as u64;
                 let mut runtime = self.runtime.lock().await;
                 runtime.apply_options(options);
+                let kernel_name = match kernel {
+                    KernelKind::Mihomo => "Mihomo",
+                    KernelKind::VpCore => "VP-Core",
+                    _ => "内核",
+                };
                 runtime.status.message =
-                    format!("Mihomo 运行中（分流规则已热重载生效，耗时 {elapsed_ms} ms）");
-                tracing::info!(elapsed_ms, "Mihomo 分流规则热重载生效成功");
+                    format!("{kernel_name} 运行中（配置已热重载生效，耗时 {elapsed_ms} ms）");
+                tracing::info!(elapsed_ms, "{kernel_name} 配置热重载生效成功");
                 Ok(true)
             }
             Ok(response) => {
-                tracing::warn!(status = %response.status(), "Mihomo 热重载 API 返回失败");
+                tracing::warn!(status = %response.status(), "内核热重载 API 返回失败");
                 Ok(false)
             }
             Err(error) => {
-                tracing::warn!("请求 Mihomo 热重载 API 失败: {error}");
+                tracing::warn!("请求内核热重载 API 失败: {error}");
                 Ok(false)
             }
         }
@@ -1150,7 +1159,7 @@ impl ProxyManager {
                     && !is_not_found
                 {
                     crate::geo::purge_corrupt_geo_files(&crate::geo::mihomo_dir());
-                    "Mihomo 分流规则文件 (GeoSite/GeoIP) 损坏，已自动清理损坏文件。请在「规则设置」点击「更新规则文件」重新同步完整库后再启动代理。".to_string()
+                    "Mihomo 分流规则文件 (GeoSite/GeoIP) 损坏，已自动清理损坏文件。请在「规则设置」点击「更新规则文件」重新同步完整库后再启动内核。".to_string()
                 } else if let Some(err) = fatal_line {
                     format!("{} 启动失败: {}", kernel.display_name(), err.trim())
                 } else if !detail_trimmed.is_empty() {

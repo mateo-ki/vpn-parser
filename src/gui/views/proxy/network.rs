@@ -169,8 +169,16 @@ impl VpnApp {
 		                                        KernelPreference::VpCore,
 		                                        "VP-Core",
 		                                    );
-		                                });
+			                                });
                             if self.proxy_config.kernel_preference != prev_pref {
+                                if !self.supports_chain_proxy() {
+                                    if self.proxy_config.chain_proxy_enabled {
+                                        self.proxy_config.chain_proxy_enabled = false;
+                                    }
+                                    if self.proxy_config.routing_mode == crate::proxy::RoutingMode::Chain {
+                                        self.proxy_config.routing_mode = crate::proxy::RoutingMode::Rule;
+                                    }
+                                }
                                 self.save_proxy_config_quiet();
                             }
                         });
@@ -195,7 +203,7 @@ impl VpnApp {
                             );
                             if term_cb.changed() {
                                 let new_state = self.proxy_config.terminal_proxy;
-                                self.save_proxy_config();
+                                self.save_proxy_config_quiet();
                                 let port = self.proxy_status.mixed_port;
                                 if self.proxy_status.local_proxy_active() {
                                     if new_state {
@@ -288,7 +296,7 @@ impl VpnApp {
                         save_clicked = ui.add(primary_btn("保存网络配置")).clicked();
                     });
                     if !editable {
-                        ui.label(RichText::new("停止代理后可修改运行配置").color(theme::muted()));
+                        ui.label(RichText::new("关闭内核后可修改运行配置").color(theme::muted()));
                     }
                 });
                 ui.add_space(16.0);
@@ -727,7 +735,7 @@ impl VpnApp {
                             );
                             ui.label(
                                 RichText::new(
-                                    "请检查节点连通性或内核配置，启动代理后将在此显示内核输出日志。",
+                                    "请检查节点连通性或内核配置，启动内核后将在此显示内核输出日志。",
                                 )
                                 .color(theme::muted())
                                 .small(),
@@ -735,7 +743,7 @@ impl VpnApp {
                         } else {
                             ui.label(
                                 RichText::new(
-                                    "代理内核未运行。点击上方「启动代理」后，此处将实时展示内核输出日志。",
+                                    "代理内核未运行。点击上方「启动内核」后，此处将实时展示内核输出日志。",
                                 )
                                 .color(theme::muted()),
                             );

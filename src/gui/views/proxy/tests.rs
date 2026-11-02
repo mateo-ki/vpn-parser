@@ -144,7 +144,7 @@ mod rule_hits_height_probe_tests {
                 .exact_height(48.0)
                 .frame(Frame::NONE.fill(egui::Color32::DARK_GRAY))
                 .show(ctx, |ui| {
-                    let _ = ui.button("启动代理");
+                    let _ = ui.button("启动内核");
                 });
             egui::CentralPanel::default()
                 .frame(
@@ -424,8 +424,8 @@ mod status_button_style_tests {
                 ui.spacing_mut().button_padding = egui::vec2(11.0, 3.0);
                 let layer = ui.layer_id();
                 ui.horizontal(|ui| {
-                    let _ = ui.add(primary_btn("启动代理"));
-                    let _ = ui.add(danger_btn("停止代理"));
+                    let _ = ui.add(primary_btn("启动内核"));
+                    let _ = ui.add(danger_btn("关闭内核"));
                     let _ = ui.add(status_btn("IP 检测"));
                     let _ = ui.add(status_btn("系统代理"));
                     let _ = ui.add(status_btn("测速全部"));
@@ -637,6 +637,13 @@ mod policy_group_filter_tests {
         assert!(node_matches_group(&hk, "国际流媒体", &[]));
         assert!(node_matches_group(&jp, "国际流媒体", &[]));
         assert!(node_matches_group(&sg, "Telegram", &[]));
+
+        // 通用功能策略组（自动选择、故障转移、负载均衡、全球直连、漏网之鱼）全量匹配候选节点
+        assert!(node_matches_group(&hk, "自动选择", &[]));
+        assert!(node_matches_group(&us, "故障转移", &[]));
+        assert!(node_matches_group(&jp, "负载均衡", &[]));
+        assert!(node_matches_group(&sg, "全球直连", &[]));
+        assert!(node_matches_group(&hk, "漏网之鱼", &[]));
     }
 
     #[test]

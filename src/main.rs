@@ -931,7 +931,7 @@ fn cjk_font_candidates() -> Vec<std::path::PathBuf> {
 
 #[cfg(feature = "gui")]
 /// 启动时校准墨迹垂直位置用的参照串与字号（单位 point）。
-const INK_CALIBRATION_LABEL: &str = "启动代理";
+const INK_CALIBRATION_LABEL: &str = "启动内核";
 #[cfg(feature = "gui")]
 const INK_CALIBRATION_SIZE: f32 = 14.0;
 #[cfg(feature = "gui")]

@@ -449,6 +449,13 @@ impl VpnApp {
                                         menu_action = Some(NodeCardAction::Speedtest(node_id.clone()));
                                         ui.close_menu();
                                     }
+                                    if ui
+                                        .add_enabled(!is_busy, egui::Button::new("📥 下载测速"))
+                                        .clicked()
+                                    {
+                                        menu_action = Some(NodeCardAction::SpeedtestDownload(node_id.clone()));
+                                        ui.close_menu();
+                                    }
                                     if ui.button("🛡️ IP 检测").clicked() {
                                         menu_action = Some(NodeCardAction::CheckIpRisk(node_id.clone()));
                                         ui.close_menu();

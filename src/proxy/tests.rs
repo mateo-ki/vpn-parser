@@ -894,7 +894,7 @@ use std::time::Duration;
             .await
             .unwrap_err();
 
-        assert!(error.to_string().contains("停止代理"));
+        assert!(error.to_string().contains("关闭内核"));
     }
 
     #[tokio::test]
@@ -1741,4 +1741,95 @@ proxy-groups:
 
         let config = manager.config().await;
         assert_eq!(config.routing_mode, RoutingMode::Global);
+    }
+
+    #[test]
+    fn test_mihomo_chain_proxy_lifecycle_and_cleared_fallback() {
+        let mut node_a = node("ss", json!({ "server": "1.1.1.1", "port": 8388, "password": "p", "cipher": "aes-128-gcm" }));
+        node_a.name = "Node A".into();
+        let mut node_b = node("ss", json!({ "server": "2.2.2.2", "port": 8388, "password": "p", "cipher": "aes-128-gcm" }));
+        node_b.name = "Node B".into();
+
+        // 1. 双节点就绪：成功编译出 relay 策略组并置入 PROXY 组首位
+        let mut opts = MihomoConfigOptions::default();
+        opts.chain_proxy_enabled = true;
+        opts.chain_entry_node_name = Some("Node A".into());
+        opts.chain_exit_node_name = Some("Node B".into());
+        opts.url_test_nodes = vec![
+            json!({ "name": "Node A", "type": "ss", "server": "1.1.1.1", "port": 8388, "password": "p", "cipher": "aes-128-gcm" }),
+            json!({ "name": "Node B", "type": "ss", "server": "2.2.2.2", "port": 8388, "password": "p", "cipher": "aes-128-gcm" }),
+        ];
+
+        let plan = lower_options_to_ir(&opts, Some(&node_a));
+        let art = MihomoCompiler::new().compile(&plan).expect("compile success");
+        let json = art.as_json_value().expect("json");
+        let groups = json["proxy-groups"].as_array().expect("groups");
+        let relay_group = groups.iter().find(|g| g["name"] == "链式代理");
+        assert!(relay_group.is_some(), "双节点就绪时必须生成「链式代理」relay 策略组");
+        assert_eq!(relay_group.unwrap()["type"], "relay");
+        assert_eq!(relay_group.unwrap()["proxies"], serde_json::json!(["Node A", "Node B"]));
+
+        let proxy_group = groups.iter().find(|g| g["name"] == "PROXY").expect("PROXY group");
+        assert_eq!(proxy_group["proxies"][0], "链式代理");
+
+        // 2. 清空前置节点：安全回退，不生成残缺 relay 策略组
+        let mut opts_cleared_entry = opts.clone();
+        opts_cleared_entry.chain_entry_node_name = None;
+        let plan_cleared = lower_options_to_ir(&opts_cleared_entry, Some(&node_a));
+        let art_cleared = MihomoCompiler::new().compile(&plan_cleared).expect("compile success");
+        let json_cleared = art_cleared.as_json_value().expect("json");
+        let groups_cleared = json_cleared["proxy-groups"].as_array().expect("groups");
+        assert!(
+            groups_cleared.iter().all(|g| g["name"] != "链式代理"),
+            "清空前置节点后必须安全降级，不得生成残缺的链式代理策略组"
+        );
+
+        // 3. 清空后置节点：同样安全回退
+        let mut opts_cleared_exit = opts.clone();
+        opts_cleared_exit.chain_exit_node_name = None;
+        let plan_cleared_exit = lower_options_to_ir(&opts_cleared_exit, Some(&node_a));
+        let art_cleared_exit = MihomoCompiler::new().compile(&plan_cleared_exit).expect("compile success");
+        let json_cleared_exit = art_cleared_exit.as_json_value().expect("json");
+        let groups_cleared_exit = json_cleared_exit["proxy-groups"].as_array().expect("groups");
+        assert!(
+            groups_cleared_exit.iter().all(|g| g["name"] != "链式代理"),
+            "清空后置节点后必须安全降级，不得生成残缺的链式代理策略组"
+        );
+
+        // 4. 前置与后置选了同一节点：杜绝自身回环死锁
+        let mut opts_same = opts.clone();
+        opts_same.chain_entry_node_name = Some("Node A".into());
+        opts_same.chain_exit_node_name = Some("Node A".into());
+        let plan_same = lower_options_to_ir(&opts_same, Some(&node_a));
+        let art_same = MihomoCompiler::new().compile(&plan_same).expect("compile success");
+        let json_same = art_same.as_json_value().expect("json");
+        let groups_same = json_same["proxy-groups"].as_array().expect("groups");
+        assert!(
+            groups_same.iter().all(|g| g["name"] != "链式代理"),
+            "前置后置相同时不得生成自身回环中继"
+        );
+    }
+
+    #[test]
+    fn test_kernel_chain_proxy_support_matrix() {
+        use crate::kernel::{KernelKind, KernelPreference};
+
+        // Mihomo / Meow / VP-Core 完整支持链式代理
+        assert!(KernelKind::Mihomo.supports_chain_proxy());
+        assert!(KernelKind::Meow.supports_chain_proxy());
+        assert!(KernelKind::VpCore.supports_chain_proxy());
+
+        // Sing-box / Xray / Shoes 暂不支持链式代理，必须被禁用
+        assert!(!KernelKind::SingBox.supports_chain_proxy());
+        assert!(!KernelKind::Xray.supports_chain_proxy());
+        assert!(!KernelKind::Shoes.supports_chain_proxy());
+
+        // 内核偏好对应矩阵
+        assert!(KernelPreference::Auto.supports_chain_proxy());
+        assert!(KernelPreference::Mihomo.supports_chain_proxy());
+        assert!(KernelPreference::Meow.supports_chain_proxy());
+        assert!(KernelPreference::VpCore.supports_chain_proxy());
+        assert!(!KernelPreference::SingBox.supports_chain_proxy());
+        assert!(!KernelPreference::Xray.supports_chain_proxy());
+        assert!(!KernelPreference::Shoes.supports_chain_proxy());
     }

@@ -448,7 +448,7 @@ pub async fn provision_files(
         }
         if !done {
             return Err(anyhow!(
-                "分流数据库 {name} 三个源都失败（{}），代理没开时请先启动代理再更新",
+                "分流数据库 {name} 三个源都失败（{}），代理没开时请先启动内核再更新",
                 failures.join("；")
             ));
         }

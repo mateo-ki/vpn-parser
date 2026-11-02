@@ -348,8 +348,8 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
             painter.add(egui::epaint::PathShape::line(arc_pts_l, fine_stroke));
         }
         Icon::Cpu => {
-            // Microprocessor chip
-            let body_size = s * 0.52;
+            // Microprocessor chip (与 Globe/Gear 等同等视觉量感)
+            let body_size = s * 0.66;
             let chip_rect = Rect::from_center_size(center, Vec2::splat(body_size));
             painter.rect_stroke(chip_rect, CornerRadius::same(2), stroke, StrokeKind::Middle);
             painter.rect_filled(
@@ -359,7 +359,7 @@ pub fn draw_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32
             );
 
             // Pins (2 on each of the 4 sides)
-            let pin_len = s * 0.14;
+            let pin_len = s * 0.12;
             let offset = body_size * 0.22;
             for sign in [-1.0, 1.0] {
                 // Top pins

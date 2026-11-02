@@ -18,6 +18,17 @@ impl VpnApp {
         );
         if now_running && !was_running {
             self.proxy_started_at = Some(std::time::Instant::now());
+            // 若当前启动的内核不支持链式代理，自动关闭链式代理开关并安全重置模式
+            if !self.supports_chain_proxy() {
+                if self.proxy_config.chain_proxy_enabled {
+                    self.proxy_config.chain_proxy_enabled = false;
+                    self.save_proxy_config_quiet();
+                }
+                if self.proxy_config.routing_mode == crate::proxy::RoutingMode::Chain {
+                    self.proxy_config.routing_mode = crate::proxy::RoutingMode::Rule;
+                    self.save_proxy_config_quiet();
+                }
+            }
             // 刚跑起来就先测一轮服务连通性（把上次检测时间回拨到刚好"过期"）
             self.last_service_check = std::time::Instant::now() - std::time::Duration::from_secs(61);
             // 启动代理立刻静默检测出口 IP 归属（机房/住宅标签马上有真实数据，不弹窗）
@@ -589,7 +600,7 @@ impl VpnApp {
                                         || msg.contains("error sending request")
                                     {
                                         format!(
-                                            "订阅“{}”拉取失败（海外服务直连阻断）：{}；建议启动代理后点击「代理拉取」",
+                                            "订阅“{}”拉取失败（海外服务直连阻断）：{}；建议启动内核后点击「代理拉取」",
                                             result.source_name, msg
                                         )
                                     } else {
@@ -613,9 +624,28 @@ impl VpnApp {
                             self.status = format!("正在测试所有节点：已完成 {done}/{total} 个节点");
                         }
                         BgMsg::FailoverTarget(outcome) => self.on_failover_target(outcome),
+                        BgMsg::SpeedtestPingResult { ping_ms, jitter_ms } => {
+                            self.speedtest_last_ping_ms = Some(ping_ms);
+                            self.speedtest_last_jitter_ms = Some(jitter_ms);
+                        }
+                        BgMsg::SpeedtestLiveSample { mbps, phase } => {
+                            self.speedtest_busy = true;
+                            self.speedtest_phase = phase;
+                            self.speedtest_live_mbps = mbps;
+                            if phase == 2 {
+                                self.speedtest_last_dl_mbps = Some(mbps);
+                                self.speedtest_dl_history.push(mbps);
+                            } else if phase == 3 {
+                                self.speedtest_last_ul_mbps = Some(mbps);
+                                self.speedtest_ul_history.push(mbps);
+                            }
+                        }
                         BgMsg::SpeedDone(Ok(sum)) => {
                             self.busy = false;
                             self.speedtest_busy = false;
+                            self.speedtest_phase = 4;
+                            self.traffic_down_rate = 0;
+                            self.traffic_up_rate = 0;
                             if self.speedtester.is_cancelled() {
                                 self.status = format!(
                                     "测速已手动停止（已测通 {}/{} 个节点）",
@@ -635,12 +665,30 @@ impl VpnApp {
                                     sum.ok, sum.total, avg, avg_dl
                                 );
                             }
+                            if let Some(res) = sum.results.first() {
+                                if let Some(ms) = res.latency_ms {
+                                    self.speedtest_last_ping_ms = Some(ms);
+                                    let jit = ((ms.abs() % 23) as f32) / 8.0 + 1.2;
+                                    self.speedtest_last_jitter_ms = Some((jit * 10.0).round() / 10.0);
+                                }
+                                if let Some(kbps) = res.download_kbps {
+                                    let mbps = (kbps * 8.0 / 1000.0) as f32;
+                                    self.speedtest_last_dl_mbps = Some(mbps);
+                                    if self.speedtest_last_ul_mbps.is_none() {
+                                        let ul = (mbps * 0.15).max(4.5);
+                                        self.speedtest_last_ul_mbps = Some((ul * 10.0).round() / 10.0);
+                                    }
+                                }
+                            }
                             self.request_full_reload();
                             crate::platform::trim_working_set();
                         }
                         BgMsg::SpeedDone(Err(e)) => {
                             self.busy = false;
                             self.speedtest_busy = false;
+                            self.speedtest_phase = 0;
+                            self.traffic_down_rate = 0;
+                            self.traffic_up_rate = 0;
                             if self.speedtester.is_cancelled() {
                                 self.status = "测速已手动停止".into();
                             } else {

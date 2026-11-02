@@ -195,7 +195,7 @@ impl VpnApp {
             ui.add_space(6.0);
             if empty {
                 ui.label(
-                    RichText::new("还没有命中记录：启动代理并跑点流量之后再回来看。")
+                    RichText::new("还没有命中记录：启动内核并跑点流量之后再回来看。")
                         .color(theme::muted()),
                 );
                 return;
@@ -320,6 +320,29 @@ impl VpnApp {
                                 "全部直连",
                             ).clicked() {
                                 mode_changed = true;
+                            }
+                            let supports_chain = self.supports_chain_proxy();
+                            let active_k = self.active_or_preferred_kernel();
+                            if supports_chain {
+                                if ui.selectable_value(
+                                    &mut self.proxy_config.routing_mode,
+                                    RoutingMode::Chain,
+                                    "链式代理",
+                                ).clicked() {
+                                    mode_changed = true;
+                                }
+                            } else {
+                                ui.add_enabled(
+                                    false,
+                                    egui::SelectableLabel::new(
+                                        self.proxy_config.routing_mode == RoutingMode::Chain,
+                                        "链式代理（内核不支持）",
+                                    ),
+                                )
+                                .on_disabled_hover_text(format!(
+                                    "当前内核（{}）不支持链式代理，请切换至 Mihomo / VP-Core / Meow 后使用",
+                                    active_k.display_name()
+                                ));
                             }
                         });
                         ui.add_space(6.0);

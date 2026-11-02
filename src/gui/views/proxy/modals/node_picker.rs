@@ -14,7 +14,13 @@ impl VpnApp {
         let mut open = self.node_picker_open;
         let mut picked_node = None;
 
-        egui::Window::new(RichText::new("选择转发目标节点").strong())
+        let modal_title = match self.node_picker_target {
+            Some(crate::gui::types::NodePickerTarget::ChainEntry) => "选择链式代理前置节点",
+            Some(crate::gui::types::NodePickerTarget::ChainExit) => "选择链式代理后置落地节点",
+            _ => "选择转发目标节点",
+        };
+
+        egui::Window::new(RichText::new(modal_title).strong())
             .open(&mut open)
             .order(egui::Order::Tooltip)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -30,7 +36,12 @@ impl VpnApp {
                             .hint_text("搜索节点名称、国家、协议、服务器..."),
                     );
                     crate::gui::widgets::note_text_field(ui, &search_field);
-                    if !self.node_picker_search.is_empty() && ui.small_button("✕").clicked() {
+                    if !self.node_picker_search.is_empty()
+                        && ui
+                            .add(crate::gui::icons::icon_btn_square(Icon::Close, 11.0))
+                            .on_hover_text("清空搜索内容")
+                            .clicked()
+                    {
                         self.node_picker_search.clear();
                     }
                 });
@@ -113,17 +124,46 @@ impl VpnApp {
             self.node_picker_open = false;
         }
         if let Some((id, name)) = picked_node {
-            if let Some(target_idx) = self.node_picker_target_index {
-                if let Some(mapping) = self.proxy_config.port_mappings.get_mut(target_idx) {
-                    mapping.node_id = id;
-                    mapping.node_name = name;
+            match self.node_picker_target {
+                Some(crate::gui::types::NodePickerTarget::Speedtest) => {
+                    self.switch_proxy_node(id, name, "测速选择出站节点");
+                }
+                Some(crate::gui::types::NodePickerTarget::ChainEntry) => {
+                    self.proxy_config.chain_entry_node_id = Some(id);
+                    self.proxy_config.chain_entry_node_name = Some(name);
                     self.save_proxy_config();
                 }
-            } else {
-                self.new_mapping_node_id = Some(id);
-                self.new_mapping_node_name = Some(name);
+                Some(crate::gui::types::NodePickerTarget::ChainExit) => {
+                    self.proxy_config.chain_exit_node_id = Some(id);
+                    self.proxy_config.chain_exit_node_name = Some(name);
+                    self.save_proxy_config();
+                }
+                Some(crate::gui::types::NodePickerTarget::PortMapping(target_idx)) => {
+                    if let Some(mapping) = self.proxy_config.port_mappings.get_mut(target_idx) {
+                        mapping.node_id = id;
+                        mapping.node_name = name;
+                        self.save_proxy_config();
+                    }
+                }
+                Some(crate::gui::types::NodePickerTarget::NewPortMapping) => {
+                    self.new_mapping_node_id = Some(id);
+                    self.new_mapping_node_name = Some(name);
+                }
+                None => {
+                    if let Some(target_idx) = self.node_picker_target_index {
+                        if let Some(mapping) = self.proxy_config.port_mappings.get_mut(target_idx) {
+                            mapping.node_id = id;
+                            mapping.node_name = name;
+                            self.save_proxy_config();
+                        }
+                    } else {
+                        self.new_mapping_node_id = Some(id);
+                        self.new_mapping_node_name = Some(name);
+                    }
+                }
             }
             self.node_picker_open = false;
+            self.node_picker_target = None;
             self.node_picker_target_index = None;
         }
     }

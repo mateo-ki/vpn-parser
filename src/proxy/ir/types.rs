@@ -102,6 +102,11 @@ pub struct OutboundPlan {
     pub client_fingerprint: Option<String>,
     pub udp_port_hopping: bool,
     pub hop_ports: String,
+    pub chain_proxy_enabled: bool,
+    pub chain_entry_node_id: Option<String>,
+    pub chain_entry_node_name: Option<String>,
+    pub chain_exit_node_id: Option<String>,
+    pub chain_exit_node_name: Option<String>,
 }
 
 /// 统一 DNS 分流计划

@@ -495,9 +495,9 @@ fn run_tray_loop(
 
                                 let running = is_proxy_running.load(Ordering::Relaxed);
                                 let proxy_label = if running {
-                                    "停止代理\0"
+                                    "关闭内核\0"
                                 } else {
-                                    "启动代理\0"
+                                    "启动内核\0"
                                 };
                                 let proxy_text = proxy_label.encode_utf16().collect::<Vec<u16>>();
                                 AppendMenuW(
@@ -507,9 +507,9 @@ fn run_tray_loop(
                                     proxy_text.as_ptr(),
                                 );
 
-                                // 重启代理：只在代理运行时可点（没跑就没啥可重启的）
+                                // 重启内核：只在内核运行时可点（没跑就没啥可重启的）
                                 let restart_text =
-                                    "重启代理\0".encode_utf16().collect::<Vec<u16>>();
+                                    "重启内核\0".encode_utf16().collect::<Vec<u16>>();
                                 let restart_flags = if running {
                                     MF_STRING
                                 } else {

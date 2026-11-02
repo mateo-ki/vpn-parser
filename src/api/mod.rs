@@ -286,7 +286,7 @@ async fn update_kernel(
         return (
             StatusCode::CONFLICT,
             Json(ApiResponse::<()>::err(format!(
-                "停止代理后才能更新 {}",
+                "关闭内核后才能更新 {}",
                 body.kind.display_name()
             ))),
         )
@@ -716,7 +716,7 @@ async fn speedtest_all(
     let opts = SpeedTestOptions {
         concurrency: settings.speedtest_concurrency,
         timeout_ms: settings.speedtest_timeout_ms,
-        measure_download: settings.speedtest_download,
+        measure_download: false,
         download_test_ms: settings.download_test_ms,
         intensity: SpeedtestIntensity::Standard,
         parallel_kernels: settings.speedtest_parallel_kernels,

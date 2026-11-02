@@ -330,7 +330,11 @@ impl VpnApp {
             *filter_changed = true;
         }
         if !self.keyword.is_empty() {
-            if ui.small_button("✕").on_hover_text("清除搜索关键词").clicked() {
+            if ui
+                .add(crate::gui::icons::icon_btn_square(Icon::Close, 11.0))
+                .on_hover_text("清除搜索关键词")
+                .clicked()
+            {
                 self.keyword.clear();
                 self.keyword_applied.clear();
                 *filter_changed = true;
@@ -377,7 +381,11 @@ impl VpnApp {
                     );
                     crate::gui::widgets::note_text_field(ui, &search_edit);
                     if !self.source_search_query.is_empty() {
-                        if ui.small_button("✕").clicked() {
+                        if ui
+                            .add(crate::gui::icons::icon_btn_square(Icon::Close, 11.0))
+                            .on_hover_text("清空搜索")
+                            .clicked()
+                        {
                             self.source_search_query.clear();
                         }
                     }
@@ -793,6 +801,13 @@ where
                                     .clicked()
                                 {
                                     card_action = Some(NodeCardAction::Speedtest(node.id.clone()));
+                                    ui.close_menu();
+                                }
+                                if ui
+                                    .add_enabled(!is_busy, egui::Button::new("📥 下载测速"))
+                                    .clicked()
+                                {
+                                    card_action = Some(NodeCardAction::SpeedtestDownload(node.id.clone()));
                                     ui.close_menu();
                                 }
                                 if ui.button("ℹ️ 查看详情").clicked() {

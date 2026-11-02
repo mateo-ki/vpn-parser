@@ -9,7 +9,7 @@ impl VpnApp {
         use crate::gui::types::{PaletteAction, PaletteItem};
         let mut items = vec![
             PaletteItem {
-                title: "启动 / 停止代理".into(),
+                title: "启动 / 关闭内核".into(),
                 hint: format!("{:?}", self.proxy_status.state),
                 action: PaletteAction::ToggleProxy,
             },
@@ -262,7 +262,7 @@ impl VpnApp {
             }
             PaletteAction::ToggleMode => {
                 if !self.proxy_status.config_editable() {
-                    self.status = "请先停止代理后再切换工作模式".into();
+                    self.status = "请先关闭内核后再切换工作模式".into();
                     return;
                 }
                 self.proxy_config.mode = match self.proxy_config.mode {

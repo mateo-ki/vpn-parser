@@ -50,6 +50,14 @@ impl KernelPreference {
             Self::VpCore => Some(KernelKind::VpCore),
         }
     }
+
+    /// 该内核偏好是否支持链式中继（Relay）代理。
+    pub const fn supports_chain_proxy(self) -> bool {
+        match self {
+            Self::Auto | Self::Mihomo | Self::Meow | Self::VpCore => true,
+            Self::SingBox | Self::Xray | Self::Shoes => false,
+        }
+    }
 }
 
 /// 官方 Release 资产按哪个系统出的。名字/后缀/可执行文件名三样都跟着它变。
@@ -133,6 +141,12 @@ impl KernelKind {
             Self::Meow => "Meow",
             Self::VpCore => "VP-Core",
         }
+    }
+
+    /// 该内核是否支持链式中继（Relay）代理。
+    /// 目前 Mihomo / Meow / VP-Core 完整支持 Clash 体系 Relay 策略组。
+    pub const fn supports_chain_proxy(self) -> bool {
+        matches!(self, Self::Mihomo | Self::Meow | Self::VpCore)
     }
 
     pub fn environment_variable(self) -> &'static str {

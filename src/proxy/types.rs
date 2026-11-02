@@ -173,6 +173,21 @@ pub struct MihomoConfigOptions {
     /// 上次选中的活动代理节点名称
     #[serde(default)]
     pub selected_node_name: Option<String>,
+    /// 链式代理开关（前置代理 + 后置代理级联传输）
+    #[serde(default)]
+    pub chain_proxy_enabled: bool,
+    /// 链式代理前置中继节点 ID
+    #[serde(default)]
+    pub chain_entry_node_id: Option<String>,
+    /// 链式代理前置中继节点名称
+    #[serde(default)]
+    pub chain_entry_node_name: Option<String>,
+    /// 链式代理后置落地出口节点 ID
+    #[serde(default)]
+    pub chain_exit_node_id: Option<String>,
+    /// 链式代理后置落地出口节点名称
+    #[serde(default)]
+    pub chain_exit_node_name: Option<String>,
 }
 
 fn default_url_test_size() -> u16 {
@@ -211,6 +226,11 @@ impl Default for MihomoConfigOptions {
             hop_ports: default_hop_ports(),
             selected_node_id: None,
             selected_node_name: None,
+            chain_proxy_enabled: false,
+            chain_entry_node_id: None,
+            chain_entry_node_name: None,
+            chain_exit_node_id: None,
+            chain_exit_node_name: None,
         }
     }
 }
@@ -227,6 +247,7 @@ impl MihomoConfigOptions {
                     | RoutingMode::ChinaDirect
                     | RoutingMode::GfwList
                     | RoutingMode::Subscription
+                    | RoutingMode::Chain
             )
             || self
                 .override_yaml

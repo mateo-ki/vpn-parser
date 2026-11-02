@@ -201,6 +201,15 @@ pub enum DashboardDrawer {
     Traffic,     // 节点流量统计
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodePickerTarget {
+    PortMapping(usize),
+    NewPortMapping,
+    ChainEntry,
+    ChainExit,
+    Speedtest,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum NodeTrafficSort {
     #[default]
@@ -453,6 +462,14 @@ pub enum BgMsg {
         total: usize,
     },
     SpeedDone(Result<SpeedTestSummary, String>),
+    SpeedtestPingResult {
+        ping_ms: i64,
+        jitter_ms: f32,
+    },
+    SpeedtestLiveSample {
+        mbps: f32,
+        phase: usize,
+    },
     /// 自动切换的替补 TCP 复检结果。
     FailoverTarget(Result<(String, String), String>),
     Kernels(Vec<KernelInfo>),

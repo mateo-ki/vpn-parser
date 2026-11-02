@@ -56,7 +56,11 @@ impl VpnApp {
                 }
 
                 if self.new_mapping_node_id.is_some() {
-                    if ui.button("✕").on_hover_text("清除选中的节点").clicked() {
+                    if ui
+                        .add(crate::gui::icons::icon_btn_square(Icon::Close, 11.0))
+                        .on_hover_text("清除选中的节点")
+                        .clicked()
+                    {
                         self.new_mapping_node_id = None;
                         self.new_mapping_node_name = None;
                     }

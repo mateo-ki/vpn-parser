@@ -89,7 +89,7 @@ impl VpnApp {
                     );
                     ui.add_space(6.0);
                     ui.label(
-                        RichText::new("启动代理内核后，此处将实时展示各网络连接的目标地址、所属进程、分流规则及上传下载速率。")
+                        RichText::new("启动内核后，此处将实时展示各网络连接的目标地址、所属进程、分流规则及上传下载速率。")
                             .small()
                             .color(theme::muted()),
                     );

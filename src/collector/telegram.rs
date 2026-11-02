@@ -322,7 +322,7 @@ impl super::Collector {
                     source,
                     format!("https://t.me/s/{channel}"),
                     "Telegram 频道需要出口：这一轮既没走应用内代理，系统代理也没开。\
-                     请在控制台启动代理后用「使用代理拉取」，或把系统代理指向一个能出境外的地址"
+                     请在控制台启动内核后用「使用代理拉取」，或把系统代理指向一个能出境外的地址"
                         .to_string(),
                 )
                 .await

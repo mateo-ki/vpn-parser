@@ -261,8 +261,8 @@ mod button_radius_tests {
                 let layer = ui.layer_id();
                 ui.horizontal(|ui| {
                     let _ = ui.button("IP 检测");
-                    let _ = ui.add(primary_btn("启动代理"));
-                    let _ = ui.add(danger_btn("停止代理"));
+                    let _ = ui.add(primary_btn("启动内核"));
+                    let _ = ui.add(danger_btn("关闭内核"));
                 });
                 out = ctx.graphics_mut(|g| {
                     g.get(layer)

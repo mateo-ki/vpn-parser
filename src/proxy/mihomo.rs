@@ -48,7 +48,7 @@ fn build_mihomo_config_legacy(node: &Node, options: MihomoConfigOptions) -> Resu
         }
         RoutingMode::ChinaDirect => recommended_traffic_rules(),
         RoutingMode::GfwList => gfwlist_traffic_rules(),
-        RoutingMode::Global | RoutingMode::Direct => Vec::new(),
+        RoutingMode::Global | RoutingMode::Direct | RoutingMode::Chain => Vec::new(),
         RoutingMode::Subscription => options.rules.clone(),
     };
     // 境内 DoH 污染出的国内 IP 会让 GEOIP,CN 误判直连，先按域名定性（仅 mihomo）。
@@ -198,7 +198,7 @@ fn build_mihomo_config_legacy(node: &Node, options: MihomoConfigOptions) -> Resu
     }
 
     let default_target = match options.routing_mode {
-        RoutingMode::Rule | RoutingMode::ChinaDirect | RoutingMode::Global | RoutingMode::Subscription => "PROXY",
+        RoutingMode::Rule | RoutingMode::ChinaDirect | RoutingMode::Global | RoutingMode::Subscription | RoutingMode::Chain => "PROXY",
         RoutingMode::GfwList | RoutingMode::Direct => "DIRECT",
     };
     let match_target = if url_test_active && default_target == "PROXY" {

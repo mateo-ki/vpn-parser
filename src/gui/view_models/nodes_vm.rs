@@ -4,6 +4,7 @@ pub enum NodeCardAction {
     Select { id: String, name: String },
     Connect { id: String, name: String },
     Speedtest(String),
+    SpeedtestDownload(String),
     ShowDetail(String),
     CheckIpRisk(String),
     Delete(String),

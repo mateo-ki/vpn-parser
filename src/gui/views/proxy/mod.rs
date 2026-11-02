@@ -181,7 +181,7 @@ impl VpnApp {
         );
         if running {
             if ui
-                .add_enabled(!self.proxy_busy, danger_btn(self.tr("停止代理")))
+                .add_enabled(!self.proxy_busy, danger_btn(self.tr("关闭内核")))
                 .clicked()
             {
                 self.stop_proxy();
@@ -192,7 +192,7 @@ impl VpnApp {
                 || !self.nodes.is_empty()
                 || !self.proxy_nodes.is_empty();
             let can_start = !self.proxy_busy && !transitioning && has_executable_node;
-            let start = ui.add_enabled(can_start, primary_btn(self.tr("启动代理")));
+            let start = ui.add_enabled(can_start, primary_btn(self.tr("启动内核")));
             let start = if !has_executable_node {
                 start.on_hover_text("节点列表为空，请先在订阅源拉取节点")
             } else if self.proxy_busy {
