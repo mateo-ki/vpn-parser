@@ -432,7 +432,7 @@ impl VpnApp {
                                             {
                                                 group_switch_member = Some((self.proxy_selected_group.clone(), node_name.clone()));
                                             }
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                     } else {
                                         ui.label(RichText::new("✓ 当前活动节点").small().color(theme::accent_strong()));
@@ -440,31 +440,31 @@ impl VpnApp {
                                     ui.separator();
                                     if ui.button("ℹ️ 查看详情").clicked() {
                                         menu_action = Some(NodeCardAction::ShowDetail(node_id.clone()));
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                     if ui
                                         .add_enabled(!is_busy, egui::Button::new("⚡ 测速节点"))
                                         .clicked()
                                     {
                                         menu_action = Some(NodeCardAction::Speedtest(node_id.clone()));
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                     if ui
                                         .add_enabled(!is_busy, egui::Button::new("📥 下载测速"))
                                         .clicked()
                                     {
                                         menu_action = Some(NodeCardAction::SpeedtestDownload(node_id.clone()));
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                     if ui.button("🛡️ IP 检测").clicked() {
                                         menu_action = Some(NodeCardAction::CheckIpRisk(node_id.clone()));
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                     if (is_auto || self.proxy_selected_group != "全部") && !is_active {
                                         ui.separator();
                                         if ui.button("锁定为出口（关闭自动选路）").clicked() {
                                             locked = Some((node_id.clone(), node_name.clone()));
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                     }
                                 });

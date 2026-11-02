@@ -1193,7 +1193,7 @@ pub fn danger_icon_btn<'a>(icon: Icon, text: &'a str) -> impl egui::Widget + 'a 
 
         let font_id = egui::FontId::proportional(13.0);
         let text_str = text.to_string();
-        let text_size = ui.fonts(|f| f.layout_no_wrap(text_str.clone(), font_id.clone(), Color32::WHITE)).size();
+        let text_size = ui.painter().layout_no_wrap(text_str.clone(), font_id.clone(), Color32::WHITE).size();
 
         let desired_size = Vec2::new(
             padding.x * 2.0 + icon_size + icon_gap + text_size.x,
@@ -1337,8 +1337,9 @@ mod tests {
         let mut input = egui::RawInput::default();
         input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(200.0)));
         let mut painted: Vec<(Icon, usize)> = Vec::new();
-        let _ = ctx.run(input, |ctx| {
-            let painter = egui::Painter::new(ctx.clone(), layer, ctx.screen_rect());
+        let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+            let ctx = ui.ctx();
+            let painter = egui::Painter::new(ctx.clone(), layer, ctx.viewport_rect());
             for icon in [
                 Icon::Dashboard,
                 Icon::Lightning,

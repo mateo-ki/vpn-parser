@@ -981,16 +981,15 @@ fn ink_offset(font_name: &str, data: &std::sync::Arc<egui::FontData>) -> f32 {
     ));
     let text = INK_CALIBRATION_LABEL.to_owned();
     let mut offset = 0.0_f32;
-    let _ = ctx.run(input, |ctx| {
-        let galley = ctx.fonts(|fonts| {
-            fonts.layout_no_wrap(
-                text.clone(),
-                egui::FontId::proportional(INK_CALIBRATION_SIZE),
-                egui::Color32::WHITE,
-            )
-        });
+    let mut out = ctx.run_ui(input, |ui| {
+        let galley = ui.painter().layout_no_wrap(
+            text.clone(),
+            egui::FontId::proportional(INK_CALIBRATION_SIZE),
+            egui::Color32::WHITE,
+        );
         offset = galley.mesh_bounds.center().y - galley.rect.center().y;
     });
+    out.textures_delta.clear();
     offset
 }
 

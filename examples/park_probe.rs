@@ -47,7 +47,8 @@ fn paintable() -> bool {
 }
 
 impl eframe::App for Probe {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         let n = FRAMES.fetch_add(1, Ordering::SeqCst);
         let t = START.elapsed().as_secs_f32();
         let can_paint = paintable();
@@ -63,7 +64,7 @@ impl eframe::App for Probe {
             _ => false,
         };
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             ui.label(format!("park_probe frame {n}"));
         });
 

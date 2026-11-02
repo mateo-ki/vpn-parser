@@ -12,8 +12,8 @@ mod layout_tests {
             Vec2::new(1200.0, 800.0),
         ));
         let mut left = -1.0;
-        let _ = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 header(ui);
                 left = ui.available_height();
             });
@@ -89,16 +89,16 @@ mod header_probe_tests {
         let mut save_right = 0.0_f32;
         let mut save_left = 0.0_f32;
         let mut chips_right = 0.0_f32;
-        let _ = ctx.run(input, |ctx| {
-            egui::TopBottomPanel::top("title_bar")
-                .exact_height(34.0)
+        let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+            egui::Panel::top("title_bar")
+                .exact_size(34.0)
                 .frame(Frame::NONE.fill(egui::Color32::WHITE))
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     let _ = ui.label("VPN Parser");
                 });
-            egui::SidePanel::left("sidebar")
-                .exact_width(220.0)
-                .show(ctx, |ui| {
+            egui::Panel::left("sidebar")
+                .exact_size(220.0)
+                .show(ui, |ui| {
                     let _ = ui.label("导航");
                 });
             egui::CentralPanel::default()
@@ -107,7 +107,7 @@ mod header_probe_tests {
                         .fill(egui::Color32::LIGHT_GRAY)
                         .inner_margin(Margin::symmetric(18, 14)),
                 )
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     if chips_before_header {
                         ui.horizontal_wrapped(|ui| {
                             for _ in 0..chips {
@@ -240,11 +240,11 @@ mod zoom_semantics_tests {
                 egui::Pos2::ZERO,
                 Vec2::new(1330.0, 800.0),
             ));
-            let _ = ctx.run(input, |ctx| {
+            let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
                 if frame == 1 {
-                    ctx.set_zoom_factor(1.1);
+                    ui.ctx().set_zoom_factor(1.1);
                 }
-                widths.push((ctx.screen_rect().width(), ctx.pixels_per_point()));
+                widths.push((ui.ctx().viewport_rect().width(), ui.ctx().pixels_per_point()));
             });
         }
         // zoom 是"下一帧才生效"的：设了之后那一帧仍旧按 1330 逻辑点排。
@@ -276,16 +276,16 @@ mod stats_row_overflow_probe_tests {
         let mut group_right = 0.0_f32;
         let mut chips_right = 0.0_f32;
         let mut save_right = 0.0_f32;
-        let _ = ctx.run(input, |ctx| {
-            egui::TopBottomPanel::top("title_bar")
-                .exact_height(34.0)
+        let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+            egui::Panel::top("title_bar")
+                .exact_size(34.0)
                 .frame(Frame::NONE.fill(Color32::WHITE))
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     let _ = ui.label("VPN Parser");
                 });
-            egui::SidePanel::left("sidebar")
-                .exact_width(220.0)
-                .show(ctx, |ui| {
+            egui::Panel::left("sidebar")
+                .exact_size(220.0)
+                .show(ui, |ui| {
                     let _ = ui.label("导航");
                 });
             egui::CentralPanel::default()
@@ -294,7 +294,7 @@ mod stats_row_overflow_probe_tests {
                         .fill(Color32::LIGHT_GRAY)
                         .inner_margin(Margin::symmetric(18, 14)),
                 )
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         stat_chip(ui, "订阅源", "36", Color32::GRAY);
                         stat_chip(ui, "启用", "36", Color32::GRAY);
@@ -366,10 +366,10 @@ mod slider_tick_probe_tests {
         ));
         let mut handle_center = 0.0_f32;
         let mut tick_x = 0.0_f32;
-        let _ = ctx.run(input, |ctx| {
+        let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
             egui::CentralPanel::default()
                 .frame(Frame::NONE.inner_margin(8.0))
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     let layer = ui.layer_id();
                     let slider_width = ui.spacing().slider_width;
                     ui.spacing_mut().slider_width = 300.0;

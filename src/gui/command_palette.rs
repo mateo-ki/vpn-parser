@@ -123,7 +123,7 @@ impl VpnApp {
         let mut run: Option<PaletteAction> = None;
         let mut close = false;
         let want_focus = self.palette_needs_focus;
-        let drop_from = ctx.input(|i| i.screen_rect()).height() * 0.18;
+        let drop_from = ctx.viewport_rect().height() * 0.18;
 
         egui::Window::new("命令面板")
             .id(egui::Id::new("vpn-parser-command-palette"))
@@ -132,7 +132,7 @@ impl VpnApp {
             .resizable(false)
             .anchor(egui::Align2::CENTER_TOP, [0.0, drop_from.max(60.0)])
             .frame(
-                egui::Frame::popup(&ctx.style())
+                egui::Frame::popup(&ctx.global_style())
                     .corner_radius(CornerRadius::same(16))
                     .inner_margin(Margin::same(10)),
             )

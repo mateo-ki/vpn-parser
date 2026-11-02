@@ -799,7 +799,7 @@ fn kv_row(ui: &mut Ui, label: &str, value: &str, action: Option<&str>) -> bool {
     );
     let shown =
         crate::gui::widgets::ellipsize(ui, value, value_w, egui::FontId::monospace(VALUE_SIZE));
-    ui.allocate_new_ui(
+    ui.scope_builder(
         egui::UiBuilder::new()
             .id_salt(("about:kv", label))
             .max_rect(egui::Rect::from_min_size(
@@ -811,7 +811,7 @@ fn kv_row(ui: &mut Ui, label: &str, value: &str, action: Option<&str>) -> bool {
             ui.label(RichText::new(label).size(11.5).color(theme::muted()));
         },
     );
-    let val_resp = ui.allocate_new_ui(
+    let val_resp = ui.scope_builder(
         egui::UiBuilder::new()
             .id_salt(("about:kv", label, "value"))
             .max_rect(cell),
@@ -833,7 +833,7 @@ fn kv_row(ui: &mut Ui, label: &str, value: &str, action: Option<&str>) -> bool {
     let mut clicked = false;
     if let Some(text) = action {
         clicked = ui
-            .allocate_new_ui(
+            .scope_builder(
                 egui::UiBuilder::new()
                     .id_salt(("about:kv", label, "action"))
                     .max_rect(egui::Rect::from_min_size(
@@ -922,14 +922,14 @@ mod about_layout_probe_tests {
             egui::Pos2::ZERO,
             Vec2::new(width, 800.0),
         ));
-        let _ = ctx.run(input, |ctx| {
+        let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
             egui::CentralPanel::default()
                 .frame(
                     Frame::NONE
                         .fill(egui::Color32::WHITE)
                         .inner_margin(Margin::symmetric(18, 14)),
                 )
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     card_frame().show(ui, |ui| {
                         let layer = ui.layer_id();
                         if let Some(body) = slot.take() {
