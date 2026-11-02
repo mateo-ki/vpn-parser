@@ -952,7 +952,23 @@ impl VpnApp {
                                         btn_painter.galley(icon_pos, galley_icon, pill_fg);
                                         btn_painter.galley(text_pos, galley_text, pill_fg);
 
-                                        let btn_resp = btn_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                                        let is_proxy_active = self.proxy_status.local_proxy_active()
+                                            || matches!(
+                                                self.proxy_status.state,
+                                                crate::proxy::types::ProxyState::Running | crate::proxy::types::ProxyState::Degraded
+                                            );
+                                        let btn_tip = if selected_node.is_some() {
+                                            if is_proxy_active {
+                                                "开始代理测速（通过当前代理节点出站转发）"
+                                            } else {
+                                                "开始直连测速（代理未启动，流量直接连接测速服务器）"
+                                            }
+                                        } else {
+                                            "请先点击选择测速节点"
+                                        };
+                                        let btn_resp = btn_resp
+                                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                            .on_hover_text(btn_tip);
                                         if btn_resp.clicked() && !is_busy {
                                             if let Some(ref node) = selected_node {
                                                 self.speedtest_one_download(node.id.clone());
@@ -1129,6 +1145,38 @@ impl VpnApp {
                                                     crate::proxy::types::ProxyMode::Both => "系统 + TUN",
                                                 };
                                                 ui.label(RichText::new(mode_str).size(12.0).strong().color(theme::text_primary()));
+                                            });
+                                        });
+
+                                        ui.separator();
+
+                                        // 测速模式（未启动代理为直连测速，已启动代理为代理测速）
+                                        ui.horizontal(|ui| {
+                                            icon_label(ui, Icon::Lightning, 14.0, theme::text_secondary());
+                                            ui.add_space(2.0);
+                                            ui.label(RichText::new("测速模式").size(12.5).color(theme::text_secondary()));
+
+                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                let is_proxy_active = self.proxy_status.local_proxy_active()
+                                                    || matches!(
+                                                        self.proxy_status.state,
+                                                        crate::proxy::types::ProxyState::Running | crate::proxy::types::ProxyState::Degraded
+                                                    );
+                                                let (mode_text, mode_col, tip) = if is_proxy_active {
+                                                    (
+                                                        "代理测速",
+                                                        Color32::from_rgb(0, 122, 255), // 醒目 Apple 蓝
+                                                        "代理内核运行中：测速数据流经由当前节点代理出站转发",
+                                                    )
+                                                } else {
+                                                    (
+                                                        "直连测速",
+                                                        theme::warning(), // 告警琥珀黄
+                                                        "代理内核未启动：测速数据流由本机网络直接连接测速服务器",
+                                                    )
+                                                };
+                                                ui.label(RichText::new(mode_text).size(12.0).strong().color(mode_col))
+                                                    .on_hover_text(tip);
                                             });
                                         });
 
