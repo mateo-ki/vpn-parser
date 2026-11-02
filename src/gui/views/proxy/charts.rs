@@ -345,7 +345,7 @@ fn dash_bottom_proxy_item(
     icon_color: Color32,
     title: &str,
     sub: &str,
-    has_gear: bool,
+    can_open_drawer: bool,
     widget: impl FnOnce(&mut Ui),
 ) -> Option<egui::Response> {
     let mut icon_clicked_resp = None;
@@ -367,9 +367,9 @@ fn dash_bottom_proxy_item(
                 // 图标圆角方块（窄卡自动隐藏，给标题腾位置）
                 let show_icon = w >= 150.0;
                 if show_icon {
-                    let sense = if has_gear { Sense::click() } else { Sense::hover() };
+                    let sense = if can_open_drawer { Sense::click() } else { Sense::hover() };
                     let (icon_rect, icon_resp) = ui.allocate_exact_size(Vec2::splat(34.0), sense);
-                    let is_hovered = has_gear && icon_resp.hovered();
+                    let is_hovered = can_open_drawer && icon_resp.hovered();
                     let icon_bg = if theme::is_light() {
                         if is_hovered {
                             icon_color.gamma_multiply(0.22)
@@ -383,7 +383,7 @@ fn dash_bottom_proxy_item(
                     };
                     ui.painter().rect_filled(icon_rect, CornerRadius::same(9), icon_bg);
                     draw_icon(ui.painter(), icon_rect.shrink(9.0), icon, icon_color);
-                    if has_gear {
+                    if can_open_drawer {
                         let icon_resp = icon_resp
                             .on_hover_cursor(egui::CursorIcon::PointingHand)
                             .on_hover_text("点击打开网络设置抽屉（DNS 协议与 TUN 虚拟网卡配置）");
@@ -450,40 +450,7 @@ fn dash_bottom_proxy_item(
             });
         });
 
-    // 卡片右上角设置齿轮图标（点击滑出网络设置抽屉）
-    let gear_clicked_resp = if has_gear {
-        let gear_size = 17.0_f32;
-        let gear_rect = Rect::from_min_size(
-            egui::pos2(outer.right() - 10.0 - gear_size, outer.top() + 7.0),
-            Vec2::splat(gear_size),
-        );
-        let gear_resp = ui.interact(
-            gear_rect,
-            ui.id().with("card_gear_btn").with(title),
-            Sense::click(),
-        );
-        let hovered = gear_resp.hovered();
-        if hovered {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            ui.painter().rect_filled(gear_rect, CornerRadius::same(4), apple_sub_bg());
-            draw_icon(ui.painter(), gear_rect.shrink(1.8), Icon::Gear, theme::accent());
-        } else {
-            draw_icon(ui.painter(), gear_rect.shrink(1.8), Icon::Gear, theme::text_secondary());
-        }
-        let gear_resp = gear_resp
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text("点击打开网络设置抽屉（DNS 协议与 TUN 虚拟网卡配置）");
-        Some(gear_resp)
-    } else {
-        None
-    };
-
-    match (gear_clicked_resp, icon_clicked_resp) {
-        (Some(g), Some(i)) => Some(g.union(i)),
-        (Some(g), None) => Some(g),
-        (None, Some(i)) => Some(i),
-        (None, None) => None,
-    }
+    icon_clicked_resp
 }
 
 /// 迷你波浪线（速率曲线）：输入原始 f32 序列，自动按最大值归一化，
@@ -1937,7 +1904,25 @@ impl VpnApp {
                         dash_dot(ui, dot_color).on_hover_text(format!("代理状态：{state_text}"));
                         ui.add_space(8.0);
 
+                        // 卡片右上角活跃连接入口：位于内核管理图标后面（右侧），点击滑出网络连接与 DNS 审计抽屉
+                        let (conn_rect, conn_resp) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
+                        let conn_color = if conn_resp.hovered() { theme::accent() } else { theme::text_secondary() };
+                        draw_icon(ui.painter(), conn_rect.shrink(1.0), Icon::Plug, conn_color);
+                        let conn_count = self.active_connections.len();
+                        let conn_tip = if conn_count == 0 {
+                            "活跃连接：网络连接与 DNS 审计（当前暂无活跃连接）".to_string()
+                        } else {
+                            format!("活跃连接：{conn_count} 条实时连接与 DNS 审计（点击滑出抽屉）")
+                        };
+                        let conn_resp = conn_resp
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text(conn_tip);
+                        if conn_resp.clicked() {
+                            self.dashboard_drawer = Some(DashboardDrawer::Connections);
+                        }
+
                         // 卡片右上角内核管理入口：点击滑出内核管理抽屉
+                        ui.add_space(8.0);
                         let (kx_rect, kx_resp) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
                         let kx_color = if kx_resp.hovered() { theme::accent() } else { theme::text_secondary() };
                         draw_icon(ui.painter(), kx_rect.shrink(1.0), Icon::Cpu, kx_color);
