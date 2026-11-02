@@ -2,6 +2,7 @@ use super::groups::{node_matches_group, visible_group_names};
 use crate::gui::icons::{draw_icon, Icon};
 use crate::gui::theme;
 use crate::gui::types::DashboardDrawer;
+use crate::gui::view_models::nodes_vm::NodeCardAction;
 use crate::gui::widgets::{format_bytes, format_speed};
 use crate::gui::VpnApp;
 use crate::kernel::KernelPreference;
@@ -315,7 +316,7 @@ fn dash_bottom_proxy_item(
     icon_color: Color32,
     title: &str,
     sub: &str,
-    icon_clickable: bool,
+    has_gear: bool,
     widget: impl FnOnce(&mut Ui),
 ) -> Option<egui::Response> {
     let mut icon_clicked_resp = None;
@@ -337,7 +338,7 @@ fn dash_bottom_proxy_item(
                 // 图标圆角方块（窄卡自动隐藏，给标题腾位置）
                 let show_icon = w >= 150.0;
                 if show_icon {
-                    let sense = if icon_clickable { Sense::click() } else { Sense::hover() };
+                    let sense = if has_gear { Sense::click() } else { Sense::hover() };
                     let (icon_rect, icon_resp) = ui.allocate_exact_size(Vec2::splat(34.0), sense);
                     let icon_bg = if theme::is_light() {
                         icon_color.gamma_multiply(0.12)
@@ -346,10 +347,10 @@ fn dash_bottom_proxy_item(
                     };
                     ui.painter().rect_filled(icon_rect, CornerRadius::same(9), icon_bg);
                     draw_icon(ui.painter(), icon_rect.shrink(9.0), icon, icon_color);
-                    if icon_clickable {
+                    if has_gear {
                         let icon_resp = icon_resp
                             .on_hover_cursor(egui::CursorIcon::PointingHand)
-                            .on_hover_text("点击配置 DNS / TUN（右侧滑出抽屉）");
+                            .on_hover_text("点击打开网络设置抽屉（DNS / TUN 虚拟网卡配置）");
                         if icon_resp.hovered() {
                             ui.painter().rect_stroke(
                                 icon_rect,
@@ -412,7 +413,41 @@ fn dash_bottom_proxy_item(
                 });
             });
         });
-    icon_clicked_resp
+
+    // 卡片右上角设置齿轮图标（点击滑出网络设置抽屉）
+    let gear_clicked_resp = if has_gear {
+        let gear_size = 17.0_f32;
+        let gear_rect = Rect::from_min_size(
+            egui::pos2(outer.right() - 10.0 - gear_size, outer.top() + 7.0),
+            Vec2::splat(gear_size),
+        );
+        let gear_resp = ui.interact(
+            gear_rect,
+            ui.id().with("card_gear_btn").with(title),
+            Sense::click(),
+        );
+        let hovered = gear_resp.hovered();
+        if hovered {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            ui.painter().rect_filled(gear_rect, CornerRadius::same(4), apple_sub_bg());
+            draw_icon(ui.painter(), gear_rect.shrink(1.8), Icon::Gear, theme::accent());
+        } else {
+            draw_icon(ui.painter(), gear_rect.shrink(1.8), Icon::Gear, theme::text_secondary());
+        }
+        let gear_resp = gear_resp
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("点击打开网络设置抽屉（DNS 协议与 TUN 虚拟网卡配置）");
+        Some(gear_resp)
+    } else {
+        None
+    };
+
+    match (gear_clicked_resp, icon_clicked_resp) {
+        (Some(g), Some(i)) => Some(g.union(i)),
+        (Some(g), None) => Some(g),
+        (None, Some(i)) => Some(i),
+        (None, None) => None,
+    }
 }
 
 /// 迷你波浪线（速率曲线）：输入原始 f32 序列，自动按最大值归一化，
@@ -1362,9 +1397,13 @@ impl VpnApp {
                             let focused_id = self.focused_node_id.clone();
                             let switching_id = self.switching_node_id.clone();
                             let selected_id = self.selected_proxy_node_id.clone();
+                            let is_busy = self.busy || self.proxy_busy;
 
                             let mut clicked_node: Option<crate::models::NodeSummary> = None;
+                            let mut force_manual = false;
                             let mut clicked_auto = false;
+                            let mut menu_action: Option<NodeCardAction> = None;
+                            let mut copied_text: Option<(String, String)> = None;
 
                             for pair in nodes.chunks(cols) {
                                 ui.columns(cols, |column_uis| {
@@ -1389,6 +1428,17 @@ impl VpnApp {
                                         if let Some(ms) = node.latency_ms {
                                             tip.push_str(&format!("\n延迟: {ms} ms"));
                                         }
+                                        if is_active {
+                                            tip.push_str("\n当前活动出口（右键管理）");
+                                        } else if group.name != "全部" && group.name != "all" && group.name != "PROXY" {
+                                            tip.push_str(&format!(
+                                                "\n左键点击选择，右键设为「{}」活动出口（双击亦可）",
+                                                group.name
+                                            ));
+                                        } else {
+                                            tip.push_str("\n左键点击选择，右键设为活动节点（双击亦可）");
+                                        }
+
                                         let resp = crate::gui::widgets::node_card::compact_node_card(
                                             column_ui,
                                             node,
@@ -1399,7 +1449,68 @@ impl VpnApp {
                                         )
                                         .on_hover_text(tip);
 
-                                        if resp.clicked() {
+                                        let clicked = resp.clicked();
+                                        let double_clicked = resp.double_clicked();
+                                        let node_id = node.id.clone();
+                                        let node_name = node.name.clone();
+                                        let node_server = node.server.clone();
+                                        let node_port = node.port;
+
+                                        resp.context_menu(|ui| {
+                                            if !is_active {
+                                                let label = if group.name != "全部" && group.name != "all" && group.name != "PROXY" {
+                                                    format!("🚀 设为「{}」活动出口", group.name)
+                                                } else {
+                                                    "🚀 设为活动节点".to_string()
+                                                };
+                                                if ui.button(label).clicked() {
+                                                    clicked_node = Some(node.clone());
+                                                    force_manual = true;
+                                                    ui.close_menu();
+                                                }
+                                            } else {
+                                                ui.label(RichText::new("✓ 当前活动出口").small().color(theme::accent_strong()));
+                                            }
+                                            ui.separator();
+                                            if ui.button("ℹ️ 查看详情").clicked() {
+                                                menu_action = Some(NodeCardAction::ShowDetail(node_id.clone()));
+                                                ui.close_menu();
+                                            }
+                                            if ui
+                                                .add_enabled(!is_busy, egui::Button::new("⚡ 测速节点"))
+                                                .clicked()
+                                            {
+                                                menu_action = Some(NodeCardAction::Speedtest(node_id.clone()));
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("🛡️ IP 检测").clicked() {
+                                                menu_action = Some(NodeCardAction::CheckIpRisk(node_id.clone()));
+                                                ui.close_menu();
+                                            }
+                                            ui.separator();
+                                            if ui.button("📋 复制节点名称").clicked() {
+                                                copied_text = Some((node_name.clone(), format!("已复制节点名称: {node_name}")));
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("📋 复制节点地址").clicked() {
+                                                let addr = format!("{node_server}:{node_port}");
+                                                copied_text = Some((addr.clone(), format!("已复制节点地址: {addr}")));
+                                                ui.close_menu();
+                                            }
+                                            if !manual_mode && !is_active {
+                                                ui.separator();
+                                                if ui.button("🔒 锁定为出口（切换为手动指定）").clicked() {
+                                                    clicked_node = Some(node.clone());
+                                                    force_manual = true;
+                                                    ui.close_menu();
+                                                }
+                                            }
+                                        });
+
+                                        if double_clicked && !is_active {
+                                            clicked_node = Some(node.clone());
+                                            force_manual = true;
+                                        } else if clicked {
                                             if !is_active && manual_mode {
                                                 clicked_node = Some(node.clone());
                                             } else if !manual_mode {
@@ -1412,6 +1523,10 @@ impl VpnApp {
                             }
 
                             if let Some(node) = clicked_node {
+                                if force_manual {
+                                    self.group_scheduling
+                                        .insert(group.name.clone(), "手动指定".to_string());
+                                }
                                 self.set_start_node(&node);
                                 if proxy_up {
                                     if group.members.contains(&node.name) {
@@ -1436,7 +1551,16 @@ impl VpnApp {
                                     self.status = "已选择节点，启动代理将使用该节点".into();
                                 }
                             } else if clicked_auto {
-                                self.status = "当前为自动调度，点选「手动指定」后可选择节点".into();
+                                self.status = "当前为自动调度，点选「手动指定」或右键卡片直接选定出口".into();
+                            }
+
+                            if let Some(action) = menu_action {
+                                self.handle_node_card_action(action);
+                            }
+
+                            if let Some((text, msg)) = copied_text {
+                                ctx.copy_text(text);
+                                self.status = msg;
                             }
 
                             if !group.members.is_empty() && !is_selector {
@@ -1768,6 +1892,8 @@ impl VpnApp {
                         // 否则状态圆点会和齿轮图标贴死
                         ui.add_space(6.0);
                         dash_dot(ui, dot_color);
+                        // 状态圆点与节点名称文本之间增加间距，避免紧贴
+                        ui.add_space(6.0);
                         let sub_title = if let Some(node) = selected_node {
                             format!("{state_text} · {}", crate::gui::widgets::clean_node_display_name(&node.name))
                         } else if let Some(ref name) = self.selected_proxy_node_name {
@@ -1844,6 +1970,8 @@ impl VpnApp {
                             );
                             painter.galley(pos, galley, theme::text_primary());
 
+                            // 区域国旗方块与 IP / 节点名称之间留出间距
+                            ui.add_space(8.0);
 
                             let display_title = if let Some(ip) = egress_ip.as_ref() {
                                 ip.clone()

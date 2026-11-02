@@ -215,23 +215,29 @@ impl VpnApp {
                     let w4 = (content_w * 0.12).clamp(95.0, 125.0);          // 健康度
                     let w5 = (content_w - w0 - w1 - w2 - w3 - w4).max(150.0); // 流量配额（吸纳全部剩余宽度并充裕保底）
 
+                    let row_h = 40.0_f32;
+
                     egui::Grid::new("sources_grid")
                         .striped(true)
                         .num_columns(6)
-                        .spacing([grid_spacing, 10.0])
+                        .spacing([grid_spacing, 6.0])
                         .min_col_width(40.0)
                         .show(ui, |ui| {
                             let col_header = |ui: &mut Ui, text: &str, w: f32| {
-                                ui.vertical(|ui| {
-                                    ui.set_min_width(w);
-                                    ui.set_max_width(w);
-                                    ui.label(
-                                        RichText::new(text)
-                                            .strong()
-                                            .color(theme::text_secondary())
-                                            .small(),
-                                    );
-                                });
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(w, 24.0),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.set_min_size(egui::vec2(w, 24.0));
+                                        ui.set_max_size(egui::vec2(w, 24.0));
+                                        ui.label(
+                                            RichText::new(text)
+                                                .strong()
+                                                .color(theme::text_secondary())
+                                                .small(),
+                                        );
+                                    },
+                                );
                             };
                             col_header(ui, self.tr("名称"), w0);
                             col_header(ui, "URL 模板", w1);
@@ -249,319 +255,386 @@ impl VpnApp {
                                 let retry =
                                     s.last_status.as_deref().is_some_and(source_status_failed);
 
-                                // 1. 名称（点击打开节点弹窗）
-                                let name_resp = ui.vertical(|ui| {
-                                    ui.set_min_width(w0);
-                                    ui.set_max_width(w0);
-                                    let shown_name = crate::gui::widgets::ellipsize(
-                                        ui,
-                                        &s.name,
-                                        w0,
-                                        egui::FontId::proportional(14.0),
-                                    );
-                                    let hover_msg = if shown_name != s.name {
-                                        format!("{}\n\n点击查看此订阅源的节点列表（右键弹出操作菜单）", s.name)
-                                    } else {
-                                        "点击查看此订阅源的节点列表（右键弹出操作菜单）".to_string()
-                                    };
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(shown_name).strong().color(theme::accent()),
-                                        )
-                                        .sense(egui::Sense::click()),
-                                    )
-                                    .on_hover_text(hover_msg)
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                }).inner;
-                                if name_resp.clicked() {
-                                    action_open_nodes = Some((s.id.clone(), s.name.clone()));
-                                }
-
-                                // 2. URL 模板（点击弹框出编辑界面，自动截断）
-                                let url_resp = ui.vertical(|ui| {
-                                    ui.set_min_width(w1);
-                                    ui.set_max_width(w1);
-                                    let small_font = egui::TextStyle::Small.resolve(ui.style());
-                                    let is_imported = s.is_imported();
-                                    let url_display = if is_imported {
-                                        "本地导入 / 剪贴板".to_string()
-                                    } else {
-                                        s.url_template.clone()
-                                    };
-                                    let shown_url = crate::gui::widgets::ellipsize(
-                                        ui,
-                                        &url_display,
-                                        w1,
-                                        small_font,
-                                    );
-                                    let url_hover = if is_imported {
-                                        "本地导入 / 剪贴板自建节点池（点击编辑配置，右键弹出操作菜单）".to_string()
-                                    } else if shown_url != s.url_template {
-                                        format!("{}\n\n点击编辑此订阅源配置（右键弹出操作菜单）", s.url_template)
-                                    } else {
-                                        "点击编辑此订阅源配置（右键弹出操作菜单）".to_string()
-                                    };
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(shown_url).small().color(theme::accent()),
-                                        )
-                                        .sense(egui::Sense::click()),
-                                    )
-                                    .on_hover_text(url_hover)
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                }).inner;
-                                if url_resp.clicked() {
-                                    action_edit = Some(s.clone());
-                                }
-
-                                // 3. 状态（自适应撑开行高，完全包裹在背景色内）
-                                let status_resp = ui.vertical(|ui| {
-                                    ui.set_min_width(w2);
-                                    ui.set_max_width(w2);
-                                    let badge = if s.enabled { self.tr("启用") } else { self.tr("停用") };
-                                    let color = if s.enabled { theme::accent_strong() } else { theme::muted() };
-                                    ui.label(RichText::new(badge).color(color));
-                                    if s.is_imported() {
-                                        ui.label(RichText::new("本地源").small().color(theme::accent_strong()));
-                                    }
-                                    if s.push_disabled {
-                                        ui.label(RichText::new(self.tr("不推送")).small().color(theme::warning()));
-                                    }
-                                    if let Some(reports) = &self.homogeneity_reports {
-                                        if let Some(rep) = reports.iter().find(|r| r.source_id == s.id) {
-                                            if rep.total_nodes == 0 {
-                                                status_badge(ui, "⚠️ 空源", theme::warning());
-                                            } else if rep.is_redundant {
-                                                status_badge(ui, &format!("⚠️ 同质 {:.0}%", rep.overlap_rate_pct), theme::warning());
-                                            } else if rep.unique_alive_nodes > 0 {
-                                                status_badge(ui, &format!("独有 {}", rep.unique_alive_nodes), theme::accent_strong());
-                                            }
-                                        }
-                                    }
-                                }).response.interact(egui::Sense::click())
-                                .on_hover_text("点击编辑此订阅源配置（右键弹出操作菜单）")
-                                .on_hover_cursor(egui::CursorIcon::PointingHand);
-                                if status_resp.clicked() {
-                                    action_edit = Some(s.clone());
-                                }
-
-                                // 4. 最近拉取（点击去拉取）
-                                let fetch_resp = ui.vertical(|ui| {
-                                    ui.set_min_width(w3);
-                                    ui.set_max_width(w3);
-                                    if s.is_imported() {
-                                        ui.label(
-                                            RichText::new("无需拉取")
-                                                .small()
-                                                .color(theme::muted()),
-                                        );
-                                        ui.label(
-                                            RichText::new("本地自建")
-                                                .size(10.0)
-                                                .color(theme::muted()),
-                                        );
-                                    } else {
-                                        ui.label(
-                                            RichText::new(
-                                                s.last_fetch_at
-                                                    .map(|t| {
-                                                        t.with_timezone(&chrono::Local)
-                                                            .format("%m-%d %H:%M")
-                                                            .to_string()
-                                                    })
-                                                    .unwrap_or_else(|| "-".into()),
-                                            )
-                                            .small(),
-                                        );
-                                        render_fetch_ticks(ui, self.fetch_history.get(&s.id));
-                                    }
-                                }).response.interact(egui::Sense::click())
-                                .on_hover_text(if s.is_imported() {
-                                    "本地导入自建节点池，无需网络拉取（右键弹出操作菜单）"
-                                } else if source_active {
-                                    "正在拉取中...（右键弹出操作菜单）"
+                                // 1. 名称（上下垂直居中）
+                                let hover_msg = if s.name.chars().count() > 18 {
+                                    format!("{}\n\n点击查看此订阅源的节点列表（右键弹出操作菜单）", s.name)
                                 } else {
-                                    "点击立即拉取此订阅源（右键弹出操作菜单）"
-                                })
-                                .on_hover_cursor(egui::CursorIcon::PointingHand);
-                                if fetch_resp.clicked() && fetch_operation_allowed && !source_active && !s.is_imported() {
-                                    action_fetch = Some(s.id.clone());
-                                }
+                                    "点击查看此订阅源的节点列表（右键弹出操作菜单）".to_string()
+                                };
+                                let col0_cell = ui.allocate_ui_with_layout(
+                                    egui::vec2(w0, row_h),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.set_min_size(egui::vec2(w0, row_h));
+                                        ui.set_max_size(egui::vec2(w0, row_h));
+                                        let shown_name = crate::gui::widgets::ellipsize(
+                                            ui,
+                                            &s.name,
+                                            w0,
+                                            egui::FontId::proportional(14.0),
+                                        );
+                                        ui.label(
+                                            RichText::new(shown_name).strong().color(theme::accent()),
+                                        );
+                                    },
+                                );
+                                let col0_rect = col0_cell.response.rect;
+                                col0_cell
+                                    .response
+                                    .on_hover_text(hover_msg)
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand);
 
-                                // 5. 健康度（成活率柱状图，点击去测速）
-                                let health_resp = ui.vertical(|ui| {
-                                    ui.set_min_width(w4);
-                                    ui.set_max_width(w4);
-                                    let (total, alive) = if let Some(grp) = self.node_groups.iter().find(|group| {
-                                        group.source_id.as_deref() == Some(s.id.as_str())
-                                            || (s.id == crate::db::UNGROUPED_SOURCE_ID
-                                                && (group.source_id.is_none() || group.source_id.as_deref() == Some(crate::db::UNGROUPED_SOURCE_ID)))
-                                    }) {
-                                        (grp.total.max(s.last_node_count.max(0)), grp.alive)
+                                // 2. URL 模板（上下垂直居中，自动截断）
+                                let is_imported = s.is_imported();
+                                let mut url_truncated = false;
+                                let col1_cell = ui.allocate_ui_with_layout(
+                                    egui::vec2(w1, row_h),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.set_min_size(egui::vec2(w1, row_h));
+                                        ui.set_max_size(egui::vec2(w1, row_h));
+                                        let small_font = egui::TextStyle::Small.resolve(ui.style());
+                                        let url_display = if is_imported {
+                                            "本地导入 / 剪贴板".to_string()
+                                        } else {
+                                            s.url_template.clone()
+                                        };
+                                        let shown_url = crate::gui::widgets::ellipsize(
+                                            ui,
+                                            &url_display,
+                                            w1,
+                                            small_font,
+                                        );
+                                        url_truncated = shown_url != s.url_template;
+                                        ui.label(
+                                            RichText::new(shown_url).small().color(theme::accent()),
+                                        );
+                                    },
+                                );
+                                let url_hover = if is_imported {
+                                    "本地导入 / 剪贴板自建节点池（点击编辑配置，右键弹出操作菜单）".to_string()
+                                } else if url_truncated {
+                                    format!("{}\n\n点击编辑此订阅源配置（右键弹出操作菜单）", s.url_template)
+                                } else {
+                                    "点击编辑此订阅源配置（右键弹出操作菜单）".to_string()
+                                };
+                                let col1_rect = col1_cell.response.rect;
+                                col1_cell
+                                    .response
+                                    .on_hover_text(url_hover)
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+
+                                // 3. 状态（上下垂直居中）
+                                let col2_cell = ui.allocate_ui_with_layout(
+                                    egui::vec2(w2, row_h),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.set_min_size(egui::vec2(w2, row_h));
+                                        ui.set_max_size(egui::vec2(w2, row_h));
+                                        ui.vertical(|ui| {
+                                            ui.set_max_width(w2);
+                                            let badge = if s.enabled { self.tr("启用") } else { self.tr("停用") };
+                                            let color = if s.enabled { theme::accent_strong() } else { theme::muted() };
+                                            ui.label(RichText::new(badge).color(color));
+                                            if s.is_imported() {
+                                                ui.label(RichText::new("本地源").small().color(theme::accent_strong()));
+                                            }
+                                            if s.push_disabled {
+                                                ui.label(RichText::new(self.tr("不推送")).small().color(theme::warning()));
+                                            }
+                                            if let Some(reports) = &self.homogeneity_reports {
+                                                if let Some(rep) = reports.iter().find(|r| r.source_id == s.id) {
+                                                    if rep.total_nodes == 0 {
+                                                        status_badge(ui, "⚠️ 空源", theme::warning());
+                                                    } else if rep.is_redundant {
+                                                        status_badge(ui, &format!("⚠️ 同质 {:.0}%", rep.overlap_rate_pct), theme::warning());
+                                                    } else if rep.unique_alive_nodes > 0 {
+                                                        status_badge(ui, &format!("独有 {}", rep.unique_alive_nodes), theme::accent_strong());
+                                                    }
+                                                }
+                                            }
+                                        });
+                                    },
+                                );
+                                let col2_rect = col2_cell.response.rect;
+                                col2_cell
+                                    .response
+                                    .on_hover_text("点击编辑此订阅源配置（右键弹出操作菜单）")
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+
+                                // 4. 最近拉取（上下垂直居中）
+                                let col3_cell = ui.allocate_ui_with_layout(
+                                    egui::vec2(w3, row_h),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.set_min_size(egui::vec2(w3, row_h));
+                                        ui.set_max_size(egui::vec2(w3, row_h));
+                                        ui.vertical(|ui| {
+                                            ui.set_max_width(w3);
+                                            if s.is_imported() {
+                                                ui.label(
+                                                    RichText::new("无需拉取")
+                                                        .small()
+                                                        .color(theme::muted()),
+                                                );
+                                                ui.label(
+                                                    RichText::new("本地自建")
+                                                        .size(10.0)
+                                                        .color(theme::muted()),
+                                                );
+                                            } else {
+                                                ui.label(
+                                                    RichText::new(
+                                                        s.last_fetch_at
+                                                            .map(|t| {
+                                                                t.with_timezone(&chrono::Local)
+                                                                    .format("%m-%d %H:%M")
+                                                                    .to_string()
+                                                            })
+                                                            .unwrap_or_else(|| "-".into()),
+                                                    )
+                                                    .small(),
+                                                );
+                                                render_fetch_ticks(ui, self.fetch_history.get(&s.id));
+                                            }
+                                        });
+                                    },
+                                );
+                                let col3_rect = col3_cell.response.rect;
+                                col3_cell
+                                    .response
+                                    .on_hover_text(if s.is_imported() {
+                                        "本地导入自建节点池，无需网络拉取（右键弹出操作菜单）"
+                                    } else if source_active {
+                                        "正在拉取中...（右键弹出操作菜单）"
                                     } else {
-                                        (s.last_node_count.max(0), 0)
-                                    };
-                                    if total == 0 {
-                                        ui.horizontal(|ui| {
-                                            Frame::NONE
-                                                .fill(theme::warning_bg())
-                                                .corner_radius(CornerRadius::same(3))
-                                                .inner_margin(Margin::symmetric(5, 2))
-                                                .show(ui, |ui| {
+                                        "点击立即拉取此订阅源（右键弹出操作菜单）"
+                                    })
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+
+                                // 5. 健康度（上下垂直居中）
+                                let col4_cell = ui.allocate_ui_with_layout(
+                                    egui::vec2(w4, row_h),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.set_min_size(egui::vec2(w4, row_h));
+                                        ui.set_max_size(egui::vec2(w4, row_h));
+                                        ui.vertical(|ui| {
+                                            ui.set_max_width(w4);
+                                            let (total, alive) = if let Some(grp) = self.node_groups.iter().find(|group| {
+                                                group.source_id.as_deref() == Some(s.id.as_str())
+                                                    || (s.id == crate::db::UNGROUPED_SOURCE_ID
+                                                        && (group.source_id.is_none() || group.source_id.as_deref() == Some(crate::db::UNGROUPED_SOURCE_ID)))
+                                            }) {
+                                                (grp.total.max(s.last_node_count.max(0)), grp.alive)
+                                            } else {
+                                                (s.last_node_count.max(0), 0)
+                                            };
+                                            if total == 0 {
+                                                ui.horizontal(|ui| {
+                                                    Frame::NONE
+                                                        .fill(theme::warning_bg())
+                                                        .corner_radius(CornerRadius::same(3))
+                                                        .inner_margin(Margin::symmetric(5, 2))
+                                                        .show(ui, |ui| {
+                                                            ui.label(
+                                                                RichText::new("无节点")
+                                                                    .size(10.0)
+                                                                    .color(theme::warning()),
+                                                            );
+                                                        });
+                                                });
+                                            } else {
+                                                let ratio = (alive as f32 / total as f32).clamp(0.0, 1.0);
+                                                let pct = ratio * 100.0;
+                                                let color = if pct >= 80.0 {
+                                                    Color32::from_rgb(52, 199, 89)
+                                                } else if pct >= 50.0 {
+                                                    Color32::from_rgb(0, 122, 255)
+                                                } else if pct >= 20.0 {
+                                                    Color32::from_rgb(255, 149, 0)
+                                                } else {
+                                                    Color32::from_rgb(255, 59, 48)
+                                                };
+                                                let bar_w = (w4 - 44.0).clamp(48.0, 85.0);
+
+                                                // 柱状图 + 百分比读数
+                                                ui.horizontal(|ui| {
+                                                    ui.spacing_mut().item_spacing.x = 5.0;
+                                                    render_bar_chart(
+                                                        ui,
+                                                        ratio,
+                                                        bar_w,
+                                                        9.0,
+                                                        color,
+                                                        format!("成活率: {:.1}% ({alive}/{total} 节点可用)", pct),
+                                                    );
                                                     ui.label(
-                                                        RichText::new("无节点")
-                                                            .size(10.0)
-                                                            .color(theme::warning()),
+                                                        RichText::new(format!("{:.0}%", pct))
+                                                            .small()
+                                                            .strong()
+                                                            .color(color),
                                                     );
                                                 });
-                                        });
-                                    } else {
-                                        let ratio = (alive as f32 / total as f32).clamp(0.0, 1.0);
-                                        let pct = ratio * 100.0;
-                                        let color = if pct >= 80.0 {
-                                            Color32::from_rgb(52, 199, 89)
-                                        } else if pct >= 50.0 {
-                                            Color32::from_rgb(0, 122, 255)
-                                        } else if pct >= 20.0 {
-                                            Color32::from_rgb(255, 149, 0)
-                                        } else {
-                                            Color32::from_rgb(255, 59, 48)
-                                        };
-                                        let bar_w = (w4 - 44.0).clamp(48.0, 85.0);
-
-                                        // 柱状图 + 百分比读数
-                                        ui.horizontal(|ui| {
-                                            ui.spacing_mut().item_spacing.x = 5.0;
-                                            render_bar_chart(
-                                                ui,
-                                                ratio,
-                                                bar_w,
-                                                9.0,
-                                                color,
-                                                format!("成活率: {:.1}% ({alive}/{total} 节点可用)", pct),
-                                            );
-                                            ui.label(
-                                                RichText::new(format!("{:.0}%", pct))
-                                                    .small()
-                                                    .strong()
-                                                    .color(color),
-                                            );
-                                        });
-                                        ui.add_space(2.0);
-                                        // 次级节点数量统计
-                                        ui.label(
-                                            RichText::new(format!("{alive}/{total} 节点"))
-                                                .size(10.0)
-                                                .color(theme::text_secondary()),
-                                        );
-                                    }
-                                }).response.interact(egui::Sense::click())
-                                .on_hover_text("点击立即测速此订阅源全部节点（右键弹出操作菜单）")
-                                .on_hover_cursor(egui::CursorIcon::PointingHand);
-                                if health_resp.clicked() {
-                                    action_speedtest = Some((s.id.clone(), s.name.clone()));
-                                }
-
-                                // 6. 流量配额（单条进度条：已用/总量一条线呈现）
-                                let traffic_resp = ui.vertical(|ui| {
-                                    ui.set_min_width(w5);
-                                    ui.set_max_width(w5);
-                                    if let Some(total) = s.total_bytes {
-                                        let upload = s.upload_bytes.unwrap_or(0);
-                                        let download = s.download_bytes.unwrap_or(0);
-                                        let used = upload + download;
-                                        let remaining = total.saturating_sub(used);
-                                        let used_ratio = if total > 0 {
-                                            (used as f32 / total as f32).clamp(0.0, 1.0)
-                                        } else {
-                                            0.0
-                                        };
-                                        let rem_ratio = if total > 0 {
-                                            (remaining as f32 / total as f32).clamp(0.0, 1.0)
-                                        } else {
-                                            0.0
-                                        };
-
-                                        let bar_color = if rem_ratio <= 0.10 {
-                                            Color32::from_rgb(255, 59, 48)   // 剩余不足 10% 红色警告
-                                        } else if rem_ratio <= 0.25 {
-                                            Color32::from_rgb(255, 149, 0)   // 剩余不足 25% 橙色提示
-                                        } else {
-                                            Color32::from_rgb(0, 122, 255)   // 正常蓝色
-                                        };
-
-                                        let bar_width = (w5 - 55.0).clamp(55.0, 140.0);
-
-                                        // 单条进度线 + 百分比读数
-                                        ui.horizontal(|ui| {
-                                            ui.spacing_mut().item_spacing.x = 5.0;
-                                            render_bar_chart(
-                                                ui,
-                                                used_ratio,
-                                                bar_width,
-                                                9.0,
-                                                bar_color,
-                                                format!(
-                                                    "已用流量: {} ({:.1}%)\n剩余流量: {} ({:.1}%)\n总额度: {}",
-                                                    crate::gui::widgets::format_bytes(used),
-                                                    used_ratio * 100.0,
-                                                    crate::gui::widgets::format_bytes(remaining),
-                                                    rem_ratio * 100.0,
-                                                    crate::gui::widgets::format_bytes(total),
-                                                ),
-                                            );
-                                            ui.label(
-                                                RichText::new(format!("{:.0}%", used_ratio * 100.0))
-                                                    .small()
-                                                    .strong()
-                                                    .color(bar_color),
-                                            );
-                                        });
-
-                                        ui.add_space(2.0);
-
-                                        // 次级单行文本：已用 / 总量 及 到期日
-                                        ui.horizontal(|ui| {
-                                            ui.label(
-                                                RichText::new(format!(
-                                                    "{} / {}",
-                                                    crate::gui::widgets::format_bytes(used),
-                                                    crate::gui::widgets::format_bytes(total)
-                                                ))
-                                                .size(10.0)
-                                                .color(theme::text_primary()),
-                                            );
-                                            if let Some(exp) = s.expire_at {
+                                                ui.add_space(2.0);
+                                                // 次级节点数量统计
                                                 ui.label(
-                                                    RichText::new(format!(
-                                                        "· {}",
-                                                        exp.with_timezone(&chrono::Local).format("%m-%d")
-                                                    ))
-                                                    .size(9.5)
-                                                    .color(theme::muted()),
+                                                    RichText::new(format!("{alive}/{total} 节点"))
+                                                        .size(10.0)
+                                                        .color(theme::text_secondary()),
                                                 );
                                             }
                                         });
-                                    } else {
-                                        Frame::NONE
-                                            .fill(theme::panel())
-                                            .stroke(Stroke::new(0.6_f32, theme::border_subtle()))
-                                            .corner_radius(CornerRadius::same(3))
-                                            .inner_margin(Margin::symmetric(6, 2))
-                                            .show(ui, |ui| {
-                                                ui.label(RichText::new("不限流量").size(10.0).color(theme::muted()));
-                                            });
-                                    }
-                                }).response.interact(egui::Sense::click())
-                                .on_hover_text("流量配额（右键弹出操作菜单）");
+                                    },
+                                );
+                                let col4_rect = col4_cell.response.rect;
+                                col4_cell
+                                    .response
+                                    .on_hover_text("点击立即测速此订阅源全部节点（右键弹出操作菜单）")
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand);
 
-                                // 整行绑定右键上下文菜单
-                                let row_resp = name_resp
-                                    .union(url_resp)
-                                    .union(status_resp)
-                                    .union(fetch_resp)
-                                    .union(health_resp)
-                                    .union(traffic_resp);
+                                // 6. 流量配额（单条进度条：已用/总量一条线呈现，上下垂直居中）
+                                let col5_cell = ui.allocate_ui_with_layout(
+                                    egui::vec2(w5, row_h),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.set_min_size(egui::vec2(w5, row_h));
+                                        ui.set_max_size(egui::vec2(w5, row_h));
+                                        ui.vertical(|ui| {
+                                            ui.set_max_width(w5);
+                                            if let Some(total) = s.total_bytes {
+                                                let upload = s.upload_bytes.unwrap_or(0);
+                                                let download = s.download_bytes.unwrap_or(0);
+                                                let used = upload + download;
+                                                let remaining = total.saturating_sub(used);
+                                                let used_ratio = if total > 0 {
+                                                    (used as f32 / total as f32).clamp(0.0, 1.0)
+                                                } else {
+                                                    0.0
+                                                };
+                                                let rem_ratio = if total > 0 {
+                                                    (remaining as f32 / total as f32).clamp(0.0, 1.0)
+                                                } else {
+                                                    0.0
+                                                };
+
+                                                let bar_color = if rem_ratio <= 0.10 {
+                                                    Color32::from_rgb(255, 59, 48)   // 剩余不足 10% 红色警告
+                                                } else if rem_ratio <= 0.25 {
+                                                    Color32::from_rgb(255, 149, 0)   // 剩余不足 25% 橙色提示
+                                                } else {
+                                                    Color32::from_rgb(0, 122, 255)   // 正常蓝色
+                                                };
+
+                                                let bar_width = (w5 - 55.0).clamp(55.0, 140.0);
+
+                                                // 单条进度线 + 百分比读数
+                                                ui.horizontal(|ui| {
+                                                    ui.spacing_mut().item_spacing.x = 5.0;
+                                                    render_bar_chart(
+                                                        ui,
+                                                        used_ratio,
+                                                        bar_width,
+                                                        9.0,
+                                                        bar_color,
+                                                        format!(
+                                                            "已用流量: {} ({:.1}%)\n剩余流量: {} ({:.1}%)\n总额度: {}",
+                                                            crate::gui::widgets::format_bytes(used),
+                                                            used_ratio * 100.0,
+                                                            crate::gui::widgets::format_bytes(remaining),
+                                                            rem_ratio * 100.0,
+                                                            crate::gui::widgets::format_bytes(total),
+                                                        ),
+                                                    );
+                                                    ui.label(
+                                                        RichText::new(format!("{:.0}%", used_ratio * 100.0))
+                                                            .small()
+                                                            .strong()
+                                                            .color(bar_color),
+                                                    );
+                                                });
+
+                                                ui.add_space(2.0);
+
+                                                // 次级单行文本：已用 / 总量 及 到期日
+                                                ui.horizontal(|ui| {
+                                                    ui.label(
+                                                        RichText::new(format!(
+                                                            "{} / {}",
+                                                            crate::gui::widgets::format_bytes(used),
+                                                            crate::gui::widgets::format_bytes(total)
+                                                        ))
+                                                        .size(10.0)
+                                                        .color(theme::text_primary()),
+                                                    );
+                                                    if let Some(exp) = s.expire_at {
+                                                        ui.label(
+                                                            RichText::new(format!(
+                                                                "· {}",
+                                                                exp.with_timezone(&chrono::Local).format("%m-%d")
+                                                            ))
+                                                            .size(9.5)
+                                                            .color(theme::muted()),
+                                                        );
+                                                    }
+                                                });
+                                            } else {
+                                                Frame::NONE
+                                                    .fill(theme::panel())
+                                                    .stroke(Stroke::new(0.6_f32, theme::border_subtle()))
+                                                    .corner_radius(CornerRadius::same(3))
+                                                    .inner_margin(Margin::symmetric(6, 2))
+                                                    .show(ui, |ui| {
+                                                        ui.label(RichText::new("不限流量").size(10.0).color(theme::muted()));
+                                                    });
+                                            }
+                                        });
+                                    },
+                                );
+                                let col5_rect = col5_cell.response.rect;
+                                col5_cell
+                                    .response
+                                    .on_hover_text("流量配额（点击编辑配置，右键弹出操作菜单）")
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+
+                                // 聚合行范围：包括全部列、列间距空白以及右侧所有横向延伸空白区域
+                                let row_cells_rect = col0_rect
+                                    .union(col1_rect)
+                                    .union(col2_rect)
+                                    .union(col3_rect)
+                                    .union(col4_rect)
+                                    .union(col5_rect);
+
+                                let full_row_max_x = row_cells_rect
+                                    .max
+                                    .x
+                                    .max(row_cells_rect.min.x + content_w + total_spacing)
+                                    .max(ui.max_rect().max.x);
+
+                                let full_row_rect = egui::Rect::from_min_max(
+                                    row_cells_rect.min,
+                                    egui::pos2(full_row_max_x, row_cells_rect.max.y),
+                                );
+
+                                // 整行交互句柄：捕获全行左键与任意位置右键菜单
+                                let row_id = ui.id().with("source_row_click").with(&s.id);
+                                let row_resp = ui.interact(full_row_rect, row_id, egui::Sense::click());
+
+                                if row_resp.clicked() {
+                                    if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                                        if col0_rect.contains(pos) {
+                                            action_open_nodes = Some((s.id.clone(), s.name.clone()));
+                                        } else if col1_rect.contains(pos) || col2_rect.contains(pos) || col5_rect.contains(pos) {
+                                            action_edit = Some(s.clone());
+                                        } else if col3_rect.contains(pos) {
+                                            if fetch_operation_allowed && !source_active && !s.is_imported() {
+                                                action_fetch = Some(s.id.clone());
+                                            }
+                                        } else if col4_rect.contains(pos) {
+                                            action_speedtest = Some((s.id.clone(), s.name.clone()));
+                                        }
+                                    }
+                                }
 
                                 let has_proxy = self.subscription_proxy_url().is_some();
                                 row_resp.context_menu(|ui| {
