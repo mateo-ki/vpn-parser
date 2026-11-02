@@ -369,8 +369,15 @@ fn dash_bottom_proxy_item(
                 if show_icon {
                     let sense = if has_gear { Sense::click() } else { Sense::hover() };
                     let (icon_rect, icon_resp) = ui.allocate_exact_size(Vec2::splat(34.0), sense);
+                    let is_hovered = has_gear && icon_resp.hovered();
                     let icon_bg = if theme::is_light() {
-                        icon_color.gamma_multiply(0.12)
+                        if is_hovered {
+                            icon_color.gamma_multiply(0.22)
+                        } else {
+                            icon_color.gamma_multiply(0.12)
+                        }
+                    } else if is_hovered {
+                        theme::accent_bg()
                     } else {
                         theme::sidebar()
                     };
@@ -379,8 +386,8 @@ fn dash_bottom_proxy_item(
                     if has_gear {
                         let icon_resp = icon_resp
                             .on_hover_cursor(egui::CursorIcon::PointingHand)
-                            .on_hover_text("点击打开网络设置抽屉（DNS / TUN 虚拟网卡配置）");
-                        if icon_resp.hovered() {
+                            .on_hover_text("点击打开网络设置抽屉（DNS 协议与 TUN 虚拟网卡配置）");
+                        if is_hovered {
                             ui.painter().rect_stroke(
                                 icon_rect,
                                 CornerRadius::same(9),
@@ -2590,7 +2597,7 @@ impl VpnApp {
                 }
                 ProxyItemKind::System => {
                     let sys_sub = format!("{}:{}", sub, self.proxy_status.mixed_port);
-                    let _ = dash_bottom_proxy_item(ui, item_w, card_h, icon, icon_col, title, &sys_sub, false, |ui| {
+                    let card_resp = dash_bottom_proxy_item(ui, item_w, card_h, icon, icon_col, title, &sys_sub, true, |ui| {
                         let resp = dash_switch(ui, sys_on);
                         if resp.clicked() && !self.proxy_busy {
                             if sys_on {
@@ -2608,9 +2615,14 @@ impl VpnApp {
                             // proxy_busy 死守卫，TUN 开关曾因此只落库不生效）
                         }
                     });
+                    if let Some(resp) = card_resp {
+                        if resp.clicked() {
+                            self.dashboard_drawer = Some(DashboardDrawer::Network);
+                        }
+                    }
                 }
                 ProxyItemKind::Tun => {
-                    let _ = dash_bottom_proxy_item(ui, item_w, card_h, icon, icon_col, title, sub, false, |ui| {
+                    let card_resp = dash_bottom_proxy_item(ui, item_w, card_h, icon, icon_col, title, sub, true, |ui| {
                         let resp = dash_switch(ui, tun_on);
                         if resp.clicked() && !self.proxy_busy {
                             if tun_on {
@@ -2627,6 +2639,11 @@ impl VpnApp {
                             // ProxyConfigSaved 回调里执行（同上，同步 apply 会撞死守卫）
                         }
                     });
+                    if let Some(resp) = card_resp {
+                        if resp.clicked() {
+                            self.dashboard_drawer = Some(DashboardDrawer::Network);
+                        }
+                    }
                 }
             }
         };
