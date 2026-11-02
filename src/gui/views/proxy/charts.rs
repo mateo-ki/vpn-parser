@@ -1904,27 +1904,9 @@ impl VpnApp {
                         dash_dot(ui, dot_color).on_hover_text(format!("代理状态：{state_text}"));
                         ui.add_space(8.0);
 
-                        // 卡片右上角内核管理入口：点击滑出内核管理抽屉
-                        let (kx_rect, kx_resp) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
-                        let kx_color = if kx_resp.hovered() { theme::accent() } else { theme::text_secondary() };
-                        draw_icon(ui.painter(), kx_rect.shrink(1.0), Icon::Cpu, kx_color);
-                        let kx_resp = kx_resp
-                            .on_hover_cursor(egui::CursorIcon::PointingHand)
-                            .on_hover_text("内核管理：版本、偏好与运行状态");
-                        if kx_resp.clicked() {
-                            self.dashboard_drawer = Some(DashboardDrawer::Kernels);
-                        }
-
-                        // 卡片右上角活跃连接入口：点击滑出网络连接与 DNS 审计抽屉
-                        ui.add_space(8.0);
+                        // 卡片右上角活跃连接入口：位于内核管理图标后面（右侧），点击滑出网络连接与 DNS 审计抽屉
                         let (conn_rect, conn_resp) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
-                        let conn_color = if conn_resp.hovered() {
-                            theme::accent()
-                        } else if !self.active_connections.is_empty() {
-                            theme::accent()
-                        } else {
-                            theme::text_secondary()
-                        };
+                        let conn_color = if conn_resp.hovered() { theme::accent() } else { theme::text_secondary() };
                         draw_icon(ui.painter(), conn_rect.shrink(1.0), Icon::Plug, conn_color);
                         let conn_count = self.active_connections.len();
                         let conn_tip = if conn_count == 0 {
@@ -1937,6 +1919,18 @@ impl VpnApp {
                             .on_hover_text(conn_tip);
                         if conn_resp.clicked() {
                             self.dashboard_drawer = Some(DashboardDrawer::Connections);
+                        }
+
+                        // 卡片右上角内核管理入口：点击滑出内核管理抽屉
+                        ui.add_space(8.0);
+                        let (kx_rect, kx_resp) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
+                        let kx_color = if kx_resp.hovered() { theme::accent() } else { theme::text_secondary() };
+                        draw_icon(ui.painter(), kx_rect.shrink(1.0), Icon::Cpu, kx_color);
+                        let kx_resp = kx_resp
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text("内核管理：版本、偏好与运行状态");
+                        if kx_resp.clicked() {
+                            self.dashboard_drawer = Some(DashboardDrawer::Kernels);
                         }
 
                         // 卡片右上角网络设置入口：点击滑出网络设置抽屉（DNS/TUN）
