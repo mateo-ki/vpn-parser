@@ -101,10 +101,8 @@ pub fn format_duration_ms(value: Option<u64>) -> String {
 pub fn ellipsize(ui: &Ui, text: &str, max_width: f32, font: egui::FontId) -> String {
     const ELLIPSIS: char = '\u{2026}';
     let width = |candidate: &str| -> f32 {
-        ui.ctx()
-            .fonts(|fonts| {
-                fonts.layout_no_wrap(candidate.to_string(), font.clone(), Color32::PLACEHOLDER)
-            })
+        ui.painter()
+            .layout_no_wrap(candidate.to_string(), font.clone(), Color32::PLACEHOLDER)
             .size()
             .x
     };

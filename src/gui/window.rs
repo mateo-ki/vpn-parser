@@ -9,7 +9,8 @@ impl VpnApp {
     /// `Frame` 的外接矩形是按内容 `min_rect` 反推的，而面板只画到 `exact_height` 就裁掉。
     /// `Button` 想要"文字 + button_padding"那么高，`ui.put` 会把格子顶到 34 之外 ——
     /// 顶出去的部分不画但照样占位，表现成标题栏下面一条没人画的黑色带子。
-    pub(crate) fn ui_title_bar(&mut self, ctx: &egui::Context) {
+    pub(crate) fn ui_title_bar(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         const BAR_H: f32 = TITLE_BAR_H;
         const BTN_W: f32 = TITLE_BAR_BTN_W;
 
@@ -95,10 +96,10 @@ impl VpnApp {
         let mut action_toggle_max = false;
         let mut action_close = false;
 
-        egui::TopBottomPanel::top("custom_title_bar")
-            .exact_height(BAR_H)
+        egui::Panel::top("custom_title_bar")
+            .exact_size(BAR_H)
             .frame(Frame::NONE.fill(theme::sidebar()))
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 // 一次性把整格占住，之后全用 painter/interact：这样 Frame 反推出来的
                 // 高度恒等于 BAR_H，画到的和分给下面面板的永远是同一条边。
                 let bar = ui.max_rect();
@@ -370,7 +371,7 @@ impl VpnApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
         }
         if action_close {
-            self.request_window_close(ctx);
+            self.request_window_close(&ctx);
         }
     }
 
@@ -472,7 +473,7 @@ impl VpnApp {
     /// 无边框窗口的缩放手：把 `resize_handle_rects` 算出的那几块铺成一层覆盖区。
     /// 中间不拦截鼠标，照常给内容用。
     pub(crate) fn ui_resize_handles(&self, ctx: &egui::Context) {
-        let screen = ctx.input(|i| i.screen_rect());
+        let screen = ctx.viewport_rect();
         let min = screen.min;
         let handles = resize_handle_rects(screen);
         egui::Area::new(egui::Id::new("vpn-parser-resize-handles"))

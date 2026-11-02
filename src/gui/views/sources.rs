@@ -661,7 +661,7 @@ impl VpnApp {
                                             .clicked()
                                         {
                                             action_fetch = Some(s.id.clone());
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                         if ui
                                             .add_enabled(
@@ -672,13 +672,13 @@ impl VpnApp {
                                             .clicked()
                                         {
                                             action_proxy_fetch = Some(s.id.clone());
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                     }
                                     ui.separator();
                                     if ui.button(self.tr("编辑")).clicked() {
                                         action_edit = Some(s.clone());
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                     if ui
                                         .button(if s.enabled { self.tr("禁用") } else { self.tr("启用") })
@@ -690,7 +690,7 @@ impl VpnApp {
                                         .clicked()
                                     {
                                         action_toggle_enabled = Some((s.id.clone(), !s.enabled));
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                     if ui
                                         .button(if s.push_disabled {
@@ -706,33 +706,33 @@ impl VpnApp {
                                         .clicked()
                                     {
                                         action_toggle_push = Some((s.id.clone(), !s.push_disabled));
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                     ui.separator();
                                     if ui.button("⚡ 测速此源全部节点").clicked() {
                                         action_speedtest = Some((s.id.clone(), s.name.clone()));
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                     if ui.button("📋 查看节点列表").clicked() {
                                         action_open_nodes = Some((s.id.clone(), s.name.clone()));
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                     if !is_imported {
                                         if ui.button("📄 复制订阅链接").clicked() {
                                             action_copy_url = Some(s.url_template.clone());
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                     }
                                     ui.separator();
                                     if s.id == crate::db::UNGROUPED_SOURCE_ID {
                                         if ui.button(RichText::new("🗑️ 清空导入节点").color(theme::danger())).clicked() {
                                             action_clear_ungrouped = true;
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                     } else {
                                         if ui.button(RichText::new("🗑️ 删除订阅源").color(theme::danger())).clicked() {
                                             action_delete = Some(s.id.clone());
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                     }
                                 });
@@ -1711,7 +1711,7 @@ mod source_filter_tests {
     /// 会不会顶出内容区。图标用一枚等宽标签近似。
     #[test]
     fn test_the_filter_row_fits_the_min_window_width() {
-        use eframe::egui::{CentralPanel, Context, Margin, RawInput, Rect, SidePanel, Vec2};
+        use eframe::egui::{CentralPanel, Context, Margin, Panel, RawInput, Rect, Vec2};
 
         let ctx = Context::default();
         let mut input = RawInput::default();
@@ -1721,15 +1721,15 @@ mod source_filter_tests {
         ));
         let mut panel = Rect::NOTHING;
         let mut row_right = 0.0_f32;
-        let _ = ctx.run(input, |ctx| {
-            SidePanel::left("sidebar")
-                .exact_width(220.0)
-                .show(ctx, |ui| {
+        let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+            Panel::left("sidebar")
+                .exact_size(220.0)
+                .show(ui, |ui| {
                     let _ = ui.label("导航");
                 });
             CentralPanel::default()
                 .frame(eframe::egui::Frame::NONE.inner_margin(Margin::symmetric(18, 14)))
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     panel = ui.max_rect();
                     let _ = ui.horizontal(|ui| {
                         let _ = ui.label("🔍");

@@ -487,8 +487,8 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let clipped = ctx.run(raw, |ctx| {
-                dialog_body(ctx, &outcome);
+            let clipped = crate::gui::run_test_ui(&ctx, raw, |ui| {
+                dialog_body(ui.ctx(), &outcome);
             });
             assert!(!clipped.shapes.is_empty(), "{outcome:?} 什么都没画出来");
         }

@@ -5068,7 +5068,8 @@ impl VpnApp {
 }
 
 impl eframe::App for VpnApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = &ui.ctx().clone();
         let _rt_guard = self.rt.enter();
         if self.reload_due
             && self.last_full_reload.elapsed() >= std::time::Duration::from_millis(800)
@@ -5323,15 +5324,15 @@ impl eframe::App for VpnApp {
 
         let mut next_tab = self.tab;
 
-        self.ui_title_bar(ctx);
+        self.ui_title_bar(ui);
 
         let sidebar_width = if self.settings.sidebar_expanded {
             SIDEBAR_EXPANDED_WIDTH
         } else {
             SIDEBAR_COLLAPSED_WIDTH
         };
-        egui::SidePanel::left("sidebar")
-            .exact_width(sidebar_width)
+        egui::Panel::left("sidebar")
+            .exact_size(sidebar_width)
             .resizable(false)
             .frame(
                 Frame::NONE
@@ -5339,9 +5340,9 @@ impl eframe::App for VpnApp {
                     .stroke(Stroke::NONE)
                     .inner_margin(Margin::symmetric(8, 10)),
             )
-            .show(ctx, |ui| self.ui_sidebar(ui, &mut next_tab));
+            .show(ui, |ui| self.ui_sidebar(ui, &mut next_tab));
 
-        let status_panel = egui::TopBottomPanel::bottom("status")
+        let status_panel = egui::Panel::bottom("status")
             .frame(
                 Frame::NONE
                     .fill(theme::sidebar())
@@ -5349,7 +5350,7 @@ impl eframe::App for VpnApp {
                     // 上下 8 → 5：这条本来就被内容顶高度，按钮压矮之后它跟着收。
                     .inner_margin(Margin::symmetric(14, 5)),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 // 这条里的按钮（启动/停止代理·模式 chip·测速全部）要矮一档：
                 // 纵向内边距 7 → 3，文字仍是 normal 字号，读得清但不再撑高度。
                 ui.spacing_mut().button_padding = egui::vec2(11.0, 3.0);
@@ -5440,7 +5441,7 @@ impl eframe::App for VpnApp {
                     .fill(theme::page_bg())
                     .inner_margin(Margin::symmetric(18, 14)),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 match self.tab {
                     Tab::Sources => self.ui_sources(ui),
                     Tab::Nodes => self.ui_nodes(ui),
@@ -5644,6 +5645,17 @@ impl VpnApp {
 }
 
 #[cfg(test)]
+pub(crate) fn run_test_ui(
+    ctx: &egui::Context,
+    input: egui::RawInput,
+    run_ui: impl FnMut(&mut egui::Ui),
+) -> egui::FullOutput {
+    let mut out = ctx.run_ui(input, run_ui);
+    out.textures_delta.clear();
+    out
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::gui::window::{resize_handle_rects, TITLE_BAR_BTN_W, TITLE_BAR_H};
@@ -5824,16 +5836,16 @@ mod tests {
             .get_mut(&viewport_id)
             .expect("默认输入里总该有根视口")
             .native_pixels_per_point = Some(1.25);
-        let _ = ctx.run(input.clone(), |ctx| {
-            assert_eq!(ctx.pixels_per_point(), 1.25, "系统 DPI 该原样传进来");
-            ctx.set_zoom_factor(1.2);
+        let _ = run_test_ui(&ctx, input.clone(), |ui| {
+            assert_eq!(ui.ctx().pixels_per_point(), 1.25, "系统 DPI 该原样传进来");
+            ui.ctx().set_zoom_factor(1.2);
         });
         // zoom 是"下一帧生效"，所以再跑一帧才看得到。
-        let _ = ctx.run(input, |ctx| {
+        let _ = run_test_ui(&ctx, input, |ui| {
             assert!(
-                (ctx.pixels_per_point() - 1.5).abs() < 0.001,
+                (ui.ctx().pixels_per_point() - 1.5).abs() < 0.001,
                 "1.25 的 DPI × 120% 该是 1.5，实际 {}",
-                ctx.pixels_per_point()
+                ui.ctx().pixels_per_point()
             );
         });
     }
@@ -5983,7 +5995,7 @@ mod tests {
     /// 跑一遍标题栏那种"exact_height 面板 + 右上角三个格子"的写法，返回面板真正占掉的
     /// 高度。面板只画到 exact_height，但 `Frame` 的外接矩形是按内容 `min_rect` 反推的：
     /// 两个数不等，中间就是没人画的窗口底色 —— 标题栏下面那条黑带。
-    fn title_bar_allocated_height(draw_buttons_with_widget: bool) -> f32 {
+    fn title_bar_allocated_height(draw_buttons_with_widget: bool) -> (f32, f32) {
         use eframe::egui::{
             self, Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Vec2,
         };
@@ -5991,7 +6003,7 @@ mod tests {
         const BTN_W: f32 = 46.0;
 
         let ctx = egui::Context::default();
-        ctx.style_mut(|style| {
+        ctx.all_styles_mut(|style| {
             style.spacing.item_spacing = Vec2::new(10.0, 9.0);
             style.spacing.button_padding = Vec2::new(14.0, 8.0);
         });
@@ -6002,16 +6014,17 @@ mod tests {
         ));
 
         let mut allocated = 0.0_f32;
-        let _ = ctx.run(input, |ctx| {
-            let response = egui::TopBottomPanel::top("title_bar_probe")
-                .exact_height(BAR_H)
+        let mut inner_height = 0.0_f32;
+        let _ = run_test_ui(&ctx, input, |ui| {
+            let response = egui::Panel::top("title_bar_probe")
+                .exact_size(BAR_H)
                 // 出问题的那版用的就是上下 5px：格子只剩 24 高，比按钮想要的 32 矮。
                 .frame(
                     Frame::NONE
                         .fill(Color32::WHITE)
                         .inner_margin(Margin::symmetric(12, 5)),
                 )
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     let bar = ui.max_rect();
                     let cell = |index: usize| {
                         egui::Rect::from_min_max(
@@ -6037,29 +6050,39 @@ mod tests {
                             ui.interact(cell(index), ui.id().with(index), Sense::click());
                         }
                     }
+                    inner_height = ui.min_rect().height();
                 });
             allocated = response.response.rect.height();
         });
-        allocated
+        (allocated, inner_height)
     }
 
     #[test]
     fn button_widgets_overflow_a_fixed_height_panel() {
-        // 这就是黑带的成因，写成测试是因为它"编译通过、只是多一条黑带"。
-        let eaten = title_bar_allocated_height(true);
+        // egui 0.31 中 Button 会把面板顶出 exact_height 产生黑带（占位 41.0）；
+        // egui 0.36.2 的 Panel 严格锁死面板尺寸为 34.0，但 Button 内部内容依然会溢出内高 24.0（实测 31.0）。
+        let (allocated, inner_h) = title_bar_allocated_height(true);
         assert!(
-            eaten > 34.0,
-            "Button 本该把面板顶出 exact_height，实测占位 {eaten:.1}"
+            inner_h > 24.0,
+            "Button 内容本该溢出面板内高 24.0，实测内部高度 {inner_h:.1}"
+        );
+        assert_eq!(
+            allocated, 34.0,
+            "egui 0.36.2 Panel 保持严格 34.0 约束，实测 {allocated:.1}"
         );
     }
 
     #[test]
     fn painted_title_bar_keeps_the_panel_height_it_claims() {
         // 自绘 + interact 不占位，所以"画到的"和"分给下面面板的"永远是同一条边。
-        let eaten = title_bar_allocated_height(false);
+        let (eaten, inner_h) = title_bar_allocated_height(false);
         assert!(
             (eaten - 34.0).abs() < 0.5,
             "标题栏应该恰好占 34，实测 {eaten:.1}"
+        );
+        assert!(
+            inner_h <= 24.0,
+            "自绘标题栏内高不应超出 24，实测 {inner_h:.1}"
         );
     }
 
@@ -6143,7 +6166,8 @@ mod tests {
             ));
             let mut edit_id = egui::Id::NULL;
             let mut query = String::new();
-            let _ = ctx.run(input, |ctx| {
+            let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+                let ctx = ui.ctx();
                 let _ = egui::Window::new("命令面板").show(ctx, |ui| {
                     for index in 0..before {
                         ui.label(format!("占位 {index}"));
@@ -6186,7 +6210,7 @@ mod tests {
     /// 上下边距 —— 改前 8/8，改后 3/5。
     fn status_bar_probe(pad_y: f32, margin_y: i8) -> (f32, Vec<f32>) {
         let ctx = egui::Context::default();
-        ctx.style_mut(|style| {
+        ctx.all_styles_mut(|style| {
             // 和应用里同一份全局样式：按钮本来是 14x8。
             style.spacing.button_padding = Vec2::new(14.0, 8.0);
         });
@@ -6197,10 +6221,10 @@ mod tests {
         ));
         let mut heights = Vec::new();
         let mut total = 0.0_f32;
-        let _ = ctx.run(input, |ctx| {
-            egui::TopBottomPanel::bottom("status_probe")
+        let _ = run_test_ui(&ctx, input, |ui| {
+            egui::Panel::bottom("status_probe")
                 .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(14, margin_y)))
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     ui.spacing_mut().button_padding = Vec2::new(11.0, pad_y);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("状态").small());
@@ -6266,8 +6290,8 @@ mod tests {
             let ctx = egui::Context::default();
             let mut buffer = String::new();
             let mut rect = egui::Rect::NOTHING;
-            let _ = ctx.run(base.clone(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = run_test_ui(&ctx, base.clone(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     rect = ui.add(egui::TextEdit::singleline(&mut buffer)).rect;
                 });
             });
@@ -6288,8 +6312,8 @@ mod tests {
                         modifiers: egui::Modifiers::NONE,
                     },
                 ];
-                let _ = ctx.run(input, |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         let field = ui.add(egui::TextEdit::singleline(&mut buffer));
                         crate::gui::widgets::note_text_field(ui, &field);
                     });
@@ -6299,15 +6323,15 @@ mod tests {
             input.events = vec![egui::Event::Paste("https://a.b/c?token=1".into())];
             let mut leftover = false;
             let mut defers = false;
-            let _ = ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     let field = ui.add(egui::TextEdit::singleline(&mut buffer));
                     crate::gui::widgets::note_text_field(ui, &field);
                 });
                 // 帧尾读一次 —— 和产品里那段同一口径。
                 leftover =
                     ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
-                defers = crate::gui::widgets::focus_is_text_field(ctx);
+                defers = crate::gui::widgets::focus_is_text_field(&ctx);
             });
             (buffer, leftover, defers)
         };
@@ -6345,8 +6369,9 @@ mod tests {
             text: &mut String,
         ) -> (egui::Rect, egui::Rect, Option<egui::Id>, bool) {
             let mut out = (egui::Rect::NOTHING, egui::Rect::NOTHING, None, false);
-            let _ = ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+                let ctx = ui.ctx().clone();
+                egui::CentralPanel::default().show(ui, |ui| {
                     out.0 = ui.add(egui::DragValue::new(number)).rect;
                     let field = ui.add(egui::TextEdit::singleline(text).desired_width(120.0));
                     // 和产品里那 15 个文本框同一口径：画完登记一次焦点。
@@ -6354,7 +6379,7 @@ mod tests {
                     out.1 = field.rect;
                 });
                 out.2 = ctx.memory(|m| m.focused());
-                out.3 = crate::gui::widgets::focus_is_text_field(ctx);
+                out.3 = crate::gui::widgets::focus_is_text_field(&ctx);
             });
             out
         }
@@ -6426,10 +6451,10 @@ mod status_bar_room_tests {
                 egui::Pos2::ZERO,
                 Vec2::new(width, 60.0),
             ));
-            let _ = ctx.run(input, |ctx| {
-                egui::TopBottomPanel::bottom("status")
+            let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+                egui::Panel::bottom("status")
                     .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(14, 5)))
-                    .show(ctx, |ui| {
+                    .show(ui, |ui| {
                         ui.spacing_mut().button_padding = Vec2::new(11.0, 3.0);
                         ui.horizontal(|ui| {
                             ui.label(RichText::new("状态").small());

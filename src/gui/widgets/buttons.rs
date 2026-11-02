@@ -28,11 +28,11 @@ pub fn panel_frame() -> Frame {
 pub fn primary_btn(text: &str) -> egui::Button<'_> {
     egui::Button::new(RichText::new(text).strong().color(theme::on_primary()))
         .fill(theme::primary_btn())
-        .stroke(Stroke::NONE)
+        .stroke(Stroke::new(1.0_f32, theme::primary_btn()))
 }
 
 pub fn danger_btn(text: &str) -> egui::Button<'_> {
-    egui::Button::new(RichText::new(text).color(theme::text_secondary()))
+    egui::Button::new(RichText::new(text).strong().color(theme::text_secondary()))
         .fill(theme::panel_hover())
         .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
 }
@@ -188,7 +188,7 @@ pub fn split_row(
     );
     let group = right_width.min(row.width());
     let left_right = (row.right() - group - GAP).max(row.left());
-    ui.allocate_new_ui(
+    ui.scope_builder(
         egui::UiBuilder::new()
             .id_salt(egui::Id::new(format!("{id}:left")))
             .max_rect(egui::Rect::from_min_max(
@@ -198,7 +198,7 @@ pub fn split_row(
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
         left,
     );
-    ui.allocate_new_ui(
+    ui.scope_builder(
         egui::UiBuilder::new()
             .id_salt(egui::Id::new(format!("{id}:right")))
             .max_rect(egui::Rect::from_min_max(
@@ -213,7 +213,7 @@ pub fn split_row(
         // 就把真实矩形打出来对账（只在诊断壳下写，产品路径零开销）。
         crate::diag::log_once(&format!(
             "DIAGROW {id} screen={:.1} max=[{:.1},{:.1}] group=[{:.1},{:.1}]",
-            ui.input(|i| i.screen_rect().width()),
+            ui.ctx().viewport_rect().width(),
             row.left(),
             row.right(),
             row.right() - group,

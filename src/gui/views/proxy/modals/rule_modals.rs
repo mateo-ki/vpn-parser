@@ -17,7 +17,7 @@ impl VpnApp {
         let mut cancel = false;
 
         // 半透明遮罩：Order::Tooltip 确保压在抽屉 (Foreground) 之上
-        let screen = ctx.screen_rect();
+        let screen = ctx.viewport_rect();
         egui::Area::new(egui::Id::new("rule_import_modal_backdrop"))
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
@@ -293,7 +293,7 @@ fn set_help_msg(slot: &mut RuleHelpMsg, next: RuleHelpMsg) {
 /// （离屏量到 660 宽的屏面上窗口画到 662）。
 /// 抽成不碰 `VpnApp` 的自由函数，好让离屏 `egui::Context` 真开一次窗口做验收。
 pub fn ui_rule_import_help_window(ctx: &egui::Context) -> (RuleHelpMsg, egui::Rect) {
-    let screen = ctx.screen_rect();
+    let screen = ctx.viewport_rect();
     let width = (screen.width() - 96.0).clamp(320.0, 680.0);
     let scroll_height = (screen.height() * 0.5).clamp(180.0, 430.0);
     let mut open = true;

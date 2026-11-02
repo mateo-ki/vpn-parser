@@ -654,7 +654,7 @@ impl VpnApp {
                         .on_hover_text(format!("点击复制到剪贴板并在终端执行：\n{export_cmd}\n\n也可写入 ~/.bashrc 或 ~/.zshrc 永久生效"))
                         .clicked()
                     {
-                        ui.output_mut(|o| o.copied_text = export_cmd.clone());
+                        ui.ctx().copy_text(export_cmd.clone());
                         self.status = format!("已复制终端代理命令 (端口 {port})");
                     }
 
@@ -668,7 +668,7 @@ impl VpnApp {
                         .on_hover_text("点击复制：\nunset http_proxy https_proxy all_proxy no_proxy")
                         .clicked()
                     {
-                        ui.output_mut(|o| o.copied_text = unset_cmd.clone());
+                        ui.ctx().copy_text(unset_cmd.clone());
                         self.status = "已复制取消代理环境变量命令".into();
                     }
                 });
