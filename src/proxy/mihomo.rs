@@ -527,6 +527,7 @@ fn build_mihomo_config_legacy(node: &Node, options: MihomoConfigOptions) -> Resu
         "allow-lan": options.allow_lan,
         "mode": mode_str,
         "log-level": "info",
+        "ipv6": options.dns.ipv6,
         "proxies": candidate_proxies,
         "proxy-groups": proxy_groups,
         "dns": {
@@ -534,6 +535,7 @@ fn build_mihomo_config_legacy(node: &Node, options: MihomoConfigOptions) -> Resu
             "ipv6": options.dns.ipv6,
             "enhanced-mode": options.dns.enhanced_mode.as_mihomo_value(),
             "fake-ip-range": "198.18.0.1/16",
+            "fake-ip-range6": "fc00::/18",
             "respect-rules": true,
             "default-nameserver": [
                 "223.5.5.5",
@@ -624,6 +626,12 @@ fn build_mihomo_config_legacy(node: &Node, options: MihomoConfigOptions) -> Resu
         if !dns_hijack.iter().any(|h| h.contains("tcp://")) {
             dns_hijack.push("tcp://any:53".into());
         }
+        if options.dns.ipv6 {
+            if !dns_hijack.iter().any(|h| h.contains("[::]:53")) {
+                dns_hijack.push("tcp://[::]:53".into());
+                dns_hijack.push("udp://[::]:53".into());
+            }
+        }
         config["tun"] = json!({
             "enable": true,
             "stack": options.tun.stack.as_mihomo_value(),
@@ -637,6 +645,39 @@ fn build_mihomo_config_legacy(node: &Node, options: MihomoConfigOptions) -> Resu
 
     if !port_listeners.is_empty() {
         config["listeners"] = Value::Array(port_listeners);
+    }
+
+    // Clash Party 规范 YAML 深度覆写
+    if let Some(ref override_text) = options.override_yaml {
+        if !override_text.trim().is_empty() {
+            if let Ok(mut patch) = serde_yaml::from_str::<Value>(override_text) {
+                if patch.is_array() {
+                    patch = json!({ "+proxy-groups": patch });
+                }
+                if let Some(patch_obj) = patch.as_object_mut() {
+                    for (k, v) in patch_obj.iter_mut() {
+                        let parsed = crate::proxy::yaml_override::parse_override_key(k);
+                        if parsed.name == "proxy-groups" {
+                            if let Some(groups_arr) = v.as_array_mut() {
+                                for g in groups_arr.iter_mut() {
+                                    crate::proxy::compiler::mihomo::expand_proxy_group_filters(g, &candidate_names);
+                                }
+                            }
+                        }
+                    }
+                }
+                crate::proxy::yaml_override::deep_merge_value(&mut config, patch);
+            }
+        }
+    }
+
+    // Rhai 脚本动态覆写（编程式最终裁决：传入已完成 YAML 覆写的完整 config，执行 main(config) 或扁平语句）
+    if let Some(ref script_text) = options.override_script {
+        if !script_text.trim().is_empty() {
+            if let Err(e) = crate::proxy::script_override::apply_script_override(&mut config, script_text) {
+                tracing::warn!(error = %e, "应用 Rhai 脚本覆写失败，已安全降级至基础配置");
+            }
+        }
     }
 
     Ok(config)

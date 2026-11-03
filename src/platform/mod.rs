@@ -482,6 +482,47 @@ pub fn shell_open(_path: &std::path::Path) -> Result<()> {
     Err(anyhow!("只有 Windows 才有安装包可打开"))
 }
 
+/// 在系统默认浏览器中打开指定 URL
+#[cfg(windows)]
+pub fn open_url_in_browser(url: &str) -> Result<()> {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let wide = |value: &str| -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
+    };
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            wide("open").as_ptr(),
+            wide(url).as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if result as isize <= 32 {
+        return Err(anyhow!(
+            "调用系统默认浏览器打开 URL 失败：{}",
+            shell_error_text(result as isize)
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn open_url_in_browser(url: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let cmd = "open";
+    #[cfg(not(target_os = "macos"))]
+    let cmd = "xdg-open";
+    std::process::Command::new(cmd)
+        .arg(url)
+        .spawn()
+        .map_err(|e| anyhow!("打开系统默认浏览器失败: {e}"))?;
+    Ok(())
+}
+
 #[cfg(windows)]
 pub fn trim_working_set() {
     unsafe {

@@ -240,7 +240,7 @@ impl BackendCompiler for SingBoxCompiler {
                 "level": "info",
                 "timestamp": true
             },
-            "dns": build_dns(&plan.dns.nameservers)?,
+            "dns": build_dns(&plan.dns.nameservers, plan.dns.ipv6)?,
             "inbounds": inbounds,
             "outbounds": [
                 proxy,
@@ -258,7 +258,7 @@ impl BackendCompiler for SingBoxCompiler {
     }
 }
 
-pub fn build_dns(nameservers: &[String]) -> Result<Value> {
+pub fn build_dns(nameservers: &[String], ipv6: bool) -> Result<Value> {
     let mut servers = vec![json!({ "type": "local", "tag": "local" })];
     for (index, server) in nameservers.iter().enumerate() {
         if server.parse::<std::net::IpAddr>().is_ok() {
@@ -289,10 +289,11 @@ pub fn build_dns(nameservers: &[String]) -> Result<Value> {
         }
         servers.push(Value::Object(dns));
     }
+    let strategy = if ipv6 { "prefer_ipv4" } else { "ipv4_only" };
     Ok(json!({
         "servers": servers,
         "final": "dns-0",
-        "strategy": "ipv4_only"
+        "strategy": strategy
     }))
 }
 

@@ -150,6 +150,14 @@ pub enum GroupsTab {
     Config,
 }
 
+/// 配置工作台覆写类型：YAML 声明式覆写 (Clash Party 规范) 与 Rhai 脚本动态覆写
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverrideEditorTab {
+    #[default]
+    Yaml,
+    Rhai,
+}
+
 /// 分流规则面板里的两个分区：规则本身（该怎么走）和实际命中记录（真走了哪）。
 /// 以前它们挤在同一屏里，规则表一长就看不到命中，反之命中一多就翻不到规则。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -791,3 +799,28 @@ impl SettingsEditState {
             || self.dashboard_ui_mode != s.dashboard_ui_mode
     }
 }
+
+/// 快捷添加规则匹配器类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickRuleType {
+    /// 域名后缀匹配 (DOMAIN-SUFFIX)
+    DomainSuffix,
+    /// 完整精准域名 (DOMAIN)
+    Domain,
+    /// 目标 IP 网段 (IP-CIDR)
+    IpCidr,
+    /// 发起进程名 (PROCESS-NAME)
+    ProcessName,
+}
+
+/// 网络连接 / DNS 审计快捷添加规则弹窗状态
+#[derive(Debug, Clone)]
+pub struct QuickRuleModalState {
+    pub rule_type: QuickRuleType,
+    pub host: String,
+    pub ip: String,
+    pub process: String,
+    pub payload: String,
+    pub action: crate::proxy::RuleAction,
+}
+

@@ -134,9 +134,12 @@ pub struct MihomoConfigOptions {
     /// 智能分流策略组体系（AI分组 / 美国节点 / 多线并发下载 / 普通代理）
     #[serde(default)]
     pub smart_routing: bool,
-    /// 用户自定义配置覆写（YAML 或 脚本扩展片段）
+    /// 用户自定义配置覆写（YAML 深度合并片段）
     #[serde(default)]
     pub override_yaml: Option<String>,
+    /// 用户自定义脚本覆写（Rhai 动态扩展脚本）
+    #[serde(default)]
+    pub override_script: Option<String>,
     /// 选中的订阅规则模板源 ID（RoutingMode::Subscription 时生效）
     #[serde(default)]
     pub subscription_rules_source_id: Option<String>,
@@ -214,6 +217,7 @@ impl Default for MihomoConfigOptions {
             url_test_nodes: Vec::new(),
             smart_routing: false,
             override_yaml: None,
+            override_script: None,
             subscription_rules_source_id: None,
             subscription_rules_yaml: None,
             subscription_groups_yaml: None,

@@ -4,7 +4,7 @@ use crate::gui::theme;
 use crate::gui::types::BgMsg;
 use crate::gui::widgets::{card_frame, fold_title, icon_tile, pill, primary_btn, section_title};
 use crate::gui::VpnApp;
-use eframe::egui::{self, CornerRadius, Frame, Margin, ProgressBar, RichText, Stroke, Ui, Vec2};
+use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, ProgressBar, RichText, Stroke, Ui, Vec2};
 
 const REPO_URL: &str = "https://github.com/mateo-ki/vpn-parser";
 const RELEASES_URL: &str = "https://github.com/mateo-ki/vpn-parser/releases";
@@ -113,6 +113,7 @@ impl VpnApp {
                 });
             });
             if open_repo {
+                let _ = crate::platform::open_url_in_browser(REPO_URL);
                 ui.ctx().open_url(egui::OpenUrl::new_tab(REPO_URL));
             }
         });
@@ -316,6 +317,7 @@ impl VpnApp {
                         "GitHub Releases（由 tag 触发 Actions 构建）",
                         Some("打开"),
                     ) {
+                        let _ = crate::platform::open_url_in_browser(RELEASES_URL);
                         ui.ctx().open_url(egui::OpenUrl::new_tab(RELEASES_URL));
                     }
                 });
@@ -719,48 +721,125 @@ impl VpnApp {
             return;
         };
 
-        let mut open = true;
-        let title = format!("Release 版本说明 · {tag}");
-        egui::Window::new(title)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .collapsible(false)
-            .resizable(true)
-            .default_width(580.0)
-            .default_height(420.0)
-            .open(&mut open)
+        // 监听 Escape 键快速关闭弹窗
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.show_release_notes_modal = false;
+            return;
+        }
+
+        // 半透明遮罩：Order::Tooltip 确保压在抽屉 (Foreground) 之上
+        let screen = ctx.viewport_rect();
+        egui::Area::new(egui::Id::new("release_notes_modal_backdrop"))
+            .fixed_pos(screen.min)
+            .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
-                ui.add_space(4.0);
+                ui.painter()
+                    .rect_filled(screen, 0.0, Color32::from_black_alpha(110));
+            });
+
+        let mut close_modal = false;
+        let is_latest = tag.contains("最新");
+        let tag_display = tag.split_whitespace().next().unwrap_or(tag.as_str());
+
+        const MODAL_WIDTH: f32 = 380.0;
+
+        egui::Window::new("vpn-parser:release-notes-modal-v5")
+            .id(egui::Id::new("vpn-parser:release-notes-modal-v5"))
+            .title_bar(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .order(egui::Order::Tooltip)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(MODAL_WIDTH)
+            .max_width(MODAL_WIDTH)
+            .frame(
+                Frame::NONE
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                    .corner_radius(CornerRadius::same(10))
+                    .inner_margin(Margin::symmetric(14, 12)),
+            )
+            .show(ctx, |ui| {
+                let inner_w = MODAL_WIDTH - 28.0;
+                ui.set_width(inner_w);
+                ui.set_max_width(inner_w);
+
+                // 1. 顶部标题行 + 右上角关闭按钮 (✕)
+                ui.allocate_ui_with_layout(
+                    Vec2::new(inner_w, 24.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.label(RichText::new("📦 版本说明").strong().size(13.5).color(theme::text_primary()));
+                        ui.add_space(4.0);
+                        if is_latest {
+                            pill(ui, &format!("● {tag_display}"), theme::success(), theme::success_bg());
+                        } else {
+                            pill(ui, tag_display, theme::accent(), theme::accent_bg());
+                        }
+
+                        // 右上角关闭按钮 (✕)
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let close_btn = ui.add(crate::gui::icons::icon_btn_square(Icon::Close, 11.0));
+                            if close_btn
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text("关闭窗口 (Esc)")
+                                .clicked()
+                            {
+                                close_modal = true;
+                            }
+                        });
+                    },
+                );
+                ui.add_space(8.0);
+
+                // 2. 内容区域：独立滚动框 + 优雅边框底色，垂直自适应收缩 (auto_shrink.y = true)
                 egui::ScrollArea::vertical()
-                    .max_height(360.0)
-                    .auto_shrink([false, false])
+                    .max_height(280.0)
+                    .auto_shrink([false, true])
                     .show(ui, |ui| {
+                        ui.set_width(inner_w);
+                        ui.set_max_width(inner_w);
                         Frame::NONE
                             .fill(theme::sidebar())
                             .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
                             .corner_radius(CornerRadius::same(6))
-                            .inner_margin(Margin::symmetric(14, 12))
+                            .inner_margin(Margin::symmetric(12, 10))
                             .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new(notes)
-                                        .size(13.0)
-                                        .color(theme::text_primary()),
-                                );
+                                crate::gui::widgets::render_markdown(ui, notes);
                             });
                     });
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    if ui.button("关闭").clicked() {
-                        self.show_release_notes_modal = false;
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("在 GitHub 查看 ↗").clicked() {
-                            ui.ctx().open_url(egui::OpenUrl::new_tab(RELEASES_URL));
+
+                ui.add_space(8.0);
+
+                // 3. 底部操作区（复制说明 + 右侧紧邻关闭按钮，右端前往 GitHub）
+                ui.allocate_ui_with_layout(
+                    Vec2::new(inner_w, 26.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        if ui.button("📋 复制说明").clicked() {
+                            ctx.copy_text(notes.clone());
+                            self.status = format!("已复制版本 {tag_display} 的更新说明到剪贴板");
                         }
-                    });
-                });
+                        ui.add_space(6.0);
+                        if ui.button("关闭").clicked() {
+                            close_modal = true;
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let release_url = if tag_display.starts_with('v') {
+                                format!("{RELEASES_URL}/tag/{tag_display}")
+                            } else {
+                                RELEASES_URL.to_string()
+                            };
+                            if ui.add(primary_btn("在 GitHub 查看 ↗")).clicked() {
+                                let _ = crate::platform::open_url_in_browser(&release_url);
+                                ui.ctx().open_url(egui::OpenUrl::new_tab(&release_url));
+                            }
+                        });
+                    },
+                );
             });
 
-        if !open {
+        if close_modal {
             self.show_release_notes_modal = false;
         }
     }

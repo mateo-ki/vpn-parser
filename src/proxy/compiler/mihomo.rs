@@ -196,6 +196,53 @@ impl MihomoCompiler {
     }
 }
 
+/// 对自定义策略组中的 `filter` / `exclude-filter` 正则进行动态宏展开，自动匹配灌入可用候选节点
+pub(crate) fn expand_proxy_group_filters(group_val: &mut Value, candidate_names: &[String]) {
+    if let Some(g_obj) = group_val.as_object_mut() {
+        let filter_regex = g_obj
+            .get("filter")
+            .and_then(Value::as_str)
+            .and_then(|pat| regex::Regex::new(pat).ok());
+        let exclude_regex = g_obj
+            .get("exclude-filter")
+            .and_then(Value::as_str)
+            .and_then(|pat| regex::Regex::new(pat).ok());
+
+        if filter_regex.is_some() || exclude_regex.is_some() {
+            let mut matched_proxies = Vec::new();
+            for c_name in candidate_names {
+                if let Some(ref f) = filter_regex {
+                    if !f.is_match(c_name) {
+                        continue;
+                    }
+                }
+                if let Some(ref ef) = exclude_regex {
+                    if ef.is_match(c_name) {
+                        continue;
+                    }
+                }
+                matched_proxies.push(c_name.clone());
+            }
+            if matched_proxies.is_empty() {
+                if candidate_names.is_empty() {
+                    matched_proxies.push("DIRECT".to_string());
+                } else {
+                    matched_proxies = candidate_names.to_vec();
+                }
+            }
+            g_obj.insert("proxies".to_string(), json!(matched_proxies));
+        } else if g_obj.get("proxies").is_none()
+            && g_obj.get("include-all").and_then(Value::as_bool) != Some(true)
+        {
+            if !candidate_names.is_empty() {
+                g_obj.insert("proxies".to_string(), json!(candidate_names));
+            } else {
+                g_obj.insert("proxies".to_string(), json!(["DIRECT"]));
+            }
+        }
+    }
+}
+
 impl BackendCompiler for MihomoCompiler {
     fn kernel(&self) -> KernelKind {
         KernelKind::Mihomo
@@ -224,7 +271,10 @@ impl BackendCompiler for MihomoCompiler {
         let mut candidate_proxies = vec![proxy.clone()];
         let mut used_names: HashSet<String> = HashSet::from([proxy_name.to_owned()]);
         let has_override_groups = if let Some(ref override_text) = plan.outbounds.override_yaml {
-            override_text.contains("proxy-groups:") || override_text.contains("proxy-groups :")
+            override_text.contains("proxy-groups:")
+                || override_text.contains("proxy-groups :")
+                || override_text.contains("+proxy-groups")
+                || override_text.contains("proxy-groups+")
         } else {
             false
         };
@@ -1108,13 +1158,15 @@ impl BackendCompiler for MihomoCompiler {
             "allow-lan": plan.inbounds.allow_lan,
             "mode": mode_str,
             "log-level": "info",
+            "ipv6": plan.dns.ipv6,
             "proxies": candidate_proxies,
             "proxy-groups": proxy_groups,
             "dns": {
-                "enable": true,
-                "ipv6": false,
+                "enable": plan.dns.enabled,
+                "ipv6": plan.dns.ipv6,
                 "enhanced-mode": plan.dns.enhanced_mode.as_mihomo_value(),
                 "fake-ip-range": plan.dns.fake_ip_range,
+                "fake-ip-range6": "fc00::/18",
                 "respect-rules": plan.dns.respect_rules,
                 "default-nameserver": plan.dns.default_nameservers,
                 "nameserver": plan.dns.nameservers,
@@ -1138,6 +1190,12 @@ impl BackendCompiler for MihomoCompiler {
             if !dns_hijack.iter().any(|h| h.contains("tcp://")) {
                 dns_hijack.push("tcp://any:53".into());
             }
+            if plan.dns.ipv6 {
+                if !dns_hijack.iter().any(|h| h.contains("[::]:53")) {
+                    dns_hijack.push("tcp://[::]:53".into());
+                    dns_hijack.push("udp://[::]:53".into());
+                }
+            }
             config["tun"] = json!({
                 "enable": true,
                 "stack": plan.inbounds.tun.stack.as_mihomo_value(),
@@ -1151,6 +1209,39 @@ impl BackendCompiler for MihomoCompiler {
 
         if !port_listeners.is_empty() {
             config["listeners"] = Value::Array(port_listeners);
+        }
+
+        // Clash Party 规范 YAML 深度覆写（支持简单值覆盖、对象递归、! 强制覆盖、+key 前插、key+ 后追加与 <> 转义）
+        if let Some(ref override_text) = plan.outbounds.override_yaml {
+            if !override_text.trim().is_empty() {
+                if let Ok(mut patch) = serde_yaml::from_str::<Value>(override_text) {
+                    if patch.is_array() {
+                        patch = json!({ "+proxy-groups": patch });
+                    }
+                    if let Some(patch_obj) = patch.as_object_mut() {
+                        for (k, v) in patch_obj.iter_mut() {
+                            let parsed = crate::proxy::yaml_override::parse_override_key(k);
+                            if parsed.name == "proxy-groups" {
+                                if let Some(groups_arr) = v.as_array_mut() {
+                                    for g in groups_arr.iter_mut() {
+                                        expand_proxy_group_filters(g, &candidate_names);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    crate::proxy::yaml_override::deep_merge_value(&mut config, patch);
+                }
+            }
+        }
+
+        // Rhai 脚本动态覆写（编程式最终裁决：传入已完成 YAML 覆写的完整 config，执行 main(config) 或扁平语句）
+        if let Some(ref script_text) = plan.outbounds.override_script {
+            if !script_text.trim().is_empty() {
+                if let Err(e) = crate::proxy::script_override::apply_script_override(&mut config, script_text) {
+                    tracing::warn!(error = %e, "应用 Rhai 脚本覆写失败，已安全降级至基础配置");
+                }
+            }
         }
 
         Ok(CompiledArtifact::Json(config))

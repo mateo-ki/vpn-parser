@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 
 // ---------------------------------------------------------------------------
 // 仪表盘（原汇总图表）Apple 雅致风格：
-// 对齐 design/dashboard-v4-apple.html 规范：
+// 对齐 Apple 雅致风格设计规范：
 // 1. 卡片统一 14px 圆角、微投影、细描边、墨黑大字、Apple 蓝与状态红黄绿语义色；
 // 2. 移除旧版阶梯频谱图与环形图，专注现代仪表盘大屏；
 // 3. 页面底部完整集成：终端代理、端口代理、局域网代理、系统代理、TUN 模式；
@@ -1638,8 +1638,8 @@ impl VpnApp {
 
         let mut close = false;
 
-        // 监听 Escape 键快速关闭抽屉
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // 监听 Escape 键快速关闭抽屉（若当前有快捷规则弹窗打开，优先让给弹窗处理关闭）
+        if self.quick_rule_modal.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             close = true;
         }
 
@@ -2704,7 +2704,36 @@ impl VpnApp {
             ui.set_clip_rect(inner);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                dash_label(ui, "服务状态", None);
+                // 顶部标题行 + 一键重测按钮
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("服务状态")
+                            .size(12.5)
+                            .strong()
+                            .color(theme::text_secondary()),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let is_running = self.service_checks_running;
+                        let refresh_label = if is_running { "检测中…" } else { "重测 🔄" };
+                        let btn = ui.add_enabled(
+                            !is_running,
+                            egui::Button::new(
+                                RichText::new(refresh_label)
+                                    .size(10.5)
+                                    .color(if is_running { theme::accent() } else { theme::muted() }),
+                            )
+                            .frame(false),
+                        );
+                        if btn
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text("点击立即重新检测各站点连通性与实测延迟")
+                            .clicked()
+                        {
+                            self.check_services_now();
+                            self.status = "正在重新检测 Google / ChatGPT / GitHub / YouTube 连通性...".into();
+                        }
+                    });
+                });
                 ui.add_space(if h > 120.0 { 6.0 } else { 2.0 });
 
                 let ok_fg = if theme::is_light() {
@@ -2755,7 +2784,7 @@ impl VpnApp {
                     ("GitHub", "https://github.com", lookup("GitHub")),
                     ("YouTube", "https://www.youtube.com", lookup("YouTube")),
                 ] {
-                    let resp = dash_svc_card(
+                    let mut resp = dash_svc_card(
                         ui,
                         item_w,
                         item_h,
@@ -2766,10 +2795,23 @@ impl VpnApp {
                         text_col,
                         false,
                     );
-                    // 点击服务项 = 在浏览器新标签页打开对应网站
+                    resp = resp
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(format!(
+                            "🌐 点击在系统默认浏览器中打开: {name}\n🔗 目标网址: {url}\n⏱ 当前延迟: {status_str}\n🔄 右键点击可立即重新检测"
+                        ));
+                    // 点击服务项 = 在系统默认浏览器新标签页打开对应网站，并在状态栏给出即时提示
                     if resp.clicked() {
-                        ui.ctx()
-                            .open_url(egui::OpenUrl::new_tab(url));
+                        if let Err(e) = crate::platform::open_url_in_browser(url) {
+                            tracing::warn!(error = %e, url = %url, "调用系统默认浏览器打开 URL 失败");
+                        }
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                        self.status = format!("已在系统浏览器中打开: {name} ({url})");
+                    }
+                    // 右键点击服务项 = 立即触发重新检测
+                    if resp.secondary_clicked() {
+                        self.check_services_now();
+                        self.status = format!("正在重新检测 {name} 及各站点连通性...");
                     }
                     ui.add_space(row_gap);
                 }

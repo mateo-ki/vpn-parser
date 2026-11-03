@@ -2,10 +2,10 @@ use super::CLASH_VERGE_RECOMMENDED_OVERRIDE;
 use crate::gui::icons::{icon_label, Icon};
 use crate::gui::theme;
 use crate::gui::types::{
-    GroupsTab, KernelGroup,
+    GroupsTab, KernelGroup, OverrideEditorTab,
 };
 use crate::gui::widgets::{
-    card_frame, primary_btn,
+    card_frame, macos_segmented_tabs, primary_btn,
 };
 use crate::gui::VpnApp;
 use crate::models::NodeSummary;
@@ -315,101 +315,290 @@ impl VpnApp {
                 }
             }
             GroupsTab::Config => {
-                // 自定义配置覆写 (YAML & Clash 脚本片段)：顶部固定标题与操作组，仅编辑区独立垂直滚动
-                Frame::NONE
-                    .fill(theme::panel())
-                    .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
-                    .corner_radius(CornerRadius::same(10))
-                    .inner_margin(Margin::symmetric(14, 12))
-                    .show(ui, |ui| {
-                        let mut save_clicked = false;
-                        let mut load_recommended = false;
-                        let mut clear_override = false;
+                // 顶部：模式分段切换器 (YAML 声明式覆写 / Rhai 脚本动态覆写)
+                ui.horizontal(|ui| {
+                    let tabs = [
+                        (
+                            OverrideEditorTab::Yaml,
+                            Icon::Terminal,
+                            "YAML 声明式覆写 (Clash Party)",
+                        ),
+                        (
+                            OverrideEditorTab::Rhai,
+                            Icon::Lightning,
+                            "Rhai 脚本动态覆写 (图灵完备)",
+                        ),
+                    ];
+                    macos_segmented_tabs(ui, &mut self.override_editor_tab, &tabs);
+                });
+                ui.add_space(8.0);
 
-                        // 固定顶部操作栏（固定不滚动）
-                        ui.horizontal(|ui| {
-                            icon_label(ui, Icon::Terminal, 14.0, theme::text_secondary());
-                            ui.label(
-                                RichText::new("自定义配置覆写 (YAML & Clash 脚本片段)")
-                                    .strong()
-                                    .color(theme::text_primary()),
-                            );
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui
-                                    .add_enabled(!self.proxy_busy, primary_btn("保存配置"))
-                                    .on_hover_text("立即保存 YAML 覆写配置并热重载生效")
-                                    .clicked()
-                                {
-                                    save_clicked = true;
-                                }
-                                if ui
-                                    .button("⚡ 一键载入推荐规则")
-                                    .on_hover_text("填入经典的 AI、Google、多线下载与国内直连分流配置")
-                                    .clicked()
-                                {
-                                    load_recommended = true;
-                                }
-                                if ui.button("清空覆写").clicked() {
-                                    clear_override = true;
-                                }
-                            });
-                        });
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new(
-                                "支持直接在此处粘贴 Clash Verge Rev 风格的 YAML 配置覆写（rules / proxy-groups 等），保存后将自动合并生效："
-                            )
-                            .small()
-                            .color(theme::muted()),
-                        );
-                        ui.add_space(6.0);
-                        ui.separator();
-                        ui.add_space(6.0);
-
-                        // 仅让编辑文本框内部区域支持大文本纵向平滑滚动
-                        let mut text = self.proxy_config.override_yaml.clone().unwrap_or_default();
-                        let max_editor_height = (ui.available_height() - 8.0).max(220.0);
-
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, false])
-                            .max_height(max_editor_height)
-                            .id_salt("proxy_override_yaml_editor_scroll")
+                match self.override_editor_tab {
+                    OverrideEditorTab::Yaml => {
+                        // 自定义配置覆写 (YAML 深度合并)：顶部固定标题与操作组，仅编辑区独立垂直滚动
+                        Frame::NONE
+                            .fill(theme::panel())
+                            .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                            .corner_radius(CornerRadius::same(10))
+                            .inner_margin(Margin::symmetric(14, 12))
                             .show(ui, |ui| {
-                                let editor = ui.add(
-                                    egui::TextEdit::multiline(&mut text)
-                                        .font(egui::TextStyle::Monospace)
-                                        .desired_width(f32::INFINITY)
-                                        .desired_rows(22)
-                                        .hint_text("# 可在此处粘贴自定义 rules 或 proxy-groups YAML 片段\nrules:\n  - DOMAIN-SUFFIX,openai.com,AI分组\n  - PROCESS-NAME,IDMan.exe,多线并发下载"),
+                                let mut save_clicked = false;
+                                let mut load_recommended = false;
+                                let mut clear_override = false;
+
+                                // 固定顶部操作栏（固定不滚动）
+                                ui.horizontal(|ui| {
+                                    icon_label(ui, Icon::Terminal, 14.0, theme::text_secondary());
+                                    ui.label(
+                                        RichText::new("自定义配置覆写 (Clash Party / Verge 规范 YAML 深度合并)")
+                                            .strong()
+                                            .color(theme::text_primary()),
+                                    );
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui
+                                            .add_enabled(!self.proxy_busy, primary_btn("保存配置"))
+                                            .on_hover_text("立即保存 YAML 覆写配置并热重载生效")
+                                            .clicked()
+                                        {
+                                            save_clicked = true;
+                                        }
+                                        if ui
+                                            .button("⚡ 一键载入推荐规则")
+                                            .on_hover_text("填入经典的 AI、Google、多线下载与国内直连分流配置")
+                                            .clicked()
+                                        {
+                                            load_recommended = true;
+                                        }
+                                        if ui.button("清空覆写").clicked() {
+                                            clear_override = true;
+                                        }
+                                    });
+                                });
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new(
+                                        "遵循 Clash Party 规范对内核配置进行深度覆写。支持 +key 前插、key+ 追加、key 全量替换、! 强制覆盖与 <> 转义（如 +rules / +proxy-groups / dns / tun），保存后热重载生效："
+                                    )
+                                    .small()
+                                    .color(theme::muted()),
                                 );
-                                if editor.changed() {
+                                ui.add_space(6.0);
+                                ui.separator();
+                                ui.add_space(6.0);
+
+                                // 仅让编辑文本框内部区域支持大文本纵向平滑滚动
+                                let mut text = self.proxy_config.override_yaml.clone().unwrap_or_default();
+                                let max_editor_height = (ui.available_height() - 8.0).max(220.0);
+
+                                egui::ScrollArea::vertical()
+                                    .auto_shrink([false, false])
+                                    .max_height(max_editor_height)
+                                    .id_salt("proxy_override_yaml_editor_scroll")
+                                    .show(ui, |ui| {
+                                        let editor = ui.add(
+                                            egui::TextEdit::multiline(&mut text)
+                                                .font(egui::TextStyle::Monospace)
+                                                .desired_width(f32::INFINITY)
+                                                .desired_rows(22)
+                                                .hint_text("# 支持 Clash Party 规范 YAML 深度合并与修饰符\n# 示例 1: 前置插入高优先级规则\n+rules:\n  - DOMAIN-SUFFIX,openai.com,AI分组\n# 示例 2: 递归合并修改 DNS 配置\ndns:\n  +nameserver:\n    - 1.1.1.1\n# 示例 3: 强制覆盖整个配置块\ntun!:\n  enable: false"),
+                                        );
+                                        if editor.changed() {
+                                            self.proxy_config.override_yaml = if text.trim().is_empty() {
+                                                None
+                                            } else {
+                                                Some(text.clone())
+                                            };
+                                        }
+                                    });
+
+                                if load_recommended {
+                                    self.proxy_config.override_yaml =
+                                        Some(CLASH_VERGE_RECOMMENDED_OVERRIDE.to_string());
+                                    self.save_proxy_config();
+                                }
+                                if clear_override {
+                                    self.proxy_config.override_yaml = None;
+                                    self.save_proxy_config();
+                                }
+                                if save_clicked {
                                     self.proxy_config.override_yaml = if text.trim().is_empty() {
                                         None
                                     } else {
-                                        Some(text.clone())
+                                        Some(text)
                                     };
+                                    self.save_proxy_config();
+                                    self.status = "已保存自定义分流覆写配置并热重载".into();
                                 }
                             });
+                    }
+                    OverrideEditorTab::Rhai => {
+                        // 自定义 Rhai 脚本动态覆写 (图灵完备编程扩展)
+                        Frame::NONE
+                            .fill(theme::panel())
+                            .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                            .corner_radius(CornerRadius::same(10))
+                            .inner_margin(Margin::symmetric(14, 12))
+                            .show(ui, |ui| {
+                                let mut save_clicked = false;
+                                let mut validate_clicked = false;
+                                let mut load_template = false;
+                                let mut clear_script = false;
 
-                        if load_recommended {
-                            self.proxy_config.override_yaml =
-                                Some(CLASH_VERGE_RECOMMENDED_OVERRIDE.to_string());
-                            self.save_proxy_config();
-                        }
-                        if clear_override {
-                            self.proxy_config.override_yaml = None;
-                            self.save_proxy_config();
-                        }
-                        if save_clicked {
-                            self.proxy_config.override_yaml = if text.trim().is_empty() {
-                                None
-                            } else {
-                                Some(text)
-                            };
-                            self.save_proxy_config();
-                            self.status = "已保存自定义分流覆写配置并热重载".into();
-                        }
-                    });
+                                // 固定顶部操作栏
+                                ui.horizontal(|ui| {
+                                    icon_label(ui, Icon::Lightning, 14.0, theme::accent());
+                                    ui.label(
+                                        RichText::new("Rhai 脚本动态覆写 (图灵完备配置扩展)")
+                                            .strong()
+                                            .color(theme::text_primary()),
+                                    );
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui
+                                            .add_enabled(!self.proxy_busy, primary_btn("保存脚本"))
+                                            .on_hover_text("立即保存 Rhai 脚本覆写并热重载生效")
+                                            .clicked()
+                                        {
+                                            save_clicked = true;
+                                        }
+                                        if ui
+                                            .button("🔍 语法校验")
+                                            .on_hover_text("在本地纯 Rust 安全沙箱中编译校验语法正确性")
+                                            .clicked()
+                                        {
+                                            validate_clicked = true;
+                                        }
+                                        if ui
+                                            .button("⚡ 载入模板")
+                                            .on_hover_text("填入经典的主流脚本模板 (DNS增强、规则插入与动态节点过滤)")
+                                            .clicked()
+                                        {
+                                            load_template = true;
+                                        }
+                                        if ui.button("清空脚本").clicked() {
+                                            clear_script = true;
+                                        }
+                                    });
+                                });
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new(
+                                        "在内核配置编译后执行用户自定义 Rhai 脚本（作为最终裁决者）。支持 fn main(config) 或扁平语句，内置 100,000 步操作数熔断防死循环，支持动态过滤节点、插入自定义规则与重写 DNS："
+                                    )
+                                    .small()
+                                    .color(theme::muted()),
+                                );
+
+                                // 语法校验反馈横幅
+                                if let Some((ref msg, is_err)) = self.rhai_syntax_status {
+                                    ui.add_space(6.0);
+                                    let (fill, stroke, col, icon) = if is_err {
+                                        (
+                                            theme::danger_bg(),
+                                            theme::danger(),
+                                            theme::danger(),
+                                            Icon::Alert,
+                                        )
+                                    } else {
+                                        (
+                                            theme::success_bg(),
+                                            theme::success(),
+                                            theme::success(),
+                                            Icon::Check,
+                                        )
+                                    };
+                                    Frame::NONE
+                                        .fill(fill)
+                                        .stroke(Stroke::new(1.0_f32, stroke))
+                                        .corner_radius(CornerRadius::same(6))
+                                        .inner_margin(Margin::symmetric(10, 6))
+                                        .show(ui, |ui| {
+                                            ui.horizontal(|ui| {
+                                                icon_label(ui, icon, 13.0, col);
+                                                ui.label(RichText::new(msg).small().strong().color(col));
+                                            });
+                                        });
+                                }
+
+                                ui.add_space(6.0);
+                                ui.separator();
+                                ui.add_space(6.0);
+
+                                let mut script_text = self.proxy_config.override_script.clone().unwrap_or_default();
+                                let max_editor_height = (ui.available_height() - 8.0).max(220.0);
+
+                                egui::ScrollArea::vertical()
+                                    .auto_shrink([false, false])
+                                    .max_height(max_editor_height)
+                                    .id_salt("proxy_override_rhai_editor_scroll")
+                                    .show(ui, |ui| {
+                                        let editor = ui.add(
+                                            egui::TextEdit::multiline(&mut script_text)
+                                                .font(egui::TextStyle::Monospace)
+                                                .desired_width(f32::INFINITY)
+                                                .desired_rows(22)
+                                                .hint_text("// Rhai 动态配置覆写脚本\n// 纯 Rust 沙箱执行，自带 100,000 步指令防死循环看门狗\nfn main(config) {\n    // 1. 修改 DNS 增强模式\n    config.dns.enhanced_mode = \"fake-ip\";\n\n    // 2. 规则最前排插入高优先级规则\n    config.rules.insert(0, \"DOMAIN-SUFFIX,openai.com,AI分组\");\n\n    // 3. 编程式过滤节点\n    let clean = [];\n    for p in config.proxies {\n        if !p.name.contains(\"2x\") {\n            clean.push(p);\n        }\n    }\n    if clean.len() > 0 {\n        config.proxies = clean;\n    }\n\n    return config;\n}"),
+                                        );
+                                        if editor.changed() {
+                                            self.proxy_config.override_script = if script_text.trim().is_empty() {
+                                                None
+                                            } else {
+                                                Some(script_text.clone())
+                                            };
+                                            self.rhai_syntax_status = None;
+                                        }
+                                    });
+
+                                if validate_clicked {
+                                    match crate::proxy::script_override::validate_script_syntax(&script_text) {
+                                        Ok(()) => {
+                                            self.rhai_syntax_status = Some((
+                                                "✅ Rhai 脚本语法校验通过 (安全合规，可正常执行)".to_string(),
+                                                false,
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            self.rhai_syntax_status = Some((format!("❌ {e}"), true));
+                                        }
+                                    }
+                                }
+                                if load_template {
+                                    self.proxy_config.override_script = Some(
+                                        crate::proxy::script_override::RHAI_RECOMMENDED_SCRIPT_TEMPLATE.to_string(),
+                                    );
+                                    self.rhai_syntax_status = Some((
+                                        "已载入经典 Rhai 脚本模板".to_string(),
+                                        false,
+                                    ));
+                                    self.save_proxy_config();
+                                }
+                                if clear_script {
+                                    self.proxy_config.override_script = None;
+                                    self.rhai_syntax_status = None;
+                                    self.save_proxy_config();
+                                }
+                                if save_clicked {
+                                    self.proxy_config.override_script = if script_text.trim().is_empty() {
+                                        None
+                                    } else {
+                                        Some(script_text.clone())
+                                    };
+                                    if let Err(e) = crate::proxy::script_override::validate_script_syntax(&script_text) {
+                                        self.rhai_syntax_status = Some((
+                                            format!("保存成功，但脚本存在语法错误: {e}"),
+                                            true,
+                                        ));
+                                    } else {
+                                        self.rhai_syntax_status = Some((
+                                            "✅ 已保存 Rhai 脚本并成功热重载生效".to_string(),
+                                            false,
+                                        ));
+                                    }
+                                    self.save_proxy_config();
+                                    self.status = "已保存 Rhai 动态脚本覆写配置并热重载".into();
+                                }
+                            });
+                    }
+                }
             }
         }
     }
@@ -633,7 +822,10 @@ pub(crate) fn override_group_names(override_yaml: Option<&str>) -> Vec<String> {
         return Vec::new();
     };
     let groups = value
-        .get("proxy-groups")
+        .get("+proxy-groups")
+        .or_else(|| value.get("proxy-groups+"))
+        .or_else(|| value.get("proxy-groups"))
+        .or_else(|| value.get("<proxy-groups>"))
         .and_then(serde_yaml::Value::as_sequence)
         .or_else(|| value.as_sequence())
         .cloned()
