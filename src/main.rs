@@ -3,42 +3,17 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-mod api;
-mod app_update;
-mod collector;
-mod db;
-mod diag;
-mod export;
-mod export_quality;
-mod geo;
+use vpn_parser::api::AppState;
+use vpn_parser::collector::Collector;
+use vpn_parser::db::Database;
 #[cfg(feature = "gui")]
-mod gui;
-mod hostutil;
-mod i18n;
-mod ip_risk;
-mod kernel;
-mod models;
-mod parser;
-mod platform;
-pub mod profile;
-mod proxy;
-mod proxy_probe;
-mod router;
-mod scheduler;
-mod speedtest;
-mod system_proxy;
-mod tasks;
-
-use crate::api::AppState;
-use crate::collector::Collector;
-use crate::db::Database;
-#[cfg(feature = "gui")]
-use crate::gui::VpnApp;
-use crate::kernel::KernelManager;
-use crate::proxy::ProxyManager;
-use crate::scheduler::Scheduler;
-use crate::speedtest::SpeedTester;
-use crate::tasks::TaskTracker;
+use vpn_parser::gui::{setup_chinese_fonts, VpnApp};
+use vpn_parser::kernel::KernelManager;
+use vpn_parser::proxy::ProxyManager;
+use vpn_parser::scheduler::Scheduler;
+use vpn_parser::speedtest::SpeedTester;
+use vpn_parser::tasks::TaskTracker;
+use vpn_parser::*;
 use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
@@ -53,6 +28,9 @@ use uuid::Uuid;
     about = "VPN/proxy subscription collector with desktop GUI and HTTP API"
 )]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     /// HTTP API listen address
     #[arg(long, default_value = "127.0.0.1:8080")]
     listen: String,
@@ -110,43 +88,171 @@ struct Cli {
     log_file: Option<std::path::PathBuf>,
 }
 
-/// 单份 startup.log 的上限。超过就整体挪到 `.1` 另开一份 —— 留一份历史，别让
-/// 启动阶段那几行（预备状态、内核探测）被后面几小时的运行日志挤掉。
-const MAX_LOG_BYTES: u64 = 1024 * 1024;
+#[derive(Debug, clap::Subcommand)]
+enum Commands {
+    /// 解析订阅链接或本地文件，以 JSON 或格式化表格输出节点列表
+    Parse {
+        /// 订阅链接 (URL)、单节点 URI (ss/vmess/vless/...) 或本地文件路径
+        target: String,
 
-/// 判据单独拎出来，好测。
-fn should_rotate(len: u64) -> bool {
-    len > MAX_LOG_BYTES
+        /// 输出完整 JSON 格式（默认输出简明表格）
+        #[arg(long)]
+        json: bool,
+    },
+    /// 将节点配置编译为目标内核支持的配置文件 (Mihomo / Sing-box / VP-Core / Xray / Shoes / Meow)
+    Compile {
+        /// 目标内核名称: mihomo, sing-box, vp-core, xray, shoes, meow
+        #[arg(long, default_value = "mihomo")]
+        kernel: String,
+
+        /// 节点链接或订阅文件路径
+        #[arg(short, long)]
+        input: String,
+
+        /// 导出文件路径（不指定则打印至 stdout）
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+
+        /// 运行模式: rule (规则分流), global (全局代理), direct (全直连)
+        #[arg(long, default_value = "rule")]
+        mode: String,
+    },
+    /// 对目标服务器或节点进行快速 TCP / TLS 握手连通性与延迟测试
+    Ping {
+        /// 目标节点 URI 或主机名:端口 (如 1.1.1.1:443)
+        target: String,
+
+        /// 超时时间（毫秒）
+        #[arg(long, default_value_t = 3000)]
+        timeout: u32,
+    },
 }
 
-pub(crate) fn startup_log(msg: &str) {
-    use std::io::Write;
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-    let line = format!("[{now}] {msg}");
-    // 程序目录写不进去（装在 Program Files 又没提权）就退到 %TEMP%：预备状态那些
-    // 步骤要是因为权限看不见，就等于没打日志。
-    for candidate in [
-        std::path::PathBuf::from("startup.log"),
-        std::env::temp_dir().join("vpn-parser-startup.log"),
-    ] {
-        if should_rotate(
-            std::fs::metadata(&candidate)
-                .map(|meta| meta.len())
-                .unwrap_or(0),
-        ) {
-            let archived = std::path::PathBuf::from(format!("{}.1", candidate.display()));
-            let _ = std::fs::remove_file(&archived);
-            let _ = std::fs::rename(&candidate, &archived);
+fn handle_command(cmd: Commands) -> Result<()> {
+    match cmd {
+        Commands::Parse { target, json } => {
+            let content = if target.starts_with("http://") || target.starts_with("https://") {
+                eprintln!("正在获取订阅内容: {target} ...");
+                let rt = Runtime::new()?;
+                rt.block_on(async {
+                    let resp = reqwest::get(&target).await?;
+                    resp.text().await.map_err(anyhow::Error::from)
+                })?
+            } else if std::path::Path::new(&target).is_file() {
+                std::fs::read_to_string(&target)?
+            } else {
+                target
+            };
+
+            let nodes = vpn_parser::parser::parse_subscription(&content, None);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&nodes)?);
+            } else {
+                println!("┌──────┬──────────────┬──────────────────────────────┬──────────────────────────────┐");
+                println!("│ 序号 │ 协议         │ 节点名称                     │ 服务器地址:端口              │");
+                println!("├──────┼──────────────┼──────────────────────────────┼──────────────────────────────┤");
+                for (idx, node) in nodes.iter().enumerate() {
+                    let mut name = node.name.clone();
+                    if name.chars().count() > 24 {
+                        name = format!("{}…", name.chars().take(23).collect::<String>());
+                    }
+                    println!(
+                        "│ {:4} │ {:12} │ {:28} │ {:24}:{:5} │",
+                        idx + 1,
+                        node.protocol,
+                        name,
+                        node.server,
+                        node.port
+                    );
+                }
+                println!("└──────┴──────────────┴──────────────────────────────┴──────────────────────────────┘");
+                println!("共解析出 {} 个有效节点", nodes.len());
+            }
         }
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&candidate)
-        {
-            let _ = writeln!(f, "{line}");
-            return;
+        Commands::Compile {
+            kernel,
+            input,
+            output,
+            mode,
+        } => {
+            let content = if std::path::Path::new(&input).is_file() {
+                std::fs::read_to_string(&input)?
+            } else {
+                input
+            };
+            let nodes = vpn_parser::parser::parse_subscription(&content, None);
+            if nodes.is_empty() {
+                eprintln!("错误: 未在输入中解析出任何有效节点");
+                std::process::exit(1);
+            }
+            let routing_mode = match mode.to_ascii_lowercase().as_str() {
+                "global" => vpn_parser::proxy::RoutingMode::Global,
+                "direct" => vpn_parser::proxy::RoutingMode::Direct,
+                _ => vpn_parser::proxy::RoutingMode::Rule,
+            };
+            let mut options = vpn_parser::proxy::MihomoConfigOptions::default();
+            options.routing_mode = routing_mode;
+            let plan = vpn_parser::proxy::ir::lower_options_to_ir(&options, Some(&nodes[0]));
+            use vpn_parser::proxy::compiler::{
+                BackendCompiler, CompiledArtifact, MeowCompiler, MihomoCompiler, ShoesCompiler,
+                SingBoxCompiler, VpCoreCompiler, XrayCompiler,
+            };
+            let artifact = match kernel.to_ascii_lowercase().as_str() {
+                "mihomo" | "clash" => MihomoCompiler::default().compile(&plan)?,
+                "sing-box" | "singbox" => SingBoxCompiler::default().compile(&plan)?,
+                "vp-core" | "vpcore" | "vp_core" => VpCoreCompiler::default().compile(&plan)?,
+                "xray" => XrayCompiler::default().compile(&plan)?,
+                "shoes" => ShoesCompiler::default().compile(&plan)?,
+                "meow" => MeowCompiler::default().compile(&plan)?,
+                other => {
+                    eprintln!("错误: 不支持的内核类型 '{other}'，可选: mihomo, sing-box, vp-core, xray, shoes, meow");
+                    std::process::exit(1);
+                }
+            };
+            let config_text = match artifact {
+                CompiledArtifact::Yaml(yaml) => yaml,
+                CompiledArtifact::Json(json) => serde_json::to_string_pretty(&json)?,
+            };
+            if let Some(out_path) = output {
+                std::fs::write(&out_path, &config_text)?;
+                println!("配置已成功写入至: {}", out_path.display());
+            } else {
+                println!("{config_text}");
+            }
+        }
+        Commands::Ping { target, timeout } => {
+            let (host, port) = if target.starts_with("ss://")
+                || target.starts_with("vmess://")
+                || target.starts_with("vless://")
+                || target.starts_with("trojan://")
+                || target.starts_with("hysteria2://")
+            {
+                let nodes = vpn_parser::parser::parse_subscription(&target, None);
+                if let Some(node) = nodes.first() {
+                    (node.server.clone(), node.port)
+                } else {
+                    eprintln!("错误: 无法解析节点 URI");
+                    std::process::exit(1);
+                }
+            } else if let Some((h, p)) = target.split_once(':') {
+                let port: u16 = p.parse().unwrap_or(80);
+                (h.to_string(), port)
+            } else {
+                (target, 80)
+            };
+            eprintln!("正在探测目标连通性: {host}:{port} (超时: {timeout}ms)...");
+            let c_host = std::ffi::CString::new(host.clone())?;
+            let latency =
+                unsafe { vpn_parser::ffi::vpn_test_tcp_latency(c_host.as_ptr(), port, timeout) };
+            if latency >= 0 {
+                println!("✓ 握手成功! 延迟: {latency} ms");
+            } else {
+                println!("✗ 握手失败: 连接超时或无法解析主机");
+                std::process::exit(1);
+            }
         }
     }
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -216,16 +322,19 @@ fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    if let Some(cmd) = cli.command {
+        return handle_command(cmd);
+    }
     if cli.run_elevated_kernel {
         let parent_pid = cli.parent_pid.unwrap_or(0);
         let kernel_str = cli.kernel.unwrap_or_else(|| "mihomo".to_string());
         let kernel = match kernel_str.to_ascii_lowercase().as_str() {
-            "sing-box" | "singbox" => crate::kernel::KernelKind::SingBox,
-            "xray" => crate::kernel::KernelKind::Xray,
-            "shoes" => crate::kernel::KernelKind::Shoes,
-            "meow" => crate::kernel::KernelKind::Meow,
-            "vpcore" | "vp-core" | "vp_core" => crate::kernel::KernelKind::VpCore,
-            _ => crate::kernel::KernelKind::Mihomo,
+            "sing-box" | "singbox" => vpn_parser::kernel::KernelKind::SingBox,
+            "xray" => vpn_parser::kernel::KernelKind::Xray,
+            "shoes" => vpn_parser::kernel::KernelKind::Shoes,
+            "meow" => vpn_parser::kernel::KernelKind::Meow,
+            "vpcore" | "vp-core" | "vp_core" => vpn_parser::kernel::KernelKind::VpCore,
+            _ => vpn_parser::kernel::KernelKind::Mihomo,
         };
         let executable = cli.executable.unwrap_or_default();
         let data_root = cli.data_root.unwrap_or_default();
@@ -348,7 +457,7 @@ fn main() -> Result<()> {
     let rt = Arc::new(Runtime::new()?);
     let _rt_guard = rt.enter();
     let handoff_proxy_options = if let Some(config_file) = cli.elevated_proxy_config_file.as_deref() {
-        match crate::proxy::read_elevated_proxy_config_file(config_file) {
+        match vpn_parser::proxy::read_elevated_proxy_config_file(config_file) {
             Ok(options) => {
                 options.validate()?;
                 Some(options)
@@ -359,7 +468,7 @@ fn main() -> Result<()> {
             }
         }
     } else if let Some(encoded) = cli.elevated_proxy_config.as_deref() {
-        let options = crate::proxy::decode_elevated_proxy_config(encoded)?;
+        let options = vpn_parser::proxy::decode_elevated_proxy_config(encoded)?;
         options.validate()?;
         Some(options)
     } else {
@@ -410,11 +519,11 @@ fn main() -> Result<()> {
         }
         // 新安装如果缺少 Geo 分流规则库，在后台异步预先拉取（Fastly CDN 2秒就绪）
         {
-            let geo_dir = crate::geo::mihomo_dir();
-            if !crate::geo::geo_ready(&geo_dir) {
+            let geo_dir = vpn_parser::geo::mihomo_dir();
+            if !vpn_parser::geo::geo_ready(&geo_dir) {
                 rt.spawn(async move {
                     tracing::info!("新安装首次运行，自动下载 GeoIP / GeoSite 规则库...");
-                    let _ = crate::geo::provision(&geo_dir, None, false).await;
+                    let _ = vpn_parser::geo::provision(&geo_dir, None, false).await;
                 });
             }
         }
@@ -507,7 +616,7 @@ fn main() -> Result<()> {
     }
 
     // Create ApiServerController for dynamic start/stop
-    let api_controller = crate::api::ApiServerController::new(
+    let api_controller = vpn_parser::api::ApiServerController::new(
         AppState {
             db: db.clone(),
             collector: collector.clone(),
@@ -759,7 +868,7 @@ fn main() -> Result<()> {
         }
         if let Err(error) = gui_res {
             startup_log(&format!("GUI failed permanently: {error}"));
-            crate::platform::show_error(
+            vpn_parser::platform::show_error(
                 "VPN Parser 启动失败",
                 &format!(
                     "界面渲染器初始化失败：{error}\n\n\
@@ -774,272 +883,6 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// 文件名像不像一个中日韩字体。macOS/Linux 上要靠它从字体目录里挑；Windows 用固定文件名。
-#[cfg(feature = "gui")]
-#[allow(dead_code)]
-fn looks_like_cjk_font(file_name_lower: &str) -> bool {
-    [
-        "pingfang",
-        "hiragino",
-        "stheiti",
-        "songti",
-        "kaiti",
-        "yuanti",
-        "arial unicode",
-        "heiti",
-        "applegothic",
-        "applesdgothicneo",
-        "msyh",
-        "simhei",
-        "simsun",
-        "msjh",
-        "notosanscjk",
-        "notosanssc",
-        "notoserifcjk",
-        "sourcehansans",
-        "sourcehanserif",
-        "wqy-microhei",
-        "wqy-zenhei",
-        "uming",
-        "ukai",
-        "droidsansfallback",
-        "fireflysung",
-    ]
-    .iter()
-    .any(|needle| file_name_lower.contains(needle))
-}
-
-/// 在字体目录里递归找中日韩字体。macOS/Linux 的字体装在随发行版变化的子目录下，固定路径
-/// 猜不中就走这里；深度封顶，不跟着符号链接往下转。
-#[cfg(feature = "gui")]
-#[allow(dead_code)]
-fn scan_cjk_fonts(dirs: &[std::path::PathBuf], depth: u8) -> Vec<std::path::PathBuf> {
-    let mut found = Vec::new();
-    let mut stack: Vec<(std::path::PathBuf, u8)> = dirs.iter().cloned().map(|d| (d, 0)).collect();
-    while let Some((current, level)) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&current) else {
-            continue; // 目录不存在或读不了：跳过，这不是错误
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            if is_dir {
-                if level + 1 <= depth {
-                    stack.push((path, level + 1));
-                }
-                continue;
-            }
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_ascii_lowercase())
-                .unwrap_or_default();
-            let font_file =
-                name.ends_with(".ttf") || name.ends_with(".ttc") || name.ends_with(".otf");
-            if font_file && looks_like_cjk_font(&name) {
-                found.push(path);
-            }
-        }
-    }
-    found
-}
-
-#[cfg(feature = "gui")]
-/// 本机可用的中日韩字体候选，按“先用哪个”排序。
-fn cjk_font_candidates() -> Vec<std::path::PathBuf> {
-    #[cfg(windows)]
-    {
-        [
-            std::path::PathBuf::from(r"C:\Windows\Fonts\msyh.ttc"),
-            std::path::PathBuf::from(r"C:\Windows\Fonts\msyhbd.ttc"),
-            std::path::PathBuf::from(r"C:\Windows\Fonts\simhei.ttf"),
-            std::path::PathBuf::from(r"C:\Windows\Fonts\simsun.ttc"),
-            std::path::PathBuf::from(r"C:\Windows\Fonts\msjh.ttc"),
-            std::path::PathBuf::from(r"C:\Windows\Fonts\NotoSansSC-Regular.otf"),
-        ]
-        .to_vec()
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let fixed = [
-            "/System/Library/Fonts/Hiragino Sans GB.ttc",
-            "/System/Library/Fonts/Supplemental/Hiragino Sans GB.ttc",
-            "/Library/Fonts/Hiragino Sans GB.ttc",
-            "/System/Library/Fonts/STHeiti Light.ttc",
-            "/System/Library/Fonts/STHeiti Medium.ttc",
-            "/System/Library/Fonts/PingFang.ttc",
-            "/System/Library/Fonts/Supplemental/Songti.ttc",
-            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-            "/System/Library/Fonts/Supplemental/Kaiti.ttc",
-            "/System/Library/Fonts/Supplemental/Yuanti.ttc",
-            "/Library/Fonts/Arial Unicode.ttf",
-            "/System/Library/Fonts/AppleSDGothicNeo.ttc",
-        ];
-        let mut roots = vec![
-            std::path::PathBuf::from("/System/Library/Fonts"),
-            std::path::PathBuf::from("/System/Library/Fonts/Supplemental"),
-            std::path::PathBuf::from("/Library/Fonts"),
-        ];
-        if let Some(home) = std::env::var_os("HOME") {
-            roots.push(std::path::Path::new(&home).join("Library/Fonts"));
-        }
-        let mut out: Vec<_> = fixed.iter().map(std::path::PathBuf::from).collect();
-        out.extend(scan_cjk_fonts(&roots, 2));
-        out
-    }
-    #[cfg(all(not(windows), not(target_os = "macos")))]
-    {
-        let fixed = [
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
-            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-        ];
-        let mut roots = vec![
-            std::path::PathBuf::from("/usr/share/fonts"),
-            std::path::PathBuf::from("/usr/local/share/fonts"),
-        ];
-        if let Some(home) = std::env::var_os("HOME") {
-            roots.push(std::path::Path::new(&home).join(".local/share/fonts"));
-        }
-        let mut out: Vec<_> = fixed.iter().map(std::path::PathBuf::from).collect();
-        out.extend(scan_cjk_fonts(&roots, 4));
-        out
-    }
-}
-
-#[cfg(feature = "gui")]
-/// 启动时校准墨迹垂直位置用的参照串与字号（单位 point）。
-const INK_CALIBRATION_LABEL: &str = "启动内核";
-#[cfg(feature = "gui")]
-const INK_CALIBRATION_SIZE: f32 = 14.0;
-#[cfg(feature = "gui")]
-/// 偏不到这个数就不动它：实测 Windows 的雅黑 14pt 正好 0.00pt，不该被改。
-const INK_MIN_OFFSET: f32 = 1.0;
-#[cfg(feature = "gui")]
-/// 封顶，再偏也只补这么多（em 的比例）。
-/// 依据：mac CI 那台机器实测冬青黑（Hiragino Sans GB）14pt 原始偏 -3.50pt ⇒ 需要 0.25，
-/// 这个帽留了一档余量，同时挡住"字体指标病态到把字挤出按钮框"的情况。
-const INK_MAX_OFFSET_FACTOR: f32 = 0.30;
-
-#[cfg(feature = "gui")]
-/// 由「实测偏移」算出该给这个字体补的 `y_offset_factor`（正 = 往下挪）。
-/// 拆成纯函数是为了让测试能拿同一份规则复算，而不是在产品路径旁边再抄一遍。
-fn ink_calibration_factor(raw_offset: f32) -> f32 {
-    if raw_offset.abs() < INK_MIN_OFFSET {
-        return 0.0;
-    }
-    (-raw_offset / INK_CALIBRATION_SIZE).clamp(-INK_MAX_OFFSET_FACTOR, INK_MAX_OFFSET_FACTOR)
-}
-
-#[cfg(feature = "gui")]
-/// 墨迹中心相对布局盒中心的偏移，单位 point；负 = 字偏上。
-///
-/// 按钮画的是「布局盒居中 + 上下等距 padding」，所以这个差就是他肉眼看到的偏差。
-/// 中日韩字体的 ascent/descent 普遍不对称（同一份 14pt 文本，行高盒比实际字形高出一截，
-/// 多出来的量几乎全落在基线以下），egui 按行高居中 → 字看着贴顶。
-/// 只在启动装载字体时跑一次，不进每帧。
-fn ink_offset(font_name: &str, data: &std::sync::Arc<egui::FontData>) -> f32 {
-    let ctx = egui::Context::default();
-    let mut definitions = egui::FontDefinitions::empty();
-    definitions
-        .font_data
-        .insert(font_name.to_owned(), data.clone());
-    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        definitions
-            .families
-            .entry(family)
-            .or_default()
-            .insert(0, font_name.to_owned());
-    }
-    ctx.set_fonts(definitions);
-    let mut input = egui::RawInput::default();
-    input.screen_rect = Some(egui::Rect::from_min_size(
-        egui::Pos2::ZERO,
-        egui::vec2(400.0, 200.0),
-    ));
-    let text = INK_CALIBRATION_LABEL.to_owned();
-    let mut offset = 0.0_f32;
-    let mut out = ctx.run_ui(input, |ui| {
-        let galley = ui.painter().layout_no_wrap(
-            text.clone(),
-            egui::FontId::proportional(INK_CALIBRATION_SIZE),
-            egui::Color32::WHITE,
-        );
-        offset = galley.mesh_bounds.center().y - galley.rect.center().y;
-    });
-    out.textures_delta.clear();
-    offset
-}
-
-#[cfg(feature = "gui")]
-/// 加载中文字体。没有它整屏中文都是方框 —— egui 自带字体不含 CJK 字形。
-fn setup_chinese_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    let mut loaded_names = Vec::new();
-
-    for path in cjk_font_candidates() {
-        if let Ok(bytes) = std::fs::read(&path) {
-            let font_name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| format!("cjk_{}", loaded_names.len()));
-
-            info!(path = %path.display(), font = %font_name, "loaded CJK font for GUI");
-
-            let data = std::sync::Arc::new(egui::FontData::from_owned(bytes));
-            // Windows 下微软雅黑/宋体/黑体字形垂直居中极为标准（实测 0.00pt 偏差）。
-            // ink_offset 会新建独立 egui::Context 进行字形栅格化排版，Windows 下跳过可规避额外分配数十兆显存/内存峰值。
-            let raw_offset = if cfg!(windows) {
-                0.0
-            } else {
-                ink_offset(&font_name, &data)
-            };
-            let factor = ink_calibration_factor(raw_offset);
-            let font_data = if factor == 0.0 {
-                data
-            } else {
-                let mut tweaked = std::sync::Arc::unwrap_or_clone(data);
-                tweaked.tweak.y_offset_factor = factor;
-                std::sync::Arc::new(tweaked)
-            };
-            info!(
-                font = %font_name,
-                ink_offset_pt = raw_offset,
-                y_offset_factor = factor,
-                "calibrated CJK font vertical centering"
-            );
-
-            fonts.font_data.insert(font_name.clone(), font_data);
-            loaded_names.push(font_name);
-
-            // 仅加载 1 个最优先的可用 CJK 字体。常规中文字体（如微软雅黑、苹方、文泉驿、Noto）
-            // 单个字库就包含完备的简体/繁体/日韩字形，避免同时载入多个动辄十数兆的字体文件
-            // 造成堆内存与纹理缓存膨胀（每个字体保留整份原始字节与字形表）。
-            if loaded_names.len() >= 1 {
-                break;
-            }
-        }
-    }
-
-    if loaded_names.is_empty() {
-        tracing::warn!("no CJK font found; Chinese text may not render");
-        return;
-    }
-
-    // 将加载到的 CJK 字体按顺序插入 proportional 与 monospace 字体族首部
-    for (i, name) in loaded_names.iter().enumerate() {
-        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-            family.insert(i, name.clone());
-        }
-        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-            family.insert(i, name.clone());
-        }
-    }
-
-    ctx.set_fonts(fonts);
 }
 
 #[cfg(test)]
@@ -1061,7 +904,7 @@ mod tests {
             "--start-proxy-node".to_string(),
             "db022bb2".to_string(),
         ];
-        let assembled = crate::platform::elevated_arguments(&current, &extra);
+        let assembled = vpn_parser::platform::elevated_arguments(&current, &extra);
         let mut argv = vec!["vpn-parser".to_string()];
         argv.extend(assembled);
         let parsed = Cli::try_parse_from(&argv);
@@ -1086,7 +929,7 @@ mod tests {
             "--start-proxy-node".to_string(),
             "new-node".to_string(),
         ];
-        let assembled = crate::platform::elevated_arguments(&current, &extra);
+        let assembled = vpn_parser::platform::elevated_arguments(&current, &extra);
         let mut argv = vec!["vpn-parser".to_string()];
         argv.extend(assembled);
         let parsed = Cli::try_parse_from(&argv);
@@ -1097,15 +940,6 @@ mod tests {
             cli.elevated_proxy_config_file.as_deref(),
             Some(std::path::Path::new("D:\\data\\run\\elevated.json"))
         );
-    }
-
-    /// 日志滚动的判据：正好到上限不动，超一点才挪档（挪档是 rename，频繁触发会丢历史）。
-    #[test]
-    fn log_rotation_triggers_only_above_the_cap() {
-        use super::should_rotate;
-        assert!(!should_rotate(0));
-        assert!(!should_rotate(super::MAX_LOG_BYTES));
-        assert!(should_rotate(super::MAX_LOG_BYTES + 1));
     }
 
     /// base64url 字母表含 `-`/`_`，编码结果可能以 `-` 开头，clap 默认会把它当成选项。
@@ -1124,292 +958,71 @@ mod tests {
             Some("-8f2_aQ")
         );
     }
-}
-#[cfg(all(test, feature = "gui"))]
-mod cjk_font_tests {
-    use super::{looks_like_cjk_font, scan_cjk_fonts};
-    use std::path::PathBuf;
 
-    /// 判据要认得出各发行版真实的文件名，同时**不许**把这台机器上确实存在的
-    /// 拉丁字体（Ubuntu / DejaVu）当成中文 —— 认错了就等于加载一个画不出汉字的字体，
-    /// 现象还是方框，但日志会说"已加载中文字体"，比现在更难查。
     #[test]
-    fn the_cjk_name_test_accepts_real_packages_and_rejects_latin_fonts() {
-        for name in [
-            "pingfang.ttc",
-            "hiraginosansgb.ttc",
-            "stheiti-light.ttc",
-            "songti.ttc",
-            "notosanscjk-regular.ttc",
-            "notosanscjksc-regular.otf",
-            "wqy-microhei.ttc",
-            "wqy-zenhei.ttc",
-            "sourcehansanssc-regular.otf",
-            "msyh.ttc",
-            "simhei.ttf",
-            "droidsansfallback.ttf",
-        ] {
-            assert!(looks_like_cjk_font(name), "{name} 该被认成中文字体");
-        }
-        for name in [
-            "dejavusans.ttf",
-            "dejavusansmono.ttf",
-            "ubuntu[wdth,wght].ttf",
-            "ubuntumono[wght].ttf",
-            "liberationMono-Regular.ttf",
-            "",
-        ] {
-            assert!(!looks_like_cjk_font(name), "{name} 不该被认成中文字体");
-        }
-    }
-
-    /// 扫描要能钻进发行版那些不一样的子目录（opentype/noto、truetype/wqy），
-    /// 并且只收字体后缀：同目录下的 .txt、以及不相关的 .ttf 都不能进来。
-    #[test]
-    fn the_font_scan_finds_nested_packages_and_skips_other_files() {
-        let root = std::env::temp_dir().join(format!("vpncjk-{}", std::process::id()));
-        let nested = root.join("opentype/noto");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("NotoSansCJK-Regular.ttc"), b"fake").unwrap();
-        let other = root.join("truetype/dejavu");
-        std::fs::create_dir_all(&other).unwrap();
-        std::fs::write(other.join("DejaVuSans.ttf"), b"fake").unwrap();
-        std::fs::write(other.join("README.txt"), b"fake").unwrap();
-
-        let found = scan_cjk_fonts(&[root.clone()], 4);
-        assert_eq!(found.len(), 1, "只该找到那个 CJK 字体，实际 {found:?}");
-        assert!(found[0]
-            .to_string_lossy()
-            .ends_with("NotoSansCJK-Regular.ttc"));
-
-        // 反向对照：深度给 0 时，第二层目录不该被打开。
-        let shallow = scan_cjk_fonts(&[PathBuf::from(&root)], 0);
-        assert!(shallow.is_empty(), "深度 0 还找到了 {shallow:?}");
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-}
-/// 这个实例的数据根目录：DB、分片库、内核都挂在它下面。
-///
-/// 三条规则按重要性排：
-/// ① 诊断壳永远跟着当前工作目录 —— 它已经切进自己的临时隔离目录，落到用户数据里
-///    就等于这个开关存在的意义没了（`VPN_PARSER_DIAG` 的第一条承诺就是不动真数据）。
-/// ② Windows 用工作目录下的 `data/`。装机目录就是程序目录（启动时会 chdir 过去），
-///    从 1.0 到现在都是这个位置，一个字没改。
-/// ③ Linux 用 XDG 数据目录。FHS 布局下可执行文件在 `/usr/bin`，而 `main` 会把工作目录
-///    切到 exe 旁边 —— 相对路径就变成往 `/usr/bin/data` 写，普通用户必然失败，
-///    而且失败发生在"窗口已经建好之后"，看起来像程序坏了。
-pub fn data_root() -> std::path::PathBuf {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let xdg = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from);
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let root = data_root_from(
-        crate::diag::enabled(),
-        &cwd,
-        xdg.as_deref(),
-        home.as_deref(),
-    );
-    let _ = std::fs::create_dir_all(&root);
-    root
-}
-
-/// 纯函数版，判据在这里测得到（Windows 上也能测 Linux 那两行，否则只能等 Linux CI）。
-fn data_root_from(
-    diag: bool,
-    cwd: &std::path::Path,
-    xdg_data_home: Option<&std::path::Path>,
-    home: Option<&std::path::Path>,
-) -> std::path::PathBuf {
-    if diag {
-        return cwd.join("data");
-    }
-    #[cfg(windows)]
-    {
-        let _ = (xdg_data_home, home);
-        cwd.join("data")
-    }
-    #[cfg(not(windows))]
-    {
-        #[cfg(target_os = "macos")]
-        {
-            if let Some(base) = home {
-                return base.join("Library/Application Support/vpn-parser");
+    fn subcommand_parse_parses_properly() {
+        use super::Commands;
+        let parsed = Cli::try_parse_from(["vpn-parser", "parse", "ss://example", "--json"]);
+        assert!(parsed.is_ok());
+        let cli = parsed.unwrap();
+        match cli.command {
+            Some(Commands::Parse { target, json }) => {
+                assert_eq!(target, "ss://example");
+                assert!(json);
             }
+            other => panic!("预期 Commands::Parse，实际: {:?}", other),
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            if let Some(base) = xdg_data_home.filter(|p| p.is_absolute()) {
-                return base.join("vpn-parser");
+    }
+
+    #[test]
+    fn subcommand_compile_parses_properly() {
+        use super::Commands;
+        let parsed = Cli::try_parse_from([
+            "vpn-parser",
+            "compile",
+            "--kernel",
+            "sing-box",
+            "-i",
+            "ss://test",
+            "--mode",
+            "global",
+        ]);
+        assert!(parsed.is_ok());
+        let cli = parsed.unwrap();
+        match cli.command {
+            Some(Commands::Compile {
+                kernel,
+                input,
+                output,
+                mode,
+            }) => {
+                assert_eq!(kernel, "sing-box");
+                assert_eq!(input, "ss://test");
+                assert!(output.is_none());
+                assert_eq!(mode, "global");
             }
-            if let Some(base) = home {
-                return base.join(".local/share/vpn-parser");
+            other => panic!("预期 Commands::Compile，实际: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn subcommand_ping_parses_properly() {
+        use super::Commands;
+        let parsed = Cli::try_parse_from([
+            "vpn-parser",
+            "ping",
+            "1.1.1.1:443",
+            "--timeout",
+            "1500",
+        ]);
+        assert!(parsed.is_ok());
+        let cli = parsed.unwrap();
+        match cli.command {
+            Some(Commands::Ping { target, timeout }) => {
+                assert_eq!(target, "1.1.1.1:443");
+                assert_eq!(timeout, 1500);
             }
+            other => panic!("预期 Commands::Ping，实际: {:?}", other),
         }
-        cwd.join("data")
-    }
-}
-
-/// `--db` 不写时的默认库路径。
-fn default_db_path() -> std::path::PathBuf {
-    data_root().join("vpn-parser.db")
-}
-
-#[cfg(test)]
-mod data_root_tests {
-    use super::data_root_from;
-    use std::path::Path;
-
-    /// 诊断壳必须永远落在工作目录里，哪怕这台机器配了 XDG。
-    /// 反向对照：这条要是不成立，`VPN_PARSER_DIAG=1` 就会往真数据目录写东西。
-    #[test]
-    fn the_diag_instance_never_uses_the_user_data_dir() {
-        let got = data_root_from(
-            true,
-            Path::new("/tmp/vpn-parser-diag-1"),
-            Some(Path::new("/home/me/.local/share")),
-            Some(Path::new("/home/me")),
-        );
-        assert_eq!(got, Path::new("/tmp/vpn-parser-diag-1/data").to_path_buf());
-    }
-
-    /// XDG 优先，其次 HOME 下的常见位置，两个都没有才退回工作目录（而不是猜一个绝对路径）。
-    #[cfg(all(not(windows), not(target_os = "macos")))]
-    #[test]
-    fn the_linux_data_root_follows_xdg_then_home() {
-        let got = data_root_from(
-            false,
-            Path::new("/usr/bin"),
-            Some(Path::new("/data/x")),
-            Some(Path::new("/home/me")),
-        );
-        assert_eq!(got, Path::new("/data/x/vpn-parser").to_path_buf());
-
-        let got = data_root_from(
-            false,
-            Path::new("/usr/bin"),
-            None,
-            Some(Path::new("/home/me")),
-        );
-        assert_eq!(
-            got,
-            Path::new("/home/me/.local/share/vpn-parser").to_path_buf()
-        );
-
-        // 相对值不当 XDG 配置：那样会拼出一个跟着工作目录跑的假绝对路径。
-        let got = data_root_from(
-            false,
-            Path::new("/usr/bin"),
-            Some(Path::new("relative")),
-            Some(Path::new("/home/me")),
-        );
-        assert_eq!(
-            got,
-            Path::new("/home/me/.local/share/vpn-parser").to_path_buf()
-        );
-
-        let got = data_root_from(false, Path::new("/usr/bin"), None, None);
-        assert_eq!(got, Path::new("/usr/bin/data").to_path_buf());
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn the_macos_data_root_follows_application_support() {
-        let got = data_root_from(
-            false,
-            Path::new("/Applications"),
-            Some(Path::new("/data/x")),
-            Some(Path::new("/Users/me")),
-        );
-        assert_eq!(
-            got,
-            Path::new("/Users/me/Library/Application Support/vpn-parser").to_path_buf()
-        );
-    }
-
-    /// Windows 那份没变：工作目录下的 `data/`，和 1.0 以来的装机位置一致。
-    #[cfg(windows)]
-    #[test]
-    fn the_windows_data_root_stays_next_to_the_program() {
-        let got = data_root_from(false, Path::new(r"C:\Apps\VPN Parser"), None, None);
-        assert_eq!(got, Path::new(r"C:\Apps\VPN Parser\data").to_path_buf());
-    }
-}
-
-#[cfg(all(test, feature = "gui"))]
-mod font_center_probe {
-    use super::*;
-
-    /// 当前平台第一个能被读到的 CJK 字体（`setup_chinese_fonts` 只装这一个）。
-    fn active_font() -> String {
-        cjk_font_candidates()
-            .iter()
-            .find(|path| path.is_file())
-            .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
-            .unwrap_or_else(|| "<没有 CJK 字体>".to_string())
-    }
-
-    /// 逐台机器上真实存在的每个候选字体跑一遍「量 → 补 → 再量」。
-    /// 这条断言在 mac CI 上量的就是那台机器上的真字体，不是我抄的表。
-    /// 一个 CJK 字体都读不到时明说跳过（ubuntu CI 镜像就这样），不把"没字体"当成校准失败。
-    #[test]
-    fn every_available_cjk_font_ends_up_vertically_centered() {
-        let mut report = Vec::new();
-        let mut over = Vec::new();
-        let mut checked = 0_usize;
-        for path in cjk_font_candidates() {
-            let Ok(bytes) = std::fs::read(&path) else {
-                continue;
-            };
-            let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
-                continue;
-            };
-            let data = std::sync::Arc::new(egui::FontData::from_owned(bytes));
-            let started = std::time::Instant::now();
-            let raw = ink_offset(&name, &data);
-            let factor = ink_calibration_factor(raw);
-            let mut tweaked = std::sync::Arc::unwrap_or_clone(data);
-            tweaked.tweak.y_offset_factor = factor;
-            let residual = ink_offset(&name, &std::sync::Arc::new(tweaked));
-            let cost_ms = started.elapsed().as_secs_f64() * 1000.0;
-            checked += 1;
-            report.push(format!(
-                "{name}: 原始{raw:+.2}pt 补{factor:+.3} 残差{residual:+.2}pt 量两次{cost_ms:.1}ms"
-            ));
-            if residual.abs() > 0.75 {
-                over.push(format!("{name} 残差 {residual:+.2}pt"));
-            }
-        }
-        // 这台机器上一个 CJK 字体都读不到 —— ubuntu CI 镜像就是这种情况（顺带说明：
-        // 那种环境下界面里的中文只能是方框，产品路径本来也没字体可校准）。
-        // 这里明说跳过，而不是把"没字体"当成校准失败。
-        if checked == 0 {
-            println!(
-                "FONT_PROBE SKIPPED：候选路径上一个字体都没读到（{:#?}）",
-                active_font()
-            );
-            return;
-        }
-        println!(
-            "FONT_ACTIVE={} 校准了 {checked} 个字体：{:#?}",
-            active_font(),
-            report
-        );
-        assert!(
-            over.is_empty(),
-            "这些字体校准后仍然偏：{over:#?}\n全部：{report:#?}"
-        );
-    }
-
-    /// 反向对照：门槛以下不许动它 —— Windows 的雅黑本来就正中，不能被"修"出新偏差。
-    #[test]
-    fn tiny_offsets_are_left_alone() {
-        assert_eq!(ink_calibration_factor(0.0), 0.0);
-        assert_eq!(ink_calibration_factor(-0.9), 0.0);
-        assert_eq!(ink_calibration_factor(0.9), 0.0);
-        // 负 = 偏上 ⇒ 要往下补（正数），别把符号搞反
-        assert!(ink_calibration_factor(-2.8) > 0.0);
-        assert!(ink_calibration_factor(2.8) < 0.0);
-        // 封顶
-        assert!(ink_calibration_factor(-90.0).abs() <= INK_MAX_OFFSET_FACTOR + f32::EPSILON);
     }
 }

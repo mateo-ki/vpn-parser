@@ -71,5 +71,8 @@ jobs:
             Write-Warning "Xray download skipped: $_"
           }
 
+      - name: 无头模式编译校验 (--no-default-features)
+        run: cargo check --no-default-features
+
       - name: 跑全量测试 (Debug 极速构建 + lld 并行链接)
-        run: cargo test --bin vpn-parser
+        run: cargo test

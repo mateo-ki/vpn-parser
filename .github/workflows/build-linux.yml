@@ -34,7 +34,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: 跑全量测试
-        run: cargo test --bin vpn-parser
+        run: cargo test
 
   package:
     name: 打包 deb + rpm (linux-x64)

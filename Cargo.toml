@@ -5,6 +5,14 @@ edition = "2021"
 description = "VPN/proxy subscription collector with desktop GUI and HTTP API"
 license = "MIT"
 
+[lib]
+name = "vpn_parser"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vpn-parser"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1.0"
 axum = { version = "0.8", features = ["macros"] }

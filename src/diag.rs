@@ -129,6 +129,43 @@ pub fn log_once(line: &str) {
 /// 不是"功能坏了"。
 pub const BLOCKED: &str = "诊断实例（VPN_PARSER_DIAG）不写系统代理与终端代理设置";
 
+/// 单份 startup.log 的上限（1MB）。超过就整体挪到 `.1` 另开一份
+const MAX_LOG_BYTES: u64 = 1024 * 1024;
+
+/// 判据单独拎出来，好测
+pub fn should_rotate(len: u64) -> bool {
+    len > MAX_LOG_BYTES
+}
+
+/// 写入启动/诊断日志（程序目录或 %TEMP% 备选路径）
+pub fn startup_log(msg: &str) {
+    use std::io::Write;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+    let line = format!("[{now}] {msg}");
+    for candidate in [
+        std::path::PathBuf::from("startup.log"),
+        std::env::temp_dir().join("vpn-parser-startup.log"),
+    ] {
+        if should_rotate(
+            std::fs::metadata(&candidate)
+                .map(|meta| meta.len())
+                .unwrap_or(0),
+        ) {
+            let archived = std::path::PathBuf::from(format!("{}.1", candidate.display()));
+            let _ = std::fs::remove_file(&archived);
+            let _ = std::fs::rename(&candidate, &archived);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&candidate)
+        {
+            let _ = writeln!(f, "{line}");
+            return;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +191,13 @@ mod tests {
         assert!(path
             .to_string_lossy()
             .contains(&std::process::id().to_string()));
+    }
+
+    /// 日志滚动的判据：正好到上限不动，超一点才挪档（挪档是 rename，频繁触发会丢历史）。
+    #[test]
+    fn log_rotation_triggers_only_above_the_cap() {
+        assert!(!should_rotate(0));
+        assert!(!should_rotate(MAX_LOG_BYTES));
+        assert!(should_rotate(MAX_LOG_BYTES + 1));
     }
 }

@@ -217,8 +217,7 @@ mod imp {
             );
         }
         set_skip_taskbar(hwnd, true);
-        #[cfg(feature = "gui")]
-        crate::gui::perf::trim_working_set();
+        crate::platform::trim_working_set();
         crate::startup_log(&format!(
             "[托盘] 窗口停放到屏幕外 {PARKED_X},{PARKED_Y}（原位置 {} , {} , {}x{}，已从任务栏彻底隐藏）",
             spot.x, spot.y, spot.w, spot.h

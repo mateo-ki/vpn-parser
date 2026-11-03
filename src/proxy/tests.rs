@@ -96,9 +96,8 @@ use std::time::Duration;
     }
 
     #[test]
-    #[cfg(feature = "gui")]
     fn test_diagnose_mihomo_config_with_recommended_override() {
-        use crate::gui::views::proxy::CLASH_VERGE_RECOMMENDED_OVERRIDE;
+        use super::CLASH_VERGE_RECOMMENDED_OVERRIDE;
         let node = Node {
             id: "test1".into(),
             source_id: None,

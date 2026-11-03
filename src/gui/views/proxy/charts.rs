@@ -704,7 +704,7 @@ impl VpnApp {
         let gap = 8.0_f32;
         let is_compact = self.settings.dashboard_ui_mode == "compact";
         let row1_h = if is_compact { 216.0_f32 } else { 176.0_f32 };
-        let row2_h = if is_compact { 180.0_f32 } else { 123.0_f32 };
+        let row2_h = if is_compact { 187.0_f32 } else { 130.0_f32 };
         let _row3_h = 154.0_f32;
 
         // 宽度预算先扣除每张卡自身的左右内边距（Frame 外框 = 内容 + margin）。

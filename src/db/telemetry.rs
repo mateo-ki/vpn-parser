@@ -88,6 +88,7 @@ fn clip(text: &str) -> String {
 
 /// 一条记录落在哪个本地日历日。`at` 存的全是 UTC，直接取前 10 个字符会把
 /// 北京时间早上 8 点之前的记录算到昨天头上。
+#[allow(dead_code)]
 pub fn switch_day(at: &str) -> String {
     DateTime::parse_from_rfc3339(at)
         .map(|t| t.with_timezone(&Local).format("%Y-%m-%d").to_string())

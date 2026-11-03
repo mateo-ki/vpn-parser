@@ -23,3 +23,4 @@ pub use config::*;
 pub use manager::*;
 pub use mihomo::*;
 pub use types::*;
+pub use yaml_override::CLASH_VERGE_RECOMMENDED_OVERRIDE;

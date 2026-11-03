@@ -1720,7 +1720,7 @@ pub fn configure_kernel_command(command: &mut Command, kernel: KernelKind, work_
     kernel_adapter(kernel).configure_command(command, work_dir);
 }
 
-pub async fn wait_for_port(child: &mut ProxyChild, port: u16, timeout: Duration) -> bool {
+pub(crate) async fn wait_for_port(child: &mut ProxyChild, port: u16, timeout: Duration) -> bool {
     let started = tokio::time::Instant::now();
     while started.elapsed() < timeout {
         if let Ok(Some(_)) = child.try_wait() {

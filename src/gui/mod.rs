@@ -4,7 +4,6 @@ use crate::kernel::{
     find_kernel_executable, missing_kernel_for, KernelInfo, KernelKind, KernelManager,
     KernelPreference, KernelReleaseInfo, KernelUpdateProgress,
 };
-use crate::gui::types::NodePickerTarget;
 use crate::gui::view_models::nodes_vm::NodeCardAction;
 use crate::models::{
     AppSettings, CreateSource, FetchResult, Node, NodeGroupSummary, NodeSummary, Source,
@@ -25,6 +24,7 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 pub mod command_palette;
 pub mod failover;
+pub mod fonts;
 pub mod icons;
 pub mod paste;
 pub mod poll;
@@ -38,10 +38,12 @@ pub mod views;
 pub mod widgets;
 pub mod window;
 
+pub use fonts::setup_chinese_fonts;
 pub use types::*;
 pub use widgets::*;
 
 /// Gist 发现里每个代理候选对第 1 页的原地重试次数（总尝试 = 1 + 该值）。
+#[allow(dead_code)]
 const GIST_PAGE_RETRIES: usize = 2;
 
 /// 侧栏两种宽度：收起 = 只有图标（64，和以前一模一样），展开 = 图标 + 短名。
@@ -49,6 +51,7 @@ const GIST_PAGE_RETRIES: usize = 2;
 pub(crate) const SIDEBAR_COLLAPSED_WIDTH: f32 = 64.0;
 pub(crate) const SIDEBAR_EXPANDED_WIDTH: f32 = 110.0;
 
+#[allow(dead_code)]
 pub struct VpnApp {
     pub(crate) rt: Arc<Runtime>,
     pub(crate) db: Database,
@@ -2013,6 +2016,7 @@ impl VpnApp {
     }
 
     /// 独立的 Gist 发现：翻页拉取 gist 搜索结果，可用的 gist 注册为源、节点进节点列表。
+    #[allow(dead_code)]
     pub(crate) fn discover_gists(&mut self) {
         self.save_gist_config();
         let pages = self.gist_pages.clamp(1, 300);
@@ -5006,6 +5010,7 @@ impl VpnApp {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_proxy_panel_visible(&self, panel: ProxyPanel) -> bool {
         let tabs = &self.edit_console_tabs;
         if tabs == "all" || tabs.trim().is_empty() {
@@ -5014,6 +5019,7 @@ impl VpnApp {
         tabs.split(',').any(|part| part.trim() == panel.id())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn toggle_proxy_panel_visibility(&mut self, panel: ProxyPanel) {
         let mut active: Vec<String> = if self.edit_console_tabs == "all" || self.edit_console_tabs.trim().is_empty() {
             ProxyPanel::ALL.iter().map(|p| p.id().to_string()).collect()

@@ -16,6 +16,7 @@ use crate::proxy::{
 };
 use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
 
+#[allow(dead_code)]
 impl VpnApp {
     pub(crate) fn ui_proxy_nodes(&mut self, ui: &mut Ui) {
         section_title(ui, self.tr("可用节点"), "多节点状态 · 快速测速 · 节点切换");
@@ -565,6 +566,7 @@ impl VpnApp {
 
 }
 
+#[allow(dead_code)]
 fn build_proxy_view(
     all: &[NodeSummary],
     group_name: &str,
