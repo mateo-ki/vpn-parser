@@ -334,10 +334,8 @@ impl VpnApp {
                             } else {
                                 ui.add_enabled(
                                     false,
-                                    egui::SelectableLabel::new(
-                                        self.proxy_config.routing_mode == RoutingMode::Chain,
-                                        "链式代理（内核不支持）",
-                                    ),
+                                    egui::Button::new("链式代理（内核不支持）")
+                                        .selected(self.proxy_config.routing_mode == RoutingMode::Chain),
                                 )
                                 .on_disabled_hover_text(format!(
                                     "当前内核（{}）不支持链式代理，请切换至 Mihomo / VP-Core / Meow 后使用",
@@ -644,7 +642,7 @@ impl VpnApp {
                                                     }
                                                     self.custom_rules_text.push_str(&line);
                                                 }
-                                                ui.close_menu();
+                                                ui.close();
                                             }
                                         }
                                     });

@@ -23,8 +23,8 @@ mod sparkline_tests {
         ));
         let mut room = -1.0_f32;
         let mut row = (-1.0_f32, -1.0_f32);
-        let _ = ctx.run(input, |ctx| {
-            CentralPanel::default().show(ctx, |ui| {
+        let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+            CentralPanel::default().show(ui, |ui| {
                 let before = ui.available_height();
                 let response = ui.horizontal(|ui| {
                     ui.label("延迟: 386 ms");
@@ -87,8 +87,8 @@ mod sparkline_tests {
                 Vec2::new(window_width, 200.0),
             ));
             let mut drawn = (0.0, 0.0, 0.0);
-            let _ = ctx.run(input, |ctx| {
-                CentralPanel::default().show(ctx, |ui| {
+            let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+                CentralPanel::default().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("实测 12:30 ✓ 262ms");
                         let before = ui.available_width();
@@ -130,11 +130,11 @@ mod sparkline_tests {
                 Vec2::new(1280.0, 200.0),
             ));
             let mut out = Vec::new();
-            let _ = ctx.run(input, |ctx| {
-                CentralPanel::default().show(ctx, |ui| {
+            let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+                CentralPanel::default().show(ui, |ui| {
                     let layer = ui.layer_id();
                     render_health_strip(ui, buckets);
-                    out = ctx.graphics_mut(|g| {
+                    out = ui.ctx().graphics_mut(|g| {
                         g.get(layer)
                             .map(|list| {
                                 list.all_entries()
@@ -256,15 +256,15 @@ mod button_radius_tests {
             Vec2::new(window, 200.0),
         ));
         let mut out = Vec::new();
-        let _ = ctx.run(input, |ctx| {
-            CentralPanel::default().show(ctx, |ui| {
+        let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+            CentralPanel::default().show(ui, |ui| {
                 let layer = ui.layer_id();
                 ui.horizontal(|ui| {
                     let _ = ui.button("IP 检测");
                     let _ = ui.add(primary_btn("启动内核"));
                     let _ = ui.add(danger_btn("关闭内核"));
                 });
-                out = ctx.graphics_mut(|g| {
+                out = ui.ctx().graphics_mut(|g| {
                     g.get(layer)
                         .map(|list| {
                             list.all_entries()

@@ -7,31 +7,38 @@ mod rule_import_help_probe_tests {
 
     /// 用产品同一份构造函数真开三帧「导入格式示范」窗口：
     /// 第 1 帧布局、第 2 帧读"看得见的那部分"、第 3 帧再读一次（确认滚动后仍在渲染）。
-    /// 返回（窗口矩形, 第 2 帧文字, 第 3 帧文字）。
+    /// 返回（窗口矩形, 第 2 帧文字, 第 4 帧文字）。
     fn probe(screen_width: f32) -> (Rect, String, String) {
         let ctx = egui::Context::default();
         let mut rect = Rect::NOTHING;
         let mut top = String::new();
         let mut bottom = String::new();
-        for frame in 0..3 {
+        for frame in 0..4 {
             let mut input = RawInput::default();
             input.screen_rect = Some(Rect::from_min_size(
                 egui::Pos2::ZERO,
                 Vec2::new(screen_width, 900.0),
             ));
             if frame == 2 {
-                // 光标停在窗口里往下滚，够滚到底。
+                // 光标停在窗口里往下滚。
                 let center = rect.center();
                 input.events.push(egui::Event::PointerMoved(center));
                 input.events.push(egui::Event::MouseWheel {
                     unit: egui::MouseWheelUnit::Point,
-                    delta: Vec2::new(0.0, -2000.0),
+                    delta: Vec2::ZERO,
+                    phase: egui::TouchPhase::Start,
+                    modifiers: egui::Modifiers::default(),
+                });
+                input.events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: Vec2::new(0.0, -350.0),
+                    phase: egui::TouchPhase::Move,
                     modifiers: egui::Modifiers::default(),
                 });
             }
             let mut this_frame = String::new();
-            let _ = ctx.run(input, |ctx| {
-                let (_msg, window_rect) = ui_rule_import_help_window(ctx);
+            let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+                let (_msg, window_rect) = ui_rule_import_help_window(ui.ctx());
                 rect = window_rect;
                 // 形状只能在同一帧里读：这一画在下一帧开始前就被 egui 清掉了。
                 let ids: Vec<egui::LayerId> = ctx.memory(|m| m.layer_ids().collect());
@@ -53,7 +60,7 @@ mod rule_import_help_probe_tests {
             });
             match frame {
                 1 => top = this_frame,
-                2 => bottom = this_frame,
+                3 => bottom = this_frame,
                 _ => {}
             }
         }
@@ -122,28 +129,28 @@ mod rule_hits_height_probe_tests {
         input.screen_rect = Some(Rect::from_min_size(egui::Pos2::ZERO, window));
         let mut viewport = 0.0_f32;
         let mut card_bottom = 0.0_f32;
-        let _ = ctx.run(input, |ctx| {
-            egui::TopBottomPanel::top("title_bar")
-                .exact_height(34.0)
+        let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+            egui::Panel::top("title_bar")
+                .exact_size(34.0)
                 .frame(Frame::NONE.fill(egui::Color32::WHITE))
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     let _ = ui.label("VPN Parser");
                 });
-            egui::SidePanel::left("sidebar")
-                .exact_width(220.0)
-                .show(ctx, |ui| {
+            egui::Panel::left("sidebar")
+                .exact_size(220.0)
+                .show(ui, |ui| {
                     let _ = ui.label("导航");
                 });
-            egui::TopBottomPanel::bottom("status")
-                .exact_height(32.0)
+            egui::Panel::bottom("status")
+                .exact_size(32.0)
                 .frame(Frame::NONE.fill(egui::Color32::GRAY))
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     let _ = ui.label("状态栏");
                 });
-            egui::TopBottomPanel::bottom("control")
-                .exact_height(48.0)
+            egui::Panel::bottom("control")
+                .exact_size(48.0)
                 .frame(Frame::NONE.fill(egui::Color32::DARK_GRAY))
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     let _ = ui.button("启动内核");
                 });
             egui::CentralPanel::default()
@@ -152,7 +159,7 @@ mod rule_hits_height_probe_tests {
                         .fill(egui::Color32::LIGHT_GRAY)
                         .inner_margin(Margin::symmetric(18, 14)),
                 )
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     let _ = ui.horizontal(|ui| {
                         let _ = ui.button("规则配置");
                         let _ = ui.button("命中记录");
@@ -247,16 +254,16 @@ mod rules_row_probe_tests {
         let mut panel = Rect::NOTHING;
         let mut tabs = Rect::NOTHING;
         let mut group = Rect::NOTHING;
-        let _ = ctx.run(input, |ctx| {
-            egui::TopBottomPanel::top("title_bar")
-                .exact_height(34.0)
+        let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+            egui::Panel::top("title_bar")
+                .exact_size(34.0)
                 .frame(Frame::NONE.fill(egui::Color32::WHITE))
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     let _ = ui.label("VPN Parser");
                 });
-            egui::SidePanel::left("sidebar")
-                .exact_width(220.0)
-                .show(ctx, |ui| {
+            egui::Panel::left("sidebar")
+                .exact_size(220.0)
+                .show(ui, |ui| {
                     let _ = ui.label("导航");
                 });
             egui::CentralPanel::default()
@@ -265,7 +272,7 @@ mod rules_row_probe_tests {
                         .fill(egui::Color32::LIGHT_GRAY)
                         .inner_margin(Margin::symmetric(18, 14)),
                 )
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     panel = ui.max_rect();
                     let mut draw_tabs = |ui: &mut egui::Ui| {
                         let a = ui.button("规则配置").rect;
@@ -336,16 +343,16 @@ mod rules_row_probe_tests {
         let mut panel = Rect::NOTHING;
         let mut tabs = Rect::NOTHING;
         let mut group = Rect::NOTHING;
-        let _ = ctx.run(input, |ctx| {
-            egui::TopBottomPanel::top("title_bar")
-                .exact_height(34.0)
+        let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+            egui::Panel::top("title_bar")
+                .exact_size(34.0)
                 .frame(Frame::NONE.fill(egui::Color32::WHITE))
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     let _ = ui.label("VPN Parser");
                 });
-            egui::SidePanel::left("sidebar")
-                .exact_width(220.0)
-                .show(ctx, |ui| {
+            egui::Panel::left("sidebar")
+                .exact_size(220.0)
+                .show(ui, |ui| {
                     let _ = ui.label("导航");
                 });
             egui::CentralPanel::default()
@@ -354,7 +361,7 @@ mod rules_row_probe_tests {
                         .fill(egui::Color32::LIGHT_GRAY)
                         .inner_margin(Margin::symmetric(18, 14)),
                 )
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     panel = ui.max_rect();
                     let _ = ui.horizontal(|ui| {
                         let a = ui.button("规则配置").rect;
@@ -419,8 +426,8 @@ mod status_button_style_tests {
             Vec2::new(1330.0, 200.0),
         ));
         let mut out = Vec::new();
-        let _ = ctx.run(input, |ctx| {
-            CentralPanel::default().show(ctx, |ui| {
+        let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+            CentralPanel::default().show(ui, |ui| {
                 ui.spacing_mut().button_padding = egui::vec2(11.0, 3.0);
                 let layer = ui.layer_id();
                 ui.horizontal(|ui| {
@@ -771,8 +778,8 @@ mod collapsed_section_tests {
                     Vec2::new(900.0, 600.0),
                 ));
                 seen = false;
-                let _ = ctx.run(input, |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         let mut header = egui::CollapsingHeader::new("自定义规则");
                         if let Some(open) = default_open {
                             header = header.default_open(open);

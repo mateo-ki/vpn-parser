@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 
 // ---------------------------------------------------------------------------
 // 仪表盘（原汇总图表）Apple 雅致风格：
-// 对齐 design/dashboard-v4-apple.html 规范：
+// 对齐 Apple 雅致风格设计规范：
 // 1. 卡片统一 14px 圆角、微投影、细描边、墨黑大字、Apple 蓝与状态红黄绿语义色；
 // 2. 移除旧版阶梯频谱图与环形图，专注现代仪表盘大屏；
 // 3. 页面底部完整集成：终端代理、端口代理、局域网代理、系统代理、TUN 模式；
@@ -358,7 +358,7 @@ fn dash_bottom_proxy_item(
     // 画框不推进 cursor：显式把光标拨到卡右侧，行内下一元素从这继续
     ui.advance_cursor_after_rect(outer);
     let band = outer.shrink2(Vec2::new(14.0, 12.0));
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(band), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(band), |ui| {
         ui.set_clip_rect(band);
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 // 内部横向间距清零（宽度预算按 icon 34 + 显式 8 + 文字 + 右侧 52 精确计算，
@@ -757,7 +757,7 @@ impl VpnApp {
                 ] {
                     let origin = egui::pos2(row_top.x + x, row_top.y);
                     let card_rect = Rect::from_min_size(origin, egui::vec2(w + 40.0, row1_needed));
-                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(card_rect), |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(card_rect), |ui| {
                         match draw {
                             0 => self.dash_status_card(ui, w, row1_needed - 20.0, selected_node, is_running, is_starting, prepared, is_compact),
                             1 => self.dash_rate_card(ui, w, row1_needed - 20.0, true),
@@ -780,7 +780,7 @@ impl VpnApp {
                     ] {
                         let origin = egui::pos2(row_top.x + x, row_top.y);
                         let card_rect = Rect::from_min_size(origin, egui::vec2(w + 28.0, row_mid_h));
-                        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(card_rect), |ui| {
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(card_rect), |ui| {
                             match kind {
                                 0 => self.dash_connections_card(ui, w, row_mid_h - 20.0),
                                 1 => self.dash_software_perf_card(ui, w, row_mid_h - 20.0),
@@ -804,7 +804,7 @@ impl VpnApp {
                 ] {
                     let origin = egui::pos2(row_top.x + x, row_top.y);
                     let card_rect = Rect::from_min_size(origin, egui::vec2(w + 28.0, row_h2));
-                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(card_rect), |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(card_rect), |ui| {
                         match kind {
                             0 => self.dash_services_card(ui, w, row2_h),
                             1 => self.dash_rules_card(ui, w, row2_h),
@@ -850,8 +850,8 @@ impl VpnApp {
 
         let ctx = ctx.clone();
         // 分流策略组抽屉宽度调整为 70% 屏幕宽度
-        let width = (ctx.screen_rect().width() * 0.70).clamp(560.0, 1400.0);
-        let screen = ctx.screen_rect();
+        let width = (ctx.viewport_rect().width() * 0.70).clamp(560.0, 1400.0);
+        let screen = ctx.viewport_rect();
         let is_selector = matches!(group.kind.to_lowercase().as_str(), "select" | "selector");
         let active_mode = self.group_scheduling.get(&group.name).cloned();
         let proxy_up = matches!(
@@ -966,7 +966,7 @@ impl VpnApp {
                     egui::pos2(drawer_rect.left() + 18.0, drawer_rect.min.y + 7.0),
                     egui::pos2(btn_rect.min.x - 12.0, header_rect.max.y - 3.0),
                 );
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(title_rect), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(title_rect), |ui| {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
                         ui.label(
@@ -1036,7 +1036,7 @@ impl VpnApp {
                     egui::pos2(drawer_rect.left(), body_top),
                     egui::pos2(drawer_rect.right(), safe_max_y - 6.0),
                 );
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(body_rect), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(body_rect), |ui| {
                     ui.set_clip_rect(body_rect);
                     ui.vertical(|ui| {
 
@@ -1481,7 +1481,7 @@ impl VpnApp {
                                                 if ui.button(label).clicked() {
                                                     clicked_node = Some(node.clone());
                                                     force_manual = true;
-                                                    ui.close_menu();
+                                                    ui.close();
                                                 }
                                             } else {
                                                 ui.label(RichText::new("✓ 当前活动出口").small().color(theme::accent_strong()));
@@ -1489,42 +1489,42 @@ impl VpnApp {
                                             ui.separator();
                                             if ui.button("ℹ️ 查看详情").clicked() {
                                                 menu_action = Some(NodeCardAction::ShowDetail(node_id.clone()));
-                                                ui.close_menu();
+                                                ui.close();
                                             }
                                             if ui
                                                 .add_enabled(!is_busy, egui::Button::new("⚡ 测速节点"))
                                                 .clicked()
                                             {
                                                 menu_action = Some(NodeCardAction::Speedtest(node_id.clone()));
-                                                ui.close_menu();
+                                                ui.close();
                                             }
                                             if ui
                                                 .add_enabled(!is_busy, egui::Button::new("📥 下载测速"))
                                                 .clicked()
                                             {
                                                 menu_action = Some(NodeCardAction::SpeedtestDownload(node_id.clone()));
-                                                ui.close_menu();
+                                                ui.close();
                                             }
                                             if ui.button("🛡️ IP 检测").clicked() {
                                                 menu_action = Some(NodeCardAction::CheckIpRisk(node_id.clone()));
-                                                ui.close_menu();
+                                                ui.close();
                                             }
                                             ui.separator();
                                             if ui.button("📋 复制节点名称").clicked() {
                                                 copied_text = Some((node_name.clone(), format!("已复制节点名称: {node_name}")));
-                                                ui.close_menu();
+                                                ui.close();
                                             }
                                             if ui.button("📋 复制节点地址").clicked() {
                                                 let addr = format!("{node_server}:{node_port}");
                                                 copied_text = Some((addr.clone(), format!("已复制节点地址: {addr}")));
-                                                ui.close_menu();
+                                                ui.close();
                                             }
                                             if !manual_mode && !is_active {
                                                 ui.separator();
                                                 if ui.button("🔒 锁定为出口（切换为手动指定）").clicked() {
                                                     clicked_node = Some(node.clone());
                                                     force_manual = true;
-                                                    ui.close_menu();
+                                                    ui.close();
                                                 }
                                             }
                                         });
@@ -1624,7 +1624,7 @@ impl VpnApp {
         };
 
         let ctx = ctx.clone();
-        let screen = ctx.screen_rect();
+        let screen = ctx.viewport_rect();
         // 抽屉宽度根据内容自适应：优雅贴边，宽度适中不遮挡大屏
         let width = match drawer {
             DashboardDrawer::Connections => (screen.width() * 0.72).clamp(760.0, 1400.0),
@@ -1638,8 +1638,8 @@ impl VpnApp {
 
         let mut close = false;
 
-        // 监听 Escape 键快速关闭抽屉
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // 监听 Escape 键快速关闭抽屉（若当前有快捷规则弹窗打开，优先让给弹窗处理关闭）
+        if self.quick_rule_modal.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             close = true;
         }
 
@@ -1754,7 +1754,7 @@ impl VpnApp {
                     egui::pos2(drawer_rect.left() + 18.0, drawer_rect.min.y + 7.0),
                     egui::pos2(btn_rect.min.x - 12.0, header_rect.max.y - 3.0),
                 );
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(title_rect), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(title_rect), |ui| {
                     ui.vertical(|ui| {
                         // 标题与副标题收紧行距：48→56 后本就放得下，再收 1px 求稳
                         ui.spacing_mut().item_spacing.y = 2.0;
@@ -1821,7 +1821,7 @@ impl VpnApp {
                     egui::pos2(drawer_rect.left() + 16.0, body_top),
                     egui::pos2(drawer_rect.right() - 16.0, safe_max_y - 6.0),
                 );
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(body_rect), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(body_rect), |ui| {
                     ui.set_clip_rect(body_rect);
                     ui.set_width(body_rect.width());
                     ui.set_height(body_rect.height());
@@ -1863,7 +1863,7 @@ impl VpnApp {
     // 画框不推进 cursor：显式把光标拨到卡右侧，行内下一元素从这继续
     ui.advance_cursor_after_rect(outer);
         let inner = outer.shrink2(Vec2::new(20.0, 10.0));
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_clip_rect(inner);
             ui.vertical(|ui| {
                 // 行距归零：区块间距全部由下面的 add_space 显式控制（否则 egui 默认
@@ -2402,7 +2402,7 @@ impl VpnApp {
         // 画框不推进 cursor：显式把光标拨到卡右侧，行内下一元素从这继续
         ui.advance_cursor_after_rect(outer);
         let inner = outer.shrink2(Vec2::new(20.0, 10.0));
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_clip_rect(inner);
             // 垂直间距全部显式控制：主题全局 item_spacing.y = 9 会在每个元素间叠加，
             // 把波形图顶出卡片被裁切，标题与统计按钮之间也会被撑出一大段空白
@@ -2682,7 +2682,7 @@ impl VpnApp {
                     };
                     let origin = egui::pos2(bar_top.x + x, bar_top.y);
                     let item_rect = Rect::from_min_size(origin, egui::vec2(item_w + cm3, bar_h));
-                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(item_rect), |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(item_rect), |ui| {
                         render_item(ui, idx, item_w);
                     });
                 }
@@ -2700,11 +2700,40 @@ impl VpnApp {
         dash_card_at(ui, outer);
         ui.advance_cursor_after_rect(outer);
         let inner = outer.shrink2(Vec2::new(14.0, 6.0));
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_clip_rect(inner);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                dash_label(ui, "服务状态", None);
+                // 顶部标题行 + 一键重测按钮
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("服务状态")
+                            .size(12.5)
+                            .strong()
+                            .color(theme::text_secondary()),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let is_running = self.service_checks_running;
+                        let refresh_label = if is_running { "检测中…" } else { "重测 🔄" };
+                        let btn = ui.add_enabled(
+                            !is_running,
+                            egui::Button::new(
+                                RichText::new(refresh_label)
+                                    .size(10.5)
+                                    .color(if is_running { theme::accent() } else { theme::muted() }),
+                            )
+                            .frame(false),
+                        );
+                        if btn
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text("点击立即重新检测各站点连通性与实测延迟")
+                            .clicked()
+                        {
+                            self.check_services_now();
+                            self.status = "正在重新检测 Google / ChatGPT / GitHub / YouTube 连通性...".into();
+                        }
+                    });
+                });
                 ui.add_space(if h > 120.0 { 6.0 } else { 2.0 });
 
                 let ok_fg = if theme::is_light() {
@@ -2755,7 +2784,7 @@ impl VpnApp {
                     ("GitHub", "https://github.com", lookup("GitHub")),
                     ("YouTube", "https://www.youtube.com", lookup("YouTube")),
                 ] {
-                    let resp = dash_svc_card(
+                    let mut resp = dash_svc_card(
                         ui,
                         item_w,
                         item_h,
@@ -2766,10 +2795,23 @@ impl VpnApp {
                         text_col,
                         false,
                     );
-                    // 点击服务项 = 在浏览器新标签页打开对应网站
+                    resp = resp
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(format!(
+                            "🌐 点击在系统默认浏览器中打开: {name}\n🔗 目标网址: {url}\n⏱ 当前延迟: {status_str}\n🔄 右键点击可立即重新检测"
+                        ));
+                    // 点击服务项 = 在系统默认浏览器新标签页打开对应网站，并在状态栏给出即时提示
                     if resp.clicked() {
-                        ui.ctx()
-                            .open_url(egui::OpenUrl::new_tab(url));
+                        if let Err(e) = crate::platform::open_url_in_browser(url) {
+                            tracing::warn!(error = %e, url = %url, "调用系统默认浏览器打开 URL 失败");
+                        }
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                        self.status = format!("已在系统浏览器中打开: {name} ({url})");
+                    }
+                    // 右键点击服务项 = 立即触发重新检测
+                    if resp.secondary_clicked() {
+                        self.check_services_now();
+                        self.status = format!("正在重新检测 {name} 及各站点连通性...");
                     }
                     ui.add_space(row_gap);
                 }
@@ -2796,7 +2838,7 @@ impl VpnApp {
         dash_card_at(ui, outer);
         ui.advance_cursor_after_rect(outer);
         let inner = outer.shrink2(Vec2::new(14.0, 6.0));
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_clip_rect(inner);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -2950,7 +2992,7 @@ impl VpnApp {
         dash_card_at(ui, outer);
         ui.advance_cursor_after_rect(outer);
         let inner = outer.shrink2(Vec2::new(14.0, 5.0));
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_clip_rect(inner);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -3023,7 +3065,7 @@ impl VpnApp {
         dash_card_at(ui, outer);
         ui.advance_cursor_after_rect(outer);
         let inner = outer.shrink2(Vec2::new(14.0, 5.0));
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_clip_rect(inner);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -3392,7 +3434,7 @@ impl VpnApp {
         dash_card_at(ui, outer);
         ui.advance_cursor_after_rect(outer);
         let inner = outer.shrink2(Vec2::new(14.0, 6.0));
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_clip_rect(inner);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -3515,7 +3557,7 @@ impl VpnApp {
         dash_card_at(ui, outer);
         ui.advance_cursor_after_rect(outer);
         let inner = outer.shrink2(Vec2::new(14.0, 8.0));
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_clip_rect(inner);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -3672,7 +3714,7 @@ impl VpnApp {
         dash_card_at(ui, outer);
         ui.advance_cursor_after_rect(outer);
         let inner = outer.shrink2(Vec2::new(14.0, 8.0));
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_clip_rect(inner);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -3741,7 +3783,7 @@ impl VpnApp {
         dash_card_at(ui, outer);
         ui.advance_cursor_after_rect(outer);
         let inner = outer.shrink2(Vec2::new(14.0, 8.0));
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_clip_rect(inner);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;

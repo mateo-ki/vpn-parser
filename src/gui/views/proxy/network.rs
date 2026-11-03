@@ -253,7 +253,17 @@ impl VpnApp {
                         ui.strong("DNS");
                         ui.horizontal_wrapped(|ui| {
                             ui.checkbox(&mut self.proxy_config.dns.enabled, "启用");
-                            ui.checkbox(&mut self.proxy_config.dns.ipv6, "IPv6");
+                            let cb_ipv6 = ui.checkbox(&mut self.proxy_config.dns.ipv6, "IPv6")
+                                .on_hover_text("开启 IPv6 双栈支持：内核将解析 AAAA 记录，接管 IPv6 流量，并在 TUN 模式下下发 IPv6 路由与 Fake-IP (fc00::/18) 虚拟池");
+                            if self.proxy_config.dns.ipv6 {
+                                ui.label(
+                                    RichText::new("双栈接管")
+                                        .small()
+                                        .strong()
+                                        .color(theme::accent_strong()),
+                                );
+                            }
+                            let _ = cb_ipv6;
                             egui::ComboBox::from_id_salt("dns_enhanced_mode")
                                 .selected_text(dns_mode_label(self.proxy_config.dns.enhanced_mode))
                                 .show_ui(ui, |ui| {
@@ -654,7 +664,7 @@ impl VpnApp {
                         .on_hover_text(format!("点击复制到剪贴板并在终端执行：\n{export_cmd}\n\n也可写入 ~/.bashrc 或 ~/.zshrc 永久生效"))
                         .clicked()
                     {
-                        ui.output_mut(|o| o.copied_text = export_cmd.clone());
+                        ui.ctx().copy_text(export_cmd.clone());
                         self.status = format!("已复制终端代理命令 (端口 {port})");
                     }
 
@@ -668,7 +678,7 @@ impl VpnApp {
                         .on_hover_text("点击复制：\nunset http_proxy https_proxy all_proxy no_proxy")
                         .clicked()
                     {
-                        ui.output_mut(|o| o.copied_text = unset_cmd.clone());
+                        ui.ctx().copy_text(unset_cmd.clone());
                         self.status = "已复制取消代理环境变量命令".into();
                     }
                 });

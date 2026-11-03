@@ -495,7 +495,7 @@ pub fn apply(ctx: &egui::Context, id: &str, dark: bool) {
     visuals.window_shadow = shadow;
     style.spacing.item_spacing = Vec2::new(10.0, 9.0);
     style.spacing.button_padding = Vec2::new(14.0, 8.0);
-    ctx.set_style(style);
+    ctx.set_global_style(style);
 }
 
 #[cfg(test)]
@@ -770,7 +770,7 @@ mod dark_mode_tests {
         apply(&ctx, DEFAULT_THEME, true);
         assert!(!is_light(), "装了夜间，is_light() 还说自己是浅色");
         assert_eq!(
-            ctx.style().visuals.panel_fill,
+            ctx.global_style().visuals.panel_fill,
             Color32::from_rgb(0x12, 0x13, 0x16),
             "egui 的面板底色没跟着夜间走"
         );
@@ -780,7 +780,7 @@ mod dark_mode_tests {
             "卡片色没跟着走"
         );
         assert_eq!(
-            ctx.style().visuals.widgets.inactive.bg_fill,
+            ctx.global_style().visuals.widgets.inactive.bg_fill,
             Color32::from_rgb(0x1F, 0x22, 0x28),
             "原生控件的底色没跟着走"
         );
@@ -788,7 +788,7 @@ mod dark_mode_tests {
         apply(&ctx, DEFAULT_THEME, false);
         assert!(is_light(), "关掉夜间之后没回到浅白");
         assert_eq!(
-            ctx.style().visuals.panel_fill,
+            ctx.global_style().visuals.panel_fill,
             Color32::from_rgb(0xEB, 0xEE, 0xF2),
             "回到浅色时面板底色没换回来"
         );

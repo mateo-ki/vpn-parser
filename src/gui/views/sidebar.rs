@@ -371,19 +371,19 @@ mod update_marker_probe_tests {
         ));
         let mut right = 0.0_f32;
         let mut painted = String::new();
-        let _ = ctx.run(input, |ctx| {
-            egui::SidePanel::left("sidebar")
-                .exact_width(220.0)
+        let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+            egui::Panel::left("sidebar")
+                .exact_size(220.0)
                 .frame(
                     Frame::NONE
                         .fill(egui::Color32::WHITE)
                         .inner_margin(Margin::symmetric(12, 10)),
                 )
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     let layer = ui.layer_id();
                     let _clicked = sidebar_update_marker(ui, tag);
                     right = ui.min_rect().max.x;
-                    painted = ctx.graphics_mut(|g| {
+                    painted = ui.ctx().graphics_mut(|g| {
                         let mut out = String::new();
                         if let Some(list) = g.get(layer) {
                             for shape in list.all_entries() {
@@ -425,15 +425,15 @@ mod update_marker_probe_tests {
             text_right: 0.0,
             painted: String::new(),
         };
-        let _ = ctx.run(input, |ctx| {
-            egui::SidePanel::left("sidebar_nav_probe")
-                .exact_width(width)
+        let _ = crate::gui::run_test_ui(&ctx, input, |ui| {
+            egui::Panel::left("sidebar_nav_probe")
+                .exact_size(width)
                 .frame(
                     Frame::NONE
                         .fill(egui::Color32::WHITE)
                         .inner_margin(Margin::symmetric(8, 10)),
                 )
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     let layer = ui.layer_id();
                     let mut tab = crate::gui::types::Tab::Proxy;
                     crate::gui::widgets::nav_item_icon_only(
@@ -448,7 +448,7 @@ mod update_marker_probe_tests {
                     let row = ui.min_rect();
                     probe.row_left = row.min.x;
                     probe.row_right = row.max.x;
-                    let (left, right, text) = ctx.graphics(|g| {
+                    let (left, right, text) = ui.ctx().graphics(|g| {
                         let mut left = f32::MAX;
                         let mut right = 0.0_f32;
                         let mut text = String::new();

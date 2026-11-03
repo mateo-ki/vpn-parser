@@ -15,14 +15,14 @@ struct Probe {
 }
 
 impl eframe::App for Probe {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let n = FRAMES.fetch_add(1, Ordering::SeqCst);
         println!(
-            "[probe] update() 被调用 frame={} t={:.2}s",
+            "[probe] ui() 被调用 frame={} t={:.2}s",
             n,
             self.started.elapsed().as_secs_f32()
         );
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             ui.label(format!("tray-wake probe · frame {n}"));
         });
     }

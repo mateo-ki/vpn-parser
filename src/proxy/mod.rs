@@ -10,6 +10,8 @@ pub mod sing_box;
 pub mod types;
 pub mod validator;
 pub mod xray;
+pub mod yaml_override;
+pub mod script_override;
 
 #[cfg(test)]
 mod tests;

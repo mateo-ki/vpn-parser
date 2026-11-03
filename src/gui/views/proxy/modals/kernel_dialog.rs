@@ -20,7 +20,7 @@ impl VpnApp {
         const DOT_W: f32 = 22.0;
 
         // 半透明遮罩：Order::Tooltip 确保压在抽屉 (Foreground) 之上
-        let screen = ctx.screen_rect();
+        let screen = ctx.viewport_rect();
         egui::Area::new(egui::Id::new("kernel_dialog_backdrop"))
             .fixed_pos(screen.min)
             .order(egui::Order::Tooltip)
@@ -43,7 +43,7 @@ impl VpnApp {
                         .raw
                         .dropped_files
                         .iter()
-                        .filter_map(|file| file.path.clone())
+                        .map(|file| file.path().to_path_buf())
                         .collect()
                 });
                 for path in dropped {

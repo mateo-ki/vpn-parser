@@ -757,7 +757,7 @@ impl VpnApp {
         let is_busy = self.busy || self.speedtest_busy || self.proxy_busy;
 
         // 全屏半透明遮罩 (使用 Order::Middle，确保内部的 ComboBox 下拉弹出层 Order::Foreground 能正常悬浮于弹窗最上层)
-        let screen = ctx.screen_rect();
+        let screen = ctx.viewport_rect();
         egui::Area::new(egui::Id::new("speedtest_dialog_backdrop"))
             .fixed_pos(screen.min)
             .order(egui::Order::Middle)

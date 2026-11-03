@@ -724,47 +724,28 @@ fn main() -> Result<()> {
     #[cfg(feature = "gui")]
     {
         startup_log("Entering GUI startup block");
-        // Windows 平台默认首选 Wgpu（DirectX 12 硬件加速），
-        // 彻底规避 Intel 核显 OpenGL 驱动（igxelpgicd64.dll）的 0xc0000005 访问越界闪退；
-        // 非 Windows 平台默认首选 Glow。仍支持 VPN_PARSER_RENDERER 环境变量覆盖。
-        let preferred = if cfg!(target_os = "windows") {
-            let use_glow = std::env::var("VPN_PARSER_RENDERER")
-                .map(|v| v.eq_ignore_ascii_case("glow"))
-                .unwrap_or(false);
-            if use_glow {
-                (
-                    eframe::Renderer::Glow,
-                    "glow",
-                    eframe::Renderer::Wgpu,
-                    "wgpu",
-                )
-            } else {
-                (
-                    eframe::Renderer::Wgpu,
-                    "wgpu",
-                    eframe::Renderer::Glow,
-                    "glow",
-                )
-            }
+        // 渲染后端选择策略：
+        // 跨平台默认统一首选 Glow（OpenGL），由系统合成器（Windows DWM）稳定呈现，
+        // 彻底规避 wgpu 30 在 Windows DirectX 12 下因即时模式突发重绘触发的显示器 VRR / G-SYNC 物理背光频闪。
+        // 若环境缺少可用 OpenGL（如未开启 3D 加速的虚拟机），下方自动降级回退至 Wgpu（D3D12 / WARP）。
+        // 仍支持 VPN_PARSER_RENDERER 环境变量覆盖（如设置 VPN_PARSER_RENDERER=wgpu 强制使用 Wgpu）。
+        let force_wgpu = std::env::var("VPN_PARSER_RENDERER")
+            .map(|v| v.eq_ignore_ascii_case("wgpu"))
+            .unwrap_or(false);
+        let preferred = if force_wgpu {
+            (
+                eframe::Renderer::Wgpu,
+                "wgpu",
+                eframe::Renderer::Glow,
+                "glow",
+            )
         } else {
-            let use_wgpu = std::env::var("VPN_PARSER_RENDERER")
-                .map(|v| v.eq_ignore_ascii_case("wgpu"))
-                .unwrap_or(false);
-            if use_wgpu {
-                (
-                    eframe::Renderer::Wgpu,
-                    "wgpu",
-                    eframe::Renderer::Glow,
-                    "glow",
-                )
-            } else {
-                (
-                    eframe::Renderer::Glow,
-                    "glow",
-                    eframe::Renderer::Wgpu,
-                    "wgpu",
-                )
-            }
+            (
+                eframe::Renderer::Glow,
+                "glow",
+                eframe::Renderer::Wgpu,
+                "wgpu",
+            )
         };
         let mut gui_res = run_gui(preferred.1, preferred.0);
         startup_log(&format!("{} run_native result: {gui_res:?}", preferred.1));
@@ -981,16 +962,15 @@ fn ink_offset(font_name: &str, data: &std::sync::Arc<egui::FontData>) -> f32 {
     ));
     let text = INK_CALIBRATION_LABEL.to_owned();
     let mut offset = 0.0_f32;
-    let _ = ctx.run(input, |ctx| {
-        let galley = ctx.fonts(|fonts| {
-            fonts.layout_no_wrap(
-                text.clone(),
-                egui::FontId::proportional(INK_CALIBRATION_SIZE),
-                egui::Color32::WHITE,
-            )
-        });
+    let mut out = ctx.run_ui(input, |ui| {
+        let galley = ui.painter().layout_no_wrap(
+            text.clone(),
+            egui::FontId::proportional(INK_CALIBRATION_SIZE),
+            egui::Color32::WHITE,
+        );
         offset = galley.mesh_bounds.center().y - galley.rect.center().y;
     });
+    out.textures_delta.clear();
     offset
 }
 

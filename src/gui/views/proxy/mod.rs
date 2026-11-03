@@ -31,9 +31,10 @@ use crate::proxy::ProxyState;
 use eframe::egui::{self, RichText, Stroke, Ui};
 
 pub const CLASH_VERGE_RECOMMENDED_OVERRIDE: &str = r#"# =========================================================
-# Clash Verge Rev / Mihomo 通用推荐覆写片段
+# Clash Party / Clash Verge Rev / Mihomo 通用推荐覆写片段
+# 支持 +key 前插、key+ 追加、key 覆盖、! 强制替换与 <> 转义
 # =========================================================
-proxy-groups:
++proxy-groups:
   - name: 多线并发下载
     type: load-balance
     strategy: round-robin
@@ -66,7 +67,7 @@ proxy-groups:
       - 美国节点
       - 普通代理
 
-rules:
++rules:
   # 局域网 / 私有地址
   - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
   - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve

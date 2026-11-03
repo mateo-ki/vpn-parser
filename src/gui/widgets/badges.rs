@@ -56,11 +56,11 @@ pub fn subscription_pill(ui: &mut Ui, source_name: &str, max_text_width: f32) {
                 ui.spacing_mut().item_spacing = Vec2::new(3.0, 0.0);
                 icon_label(ui, Icon::Subscription, 9.0, theme::icon_muted());
                 let font_id = egui::TextStyle::Small.resolve(ui.style());
-                let text_w = ui.fonts(|f| {
-                    f.layout_no_wrap(text.to_string(), font_id, theme::text_secondary())
-                        .size()
-                        .x
-                });
+                let text_w = ui
+                    .painter()
+                    .layout_no_wrap(text.to_string(), font_id, theme::text_secondary())
+                    .size()
+                    .x;
                 let alloc_w = text_w.clamp(14.0, max_text_width);
                 let shown_text = crate::gui::widgets::ellipsize(
                     ui,

@@ -402,7 +402,7 @@ impl VpnApp {
                                 self.source_filter.clear();
                                 *filter_changed = true;
                             }
-                            ui.memory_mut(|m| m.close_popup());
+                            ui.close();
                         }
 
                         let ungrouped_src = self.sources.iter().find(|s| s.id == crate::db::UNGROUPED_SOURCE_ID);
@@ -426,7 +426,7 @@ impl VpnApp {
                                     self.source_filter = crate::db::UNGROUPED_SOURCE_ID.to_string();
                                     *filter_changed = true;
                                 }
-                                ui.memory_mut(|m| m.close_popup());
+                                ui.close();
                             }
                         }
 
@@ -451,7 +451,7 @@ impl VpnApp {
                                     self.source_filter = s.id.clone();
                                     *filter_changed = true;
                                 }
-                                ui.memory_mut(|m| m.close_popup());
+                                ui.close();
                             }
                         }
 
@@ -501,7 +501,7 @@ impl VpnApp {
                         .clicked()
                     {
                         self.speedtest_page();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("⚡ 测速当前列表")
@@ -509,7 +509,7 @@ impl VpnApp {
                         .clicked()
                     {
                         self.speedtest_current_list();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("⚡ 测速全库全部节点")
@@ -517,13 +517,13 @@ impl VpnApp {
                         .clicked()
                     {
                         self.speedtest_all_sources();
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     ui.label(RichText::new("测速强度设置:").small().color(theme::muted()));
                     for intensity in [SpeedtestIntensity::Fast, SpeedtestIntensity::Standard, SpeedtestIntensity::Deep] {
                         if ui.selectable_value(&mut self.speedtest_intensity, intensity, intensity.label()).changed() {
-                            ui.close_menu();
+                            ui.close();
                         }
                     }
                 });
@@ -568,35 +568,35 @@ impl VpnApp {
                 .clicked()
             {
                 self.show_import_yaml_modal = true;
-                ui.close_menu();
+                ui.close();
             }
             if ui
                 .add_enabled(!self.busy, egui::Button::new(tr_import_clip))
                 .clicked()
             {
                 self.import_from_clipboard();
-                ui.close_menu();
+                ui.close();
             }
             if ui
                 .add_enabled(!self.busy, egui::Button::new(tr_push_nodes))
                 .clicked()
             {
                 self.publish_available_nodes();
-                ui.close_menu();
+                ui.close();
             }
             ui.separator();
             ui.label(RichText::new(tr_export_sub).small().color(theme::muted()));
             if ui.button(tr_export_clash).clicked() {
                 self.open_export("clash");
-                ui.close_menu();
+                ui.close();
             }
             if ui.button(tr_export_uri).clicked() {
                 self.open_export("uri");
-                ui.close_menu();
+                ui.close();
             }
             if ui.button(tr_export_json).clicked() {
                 self.open_export("json");
-                ui.close_menu();
+                ui.close();
             }
         });
     }
@@ -620,12 +620,11 @@ impl VpnApp {
         // 监听拖拽进窗口的文件 (Drag & Drop)
         ctx.input(|i| {
             if let Some(file) = i.raw.dropped_files.first() {
-                if let Some(path) = &file.path {
-                    self.import_yaml_path = path.to_string_lossy().to_string();
-                    if self.import_yaml_source_name.is_empty() {
-                        if let Some(stem) = path.file_stem() {
-                            self.import_yaml_source_name = format!("本地: {}", stem.to_string_lossy());
-                        }
+                let path = file.path();
+                self.import_yaml_path = path.to_string_lossy().to_string();
+                if self.import_yaml_source_name.is_empty() {
+                    if let Some(stem) = path.file_stem() {
+                        self.import_yaml_source_name = format!("本地: {}", stem.to_string_lossy());
                     }
                 }
             }
@@ -790,7 +789,7 @@ where
                                             id: node.id.clone(),
                                             name: node.name.clone(),
                                         });
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                 } else {
                                     ui.label(RichText::new("✓ 当前活动节点").small().color(theme::accent_strong()));
@@ -801,27 +800,27 @@ where
                                     .clicked()
                                 {
                                     card_action = Some(NodeCardAction::Speedtest(node.id.clone()));
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 if ui
                                     .add_enabled(!is_busy, egui::Button::new("📥 下载测速"))
                                     .clicked()
                                 {
                                     card_action = Some(NodeCardAction::SpeedtestDownload(node.id.clone()));
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 if ui.button("ℹ️ 查看详情").clicked() {
                                     card_action = Some(NodeCardAction::ShowDetail(node.id.clone()));
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 if ui.button("🛡️ IP 检测").clicked() {
                                     card_action = Some(NodeCardAction::CheckIpRisk(node.id.clone()));
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 ui.separator();
                                 if ui.button("🗑️ 删除节点").clicked() {
                                     card_action = Some(NodeCardAction::Delete(node.id.clone()));
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                             });
                             if double_clicked && !is_active {
@@ -982,8 +981,8 @@ pub(crate) mod empty_pool_modal_tests {
         for _ in 0..2 {
             let mut p = String::new();
             let mut m = String::new();
-            let _ = ctx.run(screen_input(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = crate::gui::run_test_ui(&ctx, screen_input(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     let panel_layer = ui.layer_id();
                     app.ui_nodes(ui);
                     p = layer_text(ui.ctx(), panel_layer);
@@ -1004,7 +1003,8 @@ pub(crate) mod empty_pool_modal_tests {
         let mut seen = String::new();
         for _ in 0..2 {
             let mut out = String::new();
-            let _ = ctx.run(screen_input(), |ctx| {
+            let _ = crate::gui::run_test_ui(&ctx, screen_input(), |ui| {
+                let ctx = ui.ctx();
                 egui::Modal::new(egui::Id::new("import_yaml_modal")).show(ctx, |ui| {
                     ui.label("CONTROL_MARK");
                 });
