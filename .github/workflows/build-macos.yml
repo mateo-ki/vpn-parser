@@ -57,6 +57,11 @@ jobs:
           fi
           echo "version matches tag: $declared"
 
+      - name: 清理磁盘空间
+        run: |
+          df -h
+          rm -rf ~/Library/Caches/Homebrew || true
+
       - name: 装 stable 工具链
         uses: dtolnay/rust-toolchain@stable
 
@@ -77,6 +82,14 @@ jobs:
             fi
           fi
           echo "mac_arch=${mac_arch}" >> "$GITHUB_ENV"
+          # 立即备份最终可执行文件并清除庞大的中间编译产物（x86_64目标与增量产物高达 10GB+），根除 hdiutil 磁盘写满
+          mkdir -p /tmp/macos_bin
+          cp target/release/vpn-parser /tmp/macos_bin/vpn-parser
+          rm -rf target
+          mkdir -p target/release
+          mv /tmp/macos_bin/vpn-parser target/release/vpn-parser
+          echo "=== 清理中间构建产物后的磁盘空间 ==="
+          df -h
 
       - name: 创建 macOS 应用包 (.app)、DMG 安装包 (.dmg) 与归档 (.tar.gz)
         run: |
