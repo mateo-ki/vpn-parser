@@ -105,9 +105,10 @@ jobs:
           mkdir -p "${APP_DIR}/Contents/MacOS"
           mkdir -p "${APP_DIR}/Contents/Resources"
 
-          # 2. 拷贝二进制
+          # 2. 拷贝二进制并 strip
           cp target/release/vpn-parser "${APP_DIR}/Contents/MacOS/vpn-parser"
           chmod +x "${APP_DIR}/Contents/MacOS/vpn-parser"
+          strip "${APP_DIR}/Contents/MacOS/vpn-parser" || true
 
           # 3. 写入 Info.plist
           sed "s/__VERSION__/${version}/g" installer/Info.plist > "${APP_DIR}/Contents/Info.plist"
@@ -128,17 +129,24 @@ jobs:
             rm -rf "${ICONSET}"
           fi
 
-          # 5. 生成 DMG 安装包
-          DMG_STAGING="dmg_staging"
-          rm -rf "${DMG_STAGING}"
-          mkdir -p "${DMG_STAGING}"
-          cp -R "${APP_DIR}" "${DMG_STAGING}/"
-          ln -s /Applications "${DMG_STAGING}/Applications"
+          # 5. 生成 DMG 安装包 (预留 80MB 余量并显式使用 HFS+，彻底根除 hdiutil 卷空间不足)
           dmg_name="vpn-parser-${version}-darwin-${arch}.dmg"
-          hdiutil create -volname "VPN Parser" -srcfolder "${DMG_STAGING}" -ov -format UDZO "dist/${dmg_name}"
-          rm -rf "${DMG_STAGING}"
+          rm -f "dist/${dmg_name}" /tmp/temp.dmg
+          app_size_mb=$(du -sm "${APP_DIR}" | awk '{print $1}')
+          dmg_size_mb=$((app_size_mb + 80))
+          echo "应用包体积: ${app_size_mb}MB，预分配 DMG 镜像容量: ${dmg_size_mb}MB"
+          hdiutil create -size "${dmg_size_mb}m" -volname "VPN Parser" -fs HFS+ -format UDRW /tmp/temp.dmg
+          mount_info=$(hdiutil attach -readwrite -noverify -noautoopen /tmp/temp.dmg)
+          device=$(echo "${mount_info}" | grep -E '^/dev/' | head -1 | awk '{print $1}')
+          cp -R "${APP_DIR}" "/Volumes/VPN Parser/"
+          ln -s /Applications "/Volumes/VPN Parser/Applications"
+          sync
+          hdiutil detach "${device}" -force || (sleep 2 && hdiutil detach "${device}" -force)
+          hdiutil convert /tmp/temp.dmg -format UDZO -o "dist/${dmg_name}"
+          rm -f /tmp/temp.dmg
 
           # 6. 生成命令行打包 (.tar.gz)
+          strip target/release/vpn-parser || true
           tar_name="vpn-parser-${version}-darwin-${arch}.tar.gz"
           tar -czf "dist/${tar_name}" -C target/release vpn-parser
 
