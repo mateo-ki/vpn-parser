@@ -1519,7 +1519,7 @@ ID-LIKE=\"debian\"
             name: "x".into(),
             browser_download_url: "y".into(),
             size: 1,
-            digest: Some("sha256:not-hex-".to_string() + &"b".repeat(54)),
+            digest: Some(format!("sha256:not-hex-{}", "b".repeat(54))),
         };
         assert!(asset.sha256().is_none(), "残缺摘要不许当成校验通过的依据");
     }

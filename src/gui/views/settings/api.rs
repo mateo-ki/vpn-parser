@@ -178,6 +178,7 @@ impl VpnApp {
                                         && !item.path.contains('{')
                                         && ui.small_button("打开").clicked()
                                     {
+                                        let _ = crate::platform::open_url_in_browser(&full_url);
                                         ui.ctx().open_url(egui::OpenUrl::new_tab(&full_url));
                                     }
                                     if ui.small_button("复制").clicked() {

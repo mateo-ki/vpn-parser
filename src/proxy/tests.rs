@@ -1744,6 +1744,201 @@ proxy-groups:
     }
 
     #[test]
+    fn test_clash_party_yaml_override_in_mihomo_compiler() {
+        let n = node(
+            "ss",
+            json!({
+                "server": "1.2.3.4",
+                "port": 8388,
+                "cipher": "aes-128-gcm",
+                "password": "pass"
+            }),
+        );
+        let mut options = MihomoConfigOptions::default();
+        options.override_yaml = Some(r#"
+mixed-port: 9999
+dns:
+  +nameserver:
+    - 1.1.1.1
+tun:
+  stack: gvisor
++rules:
+  - DOMAIN-SUFFIX,party-first.com,DIRECT
+rules+:
+  - DOMAIN-KEYWORD,party-last,DIRECT
++proxy-groups:
+  - name: 自定义分组
+    type: select
+    proxies: ["DIRECT"]
+"#.into());
+
+        let plan = lower_options_to_ir(&options, Some(&n));
+        let artifact = MihomoCompiler::new().compile(&plan).expect("Mihomo 编译应成功");
+        let json = artifact.as_json_value().expect("Mihomo json");
+
+        // 1. 验证简单值覆盖
+        assert_eq!(json["mixed-port"], 9999);
+
+        // 2. 验证对象递归合并及数组前插
+        assert_eq!(json["dns"]["enable"], true);
+        let ns = json["dns"]["nameserver"].as_array().expect("nameserver array");
+        assert_eq!(ns[0], "1.1.1.1", "1.1.1.1 应被前插到 nameserver 首位");
+
+        // 3. 验证 tun 递归合并
+        assert_eq!(json["tun"]["stack"], "gvisor");
+
+        // 4. 验证 rules 前插与追加
+        let rules = json["rules"].as_array().expect("rules");
+        assert_eq!(
+            rules.first().and_then(|r| r.as_str()),
+            Some("DOMAIN-SUFFIX,party-first.com,DIRECT")
+        );
+        assert_eq!(
+            rules.last().and_then(|r| r.as_str()),
+            Some("DOMAIN-KEYWORD,party-last,DIRECT")
+        );
+
+        // 5. 验证 proxy-groups 前插
+        let groups = json["proxy-groups"].as_array().expect("proxy-groups");
+        assert_eq!(
+            groups[0]["name"],
+            "自定义分组",
+            "+proxy-groups 应插在策略组首位"
+        );
+    }
+
+    #[test]
+    fn test_mihomo_yaml_and_rhai_script_stacked_override() {
+        let n = node(
+            "ss",
+            json!({
+                "server": "1.2.3.4",
+                "port": 8388,
+                "cipher": "aes-128-gcm",
+                "password": "pass"
+            }),
+        );
+        let mut options = MihomoConfigOptions::default();
+        options.override_yaml = Some(r#"
+mixed-port: 9999
+dns:
+  nameserver:
+    - 1.1.1.1
++rules:
+  - DOMAIN-SUFFIX,yaml-rule.com,DIRECT
+"#.into());
+
+        options.override_script = Some(r#"
+fn main(config) {
+    // 验证脚本作为最终裁决者：覆盖 YAML 设定的 9999
+    config["mixed-port"] = 8888;
+    // 脚本在规则最前面插入更高优先级的规则
+    config.rules.insert(0, "DOMAIN-SUFFIX,script-first.com,PROXY");
+    return config;
+}
+"#.into());
+
+        let plan = lower_options_to_ir(&options, Some(&n));
+        let artifact = MihomoCompiler::new().compile(&plan).expect("Mihomo 编译应成功");
+        let json = artifact.as_json_value().expect("Mihomo json");
+
+        // 1. 验证脚本覆盖了 YAML 的 mixed-port
+        assert_eq!(json["mixed-port"], 8888, "脚本应能覆写 YAML 的设置");
+
+        // 2. 验证规则执行顺序：脚本规则在最前，YAML 规则紧随其后
+        let rules = json["rules"].as_array().expect("rules");
+        assert_eq!(
+            rules[0].as_str(),
+            Some("DOMAIN-SUFFIX,script-first.com,PROXY")
+        );
+        assert_eq!(
+            rules[1].as_str(),
+            Some("DOMAIN-SUFFIX,yaml-rule.com,DIRECT")
+        );
+
+        // 3. 同时验证 build_mihomo_config 具有一致的表现
+        let direct_config = build_mihomo_config(&n, options).expect("build_mihomo_config 应成功");
+        assert_eq!(direct_config["mixed-port"], 8888);
+        assert_eq!(
+            direct_config["rules"][0].as_str(),
+            Some("DOMAIN-SUFFIX,script-first.com,PROXY")
+        );
+    }
+
+    #[test]
+    fn test_ipv6_configuration_across_all_compilers() {
+        let n = node(
+            "ss",
+            json!({
+                "server": "1.2.3.4",
+                "port": 8388,
+                "cipher": "aes-128-gcm",
+                "password": "pass"
+            }),
+        );
+
+        // 1. 测试启用 IPv6
+        let mut options_ipv6 = MihomoConfigOptions::default();
+        options_ipv6.dns.ipv6 = true;
+        options_ipv6.mode = ProxyMode::Tun;
+
+        let plan_ipv6 = lower_options_to_ir(&options_ipv6, Some(&n));
+        assert!(plan_ipv6.dns.ipv6, "DnsPlan 必须透传 ipv6: true");
+
+        // Mihomo 编译器生成验证
+        let mihomo_art = MihomoCompiler::new().compile(&plan_ipv6).unwrap();
+        let mihomo_json = mihomo_art.as_json_value().unwrap();
+        assert_eq!(mihomo_json["ipv6"], true, "根层级必须包含 ipv6: true");
+        assert_eq!(mihomo_json["dns"]["ipv6"], true, "dns 层级必须包含 ipv6: true");
+        assert_eq!(mihomo_json["dns"]["fake-ip-range6"], "fc00::/18", "必须生成 IPv6 Fake-IP 范围");
+        let hijacks = mihomo_json["tun"]["dns-hijack"].as_array().unwrap();
+        assert!(hijacks.iter().any(|h| h == "tcp://[::]:53"), "TUN 模式应劫持 IPv6 TCP DNS");
+        assert!(hijacks.iter().any(|h| h == "udp://[::]:53"), "TUN 模式应劫持 IPv6 UDP DNS");
+
+        // Sing-box 编译器生成验证 (Sing-box 选用原生支持的 hysteria2 协议)
+        let sing_node = node(
+            "hysteria2",
+            json!({
+                "server": "1.2.3.4",
+                "port": 443,
+                "password": "pass"
+            }),
+        );
+        let sing_plan_ipv6 = lower_options_to_ir(&options_ipv6, Some(&sing_node));
+        let sing_box_art = SingBoxCompiler::new().compile(&sing_plan_ipv6).unwrap();
+        let sing_box_json = sing_box_art.as_json_value().unwrap();
+        assert_eq!(sing_box_json["dns"]["strategy"], "prefer_ipv4", "Sing-box DNS 策略应切换为 prefer_ipv4");
+
+        // Xray 编译器生成验证 (Xray 为系统代理模式)
+        let mut xray_options = options_ipv6.clone();
+        xray_options.mode = ProxyMode::System;
+        let xray_plan_ipv6 = lower_options_to_ir(&xray_options, Some(&n));
+        let xray_art = XrayCompiler::new().compile(&xray_plan_ipv6).unwrap();
+        let xray_json = xray_art.as_json_value().unwrap();
+        assert_eq!(xray_json["dns"]["queryStrategy"], "UseIP", "Xray 查询策略应切换为 UseIP");
+
+        // 2. 测试禁用 IPv6
+        let mut options_no_ipv6 = MihomoConfigOptions::default();
+        options_no_ipv6.dns.ipv6 = false;
+        let plan_no_ipv6 = lower_options_to_ir(&options_no_ipv6, Some(&n));
+        assert!(!plan_no_ipv6.dns.ipv6);
+
+        let mihomo_art_no = MihomoCompiler::new().compile(&plan_no_ipv6).unwrap();
+        let mihomo_json_no = mihomo_art_no.as_json_value().unwrap();
+        assert_eq!(mihomo_json_no["ipv6"], false);
+        assert_eq!(mihomo_json_no["dns"]["ipv6"], false);
+
+        let sing_plan_no_ipv6 = lower_options_to_ir(&options_no_ipv6, Some(&sing_node));
+        let sing_box_art_no = SingBoxCompiler::new().compile(&sing_plan_no_ipv6).unwrap();
+        let sing_box_json_no = sing_box_art_no.as_json_value().unwrap();
+        assert_eq!(sing_box_json_no["dns"]["strategy"], "ipv4_only");
+
+        let xray_art_no = XrayCompiler::new().compile(&plan_no_ipv6).unwrap();
+        let xray_json_no = xray_art_no.as_json_value().unwrap();
+        assert_eq!(xray_json_no["dns"]["queryStrategy"], "UseIPv4");
+    }
+
+    #[test]
     fn test_mihomo_chain_proxy_lifecycle_and_cleared_fallback() {
         let mut node_a = node("ss", json!({ "server": "1.1.1.1", "port": 8388, "password": "p", "cipher": "aes-128-gcm" }));
         node_a.name = "Node A".into();

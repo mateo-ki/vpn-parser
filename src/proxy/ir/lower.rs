@@ -83,6 +83,7 @@ pub fn lower_options_to_ir(options: &MihomoConfigOptions, primary_node: Option<&
         url_test_nodes: options.url_test_nodes.clone(),
         smart_routing: options.smart_routing,
         override_yaml: options.override_yaml.clone(),
+        override_script: options.override_script.clone(),
         subscription_rules_yaml: options.subscription_rules_yaml.clone(),
         subscription_groups_yaml: options.subscription_groups_yaml.clone(),
         port_mapping_nodes: options.port_mapping_nodes.clone(),
@@ -98,6 +99,8 @@ pub fn lower_options_to_ir(options: &MihomoConfigOptions, primary_node: Option<&
 
     // 3. 构建 DnsPlan
     let dns = DnsPlan {
+        enabled: options.dns.enabled,
+        ipv6: options.dns.ipv6,
         enhanced_mode: options.dns.enhanced_mode,
         nameservers: options.dns.nameservers.clone(),
         default_nameservers: vec!["223.5.5.5".into(), "119.29.29.29".into()],
@@ -353,7 +356,13 @@ pub fn parse_clash_rules_yaml_to_ir(rules_yaml: Option<&str>, source: RuleSource
         return Vec::new();
     };
 
-    let raw_rules = if let Some(arr) = val.get("rules").and_then(serde_json::Value::as_array) {
+    let raw_rules = if let Some(arr) = val.get("+rules").and_then(serde_json::Value::as_array) {
+        arr
+    } else if let Some(arr) = val.get("rules+").and_then(serde_json::Value::as_array) {
+        arr
+    } else if let Some(arr) = val.get("rules").and_then(serde_json::Value::as_array) {
+        arr
+    } else if let Some(arr) = val.get("<rules>").and_then(serde_json::Value::as_array) {
         arr
     } else if let Some(arr) = val.as_array() {
         arr

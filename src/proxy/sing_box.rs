@@ -203,7 +203,7 @@ async fn probe_batch_with_sing_box(
     drop(reservations);
     let mut config = json!({
         "log": {"level":"warning","timestamp":true},
-        "dns": crate::proxy::compiler::sing_box::build_dns(&MihomoConfigOptions::default().dns.nameservers)?,
+        "dns": crate::proxy::compiler::sing_box::build_dns(&MihomoConfigOptions::default().dns.nameservers, false)?,
         "inbounds": inbounds,
         "outbounds": outbounds,
         "route": {"auto_detect_interface":true,"default_domain_resolver":"local","rules":rules,"final":"direct"}

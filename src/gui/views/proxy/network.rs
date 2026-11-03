@@ -253,7 +253,17 @@ impl VpnApp {
                         ui.strong("DNS");
                         ui.horizontal_wrapped(|ui| {
                             ui.checkbox(&mut self.proxy_config.dns.enabled, "启用");
-                            ui.checkbox(&mut self.proxy_config.dns.ipv6, "IPv6");
+                            let cb_ipv6 = ui.checkbox(&mut self.proxy_config.dns.ipv6, "IPv6")
+                                .on_hover_text("开启 IPv6 双栈支持：内核将解析 AAAA 记录，接管 IPv6 流量，并在 TUN 模式下下发 IPv6 路由与 Fake-IP (fc00::/18) 虚拟池");
+                            if self.proxy_config.dns.ipv6 {
+                                ui.label(
+                                    RichText::new("双栈接管")
+                                        .small()
+                                        .strong()
+                                        .color(theme::accent_strong()),
+                                );
+                            }
+                            let _ = cb_ipv6;
                             egui::ComboBox::from_id_salt("dns_enhanced_mode")
                                 .selected_text(dns_mode_label(self.proxy_config.dns.enhanced_mode))
                                 .show_ui(ui, |ui| {

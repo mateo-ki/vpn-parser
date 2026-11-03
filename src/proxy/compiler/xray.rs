@@ -170,7 +170,7 @@ impl BackendCompiler for XrayCompiler {
             "log": { "loglevel": "warning" },
             "dns": {
                 "servers": dns_servers,
-                "queryStrategy": "UseIPv4"
+                "queryStrategy": if plan.dns.ipv6 { "UseIP" } else { "UseIPv4" }
             },
             "inbounds": inbounds,
             "outbounds": [

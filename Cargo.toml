@@ -12,7 +12,7 @@ tower = { version = "0.5", features = ["util"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
-eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "wgpu", "x11", "wayland"], optional = true }
+eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "wgpu", "x11", "wayland", "links"], optional = true }
 egui = { version = "0.36.2", optional = true }
 # eframe 只给 wgpu 开了 metal/webgpu/wgsl —— Windows 上等于只有 Vulkan 一条腿，
 # 没有 OpenGL 又没有 Vulkan 的机器（虚拟机）仍然起不来。这里靠 feature 合并把 dx12
@@ -25,6 +25,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
+rhai = { version = "1.19", features = ["serde"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono"] }
 thiserror = "2.0"
 tokio = { version = "1", features = ["full"] }

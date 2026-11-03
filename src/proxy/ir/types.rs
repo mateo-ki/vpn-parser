@@ -96,6 +96,7 @@ pub struct OutboundPlan {
     pub url_test_nodes: Vec<serde_json::Value>,
     pub smart_routing: bool,
     pub override_yaml: Option<String>,
+    pub override_script: Option<String>,
     pub subscription_rules_yaml: Option<String>,
     pub subscription_groups_yaml: Option<String>,
     pub port_mapping_nodes: Vec<(u16, String, serde_json::Value)>,
@@ -112,6 +113,10 @@ pub struct OutboundPlan {
 /// 统一 DNS 分流计划
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DnsPlan {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub ipv6: bool,
     pub enhanced_mode: DnsEnhancedMode,
     pub nameservers: Vec<String>,
     pub default_nameservers: Vec<String>,
@@ -133,4 +138,8 @@ pub struct RoutingPlan {
     pub default_action: IRAction,
     #[serde(default)]
     pub routing_mode: RoutingMode,
+}
+
+fn default_true() -> bool {
+    true
 }

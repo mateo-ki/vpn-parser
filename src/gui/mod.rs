@@ -185,6 +185,10 @@ pub struct VpnApp {
     pub(crate) rules_tab: RulesTab,
     /// 分流策略组面板的分区（视图 / 配置）。
     pub(crate) groups_tab: GroupsTab,
+    /// 配置工作台覆写类型（YAML / Rhai 脚本）。
+    pub(crate) override_editor_tab: OverrideEditorTab,
+    /// Rhai 脚本语法校验状态 (提示信息, 是否报错)
+    pub(crate) rhai_syntax_status: Option<(String, bool)>,
     /// 活跃连接监控面板的分区（连接列表 / 连接进程 / DNS 记录）。
     pub(crate) connections_tab: ConnectionsTab,
     /// DNS 实时解析记录
@@ -477,6 +481,8 @@ pub struct VpnApp {
     /// 只在第一次拿到设置时按开关自动加一次规则。
     pub(crate) firewall_seeded: bool,
     pub(crate) connections_filter: String,
+    pub(crate) connections_unmatched_only: bool,
+    pub(crate) quick_rule_modal: Option<crate::gui::types::QuickRuleModalState>,
     pub(crate) homogeneity_reports: Option<Vec<crate::models::SourceHomogeneityReport>>,
     /// 同质化对话框里被勾选要剔除的源 id（分析完成后默认勾上判定为冗余的那些）。
     pub(crate) homogeneity_selected: HashSet<String>,
@@ -674,6 +680,8 @@ impl VpnApp {
             profile_status: None,
             rules_tab: RulesTab::default(),
             groups_tab: GroupsTab::default(),
+            override_editor_tab: OverrideEditorTab::default(),
+            rhai_syntax_status: None,
             connections_tab: ConnectionsTab::default(),
             dns_records: std::collections::VecDeque::new(),
             connections_process_filter: String::new(),
@@ -859,6 +867,8 @@ impl VpnApp {
             firewall_status: None,
             firewall_seeded: false,
             connections_filter: String::new(),
+            connections_unmatched_only: false,
+            quick_rule_modal: None,
             homogeneity_reports: None,
             homogeneity_selected: HashSet::new(),
             expanded_kernel_groups: HashSet::new(),
@@ -993,6 +1003,18 @@ impl VpnApp {
         }
         if self.last_service_check.elapsed() < std::time::Duration::from_secs(30) {
             return;
+        }
+        self.check_services_now();
+    }
+
+    /// 立即强制发起一轮服务连通性实测（无视 30 秒冷却），用于用户主动点击刷新或右键卡片
+    pub(crate) fn check_services_now(&mut self) {
+        if self.service_checks_running {
+            if let Some(started) = self.service_check_started {
+                if started.elapsed() < std::time::Duration::from_secs(3) {
+                    return;
+                }
+            }
         }
         self.last_service_check = std::time::Instant::now();
         self.service_checks_running = true;
@@ -5318,6 +5340,9 @@ impl eframe::App for VpnApp {
 
         if let Some(url) = self.pending_open_url.take() {
             ctx.copy_text(url.clone());
+            if let Err(e) = crate::platform::open_url_in_browser(&url) {
+                tracing::warn!(error = %e, "打开系统浏览器失败");
+            }
             ctx.open_url(egui::OpenUrl::new_tab(&url));
             self.status = format!("已打开并复制导出链接: {url}");
         }
@@ -5475,6 +5500,7 @@ impl eframe::App for VpnApp {
         self.ui_release_notes_modal(ctx);
         self.render_dashboard_drawer(ctx);
         self.render_group_drawer(ctx);
+        self.ui_quick_rule_modal(ctx);
 
         // Ctrl+V 走的是这里，不是 Key 事件：egui-winit 一认出粘贴组合就把它换成
         // `Event::Paste(剪贴板内容)`，然后**直接 return，不再发 `Event::Key{V}`**
