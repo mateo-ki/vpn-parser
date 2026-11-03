@@ -155,6 +155,9 @@ impl ProxyRuntime {
         if options.port_mapping_nodes.is_empty() {
             options.port_mapping_nodes = self.options.port_mapping_nodes.clone();
         }
+        if options.chain_nodes.is_none() {
+            options.chain_nodes = self.options.chain_nodes.clone();
+        }
         self.options = options;
     }
 }
@@ -361,6 +364,12 @@ impl ProxyManager {
         runtime.options.port_mapping_nodes = mapping_nodes;
     }
 
+    /// 启动前或热重载前注入链式代理中继与落地节点实体（不持久化，只影响本次生成的配置）。
+    pub async fn set_chain_nodes(&self, nodes: Option<(Node, Node)>) {
+        let mut runtime = self.runtime.lock().await;
+        runtime.options.chain_nodes = nodes.map(Box::new);
+    }
+
     pub async fn update_config(&self, options: MihomoConfigOptions) -> Result<()> {
         options.validate()?;
         let _operation = self.operation.lock().await;
@@ -381,7 +390,7 @@ impl ProxyManager {
         options.validate()?;
         let _operation = self.operation.lock().await;
 
-        let (kernel, config_path, controller_port, node) = {
+        let (kernel, config_path, controller_port, node, effective_options) = {
             let mut runtime = self.runtime.lock().await;
             if !matches!(
                 runtime.status.state,
@@ -414,20 +423,24 @@ impl ProxyManager {
                 runtime.apply_options(options.clone());
                 return Ok(false);
             };
+            let config_path = work_dir.config_path();
             let Some(node) = runtime.current_node.clone() else {
                 runtime.apply_options(options.clone());
                 return Ok(false);
             };
+            runtime.apply_options(options.clone());
+            let effective = runtime.options.clone();
             (
                 kernel,
-                work_dir.config_path(),
-                runtime.options.controller_port,
+                config_path,
+                effective.controller_port,
                 node,
+                effective,
             )
         };
 
         let started = tokio::time::Instant::now();
-        let config = match build_kernel_config(kernel, &node, options.clone()) {
+        let config = match build_kernel_config(kernel, &node, effective_options) {
             Ok(config) => config,
             Err(error) => {
                 tracing::warn!("构建热重载分流规则配置失败: {error}");

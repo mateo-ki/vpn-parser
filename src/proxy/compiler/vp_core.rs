@@ -55,6 +55,26 @@ impl BackendCompiler for VpCoreCompiler {
                         }
                     }
                     if let Some(po) = p.as_object_mut() {
+                        let ty = po.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                        // 补全所有支持 UDP 协议的节点 udp: true 标记 (特别是 Hysteria2 / Tuic / WireGuard / SS 等)
+                        if matches!(
+                            ty,
+                            "hysteria"
+                                | "hysteria2"
+                                | "hy2"
+                                | "tuic"
+                                | "wireguard"
+                                | "ss"
+                                | "vmess"
+                                | "vless"
+                                | "trojan"
+                                | "socks5"
+                        ) {
+                            if !po.contains_key("udp") {
+                                po.insert("udp".into(), serde_json::json!(true));
+                            }
+                        }
+
                         // 彻底清理重名 alias 字段，防止 serde 抛出 duplicate field `server_name` 错误
                         let s1 = po.remove("server_name");
                         let s2 = po.remove("server-name");
@@ -135,20 +155,30 @@ impl BackendCompiler for VpCoreCompiler {
                 ),
             );
 
+            // 保持 IPv6 双栈同步
+            if plan.dns.ipv6 {
+                obj.insert("ipv6".into(), serde_json::json!(true));
+            }
+
             // TUN 模式：生成 vp_core 标准 TUN 字段与 Fake-IP DNS 联动
             if plan.inbounds.mode.has_tun() {
-                obj.insert(
-                    "tun".into(),
-                    serde_json::json!({
-                        "enable": true,
-                        "address": "198.18.0.1",
-                        "netmask": "255.255.0.0",
-                        "mtu": 1500,
-                        "fake-ip-range": "198.18.0.0/16",
-                        "auto-route": plan.inbounds.tun.auto_route,
-                        "ring-capacity": 4194304,
-                    }),
-                );
+                let mut tun_cfg = serde_json::json!({
+                    "enable": true,
+                    "address": "198.18.0.1",
+                    "netmask": "255.255.0.0",
+                    "mtu": 1500,
+                    "fake-ip-range": "198.18.0.0/16",
+                    "auto-route": plan.inbounds.tun.auto_route,
+                    "ring-capacity": 4194304,
+                });
+                if plan.dns.ipv6 {
+                    if let Some(t_obj) = tun_cfg.as_object_mut() {
+                        t_obj.insert("ipv6".into(), serde_json::json!(true));
+                        t_obj.insert("address6".into(), serde_json::json!("fdfe:dcba:9876::1/64"));
+                        t_obj.insert("fake-ip-range6".into(), serde_json::json!("fc00::/18"));
+                    }
+                }
+                obj.insert("tun".into(), tun_cfg);
             } else {
                 obj.remove("tun");
             }
@@ -157,6 +187,12 @@ impl BackendCompiler for VpCoreCompiler {
                 if plan.inbounds.mode.has_tun() {
                     dns.insert("enhanced-mode".into(), serde_json::json!("fake-ip"));
                     dns.insert("fake-ip-range".into(), serde_json::json!("198.18.0.0/16"));
+                    if plan.dns.ipv6 {
+                        dns.insert("fake-ip-range6".into(), serde_json::json!("fc00::/18"));
+                    }
+                }
+                if plan.dns.ipv6 {
+                    dns.insert("ipv6".into(), serde_json::json!(true));
                 }
                 // 清洗 nameserver-policy：剥离大陆直连无法访问的海外 DoH 规则（1.1.1.1/8.8.8.8），
                 // 避免每个海外域名的首次本地 DNS 解析直接挂起 3 秒超时后降级
@@ -174,10 +210,22 @@ impl BackendCompiler for VpCoreCompiler {
                             ns.insert(0, serde_json::json!(extra));
                         }
                     }
+                    if plan.dns.ipv6 {
+                        for extra_v6 in ["2400:3200::1", "2402:4e00::"] {
+                            if !ns.iter().any(|v| v.as_str() == Some(extra_v6)) {
+                                ns.push(serde_json::json!(extra_v6));
+                            }
+                        }
+                    }
                 } else {
+                    let mut default_ns = vec![serde_json::json!("223.5.5.5"), serde_json::json!("119.29.29.29")];
+                    if plan.dns.ipv6 {
+                        default_ns.push(serde_json::json!("2400:3200::1"));
+                        default_ns.push(serde_json::json!("2402:4e00::"));
+                    }
                     dns.insert(
                         "nameserver".into(),
-                        serde_json::json!(["223.5.5.5", "119.29.29.29"]),
+                        serde_json::Value::Array(default_ns),
                     );
                 }
             }
@@ -646,5 +694,39 @@ rules:
             is_node_incompatible_with_vpcore(&mk("vless", json!({"network": "ws"}), "")).is_none()
         );
         assert!(is_node_incompatible_with_vpcore(&mk("ss", json!({}), "")).is_none());
+    }
+
+    #[test]
+    fn test_vpcore_hy2_udp_and_ipv6_dual_stack() {
+        let node = test_node(
+            "hysteria2",
+            json!({
+                "password": "secret_password",
+                "sni": "hy2.example.com",
+                "ports": "20000-30000"
+            }),
+        );
+        let mut options = MihomoConfigOptions::default();
+        options.mode = ProxyMode::Tun;
+        options.dns.ipv6 = true;
+        let plan = crate::proxy::ir::lower_options_to_ir(&options, Some(&node));
+        let artifact = VpCoreCompiler.compile(&plan).expect("compile success");
+        let val = artifact.as_json_value().expect("json value");
+
+        // 1. 验证 root 与 DNS IPv6
+        assert_eq!(val["ipv6"], serde_json::json!(true));
+        assert_eq!(val["dns"]["ipv6"], serde_json::json!(true));
+        assert_eq!(val["dns"]["fake-ip-range6"], "fc00::/18");
+
+        // 2. 验证 TUN IPv6 双栈参数
+        assert_eq!(val["tun"]["ipv6"], serde_json::json!(true));
+        assert_eq!(val["tun"]["address6"], "fdfe:dcba:9876::1/64");
+        assert_eq!(val["tun"]["fake-ip-range6"], "fc00::/18");
+
+        // 3. 验证 Hysteria2 包含 udp: true 及 ports
+        let proxies = val["proxies"].as_array().expect("proxies");
+        let hy2 = proxies.iter().find(|p| p["type"] == "hysteria2").expect("hy2 proxy");
+        assert_eq!(hy2["udp"], serde_json::json!(true));
+        assert_eq!(hy2["ports"], "20000-30000");
     }
 }

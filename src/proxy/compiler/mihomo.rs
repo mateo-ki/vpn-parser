@@ -306,6 +306,116 @@ impl BackendCompiler for MihomoCompiler {
             }
         }
 
+        // 链式代理节点注册与 dialer-proxy 代理构造 (彻底替代已废弃的 type: relay 组)
+        let is_chain_requested = plan.outbounds.chain_proxy_enabled || plan.routing_mode == RoutingMode::Chain;
+        let mut chain_entry_name: Option<String> = None;
+        let mut chain_exit_name: Option<String> = None;
+        let mut chain_exit_obj: Option<Value> = None;
+
+        if is_chain_requested {
+            // 1. 优先检查运行时预热注入的 chain_nodes 实体（支持跨订阅源全库直查）
+            if let Some((ref entry_node, ref exit_node)) = plan.outbounds.chain_nodes.as_deref() {
+                let is_distinct = if entry_node.id != exit_node.id {
+                    true
+                } else {
+                    entry_node.name != exit_node.name || entry_node.server != exit_node.server || entry_node.port != exit_node.port
+                };
+                if is_distinct {
+                    let entry_clash = crate::export::nodes_to_clash_proxies(std::slice::from_ref(entry_node));
+                    let exit_clash = crate::export::nodes_to_clash_proxies(std::slice::from_ref(exit_node));
+                    if let (Some(mut e_obj), Some(mut x_obj)) = (entry_clash.into_iter().next(), exit_clash.into_iter().next()) {
+                        // 注册 entry (若 candidate_proxies 中已存在同节点或同名，直接复用既有名称，不生成冗余后缀副本)
+                        let e_existing = candidate_proxies.iter().find(|p| {
+                            (p.get("server") == e_obj.get("server") && p.get("port") == e_obj.get("port") && p.get("type") == e_obj.get("type"))
+                                || p.get("name").and_then(Value::as_str) == Some(&entry_node.name)
+                        }).and_then(|p| p.get("name").and_then(Value::as_str)).map(str::to_string);
+
+                        if let Some(existing_name) = e_existing {
+                            chain_entry_name = Some(existing_name);
+                        } else {
+                            let e_raw = e_obj.get("name").and_then(Value::as_str).unwrap_or(&entry_node.name).to_string();
+                            let mut e_name = e_raw.clone();
+                            let mut idx = 2;
+                            while !used_names.insert(e_name.clone()) {
+                                e_name = format!("{e_raw} #{idx}");
+                                idx += 1;
+                            }
+                            if let Some(m) = e_obj.as_object_mut() {
+                                m.insert("name".into(), Value::String(e_name.clone()));
+                            }
+                            candidate_proxies.push(e_obj);
+                            chain_entry_name = Some(e_name);
+                        }
+
+                        // 注册 exit (若 candidate_proxies 中已存在同节点或同名，直接复用)
+                        let x_existing = candidate_proxies.iter().find(|p| {
+                            (p.get("server") == x_obj.get("server") && p.get("port") == x_obj.get("port") && p.get("type") == x_obj.get("type"))
+                                || p.get("name").and_then(Value::as_str) == Some(&exit_node.name)
+                        }).cloned();
+
+                        if let Some(existing_val) = x_existing {
+                            let x_name = existing_val.get("name").and_then(Value::as_str).unwrap_or(&exit_node.name).to_string();
+                            chain_exit_obj = Some(existing_val);
+                            chain_exit_name = Some(x_name);
+                        } else {
+                            let x_raw = x_obj.get("name").and_then(Value::as_str).unwrap_or(&exit_node.name).to_string();
+                            let mut x_name = x_raw.clone();
+                            let mut idx = 2;
+                            while !used_names.insert(x_name.clone()) {
+                                x_name = format!("{x_raw} #{idx}");
+                                idx += 1;
+                            }
+                            if let Some(m) = x_obj.as_object_mut() {
+                                m.insert("name".into(), Value::String(x_name.clone()));
+                            }
+                            chain_exit_obj = Some(x_obj.clone());
+                            candidate_proxies.push(x_obj);
+                            chain_exit_name = Some(x_name);
+                        }
+                    }
+                }
+            }
+
+            // 2. 若未从 chain_nodes 注入，尝试从 candidate_proxies 或 url_test_nodes 按名称匹配
+            if chain_entry_name.is_none() || chain_exit_name.is_none() {
+                let opt_entry = plan.outbounds.chain_entry_node_name.as_deref();
+                let opt_exit = plan.outbounds.chain_exit_node_name.as_deref();
+                match (opt_entry, opt_exit) {
+                    (Some(e), Some(x)) if e != x => {
+                        let e_found = candidate_proxies.iter().find(|p| p.get("name").and_then(Value::as_str) == Some(e));
+                        let x_found = candidate_proxies.iter().find(|p| p.get("name").and_then(Value::as_str) == Some(x));
+                        if let (Some(_), Some(x_p)) = (e_found, x_found) {
+                            chain_entry_name = Some(e.to_string());
+                            chain_exit_name = Some(x.to_string());
+                            chain_exit_obj = Some(x_p.clone());
+                        }
+                    }
+                    (None, None) if plan.routing_mode == RoutingMode::Chain && candidate_proxies.len() >= 2 => {
+                        let e_p = &candidate_proxies[1];
+                        let x_p = &candidate_proxies[0];
+                        if let (Some(e), Some(x)) = (e_p.get("name").and_then(Value::as_str), x_p.get("name").and_then(Value::as_str)) {
+                            chain_entry_name = Some(e.to_string());
+                            chain_exit_name = Some(x.to_string());
+                            chain_exit_obj = Some(x_p.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // 3. 成功定位双节点：构造并插入「链式代理」proxy 实体 (使用 dialer-proxy 连接前置节点)
+            if let (Some(ref e_name), Some(ref x_name), Some(mut x_val)) = (chain_entry_name.as_ref(), chain_exit_name.as_ref(), chain_exit_obj) {
+                if e_name != x_name {
+                    if let Some(x_obj) = x_val.as_object_mut() {
+                        x_obj.insert("name".into(), Value::String("链式代理".into()));
+                        x_obj.insert("dialer-proxy".into(), Value::String((*e_name).clone()));
+                        used_names.insert("链式代理".into());
+                        candidate_proxies.push(Value::Object(x_obj.clone()));
+                    }
+                }
+            }
+        }
+
         // 处理一节点一端口映射
         let mut port_listeners: Vec<Value> = Vec::new();
         let mut port_rules: Vec<String> = Vec::new();
@@ -626,6 +736,10 @@ impl BackendCompiler for MihomoCompiler {
             }));
         }
 
+        let is_chain_active = candidate_proxies
+            .iter()
+            .any(|p| p.get("name").and_then(Value::as_str) == Some("链式代理"));
+
         let mut proxy_groups = if url_test_active {
             let (group_type, extra_fields) = match plan.outbounds.auto_strategy {
                 AutoRoutingStrategy::UrlTest => ("url-test", json!({
@@ -637,6 +751,11 @@ impl BackendCompiler for MihomoCompiler {
                     "strategy": "consistent-hashing",
                 })),
             };
+            let auto_proxies: Vec<String> = candidate_names
+                .iter()
+                .filter(|n| n.as_str() != "链式代理")
+                .cloned()
+                .collect();
             let mut auto_group = json!({
                 "name": URL_TEST_GROUP,
                 "type": group_type,
@@ -644,7 +763,7 @@ impl BackendCompiler for MihomoCompiler {
                 "interval": URL_TEST_INTERVAL_SECS,
                 "timeout": URL_TEST_TIMEOUT_MS,
                 "lazy": true,
-                "proxies": candidate_names,
+                "proxies": auto_proxies,
             });
             if let Some(map) = auto_group.as_object_mut() {
                 if let Some(extra) = extra_fields.as_object() {
@@ -653,7 +772,11 @@ impl BackendCompiler for MihomoCompiler {
                     }
                 }
             }
-            let mut proxy_members = vec![URL_TEST_GROUP.to_owned()];
+            let mut proxy_members = Vec::new();
+            if is_chain_active {
+                proxy_members.push("链式代理".to_string());
+            }
+            proxy_members.push(URL_TEST_GROUP.to_owned());
             if plan.outbounds.smart_routing {
                 for r_name in &regional_group_names {
                     if !proxy_members.contains(r_name) {
@@ -662,36 +785,13 @@ impl BackendCompiler for MihomoCompiler {
                 }
                 proxy_members.push("DIRECT".to_string());
             }
-            let opt_entry = plan
-                .outbounds
-                .chain_entry_node_name
-                .as_deref()
-                .filter(|name| candidate_names.iter().any(|c| c == *name));
-            let opt_exit = plan
-                .outbounds
-                .chain_exit_node_name
-                .as_deref()
-                .filter(|name| candidate_names.iter().any(|c| c == *name));
-
-            let (is_chain_active, chain_entry, chain_exit) = match (opt_entry, opt_exit) {
-                (Some(entry), Some(exit)) if entry != exit => (
-                    plan.routing_mode == RoutingMode::Chain || plan.outbounds.chain_proxy_enabled,
-                    entry,
-                    exit,
-                ),
-                (None, None) if plan.routing_mode == RoutingMode::Chain && candidate_names.len() >= 2 => (
-                    true,
-                    candidate_names[1].as_str(),
-                    candidate_names[0].as_str(),
-                ),
-                _ => (false, "", ""),
-            };
-
-            if is_chain_active {
-                proxy_members.insert(0, "链式代理".to_string());
-            }
-            proxy_members.extend(candidate_names.iter().cloned());
-            let mut groups = vec![
+            proxy_members.extend(
+                candidate_names
+                    .iter()
+                    .filter(|n| n.as_str() != "链式代理")
+                    .cloned(),
+            );
+            vec![
                 json!({ "name": "PROXY", "type": "select", "proxies": proxy_members }),
                 auto_group,
                 json!({
@@ -699,42 +799,9 @@ impl BackendCompiler for MihomoCompiler {
                     "type": "select",
                     "proxies": ["PROXY", URL_TEST_GROUP, "DIRECT", "REJECT"],
                 }),
-            ];
-            if is_chain_active {
-                groups.push(json!({
-                    "name": "链式代理",
-                    "type": "relay",
-                    "proxies": [chain_entry, chain_exit],
-                }));
-            }
-            groups
+            ]
         } else {
             let mut proxy_members = Vec::new();
-            let opt_entry = plan
-                .outbounds
-                .chain_entry_node_name
-                .as_deref()
-                .filter(|name| candidate_names.iter().any(|c| c == *name));
-            let opt_exit = plan
-                .outbounds
-                .chain_exit_node_name
-                .as_deref()
-                .filter(|name| candidate_names.iter().any(|c| c == *name));
-
-            let (is_chain_active, chain_entry, chain_exit) = match (opt_entry, opt_exit) {
-                (Some(entry), Some(exit)) if entry != exit => (
-                    plan.routing_mode == RoutingMode::Chain || plan.outbounds.chain_proxy_enabled,
-                    entry,
-                    exit,
-                ),
-                (None, None) if plan.routing_mode == RoutingMode::Chain && candidate_names.len() >= 2 => (
-                    true,
-                    candidate_names[1].as_str(),
-                    candidate_names[0].as_str(),
-                ),
-                _ => (false, "", ""),
-            };
-
             if is_chain_active {
                 proxy_members.push("链式代理".to_string());
             }
@@ -742,16 +809,13 @@ impl BackendCompiler for MihomoCompiler {
                 proxy_members.extend(regional_group_names.iter().cloned());
                 proxy_members.push("DIRECT".to_string());
             }
-            proxy_members.extend(candidate_names.iter().cloned());
-            let mut groups = vec![json!({ "name": "PROXY", "type": "select", "proxies": proxy_members })];
-            if is_chain_active {
-                groups.push(json!({
-                    "name": "链式代理",
-                    "type": "relay",
-                    "proxies": [chain_entry, chain_exit],
-                }));
-            }
-            groups
+            proxy_members.extend(
+                candidate_names
+                    .iter()
+                    .filter(|n| n.as_str() != "链式代理")
+                    .cloned(),
+            );
+            vec![json!({ "name": "PROXY", "type": "select", "proxies": proxy_members })]
         };
 
         if plan.outbounds.smart_routing {

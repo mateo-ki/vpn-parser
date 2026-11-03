@@ -32,3 +32,5 @@ logs/
 *.tmp
 *.bak
 *.db
+__pycache__/
+*.pyc

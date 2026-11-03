@@ -191,6 +191,9 @@ pub struct MihomoConfigOptions {
     /// 链式代理后置落地出口节点名称
     #[serde(default)]
     pub chain_exit_node_name: Option<String>,
+    /// 运行期注入的链式代理节点实体（前置中继节点, 落地出口节点），不持久化到 SQLite
+    #[serde(default, skip_serializing)]
+    pub chain_nodes: Option<Box<(crate::models::Node, crate::models::Node)>>,
 }
 
 fn default_url_test_size() -> u16 {
@@ -235,6 +238,7 @@ impl Default for MihomoConfigOptions {
             chain_entry_node_name: None,
             chain_exit_node_id: None,
             chain_exit_node_name: None,
+            chain_nodes: None,
         }
     }
 }

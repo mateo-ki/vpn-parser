@@ -108,6 +108,8 @@ pub struct OutboundPlan {
     pub chain_entry_node_name: Option<String>,
     pub chain_exit_node_id: Option<String>,
     pub chain_exit_node_name: Option<String>,
+    #[serde(default)]
+    pub chain_nodes: Option<Box<(Node, Node)>>,
 }
 
 /// 统一 DNS 分流计划

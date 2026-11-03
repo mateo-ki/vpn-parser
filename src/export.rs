@@ -140,6 +140,7 @@ fn node_to_clash_proxy(node: &Node) -> Option<Value> {
             set_type(&mut cfg, "tuic");
             ensure_server_port_name(&mut cfg, node);
             if let Some(obj) = cfg.as_object_mut() {
+                obj.insert("udp".into(), json!(true));
                 let insecure = extract_skip_cert_verify(obj, node);
                 obj.remove("allowInsecure");
                 obj.remove("insecure");
@@ -673,6 +674,21 @@ fn normalize_hysteria2(cfg: &mut Value, node: &Node) -> Value {
             obj.insert("password".into(), a);
         }
     }
+    // Hysteria2 基于 QUIC/UDP，强制显式启用 UDP 转发支持
+    obj.insert("udp".into(), json!(true));
+
+    // 端口跳跃参数提取
+    let ports = first_str(obj, &["ports", "mport", "mports"]).or_else(|| {
+        if let Some(map) = node.config.as_object() {
+            first_str(map, &["ports", "mport", "mports"])
+        } else {
+            None
+        }
+    });
+    if let Some(p) = ports {
+        obj.insert("ports".into(), json!(p));
+    }
+
     let sni_val = first_str(obj, &["sni", "servername", "server_name", "server-name"])
         .filter(|s| !s.is_empty());
     obj.remove("servername");
@@ -720,6 +736,7 @@ fn normalize_hysteria(cfg: &mut Value, node: &Node) -> Value {
     obj.remove("allowInsecure");
     obj.remove("insecure");
     obj.insert("skip-cert-verify".into(), json!(insecure));
+    obj.insert("udp".into(), json!(true));
 
     if let Some(sni) = first_str(obj, &["sni", "peer", "server_name", "server-name"])
         .filter(|s| !s.is_empty())
@@ -1128,6 +1145,9 @@ fn rebuild_hysteria2_uri(cfg: &Value, node: &Node) -> Option<String> {
     }
     if let Some(op) = str_field(cfg, &["obfs-password"]).filter(|s| !s.is_empty()) {
         q.push(("obfs-password".into(), op));
+    }
+    if let Some(mport) = str_field(cfg, &["mport", "ports"]).filter(|s| !s.is_empty()) {
+        q.push(("mport".into(), mport));
     }
     if matches!(cfg.get("skip-cert-verify"), Some(Value::Bool(true)))
         || matches!(

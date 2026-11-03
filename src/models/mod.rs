@@ -126,7 +126,7 @@ fn default_true() -> bool {
 }
 
 /// A parsed proxy node.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Node {
     pub id: String,
     pub source_id: Option<String>,

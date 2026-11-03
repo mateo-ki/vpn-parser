@@ -352,7 +352,7 @@ fn parse_hysteria2(uri: &str, source_id: Option<&str>) -> Option<Node> {
         let port = url.port().unwrap_or(443);
         let name = url.fragment().map(percent_decode).unwrap_or_default();
         let q = parse_query(url.query().unwrap_or(""));
-        let config = json!({
+        let mut config = json!({
             "type": "hysteria2",
             "server": host,
             "port": port,
@@ -362,7 +362,11 @@ fn parse_hysteria2(uri: &str, source_id: Option<&str>) -> Option<Node> {
             "insecure": json!(false),
             "obfs": q.get("obfs").cloned().unwrap_or_default(),
             "obfs-password": q.get("obfs-password").cloned().unwrap_or_default(),
+            "udp": json!(true),
         });
+        if let Some(mport) = q.get("mport").or_else(|| q.get("ports")).filter(|s| !s.is_empty()) {
+            config["ports"] = json!(mport);
+        }
         return Some(make_node(
             "hysteria2",
             &name,
@@ -375,7 +379,7 @@ fn parse_hysteria2(uri: &str, source_id: Option<&str>) -> Option<Node> {
     }
     let (_scheme, auth, port, host, query, name) = parse_authority(&normalized)?;
     let q = parse_query(&query);
-    let config = json!({
+    let mut config = json!({
         "type": "hysteria2",
         "server": host,
         "port": port,
@@ -385,7 +389,11 @@ fn parse_hysteria2(uri: &str, source_id: Option<&str>) -> Option<Node> {
         "insecure": json!(false),
         "obfs": q.get("obfs").cloned().unwrap_or_default(),
         "obfs-password": q.get("obfs-password").cloned().unwrap_or_default(),
+        "udp": json!(true),
     });
+    if let Some(mport) = q.get("mport").or_else(|| q.get("ports")).filter(|s| !s.is_empty()) {
+        config["ports"] = json!(mport);
+    }
     Some(make_node(
         "hysteria2",
         &name,

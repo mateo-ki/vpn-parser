@@ -2980,6 +2980,7 @@ impl VpnApp {
             .unwrap_or(false);
         let url_test_size = self.proxy_config.url_test_size;
         let port_mappings = self.proxy_config.port_mappings.clone();
+        let chain_options = self.proxy_config.clone();
         let candidate_blacklist = self.router.blacklisted(std::time::Instant::now());
         let node_id = id.clone();
         self.status = format!("⚡ 正在极速异步切换至「{name}」...");
@@ -3000,6 +3001,12 @@ impl VpnApp {
                         &db,
                         &manager,
                         &port_mappings,
+                    )
+                    .await;
+                    Self::prime_chain_proxy_candidates(
+                        &db,
+                        &manager,
+                        &chain_options,
                     )
                     .await;
                     let res = manager.switch_node(&node).await;
@@ -3075,6 +3082,37 @@ impl VpnApp {
             }
         }
         manager.set_port_mapping_nodes(items).await;
+    }
+
+    /// 注入链式代理前置中继节点与落地出口节点（跨订阅源/未分组全库直查预热）
+    async fn prime_chain_proxy_candidates(
+        db: &Database,
+        manager: &ProxyManager,
+        options: &MihomoConfigOptions,
+    ) {
+        let is_active = options.chain_proxy_enabled || options.routing_mode == RoutingMode::Chain;
+        if !is_active {
+            manager.set_chain_nodes(None).await;
+            return;
+        }
+        let entry_id = options.chain_entry_node_id.as_deref();
+        let exit_id = options.chain_exit_node_id.as_deref();
+        if let (Some(e_id), Some(x_id)) = (entry_id, exit_id) {
+            if e_id != x_id {
+                let entry_node = db.get_node(e_id).await.ok().flatten();
+                let exit_node = db.get_node(x_id).await.ok().flatten();
+                if let (Some(entry), Some(exit)) = (entry_node, exit_node) {
+                    tracing::info!(
+                        entry = %entry.name,
+                        exit = %exit.name,
+                        "链式代理双节点从数据库预热注入完成"
+                    );
+                    manager.set_chain_nodes(Some((entry, exit))).await;
+                    return;
+                }
+            }
+        }
+        manager.set_chain_nodes(None).await;
     }
 
     /// 要放行的程序：本程序 + 已下载的内核 exe（按路径，重编译/换版本路径不变）。
@@ -3255,6 +3293,7 @@ impl VpnApp {
         self.rt.spawn(async move {
             let previous = manager.config().await;
             Self::prime_port_mapping_candidates(&db, &manager, &options.port_mappings).await;
+            Self::prime_chain_proxy_candidates(&db, &manager, &options).await;
             let result = match manager.reload_config(options.clone()).await {
                 Ok(_) => match db.update_proxy_config(&options).await {
                     Ok(()) => Ok(options),
@@ -3277,6 +3316,7 @@ impl VpnApp {
         let tx = self.tx.clone();
         self.rt.spawn(async move {
             Self::prime_port_mapping_candidates(&db, &manager, &options.port_mappings).await;
+            Self::prime_chain_proxy_candidates(&db, &manager, &options).await;
             let result = match manager.reload_config(options.clone()).await {
                 Ok(_) => match db.update_proxy_config(&options).await {
                     Ok(()) => Ok(options),
@@ -3731,6 +3771,12 @@ impl VpnApp {
                         &db,
                         &manager,
                         &options.port_mappings,
+                    )
+                    .await;
+                    Self::prime_chain_proxy_candidates(
+                        &db,
+                        &manager,
+                        &options,
                     )
                     .await;
                     let db_clone = db.clone();

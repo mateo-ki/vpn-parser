@@ -95,6 +95,7 @@ pub fn lower_options_to_ir(options: &MihomoConfigOptions, primary_node: Option<&
         chain_entry_node_name: options.chain_entry_node_name.clone(),
         chain_exit_node_id: options.chain_exit_node_id.clone(),
         chain_exit_node_name: options.chain_exit_node_name.clone(),
+        chain_nodes: options.chain_nodes.clone(),
     };
 
     // 3. 构建 DnsPlan

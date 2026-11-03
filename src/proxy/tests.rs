@@ -1941,11 +1941,13 @@ fn main(config) {
     #[test]
     fn test_mihomo_chain_proxy_lifecycle_and_cleared_fallback() {
         let mut node_a = node("ss", json!({ "server": "1.1.1.1", "port": 8388, "password": "p", "cipher": "aes-128-gcm" }));
+        node_a.id = "node-a-uuid".into();
         node_a.name = "Node A".into();
         let mut node_b = node("ss", json!({ "server": "2.2.2.2", "port": 8388, "password": "p", "cipher": "aes-128-gcm" }));
+        node_b.id = "node-b-uuid".into();
         node_b.name = "Node B".into();
 
-        // 1. 双节点就绪：成功编译出 relay 策略组并置入 PROXY 组首位
+        // 1. 双节点就绪：成功编译出 dialer-proxy 代理实体并置入 PROXY 组首位 (对齐 Mihomo 1.19+ 规范)
         let mut opts = MihomoConfigOptions::default();
         opts.chain_proxy_enabled = true;
         opts.chain_entry_node_name = Some("Node A".into());
@@ -1958,16 +1960,21 @@ fn main(config) {
         let plan = lower_options_to_ir(&opts, Some(&node_a));
         let art = MihomoCompiler::new().compile(&plan).expect("compile success");
         let json = art.as_json_value().expect("json");
+        let proxies = json["proxies"].as_array().expect("proxies");
+        let chain_proxy = proxies.iter().find(|p| p["name"] == "链式代理");
+        assert!(chain_proxy.is_some(), "双节点就绪时必须生成「链式代理」dialer-proxy 代理");
+        let cp = chain_proxy.unwrap();
+        assert_eq!(cp["dialer-proxy"], "Node A");
+        assert_eq!(cp["server"], "2.2.2.2");
+
         let groups = json["proxy-groups"].as_array().expect("groups");
-        let relay_group = groups.iter().find(|g| g["name"] == "链式代理");
-        assert!(relay_group.is_some(), "双节点就绪时必须生成「链式代理」relay 策略组");
-        assert_eq!(relay_group.unwrap()["type"], "relay");
-        assert_eq!(relay_group.unwrap()["proxies"], serde_json::json!(["Node A", "Node B"]));
+        // Mihomo 1.19+ 彻底移除了 type: relay 组，使用 dialer-proxy
+        assert!(groups.iter().all(|g| g["name"] != "链式代理"), "Mihomo 1.19+ 严禁生成已废弃的 type: relay 策略组");
 
         let proxy_group = groups.iter().find(|g| g["name"] == "PROXY").expect("PROXY group");
         assert_eq!(proxy_group["proxies"][0], "链式代理");
 
-        // 2. 清空前置节点：安全回退，不生成残缺 relay 策略组
+        // 2. 清空前置节点：安全回退，不生成残缺链式代理
         let mut opts_cleared_entry = opts.clone();
         opts_cleared_entry.chain_entry_node_name = None;
         let plan_cleared = lower_options_to_ir(&opts_cleared_entry, Some(&node_a));
@@ -1978,6 +1985,8 @@ fn main(config) {
             groups_cleared.iter().all(|g| g["name"] != "链式代理"),
             "清空前置节点后必须安全降级，不得生成残缺的链式代理策略组"
         );
+        let proxies_cleared = json_cleared["proxies"].as_array().expect("proxies");
+        assert!(proxies_cleared.iter().all(|p| p["name"] != "链式代理"));
 
         // 3. 清空后置节点：同样安全回退
         let mut opts_cleared_exit = opts.clone();
@@ -1990,6 +1999,8 @@ fn main(config) {
             groups_cleared_exit.iter().all(|g| g["name"] != "链式代理"),
             "清空后置节点后必须安全降级，不得生成残缺的链式代理策略组"
         );
+        let proxies_cleared_exit = json_cleared_exit["proxies"].as_array().expect("proxies");
+        assert!(proxies_cleared_exit.iter().all(|p| p["name"] != "链式代理"));
 
         // 4. 前置与后置选了同一节点：杜绝自身回环死锁
         let mut opts_same = opts.clone();
@@ -2003,6 +2014,23 @@ fn main(config) {
             groups_same.iter().all(|g| g["name"] != "链式代理"),
             "前置后置相同时不得生成自身回环中继"
         );
+        let proxies_same = json_same["proxies"].as_array().expect("proxies");
+        assert!(proxies_same.iter().all(|p| p["name"] != "链式代理"));
+
+        // 5. 跨订阅源直查预热注入 (chain_nodes 实体测试)
+        let mut opts_entity = MihomoConfigOptions::default();
+        opts_entity.chain_proxy_enabled = true;
+        opts_entity.chain_nodes = Some(Box::new((node_a.clone(), node_b.clone())));
+        let plan_entity = lower_options_to_ir(&opts_entity, Some(&node_a));
+        let art_entity = MihomoCompiler::new().compile(&plan_entity).expect("compile success");
+        let json_entity = art_entity.as_json_value().expect("json");
+        let proxies_entity = json_entity["proxies"].as_array().expect("proxies");
+        let chain_entity = proxies_entity.iter().find(|p| p["name"] == "链式代理").expect("链式代理");
+        assert_eq!(chain_entity["dialer-proxy"], "Node A");
+        assert_eq!(chain_entity["server"], "2.2.2.2");
+        let proxy_grp_entity = json_entity["proxy-groups"].as_array().expect("groups")
+            .iter().find(|g| g["name"] == "PROXY").expect("PROXY group");
+        assert_eq!(proxy_grp_entity["proxies"][0], "链式代理");
     }
 
     #[test]
