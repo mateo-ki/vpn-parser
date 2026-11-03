@@ -6,7 +6,7 @@
   "architecture": {
     "64bit": {
       "url": "https://github.com/mateo-ki/vpn-parser/releases/download/v1.15.21/vpn-parser-1.15.21-windows-x64-portable.zip",
-      "hash": "3beab8da3628c37bd410492c8857c50ae49d19adb3feb12faff53b213090ad9d"
+      "hash": "7718d3e6788e06745e3251e66a9e1f45ca54cdac39291d843f224618fe0e74bc"
     }
   },
   "bin": "vpn-parser.exe",
