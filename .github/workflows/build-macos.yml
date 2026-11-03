@@ -135,14 +135,15 @@ jobs:
           app_size_mb=$(du -sm "${APP_DIR}" | awk '{print $1}')
           dmg_size_mb=$((app_size_mb + 80))
           echo "应用包体积: ${app_size_mb}MB，预分配 DMG 镜像容量: ${dmg_size_mb}MB"
-          hdiutil create -size "${dmg_size_mb}m" -volname "VPN Parser" -fs HFS+ -format UDRW /tmp/temp.dmg
-          mount_info=$(hdiutil attach -readwrite -noverify -noautoopen /tmp/temp.dmg)
-          device=$(echo "${mount_info}" | grep -E '^/dev/' | head -1 | awk '{print $1}')
-          cp -R "${APP_DIR}" "/Volumes/VPN Parser/"
-          ln -s /Applications "/Volumes/VPN Parser/Applications"
+          hdiutil create -size "${dmg_size_mb}m" -volname "VPN Parser" -fs HFS+ -ov /tmp/temp.dmg
+          mount_point="/Volumes/VPN Parser"
+          hdiutil detach "${mount_point}" -force 2>/dev/null || true
+          hdiutil attach -readwrite -noverify -noautoopen /tmp/temp.dmg
+          cp -R "${APP_DIR}" "${mount_point}/"
+          ln -s /Applications "${mount_point}/Applications"
           sync
-          hdiutil detach "${device}" -force || (sleep 2 && hdiutil detach "${device}" -force)
-          hdiutil convert /tmp/temp.dmg -format UDZO -o "dist/${dmg_name}"
+          hdiutil detach "${mount_point}" -force || (sleep 2 && hdiutil detach "${mount_point}" -force)
+          hdiutil convert /tmp/temp.dmg -format UDZO -o "dist/${dmg_name}" -ov
           rm -f /tmp/temp.dmg
 
           # 6. 生成命令行打包 (.tar.gz)
