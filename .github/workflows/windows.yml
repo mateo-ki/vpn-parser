@@ -176,7 +176,11 @@ jobs:
             $json = Get-Content $manifestPath -Raw -Encoding utf8 | ConvertFrom-Json
             $json.version = $version
             $json.architecture.'64bit'.url = "https://github.com/mateo-ki/vproxy/releases/download/v$version/vproxy-$version-windows-x64-portable.zip"
-            $json.architecture.'64bit'.hash = $hash
+            if ($null -ne $json.architecture.'64bit'.PSObject.Properties['hash']) {
+              $json.architecture.'64bit'.hash = $hash
+            } else {
+              $json.architecture.'64bit' | Add-Member -NotePropertyName hash -NotePropertyValue $hash -Force
+            }
             $json | ConvertTo-Json -Depth 10 | Set-Content $manifestPath -Encoding utf8
             Write-Host "已更新 $manifestPath"
           }
@@ -186,7 +190,11 @@ jobs:
             $json2 = Get-Content $legacyManifest -Raw -Encoding utf8 | ConvertFrom-Json
             $json2.version = $version
             $json2.architecture.'64bit'.url = "https://github.com/mateo-ki/vproxy/releases/download/v$version/vpn-parser-$version-windows-x64-portable.zip"
-            $json2.architecture.'64bit'.hash = $hash
+            if ($null -ne $json2.architecture.'64bit'.PSObject.Properties['hash']) {
+              $json2.architecture.'64bit'.hash = $hash
+            } else {
+              $json2.architecture.'64bit' | Add-Member -NotePropertyName hash -NotePropertyValue $hash -Force
+            }
             $json2 | ConvertTo-Json -Depth 10 | Set-Content $legacyManifest -Encoding utf8
             Write-Host "已同步兼容历史 $legacyManifest"
           }
