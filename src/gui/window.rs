@@ -245,7 +245,7 @@ impl VpnApp {
                     painter.text(
                         bar.center(),
                         egui::Align2::CENTER_CENTER,
-                        "VPN Parser",
+                        "VProxy",
                         egui::FontId::proportional(13.0),
                         theme::text_primary(),
                     );
@@ -282,7 +282,7 @@ impl VpnApp {
                     ui.painter().text(
                         egui::pos2(bar.min.x + 14.0, bar.center().y),
                         egui::Align2::LEFT_CENTER,
-                        "VPN Parser",
+                        "VProxy",
                         egui::FontId::proportional(12.5),
                         theme::text_secondary(),
                     );

@@ -72,11 +72,11 @@ jobs:
         run: |
           set -euo pipefail
           rustup target add x86_64-apple-darwin || true
-          cargo build --release --bin vpn-parser
+          cargo build --release --bin vproxy
           mac_arch=$(uname -m)
-          if cargo build --release --target x86_64-apple-darwin --bin vpn-parser; then
-            if lipo -create -output target/release/vpn-parser-universal target/release/vpn-parser target/x86_64-apple-darwin/release/vpn-parser; then
-              mv target/release/vpn-parser-universal target/release/vpn-parser
+          if cargo build --release --target x86_64-apple-darwin --bin vproxy; then
+            if lipo -create -output target/release/vproxy-universal target/release/vproxy target/x86_64-apple-darwin/release/vproxy; then
+              mv target/release/vproxy-universal target/release/vproxy
               mac_arch="universal"
               echo "成功打包 Universal 二进制 (arm64 + x86_64)"
             fi
@@ -84,10 +84,10 @@ jobs:
           echo "mac_arch=${mac_arch}" >> "$GITHUB_ENV"
           # 立即备份最终可执行文件并清除庞大的中间编译产物（x86_64目标与增量产物高达 10GB+），根除 hdiutil 磁盘写满
           mkdir -p /tmp/macos_bin
-          cp target/release/vpn-parser /tmp/macos_bin/vpn-parser
+          cp target/release/vproxy /tmp/macos_bin/vproxy
           rm -rf target
           mkdir -p target/release
-          mv /tmp/macos_bin/vpn-parser target/release/vpn-parser
+          mv /tmp/macos_bin/vproxy target/release/vproxy
           echo "=== 清理中间构建产物后的磁盘空间 ==="
           df -h
 
@@ -99,16 +99,16 @@ jobs:
           mkdir -p dist
 
           # 1. 创建 .app 目录结构
-          APP_NAME="VPN Parser"
+          APP_NAME="VProxy"
           APP_DIR="${APP_NAME}.app"
           rm -rf "${APP_DIR}"
           mkdir -p "${APP_DIR}/Contents/MacOS"
           mkdir -p "${APP_DIR}/Contents/Resources"
 
           # 2. 拷贝二进制并 strip
-          cp target/release/vpn-parser "${APP_DIR}/Contents/MacOS/vpn-parser"
-          chmod +x "${APP_DIR}/Contents/MacOS/vpn-parser"
-          strip "${APP_DIR}/Contents/MacOS/vpn-parser" || true
+          cp target/release/vproxy "${APP_DIR}/Contents/MacOS/vproxy"
+          chmod +x "${APP_DIR}/Contents/MacOS/vproxy"
+          strip "${APP_DIR}/Contents/MacOS/vproxy" || true
 
           # 3. 写入 Info.plist
           sed "s/__VERSION__/${version}/g" installer/Info.plist > "${APP_DIR}/Contents/Info.plist"
@@ -130,13 +130,13 @@ jobs:
           fi
 
           # 5. 生成 DMG 安装包 (预留 80MB 余量并显式使用 HFS+，彻底根除 hdiutil 卷空间不足)
-          dmg_name="vpn-parser-${version}-darwin-${arch}.dmg"
+          dmg_name="vproxy-${version}-darwin-${arch}.dmg"
           rm -f "dist/${dmg_name}" /tmp/temp.dmg
           app_size_mb=$(du -sm "${APP_DIR}" | awk '{print $1}')
           dmg_size_mb=$((app_size_mb + 80))
           echo "应用包体积: ${app_size_mb}MB，预分配 DMG 镜像容量: ${dmg_size_mb}MB"
-          hdiutil create -size "${dmg_size_mb}m" -volname "VPN Parser" -fs HFS+ -ov /tmp/temp.dmg
-          mount_point="/Volumes/VPN Parser"
+          hdiutil create -size "${dmg_size_mb}m" -volname "VProxy" -fs HFS+ -ov /tmp/temp.dmg
+          mount_point="/Volumes/VProxy"
           hdiutil detach "${mount_point}" -force 2>/dev/null || true
           hdiutil attach -readwrite -noverify -noautoopen /tmp/temp.dmg
           cp -R "${APP_DIR}" "${mount_point}/"
@@ -147,14 +147,23 @@ jobs:
           rm -f /tmp/temp.dmg
 
           # 6. 生成命令行打包 (.tar.gz)
-          strip target/release/vpn-parser || true
-          tar_name="vpn-parser-${version}-darwin-${arch}.tar.gz"
-          tar -czf "dist/${tar_name}" -C target/release vpn-parser
+          strip target/release/vproxy || true
+          tar_name="vproxy-${version}-darwin-${arch}.tar.gz"
+          tar -czf "dist/${tar_name}" -C target/release vproxy
 
           # 7. 计算哈希值
           cd dist
           shasum -a 256 "${dmg_name}" > "${dmg_name}.sha256"
           shasum -a 256 "${tar_name}" > "${tar_name}.sha256"
+
+          # 双发兼容：为老版本升级生成镜像别名包
+          legacy_dmg="vpn-parser-${version}-darwin-${arch}.dmg"
+          legacy_tar="vpn-parser-${version}-darwin-${arch}.tar.gz"
+          cp "${dmg_name}" "${legacy_dmg}"
+          cp "${tar_name}" "${legacy_tar}"
+          shasum -a 256 "${legacy_dmg}" > "${legacy_dmg}.sha256"
+          shasum -a 256 "${legacy_tar}" > "${legacy_tar}.sha256"
+
           cat *.sha256
 
       - name: 上传产物

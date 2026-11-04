@@ -213,8 +213,8 @@ fn scan_exe_dir(exe_dir: &Path, current_exe: &Path, found: &mut Vec<CleanupItem>
                 || name_lower.ends_with(".old.exe")
                 || name_lower.ends_with(".exe.old")
                 || (name_lower.starts_with("is-") && name_lower.ends_with(".tmp"))
-                || (name_lower.starts_with("vpn-parser") && name_lower.contains(".old"))
-                || (name_lower.starts_with("vpn-parser") && name_lower.contains(".bak"));
+                || ((name_lower.starts_with("vproxy") || name_lower.starts_with("vpn-parser")) && name_lower.contains(".old"))
+                || ((name_lower.starts_with("vproxy") || name_lower.starts_with("vpn-parser")) && name_lower.contains(".bak"));
 
             if is_legacy_exe {
                 let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
@@ -656,7 +656,7 @@ impl VpnApp {
                     ui.label(RichText::new("系统防护与清理保障").strong().size(13.0));
                     ui.label(
                         RichText::new(
-                            "• 当前运行的程序实体 (vpn-parser.exe)、活动状态日志与核心数据资产数据库 (vpn-parser.db) 受到底层受控锁定，绝不会被误清理。\n• 历史程序备份镜像 (.old) 是 Windows 自动更新替换或覆盖安装时生成的副本，在当前版本使用稳定后即可放心一键清除以释放空间。",
+                            "• 当前运行的程序实体 (vproxy.exe)、活动状态日志与核心数据资产数据库 (vproxy.db) 受到底层受控锁定，绝不会被误清理。\n• 历史程序备份镜像 (.old) 是 Windows 自动更新替换或覆盖安装时生成的副本，在当前版本使用稳定后即可放心一键清除以释放空间。",
                         )
                         .size(11.0)
                         .color(theme::muted()),

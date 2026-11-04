@@ -20,18 +20,10 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-#[allow(dead_code)]
-const GEOSITE_CN_URL: &str =
-    "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs";
-#[allow(dead_code)]
-const GEOSITE_ADS_URL: &str =
-    "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs";
-#[allow(dead_code)]
-const GEOSITE_GFW_URL: &str =
-    "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-gfw.srs";
-#[allow(dead_code)]
-const GEOIP_CN_URL: &str =
-    "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs";
+#[allow(unused_imports)]
+use crate::constants::proxy::{
+    GEOIP_CN_URL, GEOSITE_ADS_URL, GEOSITE_CN_URL, GEOSITE_GFW_URL,
+};
 const SING_BOX_BATCH_SIZE: usize = 64;
 
 fn sing_box_batch_count(node_count: usize) -> usize {

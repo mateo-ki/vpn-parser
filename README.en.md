@@ -1,13 +1,13 @@
-# VPN Parser
+# VProxy
 
 <p align="center">
   <a href="README.md">简体中文</a> | <b>English</b>
 </p>
 
-A high-performance, modern cross-platform proxy tool built with Rust and egui: collects subscriptions, parses nodes, drives proxy cores (Mihomo / sing-box / Xray), and performs real-world reachability and latency benchmarking.
+A high-performance, modern cross-platform proxy workstation built with Rust and egui: collects subscriptions, parses nodes, drives multi-core compilers (Mihomo / sing-box / VP-Core / Xray / Meow / Shoes), and performs real-world reachability and latency benchmarking.
 
 <p align="center">
-  <img src="docs/images/dashboard.png" alt="VPN Parser Dashboard" width="100%">
+  <img src="docs/images/dashboard.png" alt="VProxy Dashboard" width="100%">
 </p>
 
 - **Windows**: Modern installer (Inno Setup) + one-click system proxy integration + TUN virtual adapter mode (with elevated privileges)
@@ -67,10 +67,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ### Windows (Scoop One-Line Install)
 ```powershell
 # Install directly via GitHub Raw manifest without adding extra buckets
-scoop install https://raw.githubusercontent.com/mateo-ki/vpn-parser/main/vpn-parser.json
+scoop install https://raw.githubusercontent.com/mateo-ki/vproxy/main/vproxy.json
 
 # Update in the future
-scoop update vpn-parser
+scoop update vproxy
 ```
 
 ### Windows Build

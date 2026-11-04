@@ -246,7 +246,7 @@ pub const THEMES: [Theme; 4] = [
     },
 ];
 
-pub const DEFAULT_THEME: &str = "theme-champagne";
+pub use crate::constants::brand::DEFAULT_THEME;
 
 pub fn rgb(hex: u32) -> Color32 {
     Color32::from_rgb(

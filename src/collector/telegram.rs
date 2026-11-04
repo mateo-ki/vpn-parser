@@ -698,7 +698,7 @@ vless://uuid-uuid-uuid@203.0.113.7:443?security=tls#DE-9<br/>
             .unwrap_or_else(|_| "http://127.0.0.1:9980".to_string());
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
-            .user_agent("vpn-parser/1.0")
+            .user_agent("vproxy/1.0")
             .proxy(reqwest::Proxy::all(&proxy).unwrap())
             .build()
             .unwrap();

@@ -7,8 +7,7 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
-pub const URL_TEST_GROUP: &str = "自动选择";
-pub const FINAL_GROUP: &str = "漏网之鱼";
+pub use crate::constants::proxy::{FINAL_GROUP, URL_TEST_GROUP};
 pub const URL_TEST_INTERVAL_SECS: u64 = 60;
 pub const URL_TEST_TOLERANCE_MS: u64 = 30;
 pub const URL_TEST_TIMEOUT_MS: u64 = 3000;

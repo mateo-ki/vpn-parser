@@ -2,12 +2,10 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 /// 默认 DNS 走 DoH：明文 UDP（8.8.8.8/114）在境内会被透明拦截，属于 DNS 泄露。
-pub const DEFAULT_DNS_PRIMARY: &str = "https://doh.pub/dns-query";
-pub const DEFAULT_DNS_SECONDARY: &str = "https://dns.alidns.com/dns-query";
-/// 旧版本的明文默认值；保存过的配置命中它们时迁移到上面的 DoH。
-const LEGACY_DEFAULT_PLAINTEXT: &[&str] = &["8.8.8.8", "114.114.114.114"];
-const LEGACY_DEFAULT_DOH: &str = "https://1.1.1.1/dns-query";
-const PREVIOUS_DEFAULT_DOH: &str = "https://223.5.5.5/dns-query";
+pub use crate::constants::network::{
+    DEFAULT_DNS_PRIMARY, DEFAULT_DNS_SECONDARY, LEGACY_DEFAULT_DOH, LEGACY_DEFAULT_PLAINTEXT,
+    PREVIOUS_DEFAULT_DOH,
+};
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingMode {

@@ -2,7 +2,7 @@ Package: vpn-parser
 Version: __VERSION__
 Depends: libc, ca-certificates
 Architecture: __ARCH__
-Maintainer: mateo-ki <https://github.com/mateo-ki/vpn-parser>
+Maintainer: mateo-ki <https://github.com/mateo-ki/vproxy>
 Section: net
 Priority: optional
 Title: VPN Parser subscription collector and proxy node manager

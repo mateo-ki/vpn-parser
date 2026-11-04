@@ -20,7 +20,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use uuid::Uuid;
 
-pub const UNGROUPED_SOURCE_ID: &str = "__ungrouped__";
+pub use crate::constants::network::UNGROUPED_SOURCE_ID;
 
 #[derive(Clone)]
 pub struct Database {

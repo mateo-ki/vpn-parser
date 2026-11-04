@@ -1,13 +1,13 @@
-# VPN Parser
+# VProxy
 
 <p align="center">
   <b>简体中文</b> | <a href="README.en.md">English</a>
 </p>
 
-Rust + egui 编写的高性能现代化跨平台桌面代理工具：采集订阅、解析节点、驱动代理内核（Mihomo / sing-box / Xray），并实测代理可用性与延迟。
+Rust + egui 编写的高性能现代化跨平台代理工作站：采集订阅、解析节点、驱动六大代理内核（Mihomo / sing-box / VP-Core / Xray / Meow / Shoes），并实测代理可用性与延迟。
 
 <p align="center">
-  <img src="docs/images/dashboard.png" alt="VPN Parser 控制台主界面" width="100%">
+  <img src="docs/images/dashboard.png" alt="VProxy 控制台主界面" width="100%">
 </p>
 
 - **Windows**：安装包（Inno Setup）+ 便携版（Scoop 一键安装）+ 系统代理一键控制 + TUN 虚拟网卡模式（带管理员提权）
@@ -64,16 +64,16 @@ cargo build --release               # 编译 release 二进制
 ### Windows 安装 (Scoop 一键安装)
 ```powershell
 # 无需添加 bucket，直接通过 GitHub Raw 安装并自动配置便携数据持久化
-scoop install https://raw.githubusercontent.com/mateo-ki/vpn-parser/main/vpn-parser.json
+scoop install https://raw.githubusercontent.com/mateo-ki/vproxy/main/vproxy.json
 
 # 后续升级
-scoop update vpn-parser
+scoop update vproxy
 ```
 
 ### Windows 安装包 (Inno Setup)
 ```powershell
 # 编译 Inno Setup 安装向导，产物输出至 dist/
-"<Inno Setup>\ISCC.exe" installer/vpn-parser.iss
+"<Inno Setup>\ISCC.exe" installer/vproxy.iss
 ```
 
 ### Linux 全套发行包 (AppImage / deb / rpm)

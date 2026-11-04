@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=VProxy
+GenericName=Proxy subscription & multi-core workstation
+GenericName[zh_CN]=代理订阅与多内核工作台
+Comment=Fetch subscriptions, verify nodes and drive multi-proxy cores (Mihomo/Sing-box/VP-Core/Xray)
+Comment[zh_CN]=拉取订阅、测速选节点，并驱动多代理内核（Mihomo/Sing-box/VP-Core/Xray）
+Exec=vproxy
+Icon=vproxy
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=proxy;vpn;clash;mihomo;singbox;subscription;vproxy;
+StartupNotify=true
+# 程序按 app_id 关联 .desktop 图标与窗口，Linux / Wayland 下为 vproxy
+StartupWMClass=vproxy

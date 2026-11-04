@@ -243,7 +243,7 @@ pub async fn ensure_meow_home_geo(home: &Path, proxy_url: Option<&str>) -> Resul
         ];
         let mmdb_task = async {
             let mut builder = Client::builder()
-                .user_agent("vpn-parser geo-updater")
+                .user_agent("vproxy geo-updater")
                 .connect_timeout(Duration::from_secs(6))
                 .timeout(Duration::from_secs(20));
             if let Some(proxy_url) = proxy_url {
@@ -412,7 +412,7 @@ pub async fn provision_files(
 ) -> Result<String> {
     std::fs::create_dir_all(dir)?;
     let mut builder = Client::builder()
-        .user_agent("vpn-parser geo-updater")
+        .user_agent("vproxy geo-updater")
         .connect_timeout(Duration::from_secs(6))
         .timeout(Duration::from_secs(180));
     if let Some(proxy_url) = proxy_url {

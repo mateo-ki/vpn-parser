@@ -18,7 +18,7 @@ VPN Parser 在 OpenWrt 上以**纯无头（Headless）高性能守护进程**形
 
 ## 📦 支持架构与安装包
 
-在项目的 [GitHub Releases](https://github.com/mateo-ki/vpn-parser/releases) 页面中提供预编译安装包：
+在项目的 [GitHub Releases](https://github.com/mateo-ki/vproxy/releases) 页面中提供预编译安装包：
 
 | 架构名称 | 适用设备 | OpenWrt 25.x+ (.apk) | OpenWrt 24.x/23.x (.ipk) |
 | :--- | :--- | :--- | :--- |

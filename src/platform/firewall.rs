@@ -10,7 +10,7 @@ use anyhow::{anyhow, Result};
 use std::path::Path;
 
 /// 规则名前缀，便于识别与幂等检查。
-pub const RULE_PREFIX: &str = "VPN Parser";
+pub use crate::constants::platform::FIREWALL_RULE_PREFIX as RULE_PREFIX;
 
 pub fn rule_name(program: &Path) -> String {
     let stem = program
@@ -211,14 +211,14 @@ mod tests {
         // 那样断言的就不是这个性质了（Linux 上第一次跑就是这样红的）。
         #[cfg(windows)]
         let (same_name_a, same_name_b, other) = (
-            r"C:\Apps\VPN Parser\vpn-parser.exe",
-            r"E:\other\place\vpn-parser.exe",
+            r"C:\Apps\VProxy\vproxy.exe",
+            r"E:\other\place\vproxy.exe",
             r"\tmp\mihomo.exe",
         );
         #[cfg(not(windows))]
         let (same_name_a, same_name_b, other) = (
-            "/opt/VPN Parser/vpn-parser",
-            "/srv/other/place/vpn-parser",
+            "/opt/VProxy/vproxy",
+            "/srv/other/place/vproxy",
             "/tmp/mihomo",
         );
 
@@ -274,8 +274,8 @@ mod tests {
     #[test]
     fn the_verbatim_prefix_never_reaches_netsh() {
         assert_eq!(
-            netsh_program_value(&PathBuf::from(r"\\?\C:\Apps\VPN Parser\vpn-parser.exe")),
-            r"C:\Apps\VPN Parser\vpn-parser.exe"
+            netsh_program_value(&PathBuf::from(r"\\?\C:\Apps\VProxy\vproxy.exe")),
+            r"C:\Apps\VProxy\vproxy.exe"
         );
         assert_eq!(
             netsh_program_value(&PathBuf::from(r"\\?\UNC\fileserv\share\mihomo.exe")),
@@ -283,8 +283,8 @@ mod tests {
         );
         // 本来就没有前缀的（非 Windows、或没走 canonicalize 的调用方）原样通过。
         assert_eq!(
-            netsh_program_value(&PathBuf::from(r"C:\Apps\VPN Parser\xray.exe")),
-            r"C:\Apps\VPN Parser\xray.exe"
+            netsh_program_value(&PathBuf::from(r"C:\Apps\VProxy\xray.exe")),
+            r"C:\Apps\VProxy\xray.exe"
         );
     }
 

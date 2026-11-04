@@ -3,17 +3,17 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use vpn_parser::api::AppState;
-use vpn_parser::collector::Collector;
-use vpn_parser::db::Database;
+use vproxy::api::AppState;
+use vproxy::collector::Collector;
+use vproxy::db::Database;
 #[cfg(feature = "gui")]
-use vpn_parser::gui::{setup_chinese_fonts, VpnApp};
-use vpn_parser::kernel::KernelManager;
-use vpn_parser::proxy::ProxyManager;
-use vpn_parser::scheduler::Scheduler;
-use vpn_parser::speedtest::SpeedTester;
-use vpn_parser::tasks::TaskTracker;
-use vpn_parser::*;
+use vproxy::gui::{setup_chinese_fonts, VpnApp};
+use vproxy::kernel::KernelManager;
+use vproxy::proxy::ProxyManager;
+use vproxy::scheduler::Scheduler;
+use vproxy::speedtest::SpeedTester;
+use vproxy::tasks::TaskTracker;
+use vproxy::*;
 use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
@@ -24,8 +24,9 @@ use uuid::Uuid;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "vpn-parser",
-    about = "VPN/proxy subscription collector with desktop GUI and HTTP API"
+    name = "vproxy",
+    version,
+    about = "VProxy: A modern cross-platform proxy workstation with desktop GUI, multi-core compilers and HTTP API"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -36,7 +37,7 @@ struct Cli {
     listen: String,
 
     /// SQLite database path。不写就等于 `default_db_path()`：Windows 仍是程序目录下的
-    /// `data/vpn-parser.db`（装机就是那个位置，一个字都没改），Linux 走 XDG 数据目录。
+    /// `data/vproxy.db`（或平滑沿用历史 `data/vpn-parser.db`），Linux 走 XDG 数据目录。
     #[arg(long)]
     db: Option<std::path::PathBuf>,
 
@@ -126,6 +127,20 @@ enum Commands {
         #[arg(long, default_value_t = 3000)]
         timeout: u32,
     },
+    /// 将订阅或节点导出转换为指定格式 (clash, base64, uris, json)
+    Export {
+        /// 节点链接、本地文件路径或订阅 URL
+        #[arg(short, long)]
+        input: String,
+
+        /// 导出格式: clash (Clash 代理列表 YAML), base64 (标准 Base64 订阅), uris (单行 URI 列表), json (节点完整 JSON)
+        #[arg(short, long, default_value = "clash")]
+        format: String,
+
+        /// 输出文件路径（不指定则打印至 stdout）
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
 }
 
 fn handle_command(cmd: Commands) -> Result<()> {
@@ -144,7 +159,7 @@ fn handle_command(cmd: Commands) -> Result<()> {
                 target
             };
 
-            let nodes = vpn_parser::parser::parse_subscription(&content, None);
+            let nodes = vproxy::parser::parse_subscription(&content, None);
             if json {
                 println!("{}", serde_json::to_string_pretty(&nodes)?);
             } else {
@@ -180,20 +195,20 @@ fn handle_command(cmd: Commands) -> Result<()> {
             } else {
                 input
             };
-            let nodes = vpn_parser::parser::parse_subscription(&content, None);
+            let nodes = vproxy::parser::parse_subscription(&content, None);
             if nodes.is_empty() {
                 eprintln!("错误: 未在输入中解析出任何有效节点");
                 std::process::exit(1);
             }
             let routing_mode = match mode.to_ascii_lowercase().as_str() {
-                "global" => vpn_parser::proxy::RoutingMode::Global,
-                "direct" => vpn_parser::proxy::RoutingMode::Direct,
-                _ => vpn_parser::proxy::RoutingMode::Rule,
+                "global" => vproxy::proxy::RoutingMode::Global,
+                "direct" => vproxy::proxy::RoutingMode::Direct,
+                _ => vproxy::proxy::RoutingMode::Rule,
             };
-            let mut options = vpn_parser::proxy::MihomoConfigOptions::default();
+            let mut options = vproxy::proxy::MihomoConfigOptions::default();
             options.routing_mode = routing_mode;
-            let plan = vpn_parser::proxy::ir::lower_options_to_ir(&options, Some(&nodes[0]));
-            use vpn_parser::proxy::compiler::{
+            let plan = vproxy::proxy::ir::lower_options_to_ir(&options, Some(&nodes[0]));
+            use vproxy::proxy::compiler::{
                 BackendCompiler, CompiledArtifact, MeowCompiler, MihomoCompiler, ShoesCompiler,
                 SingBoxCompiler, VpCoreCompiler, XrayCompiler,
             };
@@ -227,7 +242,7 @@ fn handle_command(cmd: Commands) -> Result<()> {
                 || target.starts_with("trojan://")
                 || target.starts_with("hysteria2://")
             {
-                let nodes = vpn_parser::parser::parse_subscription(&target, None);
+                let nodes = vproxy::parser::parse_subscription(&target, None);
                 if let Some(node) = nodes.first() {
                     (node.server.clone(), node.port)
                 } else {
@@ -243,12 +258,66 @@ fn handle_command(cmd: Commands) -> Result<()> {
             eprintln!("正在探测目标连通性: {host}:{port} (超时: {timeout}ms)...");
             let c_host = std::ffi::CString::new(host.clone())?;
             let latency =
-                unsafe { vpn_parser::ffi::vpn_test_tcp_latency(c_host.as_ptr(), port, timeout) };
+                unsafe { vproxy::ffi::vpn_test_tcp_latency(c_host.as_ptr(), port, timeout) };
             if latency >= 0 {
                 println!("✓ 握手成功! 延迟: {latency} ms");
             } else {
                 println!("✗ 握手失败: 连接超时或无法解析主机");
                 std::process::exit(1);
+            }
+        }
+        Commands::Export {
+            input,
+            format,
+            output,
+        } => {
+            let content = if input.starts_with("http://") || input.starts_with("https://") {
+                eprintln!("正在获取输入订阅内容: {input} ...");
+                let rt = Runtime::new()?;
+                rt.block_on(async {
+                    let resp = reqwest::get(&input).await?;
+                    resp.text().await.map_err(anyhow::Error::from)
+                })?
+            } else if std::path::Path::new(&input).is_file() {
+                std::fs::read_to_string(&input)?
+            } else {
+                input
+            };
+            let nodes = vproxy::parser::parse_subscription(&content, None);
+            if nodes.is_empty() {
+                eprintln!("错误: 未在输入中解析出任何有效节点");
+                std::process::exit(1);
+            }
+            let exported_text = match format.to_ascii_lowercase().as_str() {
+                "clash" | "yaml" => {
+                    let proxies = vproxy::export::nodes_to_clash_proxies(&nodes);
+                    let mut map = serde_yaml::Mapping::new();
+                    let yaml_val: serde_yaml::Value =
+                        serde_json::from_value(serde_json::Value::Array(proxies))?;
+                    map.insert(serde_yaml::Value::String("proxies".into()), yaml_val);
+                    serde_yaml::to_string(&map)?
+                }
+                "base64" | "b64" => {
+                    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+                    let uris = vproxy::export::nodes_to_share_uris(&nodes);
+                    let combined = uris.join("\n");
+                    B64.encode(combined)
+                }
+                "uris" | "uri" | "links" => {
+                    let uris = vproxy::export::nodes_to_share_uris(&nodes);
+                    uris.join("\n")
+                }
+                "json" => serde_json::to_string_pretty(&nodes)?,
+                other => {
+                    eprintln!("错误: 不支持的导出格式 '{other}'，可选: clash, base64, uris, json");
+                    std::process::exit(1);
+                }
+            };
+            if let Some(out_path) = output {
+                std::fs::write(&out_path, &exported_text)?;
+                eprintln!("导出已成功写入至: {}", out_path.display());
+            } else {
+                println!("{exported_text}");
             }
         }
     }
@@ -329,12 +398,12 @@ fn main() -> Result<()> {
         let parent_pid = cli.parent_pid.unwrap_or(0);
         let kernel_str = cli.kernel.unwrap_or_else(|| "mihomo".to_string());
         let kernel = match kernel_str.to_ascii_lowercase().as_str() {
-            "sing-box" | "singbox" => vpn_parser::kernel::KernelKind::SingBox,
-            "xray" => vpn_parser::kernel::KernelKind::Xray,
-            "shoes" => vpn_parser::kernel::KernelKind::Shoes,
-            "meow" => vpn_parser::kernel::KernelKind::Meow,
-            "vpcore" | "vp-core" | "vp_core" => vpn_parser::kernel::KernelKind::VpCore,
-            _ => vpn_parser::kernel::KernelKind::Mihomo,
+            "sing-box" | "singbox" => vproxy::kernel::KernelKind::SingBox,
+            "xray" => vproxy::kernel::KernelKind::Xray,
+            "shoes" => vproxy::kernel::KernelKind::Shoes,
+            "meow" => vproxy::kernel::KernelKind::Meow,
+            "vpcore" | "vp-core" | "vp_core" => vproxy::kernel::KernelKind::VpCore,
+            _ => vproxy::kernel::KernelKind::Mihomo,
         };
         let executable = cli.executable.unwrap_or_default();
         let data_root = cli.data_root.unwrap_or_default();
@@ -450,14 +519,14 @@ fn main() -> Result<()> {
         let killed_zombies = platform::kill_duplicate_vpn_parser_instances();
         if killed_zombies > 0 {
             startup_log(&format!(
-                "Cleaned up {killed_zombies} orphan vpn-parser zombie processes."
+                "Cleaned up {killed_zombies} orphan vproxy zombie processes."
             ));
         }
     }
     let rt = Arc::new(Runtime::new()?);
     let _rt_guard = rt.enter();
     let handoff_proxy_options = if let Some(config_file) = cli.elevated_proxy_config_file.as_deref() {
-        match vpn_parser::proxy::read_elevated_proxy_config_file(config_file) {
+        match vproxy::proxy::read_elevated_proxy_config_file(config_file) {
             Ok(options) => {
                 options.validate()?;
                 Some(options)
@@ -468,7 +537,7 @@ fn main() -> Result<()> {
             }
         }
     } else if let Some(encoded) = cli.elevated_proxy_config.as_deref() {
-        let options = vpn_parser::proxy::decode_elevated_proxy_config(encoded)?;
+        let options = vproxy::proxy::decode_elevated_proxy_config(encoded)?;
         options.validate()?;
         Some(options)
     } else {
@@ -519,11 +588,11 @@ fn main() -> Result<()> {
         }
         // 新安装如果缺少 Geo 分流规则库，在后台异步预先拉取（Fastly CDN 2秒就绪）
         {
-            let geo_dir = vpn_parser::geo::mihomo_dir();
-            if !vpn_parser::geo::geo_ready(&geo_dir) {
+            let geo_dir = vproxy::geo::mihomo_dir();
+            if !vproxy::geo::geo_ready(&geo_dir) {
                 rt.spawn(async move {
                     tracing::info!("新安装首次运行，自动下载 GeoIP / GeoSite 规则库...");
-                    let _ = vpn_parser::geo::provision(&geo_dir, None, false).await;
+                    let _ = vproxy::geo::provision(&geo_dir, None, false).await;
                 });
             }
         }
@@ -616,7 +685,7 @@ fn main() -> Result<()> {
     }
 
     // Create ApiServerController for dynamic start/stop
-    let api_controller = vpn_parser::api::ApiServerController::new(
+    let api_controller = vproxy::api::ApiServerController::new(
         AppState {
             db: db.clone(),
             collector: collector.clone(),
@@ -752,10 +821,10 @@ fn main() -> Result<()> {
         let (window_w, window_h) = (1280.0, 800.0);
         let mut viewport = egui::ViewportBuilder::default()
             // Linux / Wayland 下合成器按 app_id 关联 .desktop 与图标
-            .with_app_id("vpn-parser")
+            .with_app_id("vproxy")
             .with_inner_size([window_w, window_h])
             .with_min_inner_size([820.0, 520.0])
-            .with_title("VPN Parser")
+            .with_title("VProxy")
             .with_icon(app_icon.clone())
             .with_visible(true)
             .with_active(!diag::enabled());
@@ -868,14 +937,14 @@ fn main() -> Result<()> {
         }
         if let Err(error) = gui_res {
             startup_log(&format!("GUI failed permanently: {error}"));
-            vpn_parser::platform::show_error(
-                "VPN Parser 启动失败",
+            vproxy::platform::show_error(
+                "VProxy 启动失败",
                 &format!(
                     "界面渲染器初始化失败：{error}\n\n\
                      这台机器可能没有可用的 OpenGL/D3D（常见于未开启 3D 加速的虚拟机或显卡驱动过旧）。\n\n\
                      可以试试：\n\
                      1. 开启虚拟机 3D 加速 / 更新显卡驱动\n\
-                     2. 以无界面模式运行：vpn-parser.exe --headless\n\
+                     2. 以无界面模式运行：vproxy.exe --headless\n\
                      3. 查看启动日志：startup.log"
                 ),
             );
@@ -904,8 +973,8 @@ mod tests {
             "--start-proxy-node".to_string(),
             "db022bb2".to_string(),
         ];
-        let assembled = vpn_parser::platform::elevated_arguments(&current, &extra);
-        let mut argv = vec!["vpn-parser".to_string()];
+        let assembled = vproxy::platform::elevated_arguments(&current, &extra);
+        let mut argv = vec!["vproxy".to_string()];
         argv.extend(assembled);
         let parsed = Cli::try_parse_from(&argv);
         assert!(parsed.is_ok(), "解析失败: {:?}", parsed.err());
@@ -929,8 +998,8 @@ mod tests {
             "--start-proxy-node".to_string(),
             "new-node".to_string(),
         ];
-        let assembled = vpn_parser::platform::elevated_arguments(&current, &extra);
-        let mut argv = vec!["vpn-parser".to_string()];
+        let assembled = vproxy::platform::elevated_arguments(&current, &extra);
+        let mut argv = vec!["vproxy".to_string()];
         argv.extend(assembled);
         let parsed = Cli::try_parse_from(&argv);
         assert!(parsed.is_ok(), "解析失败: {:?}", parsed.err());
@@ -946,7 +1015,7 @@ mod tests {
     #[test]
     fn elevated_proxy_config_accepts_value_starting_with_hyphen() {
         let parsed = Cli::try_parse_from([
-            "vpn-parser",
+            "vproxy",
             "--elevated-proxy-config",
             "-8f2_aQ",
             "--start-proxy-node",
@@ -962,7 +1031,7 @@ mod tests {
     #[test]
     fn subcommand_parse_parses_properly() {
         use super::Commands;
-        let parsed = Cli::try_parse_from(["vpn-parser", "parse", "ss://example", "--json"]);
+        let parsed = Cli::try_parse_from(["vproxy", "parse", "ss://example", "--json"]);
         assert!(parsed.is_ok());
         let cli = parsed.unwrap();
         match cli.command {
@@ -978,7 +1047,7 @@ mod tests {
     fn subcommand_compile_parses_properly() {
         use super::Commands;
         let parsed = Cli::try_parse_from([
-            "vpn-parser",
+            "vproxy",
             "compile",
             "--kernel",
             "sing-box",
@@ -1009,7 +1078,7 @@ mod tests {
     fn subcommand_ping_parses_properly() {
         use super::Commands;
         let parsed = Cli::try_parse_from([
-            "vpn-parser",
+            "vproxy",
             "ping",
             "1.1.1.1:443",
             "--timeout",
@@ -1023,6 +1092,33 @@ mod tests {
                 assert_eq!(timeout, 1500);
             }
             other => panic!("预期 Commands::Ping，实际: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn subcommand_export_parses_properly() {
+        use super::Commands;
+        let parsed = Cli::try_parse_from([
+            "vproxy",
+            "export",
+            "-i",
+            "ss://test",
+            "--format",
+            "base64",
+        ]);
+        assert!(parsed.is_ok());
+        let cli = parsed.unwrap();
+        match cli.command {
+            Some(Commands::Export {
+                input,
+                format,
+                output,
+            }) => {
+                assert_eq!(input, "ss://test");
+                assert_eq!(format, "base64");
+                assert!(output.is_none());
+            }
+            other => panic!("预期 Commands::Export，实际: {:?}", other),
         }
     }
 }

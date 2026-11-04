@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// A node passed a real proxy request to Google generate_204.
-pub const GOOGLE_PROXY_TEST_KIND: &str = "google_proxy";
+pub use crate::constants::network::GOOGLE_PROXY_TEST_KIND;
 
 /// A subscription source that can be fetched periodically.
 #[derive(Debug, Clone, Serialize, Deserialize)]

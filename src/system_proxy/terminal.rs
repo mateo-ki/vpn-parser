@@ -14,9 +14,7 @@ pub const PROXY_VARS: [&str; 6] = [
     "https_proxy",
     "all_proxy",
 ];
-pub const NO_PROXY_VAR: &str = "NO_PROXY";
-/// 本地与内网一律不走代理，否则局域网打印/开发服务器会被绕进隧道。
-pub const NO_PROXY_VALUE: &str = "localhost;127.0.0.1;::1;<local>;192.168.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*";
+pub use crate::constants::network::{NO_PROXY_VALUE, NO_PROXY_VAR};
 
 /// 我们自己写进去的值长这样，用来区分"用户原有的代理设置"。
 fn is_ours(value: &str) -> bool {

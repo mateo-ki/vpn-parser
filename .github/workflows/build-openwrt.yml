@@ -74,7 +74,7 @@ jobs:
           version="${{ steps.get_version.outputs.version }}"
           arch="${{ matrix.arch }}"
           target="${{ matrix.target }}"
-          binary="target/${target}/release/vpn-parser"
+          binary="target/${target}/release/vproxy"
 
           mkdir -p dist
 
@@ -87,11 +87,11 @@ jobs:
           ./packaging/openwrt/make_apk.sh "$binary" "$arch" dist "$version" || echo "apk packaging skipped"
 
           # 3. 生成纯静态 Linux 二进制归档 (.tar.gz)
-          tar_name="vpn-parser_${version}_linux_${arch}_musl.tar.gz"
+          tar_name="vproxy_${version}_linux_${arch}_musl.tar.gz"
           mkdir -p "target/tar-staging"
-          cp "$binary" "target/tar-staging/vpn-parser"
-          chmod 755 "target/tar-staging/vpn-parser"
-          strip --strip-unneeded "target/tar-staging/vpn-parser" 2>/dev/null || true
+          cp "$binary" "target/tar-staging/vproxy"
+          chmod 755 "target/tar-staging/vproxy"
+          strip --strip-unneeded "target/tar-staging/vproxy" 2>/dev/null || true
           cp packaging/openwrt/files/etc/init.d/vpn-parser "target/tar-staging/vpn-parser.init"
           cp packaging/openwrt/files/etc/config/vpn-parser "target/tar-staging/vpn-parser.config"
           tar -czf "dist/${tar_name}" -C "target/tar-staging" .

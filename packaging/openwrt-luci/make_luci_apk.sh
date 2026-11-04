@@ -101,8 +101,8 @@ APK_PATH="$OUTPUT_DIR/$APK_NAME"
     --info "arch:noarch" \
     --info "license:MIT" \
     --info "origin:luci-app-vpn-parser" \
-    --info "url:https://github.com/mateo-ki/vpn-parser" \
-    --info "maintainer:mateo-ki <https://github.com/mateo-ki/vpn-parser>" \
+    --info "url:https://github.com/mateo-ki/vproxy" \
+    --info "maintainer:mateo-ki <https://github.com/mateo-ki/vproxy>" \
     --info "depends:vpn-parser,luci-base,rpcd" \
     --script "post-install:$POST_INSTALL" \
     --script "post-upgrade:$POST_UPGRADE" \

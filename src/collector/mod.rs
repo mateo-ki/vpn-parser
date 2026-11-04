@@ -40,15 +40,12 @@ static HOST_FETCH_LIMITS: Lazy<StdMutex<HashMap<String, Weak<tokio::sync::Semaph
     Lazy::new(|| StdMutex::new(HashMap::new()));
 const PER_HOST_FETCH_CONCURRENCY: usize = 2;
 
-const GITHUB_RAW_HOST: &str = "raw.githubusercontent.com";
-/// GitHub raw 加速镜像。2026-09-28 实测：直连间歇性挂死时这两个仍能返回，
-/// 且与 jsdelivr/ghproxy.net 的内容 sha256 一致。
-const GITHUB_RAW_MIRRORS: &[&str] = &["gh-proxy.com", "ghfast.top"];
+use crate::constants::network::{
+    GIST_RAW_BASE, GIST_SEARCH_HOST, GITHUB_RAW_HOST, GITHUB_RAW_MIRRORS,
+};
 /// 这些主机的 raw 内容可以被镜像前缀代理（gist raw 已实测与直连 size 一致；
 /// gist.github.com 的 HTML 搜索页镜像不代理，只能直连）。
 const MIRRORABLE_RAW_HOSTS: &[&str] = &[GITHUB_RAW_HOST, "gist.githubusercontent.com"];
-const GIST_SEARCH_HOST: &str = "gist.github.com";
-const GIST_RAW_BASE: &str = "https://gist.githubusercontent.com";
 /// 独立 Gist 发现：单轮扫描页数硬上限（搜索页每页 10 条，全量 100+ 页）。
 const GIST_MAX_PAGES_HARD: usize = 300;
 /// 单轮最多注册的新 gist 源数。
@@ -60,9 +57,8 @@ pub mod telegram;
 #[path = "tests_file_source.rs"]
 mod tests_file_source;
 
-pub const GIST_DISCOVERY_SOURCE_ID: &str = "__gist_discovery__";
 /// 默认搜索词（q 参数会被 percent-encode）。
-pub const GIST_DISCOVERY_DEFAULT_QUERY: &str = "vless//";
+pub use crate::constants::network::{GIST_DISCOVERY_DEFAULT_QUERY, GIST_DISCOVERY_SOURCE_ID};
 /// GUI 多选预设查询词，对应 parse_uri 支持的分享链接前缀。Gist 搜索不支持 OR，
 /// 多协议只能按词逐轮扫描；词的干扰结果由试拉解析兜底（解不出节点就丢弃）。
 /// clash/proxies 的目标是 Clash YAML gist，语言多为 YAML 而非 Text，因此所有
@@ -160,7 +156,7 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client> {
     let mut builder = Client::builder()
         .timeout(DEFAULT_FETCH_TIMEOUT)
         .connect_timeout(connect_timeout)
-        .user_agent("vpn-parser/1.0 (+https://localhost)")
+        .user_agent("vproxy/1.0 (+https://localhost)")
         .redirect(reqwest::redirect::Policy::limited(5));
     if let Some(proxy_url) = proxy_url {
         builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);

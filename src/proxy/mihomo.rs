@@ -13,13 +13,12 @@ use serde_json::{json, Value};
 pub use crate::proxy::compiler::mihomo::SMART_ROUTING_PREPEND_RULES;
 
 /// 内核内自动选路用的两个组名。
-pub const URL_TEST_GROUP: &str = "自动选择";
+pub use crate::constants::proxy::{FINAL_GROUP, URL_TEST_GROUP};
 
 /// url-test 的判活节奏。
 pub(crate) const URL_TEST_INTERVAL_SECS: u64 = 60;
 pub(crate) const URL_TEST_TOLERANCE_MS: u64 = 30;
 pub(crate) const URL_TEST_TIMEOUT_MS: u64 = 3000;
-pub const FINAL_GROUP: &str = "漏网之鱼";
 
 pub fn build_mihomo_config(node: &Node, options: MihomoConfigOptions) -> Result<Value> {
     options.validate()?;

@@ -26,8 +26,9 @@ pub const WARP_MASQUE_V6: &[&str] = &[
 pub const WARP_MASQUE_PORTS: &[u16] = &[443, 500, 1701, 4500, 4443, 8443, 8095];
 
 /// Cloudflare WARP MASQUE 官方 SNI 域名及接入节点
-pub const OFFICIAL_SNI: &str = "zt-masque.cloudflareclient.com";
-pub const SNI_NODE_IP: &str = "162.159.198.1";
+pub use crate::constants::network::{
+    OFFICIAL_WARP_SNI as OFFICIAL_SNI, WARP_SNI_NODE_IP as SNI_NODE_IP,
+};
 pub const SNI_NODE_PORT: u16 = 443;
 
 /// 剥离 PEM 格式的头部与尾部，保留纯 base64 字符串

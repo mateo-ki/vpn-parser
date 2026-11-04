@@ -4,7 +4,7 @@ PKG_NAME:=luci-app-vpn-parser
 PKG_VERSION:=1.8.8
 PKG_RELEASE:=1
 
-PKG_MAINTAINER:=mateo-ki <https://github.com/mateo-ki/vpn-parser>
+PKG_MAINTAINER:=mateo-ki <https://github.com/mateo-ki/vproxy>
 PKG_LICENSE:=MIT
 
 LUCI_TITLE:=LuCI Web GUI for VPN Parser

@@ -1,9 +1,10 @@
-//! vpn-parser: A modern cross-platform proxy tool for collecting subscriptions,
+//! VProxy: A modern cross-platform proxy workstation for collecting subscriptions,
 //! parsing nodes, and managing proxy cores (Mihomo, Sing-box, VP-Core, Meow, Xray, Shoes).
 
 pub mod api;
 pub mod app_update;
 pub mod collector;
+pub mod constants;
 pub mod db;
 pub mod diag;
 pub mod export;
@@ -76,16 +77,31 @@ pub fn data_root_from(
         #[cfg(target_os = "macos")]
         {
             if let Some(base) = home {
-                return base.join("Library/Application Support/vpn-parser");
+                let new_path = base.join("Library/Application Support/vproxy");
+                let old_path = base.join("Library/Application Support/vpn-parser");
+                if !new_path.exists() && old_path.exists() {
+                    return old_path;
+                }
+                return new_path;
             }
         }
         #[cfg(not(target_os = "macos"))]
         {
             if let Some(base) = xdg_data_home.filter(|p| p.is_absolute()) {
-                return base.join("vpn-parser");
+                let new_path = base.join("vproxy");
+                let old_path = base.join("vpn-parser");
+                if !new_path.exists() && old_path.exists() {
+                    return old_path;
+                }
+                return new_path;
             }
             if let Some(base) = home {
-                return base.join(".local/share/vpn-parser");
+                let new_path = base.join(".local/share/vproxy");
+                let old_path = base.join(".local/share/vpn-parser");
+                if !new_path.exists() && old_path.exists() {
+                    return old_path;
+                }
+                return new_path;
             }
         }
         cwd.join("data")
@@ -93,8 +109,15 @@ pub fn data_root_from(
 }
 
 /// `--db` 不写时的默认库路径。
+/// 平滑迁移：优先使用 vproxy.db，若尚不存在且原 vpn-parser.db 存在，则无缝使用原数据库。
 pub fn default_db_path() -> std::path::PathBuf {
-    data_root().join("vpn-parser.db")
+    let root = data_root();
+    let new_db = root.join(constants::DEFAULT_DB_FILE);
+    let old_db = root.join(constants::LEGACY_DB_FILE);
+    if !new_db.exists() && old_db.exists() {
+        return old_db;
+    }
+    new_db
 }
 
 #[cfg(test)]
@@ -108,11 +131,11 @@ mod data_root_tests {
     fn the_diag_instance_never_uses_the_user_data_dir() {
         let got = data_root_from(
             true,
-            Path::new("/tmp/vpn-parser-diag-1"),
+            Path::new("/tmp/vproxy-diag-1"),
             Some(Path::new("/home/me/.local/share")),
             Some(Path::new("/home/me")),
         );
-        assert_eq!(got, Path::new("/tmp/vpn-parser-diag-1/data").to_path_buf());
+        assert_eq!(got, Path::new("/tmp/vproxy-diag-1/data").to_path_buf());
     }
 
     /// XDG 优先，其次 HOME 下的常见位置，两个都没有才退回工作目录（而不是猜一个绝对路径）。
@@ -125,7 +148,7 @@ mod data_root_tests {
             Some(Path::new("/data/x")),
             Some(Path::new("/home/me")),
         );
-        assert_eq!(got, Path::new("/data/x/vpn-parser").to_path_buf());
+        assert_eq!(got, Path::new("/data/x/vproxy").to_path_buf());
 
         let got = data_root_from(
             false,
@@ -135,7 +158,7 @@ mod data_root_tests {
         );
         assert_eq!(
             got,
-            Path::new("/home/me/.local/share/vpn-parser").to_path_buf()
+            Path::new("/home/me/.local/share/vproxy").to_path_buf()
         );
 
         // 相对值不当 XDG 配置：那样会拼出一个跟着工作目录跑的假绝对路径。
@@ -147,7 +170,7 @@ mod data_root_tests {
         );
         assert_eq!(
             got,
-            Path::new("/home/me/.local/share/vpn-parser").to_path_buf()
+            Path::new("/home/me/.local/share/vproxy").to_path_buf()
         );
 
         let got = data_root_from(false, Path::new("/usr/bin"), None, None);
@@ -165,7 +188,7 @@ mod data_root_tests {
         );
         assert_eq!(
             got,
-            Path::new("/Users/me/Library/Application Support/vpn-parser").to_path_buf()
+            Path::new("/Users/me/Library/Application Support/vproxy").to_path_buf()
         );
     }
 
@@ -173,7 +196,7 @@ mod data_root_tests {
     #[cfg(windows)]
     #[test]
     fn the_windows_data_root_stays_next_to_the_program() {
-        let got = data_root_from(false, Path::new(r"C:\Apps\VPN Parser"), None, None);
-        assert_eq!(got, Path::new(r"C:\Apps\VPN Parser\data").to_path_buf());
+        let got = data_root_from(false, Path::new(r"C:\Apps\VProxy"), None, None);
+        assert_eq!(got, Path::new(r"C:\Apps\VProxy\data").to_path_buf());
     }
 }

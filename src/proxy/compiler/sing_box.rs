@@ -7,14 +7,9 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 
-pub const GEOSITE_CN_URL: &str =
-    "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs";
-pub const GEOSITE_ADS_URL: &str =
-    "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs";
-pub const GEOSITE_GFW_URL: &str =
-    "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-gfw.srs";
-pub const GEOIP_CN_URL: &str =
-    "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs";
+pub use crate::constants::proxy::{
+    GEOIP_CN_URL, GEOSITE_ADS_URL, GEOSITE_CN_URL, GEOSITE_GFW_URL,
+};
 
 pub struct SingBoxCompiler {
     capabilities: CompilerCapabilities,

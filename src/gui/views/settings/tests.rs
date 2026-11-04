@@ -94,7 +94,7 @@ mod header_probe_tests {
                 .exact_size(34.0)
                 .frame(Frame::NONE.fill(egui::Color32::WHITE))
                 .show(ui, |ui| {
-                    let _ = ui.label("VPN Parser");
+                    let _ = ui.label("VProxy");
                 });
             egui::Panel::left("sidebar")
                 .exact_size(220.0)
@@ -281,7 +281,7 @@ mod stats_row_overflow_probe_tests {
                 .exact_size(34.0)
                 .frame(Frame::NONE.fill(Color32::WHITE))
                 .show(ui, |ui| {
-                    let _ = ui.label("VPN Parser");
+                    let _ = ui.label("VProxy");
                 });
             egui::Panel::left("sidebar")
                 .exact_size(220.0)

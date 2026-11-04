@@ -186,6 +186,46 @@ pub unsafe extern "C" fn vpn_test_tcp_latency(
     -1
 }
 
+// ── VProxy 品牌规范导出别名 ───────────────────────────────────────
+
+#[no_mangle]
+pub extern "C" fn vproxy_version() -> *const c_char {
+    vpn_version()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vproxy_free_string(ptr: *mut c_char) {
+    vpn_free_string(ptr);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vproxy_parse_subscription(content: *const c_char) -> *mut c_char {
+    vpn_parse_subscription(content)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vproxy_parse_nodes_count(content: *const c_char) -> i32 {
+    vpn_parse_nodes_count(content)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vproxy_compile_config(
+    kernel_kind: *const c_char,
+    node_json: *const c_char,
+    options_json: *const c_char,
+) -> *mut c_char {
+    vpn_compile_config(kernel_kind, node_json, options_json)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vproxy_test_tcp_latency(
+    host: *const c_char,
+    port: u16,
+    timeout_ms: u32,
+) -> i32 {
+    vpn_test_tcp_latency(host, port, timeout_ms)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +236,10 @@ mod tests {
         let v_ptr = vpn_version();
         let c_str = unsafe { CStr::from_ptr(v_ptr) };
         assert_eq!(c_str.to_str().unwrap(), env!("CARGO_PKG_VERSION"));
+
+        let v2_ptr = vproxy_version();
+        let c2_str = unsafe { CStr::from_ptr(v2_ptr) };
+        assert_eq!(c2_str.to_str().unwrap(), env!("CARGO_PKG_VERSION"));
     }
 
     #[test]

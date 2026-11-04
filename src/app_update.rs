@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// 安装包发布在这儿，由 `.github/workflows/release.yml`（Windows）和
 /// `.github/workflows/build-linux.yml`（deb / rpm）用同一个 tag 打出来。
-pub const REPOSITORY: &str = "mateo-ki/vpn-parser";
+pub use crate::constants::brand::REPOSITORY;
 
 /// 一种平台的安装包形态。资产名规则各不同，所以"挑哪个包"和"怎么装"都得跟着它走。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +72,7 @@ impl PackageKind {
     }
 }
 
-const HASH_INDEX_NAME: &str = "sha256.txt";
+use crate::constants::brand::HASH_INDEX_NAME;
 /// 安装包现在 ~15 MB，留 200 MB 上限只为挡住"镜像回了一个 HTML 或者整个盘"。
 const MAX_INSTALLER_SIZE: u64 = 200 * 1024 * 1024;
 
@@ -388,7 +388,8 @@ fn pick_installer_asset(assets: &[AssetJson], tag: &str) -> Option<AppAsset> {
 }
 
 fn pick_one_kind(assets: &[AssetJson], kind: PackageKind, version: &str) -> Option<AppAsset> {
-    let expected = format!("vpn-parser-{version}{}", kind.suffix());
+    let expected_vproxy = format!("vproxy-{version}{}", kind.suffix());
+    let expected_legacy = format!("vpn-parser-{version}{}", kind.suffix());
     // 松匹配按包型分两档，理由见 `needs_version_in_name`：Windows 那串是 release.yml
     // 按同一个模板写的，后缀命中就等于版本命中；deb/rpm/AppImage 的名字里还夹着工具自己填的
     // 修订号（`-1`）和架构（`amd64`/`x86_64`），只看后缀就可能挑到别的版本那一份。
@@ -400,7 +401,8 @@ fn pick_one_kind(assets: &[AssetJson], kind: PackageKind, version: &str) -> Opti
     };
     let found = assets
         .iter()
-        .position(|asset| asset.name.eq_ignore_ascii_case(&expected))
+        .position(|asset| asset.name.eq_ignore_ascii_case(&expected_vproxy))
+        .or_else(|| assets.iter().position(|asset| asset.name.eq_ignore_ascii_case(&expected_legacy)))
         .or_else(|| assets.iter().rposition(loose))?;
     let asset = &assets[found];
     Some(AppAsset {
@@ -881,9 +883,25 @@ fn synthesize_candidate_assets(tag: &str) -> Vec<AssetJson> {
     let version = tag.trim_start_matches('v');
     vec![
         AssetJson {
+            name: format!("vproxy-{version}-windows-x64-setup.exe"),
+            browser_download_url: format!(
+                "https://github.com/{REPOSITORY}/releases/download/{tag}/vproxy-{version}-windows-x64-setup.exe"
+            ),
+            size: 0,
+            digest: None,
+        },
+        AssetJson {
             name: format!("vpn-parser-{version}-windows-x64-setup.exe"),
             browser_download_url: format!(
                 "https://github.com/{REPOSITORY}/releases/download/{tag}/vpn-parser-{version}-windows-x64-setup.exe"
+            ),
+            size: 0,
+            digest: None,
+        },
+        AssetJson {
+            name: format!("vproxy_{version}_amd64.deb"),
+            browser_download_url: format!(
+                "https://github.com/{REPOSITORY}/releases/download/{tag}/vproxy_{version}_amd64.deb"
             ),
             size: 0,
             digest: None,
@@ -897,6 +915,14 @@ fn synthesize_candidate_assets(tag: &str) -> Vec<AssetJson> {
             digest: None,
         },
         AssetJson {
+            name: format!("vproxy-{version}-x86_64.AppImage"),
+            browser_download_url: format!(
+                "https://github.com/{REPOSITORY}/releases/download/{tag}/vproxy-{version}-x86_64.AppImage"
+            ),
+            size: 0,
+            digest: None,
+        },
+        AssetJson {
             name: format!("vpn-parser-{version}-x86_64.AppImage"),
             browser_download_url: format!(
                 "https://github.com/{REPOSITORY}/releases/download/{tag}/vpn-parser-{version}-x86_64.AppImage"
@@ -905,9 +931,9 @@ fn synthesize_candidate_assets(tag: &str) -> Vec<AssetJson> {
             digest: None,
         },
         AssetJson {
-            name: format!("vpn-parser-{version}.AppImage"),
+            name: format!("vproxy-{version}-1.x86_64.rpm"),
             browser_download_url: format!(
-                "https://github.com/{REPOSITORY}/releases/download/{tag}/vpn-parser-{version}.AppImage"
+                "https://github.com/{REPOSITORY}/releases/download/{tag}/vproxy-{version}-1.x86_64.rpm"
             ),
             size: 0,
             digest: None,
@@ -1489,7 +1515,7 @@ ID-LIKE=\"debian\"
         assert_eq!(picked.name, "vpn-parser-1.2.2-windows-x64-setup.exe");
         assert_eq!(
             picked.url,
-            "https://github.com/mateo-ki/vpn-parser/releases/download/v1.2.2/vpn-parser-1.2.2-windows-x64-setup.exe"
+            format!("https://github.com/{REPOSITORY}/releases/download/v1.2.2/vpn-parser-1.2.2-windows-x64-setup.exe")
         );
         // 名字对不上 tag（比如 tag 打错、资产手工传过）时退到后缀匹配的最后一个。
         let loose = vec![asset("vpn-parser-0.9.0-windows-x64-setup.exe", None)];
@@ -1498,6 +1524,18 @@ ID-LIKE=\"debian\"
             "vpn-parser-0.9.0-windows-x64-setup.exe"
         );
         assert!(pick_installer_asset(&[asset("sha256.txt", None)], "v1.2.2").is_none());
+
+        // 双发场景下，新版优先挑 vproxy 包；历史 Release 仅有 vpn-parser 时自动回退
+        let dual_assets = vec![
+            asset("vpn-parser-1.16.0-windows-x64-setup.exe", None),
+            asset("vproxy-1.16.0-windows-x64-setup.exe", None),
+        ];
+        let picked_vproxy = pick_installer_asset(&dual_assets, "v1.16.0").expect("优先命中 vproxy 安装包");
+        assert_eq!(picked_vproxy.name, "vproxy-1.16.0-windows-x64-setup.exe");
+
+        let legacy_only = vec![asset("vpn-parser-1.16.0-windows-x64-setup.exe", None)];
+        let picked_legacy = pick_installer_asset(&legacy_only, "v1.16.0").expect("兼容历史 vpn-parser 安装包");
+        assert_eq!(picked_legacy.name, "vpn-parser-1.16.0-windows-x64-setup.exe");
     }
 
     #[test]
@@ -1572,7 +1610,7 @@ ID-LIKE=\"debian\"
         // 摘要文件找不到时至少给我一个可试的原链
         assert_eq!(
             info.hash_index_url.as_deref().unwrap(),
-            "https://github.com/mateo-ki/vpn-parser/releases/download/v1.2.2/sha256.txt"
+            format!("https://github.com/{REPOSITORY}/releases/download/v1.2.2/sha256.txt")
         );
 
         let same = summarize(

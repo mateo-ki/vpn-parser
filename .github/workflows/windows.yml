@@ -52,31 +52,41 @@ jobs:
         run: choco install innosetup --no-progress -y
 
       - name: 编译 release 版 (LLVM lld 高速并行链接)
-        run: cargo build --release --bin vpn-parser
+        run: cargo build --release --bin vproxy
 
       - name: 编译安装包
-        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer/vpn-parser.iss'
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer/vproxy.iss'
 
       - name: 打包 Windows 便携版 (zip)
         shell: pwsh
         run: |
           $version = (Select-String -Path Cargo.toml -Pattern '^\s*version\s*=\s*"([^"]+)"' |
               Select-Object -First 1).Matches[0].Groups[1].Value
-          $zipName = "vpn-parser-$version-windows-x64-portable.zip"
+          $zipName = "vproxy-$version-windows-x64-portable.zip"
           $zipPath = "dist/$zipName"
           if (!(Test-Path "dist")) {
             New-Item -ItemType Directory -Force -Path "dist" | Out-Null
           }
           # 创建临时便携版目录，放入可执行文件与说明文件
-          $stageDir = "dist/vpn-parser-$version-windows-x64"
+          $stageDir = "dist/vproxy-$version-windows-x64"
           if (Test-Path $stageDir) { Remove-Item -Recurse -Force $stageDir }
           New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
-          Copy-Item "target/release/vpn-parser.exe" "$stageDir/"
+          Copy-Item "target/release/vproxy.exe" "$stageDir/"
           if (Test-Path "README.md") { Copy-Item "README.md" "$stageDir/" }
           if (Test-Path "LICENSE") { Copy-Item "LICENSE" "$stageDir/" }
           Compress-Archive -Path "$stageDir/*" -DestinationPath $zipPath -Force
           Remove-Item -Recurse -Force $stageDir
           Write-Host "Portable package created at $zipPath"
+
+          # 双发兼容：为老版本 vpn-parser 客户端的自动升级检查生成镜像别名包
+          if (Test-Path "dist/vproxy-$version-windows-x64-setup.exe") {
+            Copy-Item "dist/vproxy-$version-windows-x64-setup.exe" "dist/vpn-parser-$version-windows-x64-setup.exe" -Force
+            Write-Host "Created compatibility setup alias: dist/vpn-parser-$version-windows-x64-setup.exe"
+          }
+          if (Test-Path $zipPath) {
+            Copy-Item $zipPath "dist/vpn-parser-$version-windows-x64-portable.zip" -Force
+            Write-Host "Created compatibility portable alias: dist/vpn-parser-$version-windows-x64-portable.zip"
+          }
 
       - name: 算 SHA-256
         shell: pwsh
@@ -133,26 +143,26 @@ jobs:
             if ($pre) { gh release edit "$env:TAG" --prerelease } else { gh release edit "$env:TAG" --prerelease=false }
           } elseif ($pre) {
             if ($notesValid) {
-              gh release create "$env:TAG" @assets --title "VPN Parser $env:TAG（预发）" --notes-file $notesFile --prerelease
+              gh release create "$env:TAG" @assets --title "VProxy $env:TAG（预发）" --notes-file $notesFile --prerelease
             } else {
-              gh release create "$env:TAG" @assets --title "VPN Parser $env:TAG（预发）" --generate-notes --prerelease
+              gh release create "$env:TAG" @assets --title "VProxy $env:TAG（预发）" --generate-notes --prerelease
             }
           } else {
             if ($notesValid) {
-              gh release create "$env:TAG" @assets --title "VPN Parser $env:TAG" --notes-file $notesFile
+              gh release create "$env:TAG" @assets --title "VProxy $env:TAG" --notes-file $notesFile
             } else {
-              gh release create "$env:TAG" @assets --title "VPN Parser $env:TAG" --generate-notes
+              gh release create "$env:TAG" @assets --title "VProxy $env:TAG" --generate-notes
             }
           }
 
-      - name: 同步更新 Scoop Manifest (vpn-parser.json)
+      - name: 同步更新 Scoop Manifest (vproxy.json)
         if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, 'alpha') && !contains(github.ref_name, 'beta') && !contains(github.ref_name, 'rc')
         shell: pwsh
         env:
           TAG: ${{ github.ref_name }}
         run: |
           $version = $env:TAG.TrimStart('v')
-          $zipName = "vpn-parser-$version-windows-x64-portable.zip"
+          $zipName = "vproxy-$version-windows-x64-portable.zip"
           $shaLine = Get-Content dist/sha256.txt | Where-Object { $_ -match [regex]::Escape($zipName) } | Select-Object -First 1
           if (!$shaLine) {
             Write-Warning "未在 dist/sha256.txt 中找到 $zipName 的校验值，跳过 Scoop Manifest 同步"
@@ -161,26 +171,37 @@ jobs:
           $hash = ($shaLine -split '\s+')[0].Trim().ToLower()
           Write-Host "同步 Scoop Manifest: version=$version, hash=$hash"
 
-          $manifestPath = "vpn-parser.json"
+          $manifestPath = "vproxy.json"
           if (Test-Path $manifestPath) {
             $json = Get-Content $manifestPath -Raw -Encoding utf8 | ConvertFrom-Json
             $json.version = $version
-            $json.architecture.'64bit'.url = "https://github.com/mateo-ki/vpn-parser/releases/download/v$version/vpn-parser-$version-windows-x64-portable.zip"
+            $json.architecture.'64bit'.url = "https://github.com/mateo-ki/vproxy/releases/download/v$version/vproxy-$version-windows-x64-portable.zip"
             $json.architecture.'64bit'.hash = $hash
             $json | ConvertTo-Json -Depth 10 | Set-Content $manifestPath -Encoding utf8
             Write-Host "已更新 $manifestPath"
+          }
 
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git fetch origin main:main
-            git checkout main
-            git add $manifestPath
-            $status = git status --porcelain
-            if ($status) {
-              git commit -m "chore(scoop): 自动同步 vpn-parser.json 至 v$version"
-              git push origin main
-              Write-Host "已推送最新 Scoop Manifest 到 main 分支"
-            } else {
-              Write-Host "vpn-parser.json 内容未变，无需提交"
-            }
+          $legacyManifest = "vpn-parser.json"
+          if (Test-Path $legacyManifest) {
+            $json2 = Get-Content $legacyManifest -Raw -Encoding utf8 | ConvertFrom-Json
+            $json2.version = $version
+            $json2.architecture.'64bit'.url = "https://github.com/mateo-ki/vproxy/releases/download/v$version/vpn-parser-$version-windows-x64-portable.zip"
+            $json2.architecture.'64bit'.hash = $hash
+            $json2 | ConvertTo-Json -Depth 10 | Set-Content $legacyManifest -Encoding utf8
+            Write-Host "已同步兼容历史 $legacyManifest"
+          }
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main:main
+          git checkout main
+          if (Test-Path $manifestPath) { git add $manifestPath }
+          if (Test-Path $legacyManifest) { git add $legacyManifest }
+          $status = git status --porcelain
+          if ($status) {
+            git commit -m "chore(scoop): 自动同步 vproxy.json 及 vpn-parser.json 至 v$version"
+            git push origin main
+            Write-Host "已推送最新 Scoop Manifest 到 main 分支"
+          } else {
+            Write-Host "Scoop Manifest 内容未变，无需提交"
           }

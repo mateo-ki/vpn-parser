@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-const FLAG: &str = "VPN_PARSER_DIAG";
+use crate::constants::platform::{DIAG_BLOCKED_MSG as BLOCKED_MSG, DIAG_ENV_VAR as FLAG};
 
 /// 判定口径单独抽出来，好让"什么算开了"这件事有测试。只认 `1` / `true`（不区分大小写）。
 pub fn enabled_from_value(value: Option<&str>) -> bool {
@@ -127,7 +127,7 @@ pub fn log_once(line: &str) {
 
 /// 给拒绝写系统设置那条路用的统一文案：出错时界面/日志都要能看出是"诊断壳拦的"，
 /// 不是"功能坏了"。
-pub const BLOCKED: &str = "诊断实例（VPN_PARSER_DIAG）不写系统代理与终端代理设置";
+pub const BLOCKED: &str = BLOCKED_MSG;
 
 /// 单份 startup.log 的上限（1MB）。超过就整体挪到 `.1` 另开一份
 const MAX_LOG_BYTES: u64 = 1024 * 1024;

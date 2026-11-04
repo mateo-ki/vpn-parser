@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::constants::proxy::{MEOW_TAG, MIHOMO_TAG, SHOES_TAG, VPCORE_TAG};
+
 const MAX_ARCHIVE_SIZE: u64 = 150 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -297,12 +299,12 @@ impl KernelUpdater {
             // 同一个通道要两个 client（见 `Transport` 上那段注释），而 reqwest 的
             // `ClientBuilder` 不是 Clone，所以代理与 UA 这些共同项对折两遍。
             let mut metadata = Client::builder()
-                .user_agent("vpn-parser/0.1 kernel-updater")
+                .user_agent("vproxy/0.1 kernel-updater")
                 .http1_only()
                 .connect_timeout(std::time::Duration::from_secs(4))
                 .read_timeout(std::time::Duration::from_secs(15));
             let mut streaming = Client::builder()
-                .user_agent("vpn-parser/0.1 kernel-updater")
+                .user_agent("vproxy/0.1 kernel-updater")
                 .http1_only()
                 .connect_timeout(std::time::Duration::from_secs(10));
             // 刻意不调 read_timeout：reqwest 默认就没有逐次读超时。
@@ -1049,7 +1051,6 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
         // meow v0.3.x 时代没有兜底元数据；Windows 资产实测过（2026-10-24：
         // 走本地代理 2 秒下完 6,923,117 字节，SHA-256 本地计算，解包后
         // `meow --version` 输出 0.26.1）。Linux/macOS 暂无兜底，走在线查询。
-        const MEOW_TAG: &str = "v0.26.1";
         let (name, digest, size) = match KernelPlatform::current() {
             KernelPlatform::Windows => (
                 format!("meow-{MEOW_TAG}-x86_64-pc-windows-msvc.zip"),
@@ -1086,7 +1087,6 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
     }
 
     if kind == KernelKind::Shoes {
-        const SHOES_TAG: &str = "v0.3.4";
         let (name, digest, size) = match KernelPlatform::current() {
             KernelPlatform::Windows => (
                 "shoes-x86_64-pc-windows-msvc.zip",
@@ -1119,7 +1119,6 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
     }
 
     if kind == KernelKind::VpCore {
-        const VPCORE_TAG: &str = "v1.0.0";
         let (name, digest, size) = match KernelPlatform::current() {
             KernelPlatform::Windows => (
                 format!("vpcore-{VPCORE_TAG}-x86_64-pc-windows-msvc.zip"),
@@ -1154,7 +1153,6 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
     if kind != KernelKind::Mihomo {
         return None;
     }
-    const MIHOMO_TAG: &str = "v1.19.32";
     let (primary_name, primary_digest, primary_size, compat_name, compat_digest, compat_size) =
         match KernelPlatform::current() {
             KernelPlatform::Windows => (

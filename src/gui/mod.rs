@@ -1723,7 +1723,7 @@ impl VpnApp {
         self.profile_status = Some(("正在导出完整配置...".to_string(), false));
         self.rt.spawn(async move {
             let res = async {
-                let profile = crate::profile::export_unified_profile(&db, Some("VPN Parser 配置备份".into()), true).await?;
+                let profile = crate::profile::export_unified_profile(&db, Some(crate::constants::brand::DEFAULT_PROFILE_BACKUP_NAME.into()), true).await?;
                 let yaml = crate::profile::to_yaml(&profile)?;
                 let path = crate::profile::save_backup_file(&yaml)?;
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
@@ -1744,11 +1744,11 @@ impl VpnApp {
         self.profile_status = Some(("正在选择保存路径...".to_string(), false));
         self.rt.spawn(async move {
             let res = async {
-                let profile = crate::profile::export_unified_profile(&db, Some("VPN Parser 配置文件".into()), true).await?;
+                let profile = crate::profile::export_unified_profile(&db, Some("VProxy 配置文件".into()), true).await?;
                 let yaml = crate::profile::to_yaml(&profile)?;
                 let file = rfd::AsyncFileDialog::new()
-                    .set_title("保存统一配置文件")
-                    .set_file_name("vpn-parser-profile.yaml")
+                    .add_filter("YAML 配置文件", &["yaml", "yml"])
+                    .set_file_name(crate::constants::brand::DEFAULT_PROFILE_FILE_NAME)
                     .add_filter("YAML 配置文件 (*.yaml, *.yml)", &["yaml", "yml"])
                     .add_filter("全部文件 (*.*)", &["*"])
                     .save_file()
@@ -6111,7 +6111,7 @@ mod tests {
                         )
                     };
                     if draw_buttons_with_widget {
-                        ui.label(RichText::new("VPN Parser").size(12.5));
+                        ui.label(RichText::new("VProxy").size(12.5));
                         for index in 0..3 {
                             let rect = cell(index);
                             ui.put(
@@ -6584,7 +6584,7 @@ mod status_bar_room_tests {
 
     /// 他 2026-10-15 报的那条超长状态（防火墙失败原文，200+ 字）。
     fn long_status() -> String {
-        let one = "防火墙规则未写入：防火墙放行部分失败（0 成功 / 4 失败：\"vpn-parser.exe\": \
+        let one = "防火墙规则未写入：防火墙放行部分失败（0 成功 / 4 失败：\"vproxy.exe\": \
                    添加防火墙规则失败: 未知错误；\"mihomo.exe\": 添加防火墙规则失败: 未知错误；\
                    \"xray.exe\": 添加防火墙规则失败: 未知错误；\"sing-box.exe\": \
                    添加防火墙规则失败: 未知错误）";

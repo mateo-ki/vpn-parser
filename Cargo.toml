@@ -1,16 +1,17 @@
 [package]
-name = "vpn-parser"
-version = "1.15.21"
+name = "vproxy"
+version = "1.16.0"
 edition = "2021"
-description = "VPN/proxy subscription collector with desktop GUI and HTTP API"
+description = "VProxy: A modern cross-platform proxy workstation with desktop GUI, multi-core compilers and HTTP API"
 license = "MIT"
 
 [lib]
-name = "vpn_parser"
+name = "vproxy"
 path = "src/lib.rs"
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [[bin]]
-name = "vpn-parser"
+name = "vproxy"
 path = "src/main.rs"
 
 [dependencies]
@@ -97,6 +98,9 @@ incremental = false
 maintainer = "mateo-ki <mateo-ki@users.noreply.github.com>"
 section = "net"
 priority = "optional"
+replaces = "vpn-parser"
+conflicts = "vpn-parser"
+provides = "vpn-parser"
 # 运行期真正要加载的库。这里手写而不是 `depends = "$auto"`：自动推导要 dpkg-dev 的
 # shlibdeps，而那要 root —— 我们的包必须在无 sudo 环境里也能造出来。
 depends = "libc6, libxcb1, libxkbcommon0, libwayland-client0, libegl1, libgl1, ca-certificates, zlib1g"
@@ -109,35 +113,37 @@ recommends = "fonts-noto-cjk"
 # Description 字段，于是包里出现 "# VPN Parser"、反引号和 markdown 列表 —— apt 界面
 # 与 `apt show` 会照原样显示那堆 markdown（2026-10-16 出第一个 deb 时就是这样）。
 # Debian 的长描述格式：每行前置一个空格，空行写成单独一个 `.`。
-extended-description = """拉取订阅并解析节点，实测延迟与可用性，再把选中节点交给本地代理内核 （Mihomo / Sing-box / Xray）运行，附带 HTTP 管理接口与桌面界面。
+extended-description = """拉取订阅并解析节点，实测延迟与可用性，再把选中节点交给本地代理内核（Mihomo / Sing-box / VP-Core / Xray 等）运行，附带 HTTP 管理接口与桌面界面。
 .
 接管方式按平台而定：Windows 支持系统代理与 TUN（TUN 需管理员），
 Linux 目前只提供本地混合端口（把应用指向 127.0.0.1 的那个端口），TUN 尚未接入。
 可导出 Clash / Sing-box / Xray 配置，并能按域名规则分流。"""
 maintainer-scripts = "packaging/linux/deb/"
 assets = [
-    ["target/release/vpn-parser", "usr/bin/", "755"],
-    ["packaging/linux/vpn-parser.desktop", "usr/share/applications/", "644"],
-    ["assets/app-icon-16.png", "usr/share/icons/hicolor/16x16/apps/vpn-parser.png", "644"],
-    ["assets/app-icon-32.png", "usr/share/icons/hicolor/32x32/apps/vpn-parser.png", "644"],
-    ["assets/app-icon-48.png", "usr/share/icons/hicolor/48x48/apps/vpn-parser.png", "644"],
-    ["assets/app-icon-256.png", "usr/share/icons/hicolor/256x256/apps/vpn-parser.png", "644"],
-    ["LICENSE", "usr/share/doc/vpn-parser/", "644"],
-    ["README.md", "usr/share/doc/vpn-parser/", "644"],
+    ["target/release/vproxy", "usr/bin/", "755"],
+    ["packaging/linux/vproxy.desktop", "usr/share/applications/", "644"],
+    ["assets/app-icon-16.png", "usr/share/icons/hicolor/16x16/apps/vproxy.png", "644"],
+    ["assets/app-icon-32.png", "usr/share/icons/hicolor/32x32/apps/vproxy.png", "644"],
+    ["assets/app-icon-48.png", "usr/share/icons/hicolor/48x48/apps/vproxy.png", "644"],
+    ["assets/app-icon-256.png", "usr/share/icons/hicolor/256x256/apps/vproxy.png", "644"],
+    ["LICENSE", "usr/share/doc/vproxy/", "644"],
+    ["README.md", "usr/share/doc/vproxy/", "644"],
 ]
 
 [package.metadata.generate-rpm]
 # rpm 侧没有 "recommends" 这种弱依赖语义可用（generate-rpm 只出 Requires），
 # 所以这里用 Recommends 表达同一个意思：缺字体不该让包装不上。
 auto-requires = false
+obsoletes = ["vpn-parser"]
+provides = ["vpn-parser = %{version}"]
 assets = [
-    { source = "target/release/vpn-parser", dest = "/usr/bin/vpn-parser", mode = "755" },
-    { source = "packaging/linux/vpn-parser.desktop", dest = "/usr/share/applications/vpn-parser.desktop", mode = "644" },
-    { source = "assets/app-icon-16.png", dest = "/usr/share/icons/hicolor/16x16/apps/vpn-parser.png", mode = "644" },
-    { source = "assets/app-icon-32.png", dest = "/usr/share/icons/hicolor/32x32/apps/vpn-parser.png", mode = "644" },
-    { source = "assets/app-icon-48.png", dest = "/usr/share/icons/hicolor/48x48/apps/vpn-parser.png", mode = "644" },
-    { source = "assets/app-icon-256.png", dest = "/usr/share/icons/hicolor/256x256/apps/vpn-parser.png", mode = "644" },
-    { source = "LICENSE", dest = "/usr/share/doc/vpn-parser/LICENSE", mode = "644" },
+    { source = "target/release/vproxy", dest = "/usr/bin/vproxy", mode = "755" },
+    { source = "packaging/linux/vproxy.desktop", dest = "/usr/share/applications/vproxy.desktop", mode = "644" },
+    { source = "assets/app-icon-16.png", dest = "/usr/share/icons/hicolor/16x16/apps/vproxy.png", mode = "644" },
+    { source = "assets/app-icon-32.png", dest = "/usr/share/icons/hicolor/32x32/apps/vproxy.png", mode = "644" },
+    { source = "assets/app-icon-48.png", dest = "/usr/share/icons/hicolor/48x48/apps/vproxy.png", mode = "644" },
+    { source = "assets/app-icon-256.png", dest = "/usr/share/icons/hicolor/256x256/apps/vproxy.png", mode = "644" },
+    { source = "LICENSE", dest = "/usr/share/doc/vproxy/LICENSE", mode = "644" },
 ]
 
 [package.metadata.generate-rpm.scripts]

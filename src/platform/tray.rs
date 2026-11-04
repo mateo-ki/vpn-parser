@@ -1,8 +1,7 @@
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
-pub const TRAY_WINDOW_CLASS: &str = "VPNParserTrayWindowClass";
-pub const WAKEUP_MSG_NAME: &str = "VPN_PARSER_SHOW_WINDOW_MSG\0";
+pub use crate::constants::platform::{TRAY_WINDOW_CLASS, WAKEUP_MSG_NAME};
 
 #[cfg(windows)]
 pub const WM_WAKEUP_INSTANCE: u32 = windows_sys::Win32::UI::WindowsAndMessaging::WM_USER + 101;

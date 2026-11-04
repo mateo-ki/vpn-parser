@@ -10,7 +10,7 @@ pub use window_park::{
     restore_and_repaint_main_window, unpark as unpark_main_window,
 };
 
-const SINGLE_INSTANCE_MUTEX_NAME: &str = "Local\\VPNParser-7F61E55C-DB54-49C6-AB9E-986AEBFDD56B";
+use crate::constants::platform::SINGLE_INSTANCE_MUTEX as SINGLE_INSTANCE_MUTEX_NAME;
 
 /// 「以管理员方式启动」在窗口创建前提权时被 UAC 取消的会话标记：
 /// 设置页据此提示"本次以普通权限运行"，应用生命周期内不再重复弹 UAC。
@@ -67,9 +67,9 @@ pub fn acquire_single_instance() -> Result<Option<SingleInstanceGuard>> {
     use std::os::unix::net::{UnixListener, UnixStream};
 
     let socket_path = if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
-        std::path::PathBuf::from(runtime_dir).join("vpn-parser.sock")
+        std::path::PathBuf::from(runtime_dir).join("vproxy.sock")
     } else {
-        std::env::temp_dir().join("vpn-parser.sock")
+        std::env::temp_dir().join("vproxy.sock")
     };
 
     if let Some(parent) = socket_path.parent() {
@@ -79,7 +79,7 @@ pub fn acquire_single_instance() -> Result<Option<SingleInstanceGuard>> {
     // 1. 先尝试连接已存在的 socket
     if let Ok(mut stream) = UnixStream::connect(&socket_path) {
         let _ = stream.write_all(b"WAKEUP\n");
-        crate::startup_log("检测到已存在运行中的 VPN Parser 实例，已发送唤醒消息。本实例退出。");
+        crate::startup_log("检测到已存在运行中的 VProxy 实例，已发送唤醒消息。本实例退出。");
         return Ok(None);
     }
 
@@ -829,7 +829,7 @@ pub fn kill_duplicate_vpn_parser_instances() -> usize {
                 let exe_name = String::from_utf16_lossy(&entry.szExeFile[..len]);
                 let exe_lower = exe_name.to_ascii_lowercase();
 
-                if exe_lower == "vpn-parser.exe" {
+                if exe_lower == "vproxy.exe" || exe_lower == "vpn-parser.exe" {
                     unsafe {
                         let proc_handle =
                             OpenProcess(PROCESS_TERMINATE, FALSE, entry.th32ProcessID);
@@ -837,7 +837,7 @@ pub fn kill_duplicate_vpn_parser_instances() -> usize {
                             if TerminateProcess(proc_handle, 1) != 0 {
                                 killed_count += 1;
                                 crate::startup_log(&format!(
-                                    "Cleaned up stale duplicate vpn-parser.exe process: pid={}",
+                                    "Cleaned up stale duplicate vproxy.exe process: pid={}",
                                     entry.th32ProcessID
                                 ));
                             }
@@ -865,7 +865,8 @@ pub fn kill_duplicate_vpn_parser_instances() -> usize {
 #[cfg(windows)]
 pub fn is_our_proxy_core_path(path_str: &str) -> bool {
     let path_lower = path_str.to_ascii_lowercase();
-    if path_lower.contains("vpn-parser")
+    if path_lower.contains("vproxy")
+        || path_lower.contains("vpn-parser")
         || path_lower.contains("vpn_parser")
         || path_lower.contains("vpn parser")
         || path_lower.contains("vpn-orphan")
@@ -984,7 +985,7 @@ pub fn is_our_proxy_core(pid: u32) -> bool {
     // 2. 检查可执行文件路径是否位于本程序的受管内核目录中
     let managed = crate::kernel::managed_kernel_root();
     let managed_str = managed.to_string_lossy();
-    if exe_str.starts_with(&*managed_str) || exe_str.contains("vpn-parser") {
+    if exe_str.starts_with(&*managed_str) || exe_str.contains("vproxy") || exe_str.contains("vpn-parser") {
         return true;
     }
     if let Ok(cwd) = std::env::current_dir() {
@@ -994,10 +995,10 @@ pub fn is_our_proxy_core(pid: u32) -> bool {
         }
     }
 
-    // 3. 检查命令行参数中是否包含本程序专有标记（工作目录或临时配置通常在包含 vpn-parser 的路径中）
+    // 3. 检查命令行参数中是否包含本程序专有标记（工作目录或临时配置通常在包含 vproxy/vpn-parser 的路径中）
     if let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) {
         let cmdline_str = String::from_utf8_lossy(&cmdline);
-        if cmdline_str.contains("vpn-parser") {
+        if cmdline_str.contains("vproxy") || cmdline_str.contains("vpn-parser") {
             return true;
         }
     }
@@ -1781,7 +1782,7 @@ pub fn startup_sync_action(enabled: bool, current: Option<&str>, desired: &str) 
 }
 
 /// 开机自启动的注册表条目：值名与数据形状（引号包裹的 exe 全路径，路径带空格也稳）。
-pub const LAUNCH_AT_STARTUP_VALUE_NAME: &str = "VPN Parser";
+pub use crate::constants::platform::{LAUNCH_AT_STARTUP_VALUE_NAME, LEGACY_STARTUP_VALUE_NAME};
 
 pub fn launch_at_startup_desired_value(exe_path: &std::path::Path) -> String {
     format!("\"{}\"", exe_path.display())
@@ -1809,9 +1810,19 @@ pub fn sync_launch_at_startup(enabled: bool) -> bool {
     let value_name: Vec<u16> = format!("{}\0", LAUNCH_AT_STARTUP_VALUE_NAME)
         .encode_utf16()
         .collect();
+    let legacy_value_name: Vec<u16> = format!("{}\0", LEGACY_STARTUP_VALUE_NAME)
+        .encode_utf16()
+        .collect();
     let desired_w: Vec<u16> = format!("{desired}\0").encode_utf16().collect();
 
     unsafe {
+        // 先清理可能存在的旧版本开机启动键名残留（VPN Parser -> VProxy 平滑迁移）
+        let mut clean_hkey = std::ptr::null_mut();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, run_key.as_ptr(), 0, KEY_SET_VALUE, &mut clean_hkey) == 0 {
+            let _ = RegDeleteValueW(clean_hkey, legacy_value_name.as_ptr());
+            RegCloseKey(clean_hkey);
+        }
+
         // 先读现状，一致就一个字节都不写
         let mut current: Option<String> = None;
         let mut hkey = std::ptr::null_mut();
@@ -2235,7 +2246,7 @@ mod startup_sync_tests {
     /// 四象限：开+一致=不动；开+缺/旧=写；关+在=删；关+缺=不动。
     #[test]
     fn the_sync_decision_covers_all_four_quadrants() {
-        let desired = r#""C:\Apps\VPN Parser\vpn-parser.exe""#;
+        let desired = r#""C:\Apps\VProxy\vproxy.exe""#;
         assert_eq!(
             startup_sync_action(true, Some(desired), desired),
             StartupSyncAction::Leave
@@ -2246,7 +2257,7 @@ mod startup_sync_tests {
         );
         // 软件挪了位置：旧路径要被新路径覆盖
         assert_eq!(
-            startup_sync_action(true, Some(r#""D:\old\vpn-parser.exe""#), desired),
+            startup_sync_action(true, Some(r#""D:\old\vproxy.exe""#), desired),
             StartupSyncAction::Write
         );
         assert_eq!(
@@ -2262,8 +2273,8 @@ mod startup_sync_tests {
     /// 数据形状：引号包裹的 exe 全路径 —— 路径带空格（Program Files 类）不炸。
     #[test]
     fn the_desired_value_quotes_the_exe_path() {
-        let v = launch_at_startup_desired_value(std::path::Path::new(r"C:\Apps\VPN Parser\vpn-parser.exe"));
-        assert_eq!(v, r#""C:\Apps\VPN Parser\vpn-parser.exe""#);
+        let v = launch_at_startup_desired_value(std::path::Path::new(r"C:\Apps\VProxy\vproxy.exe"));
+        assert_eq!(v, r#""C:\Apps\VProxy\vproxy.exe""#);
     }
 }
 
@@ -2281,7 +2292,7 @@ mod startup_sync_e2e {
                     "query",
                     r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
                     "/v",
-                    "VPN Parser",
+                    crate::constants::platform::LAUNCH_AT_STARTUP_VALUE_NAME,
                 ])
                 .output()
                 .ok()?;
@@ -2290,7 +2301,7 @@ mod startup_sync_e2e {
             }
             let text = String::from_utf8_lossy(&out.stdout);
             text.lines()
-                .find(|line| line.contains("VPN Parser"))
+                .find(|line| line.contains(crate::constants::platform::LAUNCH_AT_STARTUP_VALUE_NAME))
                 .and_then(|line| line.split("REG_SZ").nth(1))
                 .map(|rest| rest.trim().to_string())
         }
@@ -2308,7 +2319,7 @@ mod startup_sync_e2e {
         assert!(removed, "删除 HKCU Run 键值被拒绝");
         assert!(
             read_value().is_none(),
-            "关闭后 Run 键里不应再有 VPN Parser 值"
+            "关闭后 Run 键里不应再有 VProxy 值"
         );
     }
 }

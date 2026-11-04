@@ -1,15 +1,11 @@
 use crate::app_update::{self, AppUpdateProgress, AppUpdateStage};
+use crate::constants::brand::{RELEASES_URL, REPO_URL, TAGLINE};
 use crate::gui::icons::Icon;
 use crate::gui::theme;
 use crate::gui::types::BgMsg;
 use crate::gui::widgets::{card_frame, fold_title, icon_tile, pill, primary_btn, section_title};
 use crate::gui::VpnApp;
 use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, ProgressBar, RichText, Stroke, Ui, Vec2};
-
-const REPO_URL: &str = "https://github.com/mateo-ki/vpn-parser";
-const RELEASES_URL: &str = "https://github.com/mateo-ki/vpn-parser/releases";
-/// 关于页顶部那句介绍。刻意写"这程序干四件事"而不是形容词：这一页是排障时才来的地方。
-const TAGLINE: &str = "采集订阅 · 解析节点 · 本地跑代理 · 把代理质量测出来给你看。";
 
 /// 关于页底部的免责声明，一行一条（用户 2026-10-20 要求加）。
 /// 每条都对着代码核过：没有统计上报模块、IP 风险查询要用户点、发布节点要用户填后台地址、
@@ -76,7 +72,7 @@ impl VpnApp {
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new("VPN Parser")
+                            RichText::new("VProxy")
                                 .strong()
                                 .size(20.0)
                                 .color(theme::text_primary()),
@@ -245,7 +241,7 @@ impl VpnApp {
                         // root），点了只是把校验过的包和该敲的命令交给你 —— 写着"启动安装向导"
                         // 就是假话，而这个按钮点下去的行为两个平台确实不一样。
                         let hint = if cfg!(windows) {
-                            "启动安装向导。安装包一启动就会结束当前这个 vpn-parser.exe，\
+                            "启动安装向导。安装包一启动就会结束当前这个 vproxy.exe，\
                              装完由向导把程序带回来。"
                         } else {
                             "本程序不会自己去拿 root：点这里会把已校验的包交给你，\
@@ -1025,11 +1021,11 @@ mod about_layout_probe_tests {
         let mut painted = Painted::new();
         let mut card_right = 0.0_f32;
         in_card(1330.0, |ui, layer| {
-            kv_row(ui, "程序目录", "C:\\Apps\\VPN Parser", Some("打开"));
+            kv_row(ui, "程序目录", "C:\\Apps\\VProxy", Some("打开"));
             kv_row(
                 ui,
                 "更新包暂存",
-                "C:\\Apps\\VPN Parser\\data\\updates",
+                "C:\\Apps\\VProxy\\data\\updates",
                 Some("打开"),
             );
             kv_row(ui, "SHA-256", &"a".repeat(64), Some("复制"));
@@ -1178,7 +1174,7 @@ mod about_layout_probe_tests {
                     ui.add_space(4.0);
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("VPN Parser").strong().size(20.0));
+                            ui.label(RichText::new("VProxy").strong().size(20.0));
                             ui.add_space(9.0);
                             pill(
                                 ui,
