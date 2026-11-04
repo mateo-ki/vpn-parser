@@ -134,8 +134,6 @@ assets = [
 # rpm 侧没有 "recommends" 这种弱依赖语义可用（generate-rpm 只出 Requires），
 # 所以这里用 Recommends 表达同一个意思：缺字体不该让包装不上。
 auto-requires = false
-obsoletes = ["vpn-parser"]
-provides = ["vpn-parser = %{version}"]
 assets = [
     { source = "target/release/vproxy", dest = "/usr/bin/vproxy", mode = "755" },
     { source = "packaging/linux/vproxy.desktop", dest = "/usr/share/applications/vproxy.desktop", mode = "644" },
@@ -145,6 +143,12 @@ assets = [
     { source = "assets/app-icon-256.png", dest = "/usr/share/icons/hicolor/256x256/apps/vproxy.png", mode = "644" },
     { source = "LICENSE", dest = "/usr/share/doc/vproxy/LICENSE", mode = "644" },
 ]
+
+[package.metadata.generate-rpm.obsoletes]
+vpn-parser = "*"
+
+[package.metadata.generate-rpm.provides]
+vpn-parser = "*"
 
 [package.metadata.generate-rpm.scripts]
 # 和 deb 那两个 scriptlet 同一件事：装完/卸完刷新桌面入口与图标缓存。
