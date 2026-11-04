@@ -349,8 +349,8 @@ pub fn requires_tun_elevation(mode: ProxyMode, elevated: bool) -> bool {
     if cfg!(windows) {
         mode.has_tun() && !elevated
     } else {
-        // Linux 下 GUI 始终以当前登录用户运行，严禁使用 sudo 启动 GUI（会导致 Wayland 鉴权失败与目录跑偏）。
-        // TUN 网络权限由内核二进制文件通过 setcap 独立持有。
+        // The GUI stays unprivileged: Linux uses file capabilities and macOS
+        // uses the persistent helper without handing off this window.
         false
     }
 }

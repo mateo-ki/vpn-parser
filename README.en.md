@@ -13,7 +13,7 @@ A high-performance, modern cross-platform proxy workstation built with Rust and 
 - **Windows**: Modern installer (Inno Setup) + one-click system proxy integration + TUN virtual adapter mode (with elevated privileges)
 - **Linux**: Universal **AppImage** (standalone portable bundle), Debian/Ubuntu **deb**, and Fedora/RHEL **rpm** desktop packages, providing local mixed proxy listener (default `127.0.0.1:9980`)
 - **OpenWrt**: Native **.ipk** service packages (`x86_64` / `aarch64_generic`) and universal **LuCI Web GUI (`luci-app-vpn-parser`)**, integrated `procd` supervisor and UCI configuration, ultra-lightweight headless microservice (~20MB memory) for routers, see [OpenWrt Deployment Guide](docs/openwrt.md)
-- **macOS**: Native DMG / App packages with Apple Silicon and Intel architecture support
+- **macOS**: Native DMG / App packages with Apple Silicon and Intel architecture support. Mihomo TUN uses a privileged background service while the GUI retains node and TUN controls; see [macOS TUN](docs/macos-tun.md).
 
 ## Features
 

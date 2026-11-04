@@ -1104,6 +1104,128 @@ use std::time::Duration;
         assert!(!res);
     }
 
+    #[cfg(target_os = "macos")]
+    async fn macos_standard_child_with_controller() -> (
+        ProxyManager,
+        Arc<std::sync::atomic::AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let controller = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let controller_port = controller.local_addr().unwrap().port();
+        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed_requests = requests.clone();
+        // A successful controller exposes accidental hot reloads: these tests must
+        // refuse the operation before making an HTTP request to the ordinary core.
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = controller.accept().await {
+                observed_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut received = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let count = stream.read(&mut chunk).await.unwrap();
+                    if count == 0 {
+                        break;
+                    }
+                    received.extend_from_slice(&chunk[..count]);
+                    if let Some(header_end) = received.windows(4).position(|s| s == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&received[..header_end]);
+                        let body_length = headers.lines().find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        }).unwrap_or(0);
+                        if received.len() >= header_end + 4 + body_length {
+                            break;
+                        }
+                    }
+                }
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                ).await;
+            }
+        });
+        let options = MihomoConfigOptions {
+            mode: ProxyMode::System,
+            controller_port,
+            ..MihomoConfigOptions::default()
+        };
+        let manager = ProxyManager::with_system_proxy(options, Arc::new(FakeSystemProxy::default()));
+        let child = tokio::process::Command::new("/bin/sleep")
+            .arg("30")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let work_dir = ProxyWorkDir::create(KernelKind::Mihomo).await.unwrap();
+        let selected = node("ss", json!({
+            "server": "127.0.0.1",
+            "port": 8388,
+            "cipher": "aes-128-gcm",
+            "password": "test-only"
+        }));
+        {
+            let mut runtime = manager.runtime.lock().await;
+            runtime.status.state = ProxyState::Running;
+            runtime.status.mode = ProxyMode::System;
+            runtime.status.kernel = Some(KernelKind::Mihomo);
+            runtime.status.local_proxy_ready = true;
+            runtime.child = Some(crate::proxy::manager::ProxyChild::Standard(child));
+            runtime.work_dir = Some(work_dir);
+            runtime.current_node = Some(selected);
+        }
+        (manager, requests, server)
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn macos_reload_defers_tun_until_the_standard_child_is_restarted() {
+        assert!(!crate::platform::is_elevated(), "run this regression test as a normal user");
+        for requested_mode in [ProxyMode::Tun, ProxyMode::Both] {
+            let (manager, requests, server) = macos_standard_child_with_controller().await;
+            let mut options = manager.config().await;
+            options.mode = requested_mode;
+
+            let applied = manager.reload_config(options).await;
+            let status = manager.status().await;
+            let pending = manager.config().await;
+            let stopped = manager.stop_inner_for_restart().await;
+            server.abort();
+            let _ = server.await;
+
+            stopped.unwrap();
+            assert!(!applied.unwrap(), "{requested_mode:?} needs a restart through the macOS service");
+            assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert_eq!(status.state, ProxyState::Running);
+            assert_eq!(status.mode, ProxyMode::System, "the UI must keep showing the active mode");
+            assert_eq!(pending.mode, requested_mode, "retain the requested mode for the service restart");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn macos_tun_hot_toggle_never_targets_a_standard_child() {
+        assert!(!crate::platform::is_elevated(), "run this regression test as a normal user");
+        for requested_mode in [ProxyMode::Tun, ProxyMode::Both] {
+            let (manager, requests, server) = macos_standard_child_with_controller().await;
+            let mut options = manager.config().await;
+            options.mode = requested_mode;
+
+            let applied = manager.try_hot_toggle_tun(options).await;
+            let status = manager.status().await;
+            let stopped = manager.stop_inner_for_restart().await;
+            server.abort();
+            let _ = server.await;
+
+            stopped.unwrap();
+            assert!(!applied.unwrap(), "{requested_mode:?} needs a new privileged child");
+            assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert_eq!(status.state, ProxyState::Running);
+            assert_eq!(status.mode, ProxyMode::System);
+        }
+    }
+
     #[test]
     fn format_kernel_diagnostic_cleans_raw_errors() {
         let raw1 = r#"time="2026-09-04T13:00:45.748268800+08:00" level=warning msg="[TCP] dial PROXY (match Match/) 127.0.0.1:53655 --> www.google.com:443 error: failed to dial WebSocket: read tcp 192.168.0.103:53662->104.18.42.163:2087: wsarecv: An existing connection was forcibly closed by the remote host.""#;

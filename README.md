@@ -13,7 +13,7 @@ Rust + egui 编写的高性能现代化跨平台代理工作站：采集订阅�
 - **Windows**：安装包（Inno Setup）+ 便携版（Scoop 一键安装）+ 系统代理一键控制 + TUN 虚拟网卡模式（带管理员提权）
 - **Linux**：通用免安装 **AppImage**、Debian/Ubuntu **deb** 与 Fedora/RHEL **rpm** 全套发布包支持，提供本地混合代理端口（默认 `127.0.0.1:9980`）
 - **OpenWrt**：提供原生 **.ipk** 服务包（x86_64 / aarch64_generic）与通用 **LuCI Web 控制面板 (`luci-app-vpn-parser`)**，集成 `procd` 守护与 UCI 配置，超轻量无头微服务常驻路由器（~20MB 内存），详见 [OpenWrt 部署指南](docs/openwrt.md)
-- **macOS**：原生 DMG 拖拽安装包与便携归档（Apple Silicon 与 Intel 架构支持）
+- **macOS**：原生 DMG 拖拽安装包与便携归档（Apple Silicon 与 Intel 架构支持）；Mihomo TUN 通过独立后台服务授权，节点与 TUN 仍由界面控制，详见 [macOS TUN](docs/macos-tun.md)
 
 ## 功能
 
@@ -114,7 +114,7 @@ VPN Parser 原生支持 OpenWrt 路由器环境（X86 软路由及 ARM64 路由�
 
 ## 已知边界
 
-- 内核装在用户可写目录（`data/kernels`），TUN 提权时会以管理员执行其中的 exe
+- Windows TUN 提权执行用户目录内的内核；macOS Mihomo TUN 在管理员授权后安装并运行受保护的内核副本，其他 macOS 内核的 TUN 暂不支持
 - url-test 只看"到测试 URL 的 HTTP 延迟"，不看带宽也不看落地 IP 信誉
 - 免费共享订阅失效极快，测通数量长期偏低是常态
 

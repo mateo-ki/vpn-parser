@@ -3573,7 +3573,7 @@ impl VpnApp {
             });
             return;
         }
-        if tun_on && !crate::platform::is_elevated() {
+        if cfg!(windows) && tun_on && !crate::platform::is_elevated() {
             // 开 TUN 需要管理员权限建 Wintun 网卡：本进程没提权，热切换必然失败，
             // 直接走现有 UAC 提权重启交接（提权实例接管后本窗口关闭）
             self.start_proxy();
@@ -3857,7 +3857,7 @@ impl VpnApp {
                                 Err(anyhow::anyhow!(
                                     "{message}; 已将该节点标记为不可用，请切换节点"
                                 ))
-                            } else if mode == ProxyMode::Tun
+                            } else if cfg!(target_os = "linux") && mode.has_tun()
                                 && (message.contains("Operation not permitted")
                                     || message.contains("CAP_NET_ADMIN")
                                     || message.contains("TUNSETIFF")

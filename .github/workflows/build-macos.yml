@@ -129,6 +129,11 @@ jobs:
             rm -rf "${ICONSET}"
           fi
 
+          # TUN helper 校验连接进程的 CDHash 和 hardened runtime 标志。
+          # 必须在 strip、Info.plist 和资源写入完成后签名；复制 helper 时保留此签名。
+          codesign --force --sign - --options runtime "${APP_DIR}"
+          codesign --verify --deep --strict --verbose=2 "${APP_DIR}"
+
           # 5. 生成 DMG 安装包 (预留 80MB 余量并显式使用 HFS+，彻底根除 hdiutil 卷空间不足)
           dmg_name="vproxy-${version}-darwin-${arch}.dmg"
           rm -f "dist/${dmg_name}" /tmp/temp.dmg
@@ -148,6 +153,8 @@ jobs:
 
           # 6. 生成命令行打包 (.tar.gz)
           strip target/release/vproxy || true
+          codesign --force --sign - --options runtime target/release/vproxy
+          codesign --verify --strict --verbose=2 target/release/vproxy
           tar_name="vproxy-${version}-darwin-${arch}.tar.gz"
           tar -czf "dist/${tar_name}" -C target/release vproxy
 

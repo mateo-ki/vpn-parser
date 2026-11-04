@@ -2,6 +2,10 @@ use crate::kernel::KernelKind;
 use anyhow::{anyhow, Result};
 
 pub mod firewall;
+#[cfg(target_os = "macos")]
+pub mod macos_helper;
+#[cfg(all(target_os = "macos", feature = "macos-tun-probe"))]
+pub mod macos_probe;
 pub mod tray;
 pub mod window_park;
 pub use tray::{refresh_notification_area, round_window_corners, TrayEvent, TrayHandle};
@@ -408,7 +412,12 @@ pub fn request_elevation(extra_args: &[String]) -> Result<()> {
 /// 事件循环崩溃，且配置和数据目录会错误指向 /root）。
 ///
 /// 真正需要网络权限的是代理内核（如 Mihomo / Sing-box）。本函数提供清晰的授权指引。
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn request_elevation(_extra_args: &[String]) -> Result<()> {
+    Err(anyhow!("macOS 无需以管理员身份启动界面；启用 Mihomo TUN 时会自动安装或连接后台服务"))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn request_elevation(_extra_args: &[String]) -> Result<()> {
     let kernel_path = crate::kernel::managed_kernel_path(crate::kernel::KernelKind::Mihomo);
     let kernel_str = kernel_path.display();
@@ -1977,11 +1986,14 @@ impl ElevatedChild {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 #[derive(Debug)]
 pub struct ElevatedChild;
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub use macos_helper::MacChild as ElevatedChild;
+
+#[cfg(not(any(windows, target_os = "macos")))]
 impl ElevatedChild {
     pub fn id(&self) -> Option<u32> {
         None
@@ -2079,7 +2091,18 @@ pub fn start_elevated_kernel_runner(
     })
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn start_elevated_kernel_runner(
+    kernel: KernelKind,
+    executable: &std::path::Path,
+    data_root: &std::path::Path,
+    config_path: &std::path::Path,
+    log_path: &std::path::Path,
+) -> Result<ElevatedChild> {
+    macos_helper::start(kernel, executable, data_root, config_path, log_path)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn start_elevated_kernel_runner(
     _kernel: KernelKind,
     _executable: &std::path::Path,

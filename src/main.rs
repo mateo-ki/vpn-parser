@@ -325,6 +325,28 @@ fn handle_command(cmd: Commands) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    // launchd must enter the daemon before GUI logging, HOME discovery or DB access.
+    #[cfg(target_os = "macos")]
+    {
+        let args = std::env::args().skip(1).collect::<Vec<_>>();
+        if args.first().map(String::as_str) == Some("--macos-tun-helper") {
+            anyhow::ensure!(args.len() == 3, "后台服务参数错误");
+            return platform::macos_helper::run_helper(args[1].parse()?, args[2].parse()?);
+        }
+        if args.first().map(String::as_str) == Some("--macos-tun-helper-check") {
+            anyhow::ensure!(args.len() == 2, "后台服务校验参数错误");
+            return platform::macos_helper::check_installation(args[1].parse()?);
+        }
+        #[cfg(feature = "macos-tun-probe")]
+        if args.first().map(String::as_str) == Some("--macos-tun-self-test") {
+            return platform::macos_probe::run();
+        }
+        #[cfg(feature = "macos-tun-probe")]
+        if args.first().map(String::as_str) == Some("--macos-tun-abandon-probe") {
+            anyhow::ensure!(args.len() == 2, "测试参数错误");
+            return platform::macos_probe::abandon(std::path::Path::new(&args[1]));
+        }
+    }
     platform::register_crash_rollback_hook();
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("PANIC: {info}");
@@ -710,7 +732,7 @@ fn main() -> Result<()> {
     // 「以管理员方式启动软件」必须在**创建任何窗口之前**决策：提权成功则本实例直接退出，
     // 整个过程没有窗口出现过，用户只看到提权实例那一个窗口——否则普通实例先把窗口画出来、
     // 提权后再闪第二个，就是"启动闪一次"的来源。UAC 被取消则本实例以普通权限继续（不再重试）。
-    if app_settings.launch_as_admin
+    if cfg!(windows) && app_settings.launch_as_admin
         && !diag
         && !cli.headless
         && !cli.run_elevated_kernel

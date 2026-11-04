@@ -174,6 +174,16 @@ pub fn with_controller_auth(
     }
 }
 
+fn controller_reload_payload(path: &Path, content: &str) -> Value {
+    // The macOS service keeps its initial config in a private root-owned directory.
+    // Send the compiled YAML inline so reload never depends on a GUI-owned path.
+    if cfg!(target_os = "macos") {
+        serde_json::json!({ "payload": content })
+    } else {
+        serde_json::json!({ "path": path.to_string_lossy(), "payload": content })
+    }
+}
+
 #[derive(Clone)]
 pub struct ProxyManager {
     pub(crate) runtime: Arc<Mutex<ProxyRuntime>>,
@@ -266,10 +276,17 @@ impl ProxyManager {
     pub async fn status(&self) -> ProxyRuntimeStatus {
         let cleanup = {
             let mut runtime = self.runtime.lock().await;
-            let exit_status = runtime
-                .child
-                .as_mut()
-                .and_then(|child| child.try_wait().ok().flatten());
+            let exit_status = match runtime.child.as_mut().map(ProxyChild::try_wait) {
+                Some(Ok(status)) => status,
+                Some(Err(error)) => {
+                    runtime.status.state = ProxyState::Degraded;
+                    runtime.status.last_error = Some(format!("读取内核或 TUN 后台服务状态失败: {error}"));
+                    runtime.status.message = runtime.status.last_error.clone().unwrap();
+                    // Keep the handle/work directory so Stop can still retry cleanup.
+                    None
+                }
+                None => None,
+            };
             if let Some(exit_status) = exit_status {
                 let kernel_name = runtime
                     .status
@@ -404,6 +421,16 @@ impl ProxyManager {
                 runtime.status.controller_secret = options.controller_secret.clone();
                 return Ok(true);
             }
+            // A user-owned process cannot acquire utun permissions by reloading YAML.
+            // Keep the requested options for the following restart through the helper.
+            #[cfg(target_os = "macos")]
+            if options.mode.has_tun()
+                && !crate::platform::is_elevated()
+                && !matches!(runtime.child.as_ref(), Some(ProxyChild::Elevated(_)))
+            {
+                runtime.apply_options(options);
+                return Ok(false);
+            }
             let kernel = match runtime.status.kernel {
                 Some(k @ (KernelKind::Mihomo | KernelKind::VpCore)) => k,
                 _ => {
@@ -412,7 +439,7 @@ impl ProxyManager {
                 }
             };
             let alive = match runtime.child.as_mut() {
-                Some(child) => child.try_wait().ok().flatten().is_none(),
+                Some(child) => child.try_wait().is_ok_and(|status| status.is_none()),
                 None => false,
             };
             if !alive {
@@ -473,10 +500,7 @@ impl ProxyManager {
 
         let controller_secret = options.controller_secret.clone();
         let url = format!("http://127.0.0.1:{controller_port}/configs?force=true");
-        let payload = serde_json::json!({
-            "path": config_path.to_string_lossy(),
-            "payload": &config_text,
-        });
+        let payload = controller_reload_payload(&config_path, &config_text);
         let request = with_controller_auth(client.put(&url).json(&payload), &controller_secret);
         match request.send().await {
             Ok(response) if response.status().is_success() => {
@@ -523,11 +547,19 @@ impl ProxyManager {
             ) {
                 return Ok(false);
             }
+            #[cfg(target_os = "macos")]
+            if tun_on
+                && !crate::platform::is_elevated()
+                && !matches!(runtime.child.as_ref(), Some(ProxyChild::Elevated(_)))
+            {
+                runtime.apply_options(options);
+                return Ok(false);
+            }
             let Some(kernel) = runtime.status.kernel else {
                 return Ok(false);
             };
             let alive = match runtime.child.as_mut() {
-                Some(child) => child.try_wait().ok().flatten().is_none(),
+                Some(child) => child.try_wait().is_ok_and(|status| status.is_none()),
                 None => false,
             };
             if !alive {
@@ -701,7 +733,7 @@ impl ProxyManager {
                 return Ok(false);
             };
             let alive = match runtime.child.as_mut() {
-                Some(child) => child.try_wait().ok().flatten().is_none(),
+                Some(child) => child.try_wait().is_ok_and(|status| status.is_none()),
                 None => false,
             };
             if !alive {
@@ -762,9 +794,7 @@ impl ProxyManager {
                                     let new_content = re.replace(&content, format!("${{1}}{mode_str}")).to_string();
                                     let _ = tokio::fs::write(&config_path, &new_content).await;
                                     let put_url = format!("http://127.0.0.1:{controller_port}/configs?force=true");
-                                    let put_payload = serde_json::json!({
-                                        "path": config_path.to_string_lossy(),
-                                    });
+                                    let put_payload = controller_reload_payload(&config_path, &new_content);
                                     let put_req = with_controller_auth(client.put(&put_url).json(&put_payload), &controller_secret);
                                     if let Ok(resp) = put_req.send().await {
                                         resp.status().is_success()
@@ -937,6 +967,12 @@ impl ProxyManager {
             mark_failed(&mut runtime, message.clone());
             return Err(anyhow!(message));
         }
+        #[cfg(target_os = "macos")]
+        if runtime.options.mode.has_tun() && kernel != KernelKind::Mihomo {
+            let message = "macOS TUN 服务当前支持 Mihomo，请将代理内核设为 Mihomo".to_string();
+            mark_failed(&mut runtime, message.clone());
+            return Err(anyhow!(message));
+        }
         // 分流数据库没备好就别急着起内核：半截库会让内核直接拒绝启动，而且报出来的
         // 是一句要人复制才能看懂的长错误。这里缺就补（镜像优先，其次系统代理）。
         // 不限 Mihomo：shoes 的 geosite/geoip 规则同样引用这份库（shared mihomo 目录）。
@@ -969,7 +1005,7 @@ impl ProxyManager {
         }
 
         let startup_started = tokio::time::Instant::now();
-        let startup_deadline = startup_started + STARTUP_PROXY_TOTAL_TIMEOUT;
+        let mut startup_deadline = startup_started + STARTUP_PROXY_TOTAL_TIMEOUT;
 
         runtime.status.state = ProxyState::Starting;
         runtime.status.kernel = Some(kernel);
@@ -1044,35 +1080,43 @@ impl ProxyManager {
                 return Err(anyhow!(message));
             }
         };
-        let requires_elevation = cfg!(windows)
+        let requires_elevation = cfg!(any(windows, target_os = "macos"))
             && runtime.options.mode.has_tun()
             && !crate::platform::is_elevated();
 
         let mut child = if requires_elevation {
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             {
                 tracing::info!(
                     kernel = kernel.display_name(),
                     "TUN 模式需管理员权限，通过无头提权 Supervisor 静默拉起内核..."
                 );
-                match crate::platform::start_elevated_kernel_runner(
-                    kernel,
-                    executable_path,
-                    work_dir.data_root(),
-                    &work_dir.config_path(),
-                    &work_dir.log_path(),
-                ) {
-                    Ok(elevated) => ProxyChild::Elevated(elevated),
+                let executable = executable_path.to_owned();
+                let data = work_dir.data_root().to_owned();
+                let config = work_dir.config_path();
+                let log_path = work_dir.log_path();
+                // The OS authorization dialog must not block Tokio's worker threads.
+                let elevated = tokio::task::spawn_blocking(move || {
+                    crate::platform::start_elevated_kernel_runner(
+                        kernel, &executable, &data, &config, &log_path,
+                    )
+                }).await.unwrap_or_else(|error| Err(anyhow!("启动 TUN 后台服务失败: {error}")));
+                // First installation may take longer than the normal startup deadline.
+                startup_deadline = tokio::time::Instant::now() + STARTUP_PROXY_TOTAL_TIMEOUT;
+                match elevated {
+                    Ok(elevated) => {
+                        runtime.status.kernel_pid = elevated.id();
+                        ProxyChild::Elevated(elevated)
+                    }
                     Err(error) => {
                         let _ = work_dir.cleanup().await;
                         let message = format!("无头提权启动 {} 失败: {error}", kernel.display_name());
-                        runtime.status.state = ProxyState::Failed;
-                        runtime.status.message = message.clone();
+                        mark_failed(&mut runtime, message);
                         return Err(error);
                     }
                 }
             }
-            #[cfg(not(windows))]
+            #[cfg(not(any(windows, target_os = "macos")))]
             {
                 unreachable!()
             }
@@ -1227,6 +1271,7 @@ impl ProxyManager {
             let lower_log = log_detail.to_lowercase();
             if lower_log.contains("tunsetiff")
                 || lower_log.contains("start tun error")
+                || lower_log.contains("start tun listening error")
                 || lower_log.contains("create tun interface error")
                 || (lower_log.contains("tun") && lower_log.contains("operation not permitted"))
                 || (lower_log.contains("tun") && lower_log.contains("permission denied"))
@@ -1236,7 +1281,14 @@ impl ProxyManager {
                 let _ = child.kill().await;
                 let _ = child.wait().await;
                 let _ = work_dir.cleanup().await;
+                #[cfg(target_os = "macos")]
+                let message = format!(
+                    "TUN 虚拟网卡创建失败，请检查 macOS 后台服务与内核日志：{}",
+                    last_nonempty_line(&log_detail)
+                );
+                #[cfg(not(target_os = "macos"))]
                 let cmd = crate::platform::tun_capability_command(executable_path);
+                #[cfg(not(target_os = "macos"))]
                 let message = format!(
                     "TUN 模式启动失败：内核未能创建虚拟网卡（缺少系统网络权限）。\n\
                      请在 Linux 终端执行一次授权命令为内核授权：\n\
@@ -1537,8 +1589,15 @@ impl ProxyManager {
             if runtime.status.kernel != Some(KernelKind::Mihomo) {
                 return Ok(false);
             }
+            #[cfg(target_os = "macos")]
+            if runtime.options.mode.has_tun()
+                && !crate::platform::is_elevated()
+                && !matches!(runtime.child.as_ref(), Some(ProxyChild::Elevated(_)))
+            {
+                return Ok(false);
+            }
             let alive = match runtime.child.as_mut() {
-                Some(child) => child.try_wait().ok().flatten().is_none(),
+                Some(child) => child.try_wait().is_ok_and(|status| status.is_none()),
                 None => false,
             };
             if !alive {
@@ -1588,10 +1647,7 @@ impl ProxyManager {
         };
 
         let url = format!("http://127.0.0.1:{controller_port}/configs?force=true");
-        let payload = serde_json::json!({
-            "path": config_path.to_string_lossy(),
-            "payload": &config_text,
-        });
+        let payload = controller_reload_payload(&config_path, &config_text);
         let request = with_controller_auth(client.put(&url).json(&payload), &controller_secret);
         match request.send().await {
             Ok(response) if response.status().is_success() => {
