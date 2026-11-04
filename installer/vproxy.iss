@@ -39,6 +39,11 @@ VersionInfoProductVersion={#MyAppFileVersion}
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务:"; Flags: unchecked
 
+[InstallDelete]
+Type: files; Name: "{app}\vpn-parser.exe"
+Type: files; Name: "{autodesktop}\VPN Parser.lnk"
+Type: files; Name: "{group}\VPN Parser.lnk"
+
 [Files]
 Source: "..\target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -47,7 +52,7 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{a
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "启动 {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "启动 {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent runascurrentuser
 
 [Code]
 function InitializeSetup(): Boolean;
@@ -55,8 +60,10 @@ var
   ResultCode: Integer;
 begin
   // 1. 按镜像名彻底关闭所有旧版与新版主进程
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM vproxy.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM vpn-parser.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // 注意：绝对不能带 /T 参数！老程序点击「更新/安装」时安装包作为子进程运行，
+  // 若带 /T 会将整个进程树一并杀死（导致向导自身闪退，表现为"点击安装无反应/弹不出向导"）
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM vproxy.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM vpn-parser.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
   // 2. 防御性终止可能残留的后台代理内核进程，确保 data/kernels 目录下的文件句柄全部释放
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM mihomo.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
@@ -66,6 +73,12 @@ begin
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM shoes.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM vp-core.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Result := True;
+end;
+
+procedure InitializeWizard();
+begin
+  // 将安装向导窗口显式激活并置于前台，避免被老程序退出后前置的浏览器或其他全屏窗口遮挡
+  WizardForm.BringToFront();
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -105,6 +118,12 @@ begin
     DeleteFile(ExpandConstant('{autodesktop}\VPN Parser.lnk'));
     DeleteFile(ExpandConstant('{group}\VPN Parser.lnk'));
     DeleteFile(ExpandConstant('{app}\vpn-parser.exe'));
+    if (OldAppDir <> '') and (CompareText(OldAppDir, ExpandConstant('{app}')) <> 0) then
+    begin
+      DeleteFile(OldAppDir + '\vpn-parser.exe');
+      DeleteFile(OldAppDir + '\unins000.exe');
+      DeleteFile(OldAppDir + '\unins000.dat');
+    end;
 
     // 清理旧注册表开机自启项 (VPN Parser -> VProxy 由程序启动自动接管)
     RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', 'VPN Parser');
