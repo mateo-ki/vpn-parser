@@ -1,3 +1,35 @@
+# 🚀 VProxy v1.16.1 发布说明 / Release Notes
+
+🎉 **VProxy v1.16.1** 正式发布！本版本重点解决了 Windows 旧版本客户端在线平滑升级的向导启动体验问题，并正式引入了面向 macOS 平台的 Mihomo TUN 持久化特权助手服务，实现全平台体验与稳定性的关键跨越：
+
+### 🛠️ Windows：彻底修复在线平滑升级与安装向导体验
+- **修复升级向导被误杀导致无弹窗问题**：
+  - 优化安装包脚本进程管理，移除原 `taskkill /F /IM vpn-parser.exe /T` 中的 `/T`（子树递归结束）参数；
+  - 彻底杜绝老版本客户端（v1.15.x）在「关于」页面点击「更新/安装」后，启动的安装向导因作为子进程被递归自杀的问题，确保点击后安装向导 100% 顺畅弹出；
+- **消除安装完成时的 `CallSpawnServer` 报错**：
+  - 安装向导启动指令增加 `runascurrentuser` 标志，直接以当前会话凭据启动全新的 `vproxy.exe`，不再依赖失效的进程间提权通知句柄；
+- **安装向导强制激活前台**：
+  - 在向导初始化时调用 `WizardForm.BringToFront()`，确保老程序退出后向导窗口自动置于屏幕最前台，避免被其他全屏窗口遮挡；
+- **残留清理机制加固**：
+  - 增加原生 `[InstallDelete]` 声明，平滑清理旧的 `vpn-parser.exe` 与旧桌面/开始菜单快捷方式，历史数据目录与配置 100% 自动继承保留。
+
+### 🍎 macOS：全新集成 Mihomo TUN 模式持久化系统级助手服务 (PR #8)
+- **免 Sudo 的生产级特权隔离设计**：
+  - 为 macOS 引入独立的 root LaunchDaemon 服务（`com.mateoki.vproxy.tun.<uid>`），用户主界面始终以普通用户权限运行，彻底规避了以往通过 sudo 启动 GUI 导致的 Wayland/Cocoa 崩溃与路径跑偏风险；
+  - 首次启用 TUN 时在系统标准授权窗口中完成一键安装，日常启动、停止、切换节点和开关 TUN 复用该服务，无需每次重复输入管理员密码；
+- **内核级双向安全鉴权**：
+  - GUI 与特权助手通过本地 Unix Domain Socket 通信，基于 macOS 内核级 `getsockopt(LOCAL_PEERPID)`、`getpeereid` 与 `csops(CS_OPS_CDHASH)` 双向严格校验对方的 UID、PID、Hardened Runtime 标志及代码签名 CDHash，杜绝未授权进程仿冒控制；
+- **防越权与目录安全校验**：
+  - 服务端使用严格的 `openat(O_NOFOLLOW)` 逐级校验机制，拒绝符号链接攻击、特殊设备文件与路径遍历，严格限定在受保护的数据目录中；
+- **代码签名与 Hardened Runtime 支持**：
+  - CI 全面集成 `codesign --options runtime` 深度签名，提供全新 Universal / Apple Silicon 原生支持；
+  - 新增详尽的架构、验证与卸载操作指南文档 [`docs/macos-tun.md`](docs/macos-tun.md)。
+
+### 📦 跨平台生态与双发兼容
+- 全平台持续提供双发兼容包支持（`vproxy-*` 主包 + `vpn-parser-*` 镜像包），旧版自动化检测与 Scoop 包管理器平滑无痕过渡。
+
+---
+
 # 🚀 VProxy v1.16.0 发布说明 / Release Notes
 
 🎉 欢迎使用 **VProxy v1.16.0**！本版本是项目发展史上的一次重大里程碑升级：正式确立 **VP 家族品牌核心 —— VProxy**，完成**核心业务逻辑与 GUI 视图彻底解耦**（零逆向依赖无头核心库），引入**跨平台 C-ABI FFI 导出层**与**全新无头 CLI 实用子命令体系**，并对全平台安装包与数据兼容进行无缝迁移：
