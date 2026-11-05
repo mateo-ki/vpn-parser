@@ -15,7 +15,11 @@ impl VpnApp {
                 icon_label(ui, Icon::Gear, 16.0, theme::accent());
                 ui.label(RichText::new(self.tr("桌面窗口与运行模式")).strong().size(15.0));
                 let tray_badge = if self.edit_close_to_tray {
-                    (self.tr("托盘常驻"), theme::accent_strong())
+                    #[cfg(target_os = "macos")]
+                    let label = "后台运行";
+                    #[cfg(not(target_os = "macos"))]
+                    let label = "托盘常驻";
+                    (self.tr(label), theme::accent_strong())
                 } else {
                     (self.tr("直接退出"), theme::muted())
                 };
@@ -25,7 +29,11 @@ impl VpnApp {
 
             ui.label(RichText::new(self.tr("点击主窗口关闭按钮 (X) 时：")).strong());
             ui.add_space(4.0);
-            let tr_minimize = self.tr("最小化到系统托盘 (推荐：后台保持代理与定时自动化运行)");
+            #[cfg(target_os = "macos")]
+            let background_label = "隐藏到后台，保持代理与定时自动化运行（点击 Dock 图标重新打开）";
+            #[cfg(not(target_os = "macos"))]
+            let background_label = "最小化到系统托盘 (推荐：后台保持代理与定时自动化运行)";
+            let tr_minimize = self.tr(background_label);
             let tr_exit = self.tr("直接退出程序 (停止所有网络连接并彻底退出软件)");
             if ui
                 .radio_value(

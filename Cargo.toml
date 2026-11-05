@@ -60,7 +60,7 @@ mimalloc = { version = "0.1", default-features = false }
 
 [features]
 default = ["gui"]
-gui = ["dep:eframe", "dep:egui", "dep:arboard", "dep:image", "dep:wgpu", "dep:rfd"]
+gui = ["dep:eframe", "dep:egui", "dep:arboard", "dep:image", "dep:wgpu", "dep:rfd", "dep:objc2", "dep:objc2-app-kit"]
 # Explicit local integration probe; excluded from normal release builds.
 macos-tun-probe = []
 
@@ -77,6 +77,8 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphic
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+objc2 = { version = "0.6.4", optional = true }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow"], optional = true }
 
 [build-dependencies]
 embed-resource = "3.0"
