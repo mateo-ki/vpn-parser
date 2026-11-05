@@ -5311,7 +5311,23 @@ impl VpnApp {
 impl eframe::App for VpnApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        crate::platform::macos_window::repair_minimized_state(ctx);
+        {
+            crate::platform::macos_window::repair_minimized_state(ctx);
+            // eframe skips `ui` while minimized or occluded, but still acts on
+            // native close requests after `logic`. Apply the same background
+            // policy here, or a hidden window can silently quit the proxy.
+            if ctx.input(|input| {
+                input.viewport().visible() == Some(false) && input.viewport().close_requested()
+            }) {
+                if self.frame_count > 5 || self.force_quit {
+                    self.request_window_close(ctx);
+                } else {
+                    // Match the startup close-event guard in `ui`, while
+                    // explicitly canceling the framework's pending close.
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                }
+            }
+        }
         #[cfg(not(target_os = "macos"))]
         let _ = ctx;
     }
