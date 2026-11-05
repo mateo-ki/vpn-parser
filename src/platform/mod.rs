@@ -6,6 +6,8 @@ pub mod firewall;
 pub mod macos_helper;
 #[cfg(target_os = "macos")]
 mod macos_startup;
+#[cfg(all(target_os = "macos", feature = "gui"))]
+pub mod macos_window;
 #[cfg(all(target_os = "macos", feature = "macos-tun-probe"))]
 pub mod macos_probe;
 pub mod tray;

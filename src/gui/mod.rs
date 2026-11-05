@@ -5309,6 +5309,13 @@ impl VpnApp {
 }
 
 impl eframe::App for VpnApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        crate::platform::macos_window::repair_minimized_state(ctx);
+        #[cfg(not(target_os = "macos"))]
+        let _ = ctx;
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = &ui.ctx().clone();
         let _rt_guard = self.rt.enter();

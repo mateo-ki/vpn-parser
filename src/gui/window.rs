@@ -142,7 +142,7 @@ impl VpnApp {
                     }
                     if ui
                         .interact(red_rect, ui.id().with("mac_close"), Sense::click())
-                        .on_hover_text("关闭（按设置在后台继续运行）")
+                        .on_hover_text("关闭（按设置隐藏到后台或退出）")
                         .clicked()
                     {
                         action_close = true;
@@ -173,7 +173,7 @@ impl VpnApp {
                     }
                     if ui
                         .interact(yellow_rect, ui.id().with("mac_min"), Sense::click())
-                        .on_hover_text("最小化（按设置收进系统托盘）")
+                        .on_hover_text("最小化到 Dock")
                         .clicked()
                     {
                         action_minimize = true;
@@ -456,20 +456,41 @@ impl VpnApp {
         ctx.request_repaint();
     }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) fn request_window_close(&mut self, ctx: &egui::Context) {
+        self.request_window_close_with_hide(
+            ctx,
+            crate::platform::macos_window::hide_application_to_background,
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    fn request_window_close_with_hide(
+        &mut self,
+        ctx: &egui::Context,
+        hide_application: impl FnOnce() -> bool,
+    ) {
+        if self.settings.close_to_tray && !self.force_quit {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if hide_application() {
+                crate::startup_log(
+                    "Window close requested -> hiding application in background, proxy stays active",
+                );
+            } else {
+                // Never tear down a running proxy if AppKit is unavailable.
+                crate::startup_log(
+                    "Window close requested -> native hide unavailable, minimizing instead",
+                );
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
+            return;
+        }
+        self.quit_main_window(ctx);
+    }
+
+    #[cfg(not(target_os = "macos"))]
     pub(crate) fn request_window_close(&mut self, ctx: &egui::Context) {
         if self.settings.close_to_tray && !self.force_quit {
-            #[cfg(target_os = "macos")]
-            {
-                // macOS has no tray implementation. Keep the native window in
-                // the Dock so closing it preserves the proxy and remains reversible.
-                crate::startup_log(
-                    "Window close requested -> minimizing to Dock, proxy stays active",
-                );
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                return;
-            }
-            #[cfg(not(target_os = "macos"))]
             if self.tray.supported() {
                 crate::startup_log("Window close requested -> 收进托盘（停放到屏幕外）");
                 if self.park_to_tray() {
@@ -479,6 +500,10 @@ impl VpnApp {
                 crate::startup_log("[托盘] 停放失败，降级为退出程序");
             }
         }
+        self.quit_main_window(ctx);
+    }
+
+    fn quit_main_window(&mut self, ctx: &egui::Context) {
         crate::startup_log("Window close requested -> quitting application");
         self.force_quit = true;
         self.tray.shutdown();
@@ -518,18 +543,23 @@ mod macos_window_close_tests {
     #[test]
     fn window_close_preserves_background_runtime_and_respects_explicit_quit() {
         let mut app = crate::gui::views::nodes::empty_pool_modal_tests::app_with_an_empty_library();
-        for (background_enabled, explicit_quit, expect_background) in [
-            (true, false, true),
-            (true, true, false),
-            (false, false, false),
+        for (background_enabled, explicit_quit, hide_succeeds, expect_background) in [
+            (true, false, true, true),
+            (true, false, false, true),
+            (true, true, true, false),
+            (false, false, true, false),
         ] {
             app.settings.close_to_tray = background_enabled;
             app.force_quit = explicit_quit;
             let manager = app.proxy_manager.clone();
             let status_before = app.rt.block_on(manager.status());
             let ctx = egui::Context::default();
+            let mut native_hide_called = false;
             let output = crate::gui::run_test_ui(&ctx, egui::RawInput::default(), |ui| {
-                app.request_window_close(ui.ctx());
+                app.request_window_close_with_hide(ui.ctx(), || {
+                    native_hide_called = true;
+                    hide_succeeds
+                });
             });
             let commands = &output
                 .viewport_output
@@ -540,15 +570,17 @@ mod macos_window_close_tests {
                 commands.contains(&egui::ViewportCommand::CancelClose),
                 expect_background
             );
+            assert!(!commands.contains(&egui::ViewportCommand::Visible(false)));
             assert_eq!(
                 commands.contains(&egui::ViewportCommand::Minimized(true)),
-                expect_background
+                expect_background && !hide_succeeds
             );
             assert_eq!(
                 commands.contains(&egui::ViewportCommand::Close),
                 !expect_background
             );
             assert_eq!(app.force_quit, !expect_background);
+            assert_eq!(native_hide_called, expect_background);
             assert_eq!(app.rt.block_on(manager.status()), status_before);
         }
     }
