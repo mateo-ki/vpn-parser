@@ -134,25 +134,35 @@ jobs:
           }
           $notesValid = ($null -ne $notesFile) -and (Test-Path $notesFile)
 
-          if (gh release view "$env:TAG" 2>$null) {
-            Write-Host "Release $env:TAG already exists, updating assets with --clobber..."
-            gh release upload "$env:TAG" @assets --clobber
-            if ($notesValid) {
-              gh release edit "$env:TAG" --notes-file $notesFile
-            }
-            if ($pre) { gh release edit "$env:TAG" --prerelease } else { gh release edit "$env:TAG" --prerelease=false }
-          } elseif ($pre) {
-            if ($notesValid) {
-              gh release create "$env:TAG" @assets --title "VProxy $env:TAG（预发）" --notes-file $notesFile --prerelease
+          $published = $false
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            Write-Host "尝试发布/同步 Release (第 $attempt 次)..."
+            if (gh release view "$env:TAG" 2>$null) {
+              Write-Host "Release $env:TAG 已存在，使用 --clobber 上传资产..."
+              gh release upload "$env:TAG" @assets --clobber
+              if ($LASTEXITCODE -eq 0) {
+                if ($notesValid) {
+                  gh release edit "$env:TAG" --notes-file $notesFile
+                }
+                if ($pre) { gh release edit "$env:TAG" --prerelease } else { gh release edit "$env:TAG" --prerelease=false }
+                $published = $true
+                break
+              }
             } else {
-              gh release create "$env:TAG" @assets --title "VProxy $env:TAG（预发）" --generate-notes --prerelease
+              $createArgs = @("$env:TAG") + $assets + @("--title", "VProxy $env:TAG")
+              if ($pre) { $createArgs += "--prerelease" }
+              if ($notesValid) { $createArgs += @("--notes-file", $notesFile) } else { $createArgs += "--generate-notes" }
+              gh release create @createArgs
+              if ($LASTEXITCODE -eq 0) {
+                $published = $true
+                break
+              }
             }
-          } else {
-            if ($notesValid) {
-              gh release create "$env:TAG" @assets --title "VProxy $env:TAG" --notes-file $notesFile
-            } else {
-              gh release create "$env:TAG" @assets --title "VProxy $env:TAG" --generate-notes
-            }
+            Write-Warning "第 $attempt 次发布未成功，等待 10 秒后重试..."
+            Start-Sleep -Seconds 10
+          }
+          if (-not $published) {
+            throw "多次尝试发布/同步 GitHub Release 均失败"
           }
 
       - name: 同步更新 Scoop Manifest (vproxy.json)
@@ -208,6 +218,7 @@ jobs:
           $status = git status --porcelain
           if ($status) {
             git commit -m "chore(scoop): 自动同步 vproxy.json 及 vpn-parser.json 至 v$version"
+            git pull --rebase origin main
             git push origin main
             Write-Host "已推送最新 Scoop Manifest 到 main 分支"
           } else {

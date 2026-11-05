@@ -187,7 +187,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
-          for i in $(seq 1 40); do
+          for i in $(seq 1 80); do
             if gh release view "$tag" >/dev/null 2>&1; then
               echo "release $tag 已存在（第 $i 次查到），上传 macOS 资产"
               for f in dist/*.tar.gz dist/*.dmg dist/*.sha256; do
@@ -197,8 +197,8 @@ jobs:
               done
               exit 0
             fi
-            echo "Waiting for release $tag to be created... ($i/40)"
+            echo "Waiting for release $tag to be created... ($i/80)"
             sleep 15
           done
           echo "Release 等待超时，尝试直接创建并上传资产..."
-          gh release create "$tag" dist/* --title "VPN Parser $tag" || true
+          gh release create "$tag" dist/* --title "VProxy $tag" || true

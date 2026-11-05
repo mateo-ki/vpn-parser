@@ -134,7 +134,7 @@ jobs:
             sleep 15
           done
           echo "Release 等待超时，尝试直接创建并上传资产..."
-          gh release create "$tag" dist/* --title "VPN Parser $tag" || true
+          gh release create "$tag" dist/* --title "VProxy $tag" || true
 
   build-luci-ipk:
     name: 构建 OpenWrt LuCI 控制面板 (.ipk / .apk)
@@ -200,4 +200,4 @@ jobs:
             sleep 15
           done
           echo "Release 等待超时，尝试直接创建并上传资产..."
-          gh release create "$tag" dist/* --title "VPN Parser $tag" || true
+          gh release create "$tag" dist/* --title "VProxy $tag" || true

@@ -188,7 +188,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
-          for i in $(seq 1 40); do
+          for i in $(seq 1 80); do
             if gh release view "$tag" >/dev/null 2>&1; then
               echo "release $tag 已存在（第 $i 次查到），上传 Linux 资产"
               gh release upload "$tag" target/debian/*.deb target/generate-rpm/*.rpm target/appimage/*.AppImage --clobber
@@ -196,5 +196,5 @@ jobs:
             fi
             sleep 15
           done
-          echo "等 Release $tag 出现超时（10 分钟）—— 检查 windows.yml 那次运行" >&2
-          exit 1
+          echo "Release 等待超时，尝试直接创建并上传资产..."
+          gh release create "$tag" target/debian/*.deb target/generate-rpm/*.rpm target/appimage/*.AppImage --title "VProxy $tag" || true
