@@ -38,4 +38,4 @@ pub const MEOW_TAG: &str = "v0.26.1";
 pub const SHOES_TAG: &str = "v0.3.4";
 
 /// 默认内置锁定的 VP-Core 资产版本
-pub const VPCORE_TAG: &str = "v1.6.1";
+pub const VPCORE_TAG: &str = "v1.6.2";
