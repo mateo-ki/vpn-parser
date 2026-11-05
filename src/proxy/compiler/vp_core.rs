@@ -99,6 +99,23 @@ impl BackendCompiler for VpCoreCompiler {
                         if let Some(f) = f1.or(f2).or(f3) {
                             po.insert("client-fingerprint".into(), f);
                         }
+
+                        // 剥离大陆防火墙(GFW)全网阻断丢包的 ECH 扩展，防止触发黑洞导致代理出站硬超时
+                        po.remove("ech");
+                        po.remove("ech-opts");
+
+                        // 补齐 WebSocket 握手标准 User-Agent 标头，防止被 Cloudflare WAF 识别拦截 (400 Bad Request)
+                        if let Some(ws_opts) = po.get_mut("ws-opts").and_then(|v| v.as_object_mut()) {
+                            let headers = ws_opts.entry("headers").or_insert_with(|| serde_json::json!({}));
+                            if let Some(h) = headers.as_object_mut() {
+                                if !h.keys().any(|k| k.eq_ignore_ascii_case("user-agent")) {
+                                    h.insert(
+                                        "User-Agent".into(),
+                                        serde_json::json!("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"),
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
                 proxies.retain(|p| {
@@ -619,6 +636,42 @@ rules:
             !yaml.contains("network: raw"),
             "raw 必须归一成 tcp:\n{yaml}"
         );
+    }
+
+    #[test]
+    fn test_vpcore_compiler_strips_ech_and_injects_ws_ua() {
+        let node = test_node(
+            "vless",
+            json!({
+                "uuid": "aaaaaaaa-bbbb-4ccc-8ddd-000000000060",
+                "tls": true,
+                "network": "ws",
+                "ech-opts": {
+                    "enable": true,
+                    "query-server-name": "cloudflare-ech.com"
+                },
+                "ws-opts": {
+                    "path": "/test?ed=2048",
+                    "headers": {
+                        "Host": "example.com"
+                    }
+                }
+            }),
+        );
+        let options = MihomoConfigOptions::default();
+        let plan = crate::proxy::ir::lower_options_to_ir(&options, Some(&node));
+        let artifact = VpCoreCompiler.compile(&plan).expect("compile success");
+        let yaml = match artifact {
+            CompiledArtifact::Yaml(y) => y,
+            _ => panic!("expected Yaml artifact"),
+        };
+
+        // 必须彻底剥离 ech-opts，防止 GFW 黑洞静默丢包超时
+        assert!(!yaml.contains("ech-opts"), "ech-opts 必须被剥离:\n{yaml}");
+        assert!(!yaml.contains("cloudflare-ech.com"), "ech 查询名必须被剥离:\n{yaml}");
+
+        // 必须注入标准 User-Agent 标头防止 Cloudflare 400 Bad Request
+        assert!(yaml.contains("User-Agent: Mozilla/5.0"), "必须补全 User-Agent 标头:\n{yaml}");
     }
 
     #[test]
