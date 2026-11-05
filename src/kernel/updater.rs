@@ -148,6 +148,8 @@ pub struct KernelReleaseInfo {
     pub update_available: bool,
     pub asset_name: Option<String>,
     pub message: String,
+    #[serde(default)]
+    pub from_cache: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,6 +210,9 @@ struct GithubRelease {
     /// 内置兜底 Release 用的标记：不是"最新"，是"已知能下下来、SHA-256 核对过"的那一版。
     #[serde(default)]
     fallback: bool,
+    /// 标记是否来自本地离线缓存
+    #[serde(default)]
+    from_cache: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -425,7 +430,7 @@ impl KernelUpdater {
             let mut metadata = Client::builder()
                 .user_agent("vproxy/0.1 kernel-updater")
                 .http1_only()
-                .connect_timeout(std::time::Duration::from_secs(4))
+                .connect_timeout(std::time::Duration::from_secs(6))
                 .read_timeout(std::time::Duration::from_secs(15));
             let mut streaming = Client::builder()
                 .user_agent("vproxy/0.1 kernel-updater")
@@ -443,7 +448,11 @@ impl KernelUpdater {
                         format!("系统代理 {url}")
                     }
                 }
-                None => "直连".to_string(),
+                None => {
+                    metadata = metadata.no_proxy();
+                    streaming = streaming.no_proxy();
+                    "直连".to_string()
+                }
             };
             transports.push(Transport {
                 label,
@@ -464,20 +473,64 @@ impl KernelUpdater {
             .with_context(|| format!("官方 Release 未找到资产 {asset_name}"))?;
         require_sha256(asset)?;
         let update_available = match info.version.as_deref() {
-            Some(current) => !version_matches(current, &release.tag_name),
+            Some(current) => {
+                let current_clean = crate::kernel::clean_kernel_version(current);
+                let remote_clean = crate::kernel::clean_kernel_version(&release.tag_name);
+                if version_matches(current, &release.tag_name) {
+                    false
+                } else {
+                    crate::app_update::version_is_newer(remote_clean, current_clean)
+                }
+            }
             None => true,
         };
+
+        let is_downgrade = info
+            .version
+            .as_deref()
+            .map(|current| {
+                !version_matches(current, &release.tag_name)
+                    && !crate::app_update::version_is_newer(
+                        crate::kernel::clean_kernel_version(&release.tag_name),
+                        crate::kernel::clean_kernel_version(current),
+                    )
+            })
+            .unwrap_or(false);
+
+        let cache_hint = if release.from_cache {
+            "（离线缓存）"
+        } else if release.fallback {
+            "（内置兜底）"
+        } else {
+            ""
+        };
+
+        let message = if update_available {
+            format!(
+                "{} 可更新至 {}{}",
+                info.kind.display_name(),
+                release.tag_name,
+                cache_hint
+            )
+        } else if is_downgrade {
+            format!(
+                "{} 当前版本高于检查到的版本（{}{}）",
+                info.kind.display_name(),
+                release.tag_name,
+                cache_hint
+            )
+        } else {
+            format!("{} 已是最新版本{}", info.kind.display_name(), cache_hint)
+        };
+
         Ok(KernelReleaseInfo {
             kind: info.kind,
             current_version: info.version.clone(),
             latest_version: Some(release.tag_name.clone()),
             update_available,
             asset_name: Some(asset.name.clone()),
-            message: if update_available {
-                format!("{} 可更新至 {}", info.kind.display_name(), release.tag_name)
-            } else {
-                format!("{} 已是最新版本", info.kind.display_name())
-            },
+            message,
+            from_cache: release.from_cache,
         })
     }
 
@@ -1104,7 +1157,8 @@ impl KernelUpdater {
         for index in order {
             let transport = &self.transports[index];
             match fetch_json::<GithubRelease>(&transport.client, &url).await {
-                Ok(release) => {
+                Ok(mut release) => {
+                    release.from_cache = false;
                     let cache_path = self.release_cache_path(kind);
                     if let Some(parent) = cache_path.parent() {
                         let _ = tokio::fs::create_dir_all(parent).await;
@@ -1120,14 +1174,18 @@ impl KernelUpdater {
         let remote_error = anyhow::anyhow!("{}", failures.join("；"));
         // 退到本地缓存：上一次成功查到的 Release 会写在那儿。
         if let Ok(bytes) = tokio::fs::read(self.release_cache_path(kind)).await {
-            if let Ok(release) = serde_json::from_slice::<GithubRelease>(&bytes) {
+            if let Ok(mut release) = serde_json::from_slice::<GithubRelease>(&bytes) {
+                release.from_cache = true;
                 return Ok((release, 0));
             }
         }
         // 新装的机器上缓存也不存在，而 `api.github.com` 在这边是间歇被掐的（镜像站又
         // 不代理它）。这时用内置兜底版本，别让"预备状态"卡在查不到版本号上。
         fallback_release(kind)
-            .map(|release| (release, 0))
+            .map(|mut release| {
+                release.from_cache = false;
+                (release, 0)
+            })
             .with_context(|| {
                 format!(
                     "读取 {} 官方 Release 失败且没有本地缓存: {remote_error}",
@@ -1189,6 +1247,7 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
                 digest: Some(digest.to_string()),
             }],
             fallback: true,
+            from_cache: false,
         });
     }
 
@@ -1221,6 +1280,7 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
                 digest: Some(digest.to_string()),
             }],
             fallback: true,
+            from_cache: false,
         });
     }
 
@@ -1228,18 +1288,18 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
         let (name, digest, size) = match KernelPlatform::current() {
             KernelPlatform::Windows => (
                 format!("vpcore-{VPCORE_TAG}-x86_64-pc-windows-msvc.zip"),
-                "sha256:8aa9ca332994572e1617c0202ef7e2c29ce7c3a072cda1611e88aea0647ddba8",
-                3_735_464_u64,
+                "sha256:ffcbfed7b1bfc14d2c222e35736be638800bfa606cec1426f3a27ab74a59dd77",
+                7_261_792_u64,
             ),
             KernelPlatform::Linux => (
                 format!("vpcore-{VPCORE_TAG}-x86_64-unknown-linux-musl.tar.gz"),
-                "sha256:cbf6b001d12f11051b076cf2895a32a21b66457a249e1273512d0f538efda937",
-                3_704_966_u64,
+                "sha256:e1c619e6a1d565128150b975c1f8d99dcd89ab5e32b6b6a1021dbc93268fcce1",
+                7_037_106_u64,
             ),
             KernelPlatform::MacOS => (
                 format!("vpcore-{VPCORE_TAG}-aarch64-apple-darwin.tar.gz"),
-                "sha256:5f1e3d54a23530f859548b19f563a908410947fb16a66e19ae069f9bd4cd1cf6",
-                3_201_746_u64,
+                "sha256:38a143e1e67fa236bee30ea380cc33ba238eefa7a66b446467d14d389c50fb59",
+                6_072_454_u64,
             ),
         };
         return Some(GithubRelease {
@@ -1253,6 +1313,7 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
                 digest: Some(digest.to_string()),
             }],
             fallback: true,
+            from_cache: false,
         });
     }
 
@@ -1323,6 +1384,7 @@ fn mihomo_fallback_release(platform: KernelPlatform, arch: &str) -> GithubReleas
             })
             .collect(),
         fallback: true,
+        from_cache: false,
     }
 }
 
@@ -1639,6 +1701,29 @@ mod tests {
         ));
         assert!(version_matches("Xray 26.3.27 (Xray)", "v26.3.27"));
         assert!(!version_matches("sing-box version 1.13.13", "v1.13.14"));
+    }
+
+    #[test]
+    fn semver_comparison_prevents_downgrade_update_prompt() {
+        // 本地为 1.6.0，远端旧缓存为 v1.5.1
+        let current = "vpcore 1.6.0";
+        let remote_cache = "v1.5.1";
+        let cur_clean = crate::kernel::clean_kernel_version(current);
+        let rem_clean = crate::kernel::clean_kernel_version(remote_cache);
+        assert!(!version_matches(current, remote_cache));
+        assert!(
+            !crate::app_update::version_is_newer(rem_clean, cur_clean),
+            "旧版本不能当作新版本推荐更新"
+        );
+
+        // 本地为 1.6.0，远端发布了 v1.6.1
+        let remote_new = "v1.6.1";
+        let rem_new_clean = crate::kernel::clean_kernel_version(remote_new);
+        assert!(!version_matches(current, remote_new));
+        assert!(
+            crate::app_update::version_is_newer(rem_new_clean, cur_clean),
+            "新版本应正确识别为可更新"
+        );
     }
 
     /// 兜底 Release 必须是"照原样下得回来、哈希对得上"的那种：资产名要符合内核

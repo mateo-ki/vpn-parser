@@ -516,8 +516,16 @@ impl VpnApp {
                                     });
                                     ui.horizontal(|ui| {
                                         ui.label(RichText::new("最新:").small().color(theme::muted()));
+                                        let is_from_cache = release.is_some_and(|r| r.from_cache);
                                         let (lat_text, lat_color) = if release.is_some_and(|r| r.update_available) {
-                                            (format!("{latest} (可更新)"), theme::warning())
+                                            let tag = if is_from_cache {
+                                                format!("{latest} (可更新·缓存)")
+                                            } else {
+                                                format!("{latest} (可更新)")
+                                            };
+                                            (tag, theme::warning())
+                                        } else if is_from_cache {
+                                            (format!("{latest} (缓存)"), theme::text_secondary())
                                         } else {
                                             (format!("{latest} (最新)"), theme::text_secondary())
                                         };
@@ -536,7 +544,12 @@ impl VpnApp {
                                             ),
                                         );
                                         if latest != "-" && !latest.is_empty() {
-                                            lat_resp.on_hover_text(format!("官方远端版本：{latest}"));
+                                            let hint = if is_from_cache {
+                                                format!("官方远端版本：{latest}（网络受限，取自本地历史缓存）")
+                                            } else {
+                                                format!("官方远端版本：{latest}")
+                                            };
+                                            lat_resp.on_hover_text(hint);
                                         }
                                     });
 
@@ -767,28 +780,4 @@ impl VpnApp {
 
 }
 
-pub fn clean_kernel_version(raw: &str) -> &str {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed == "未检测到" || trimmed == "-" {
-        return trimmed;
-    }
-
-    // 优先从按空格分隔的词项中寻找形如 v1.19.32、1.14.3 或 26.3.27 的标准版本标记
-    for part in trimmed.split_whitespace() {
-        let clean = part.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '-');
-        let check = clean.strip_prefix('v').unwrap_or(clean);
-        if let Some(first_char) = check.chars().next() {
-            if first_char.is_ascii_digit() && check.contains('.') {
-                return clean;
-            }
-        }
-    }
-
-    // 如果未识别出标准数字版本（如包含短 commit hash 或特殊名称），安全截取最多 16 个字符
-    if trimmed.chars().count() > 16 {
-        let (idx, _) = trimmed.char_indices().nth(16).unwrap_or((trimmed.len(), ' '));
-        &trimmed[..idx]
-    } else {
-        trimmed
-    }
-}
+pub use crate::kernel::clean_kernel_version;

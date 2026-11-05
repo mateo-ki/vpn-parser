@@ -923,6 +923,7 @@ impl KernelManager {
                 update_available: false,
                 asset_name: None,
                 message: format!("检查更新超时或受限: {err}"),
+                from_cache: false,
             },
         };
         Ok(vec![
@@ -1065,6 +1066,33 @@ pub fn parse_version_output(output: &str) -> Option<String> {
         .map(str::trim)
         .find(|line| !line.is_empty())
         .map(str::to_string)
+}
+
+/// 清洗内核原始版本输出，提取类似 `v1.19.32`、`1.14.3`、`26.3.27` 的纯净版本号
+pub fn clean_kernel_version(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "未检测到" || trimmed == "-" {
+        return trimmed;
+    }
+
+    // 优先从按空格分隔的词项中寻找形如 v1.19.32、1.14.3 或 26.3.27 的标准版本标记
+    for part in trimmed.split_whitespace() {
+        let clean = part.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '-');
+        let check = clean.strip_prefix('v').unwrap_or(clean);
+        if let Some(first_char) = check.chars().next() {
+            if first_char.is_ascii_digit() && check.contains('.') {
+                return clean;
+            }
+        }
+    }
+
+    // 如果未识别出标准数字版本（如包含短 commit hash 或特殊名称），安全截取最多 16 个字符
+    if trimmed.chars().count() > 16 {
+        let (idx, _) = trimmed.char_indices().nth(16).unwrap_or((trimmed.len(), ' '));
+        &trimmed[..idx]
+    } else {
+        trimmed
+    }
 }
 
 /// 把"跑一下内核拿版本"的结果分类。

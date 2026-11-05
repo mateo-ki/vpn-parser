@@ -526,7 +526,10 @@ fn transports(app_proxy: Option<&str>) -> Result<Vec<Transport>> {
                 builder = builder.proxy(reqwest::Proxy::all(url)?);
                 format!("代理 {url}")
             }
-            None => "直连".to_string(),
+            None => {
+                builder = builder.no_proxy();
+                "直连".to_string()
+            }
         };
         list.push(Transport {
             label,
