@@ -2050,7 +2050,12 @@ mod tests {
             "订阅拉取没有并发: {}",
             peak.load(Ordering::SeqCst)
         );
-        assert!(started.elapsed() < Duration::from_secs(5));
+        // CI 共享双核虚拟机高负荷下放宽上限（peak >= 2 才是并发的核心凭据）
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "耗时异常过长: {:?}",
+            started.elapsed()
+        );
         assert_eq!(
             results
                 .iter()
