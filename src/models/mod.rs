@@ -344,8 +344,8 @@ pub struct AppSettings {
     /// 以管理员方式启动软件：非提权实例加载到这条设置时自动 runas 重启（UAC 取消则本会话跳过）。
     #[serde(default)]
     pub launch_as_admin: bool,
-    /// 开机自启动：写/清 HKCU Run 键（仅 Windows 实装）。默认关 —— 动的是用户的注册表，
-    /// 不能擅自开；开启后每次启动还会对账一次，软件挪了位置也能把 Run 键指回新路径。
+    /// 登录自启动：Windows 使用 HKCU Run，macOS 使用当前用户的 LaunchAgent。
+    /// 默认关闭；macOS 登录启动还会连接上次选中的节点。
     #[serde(default)]
     pub launch_at_startup: bool,
     /// 新增订阅源后自动拉取它并只测这个源。同样默认开：他要的是"加完就知道好不好用"。

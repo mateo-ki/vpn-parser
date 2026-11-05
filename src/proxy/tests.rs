@@ -933,6 +933,53 @@ use std::time::Duration;
         assert!(error.to_string().contains("启动"));
         assert_eq!(status.state, ProxyState::Failed);
         assert!(status.message.contains("启动"));
+        assert!(!status.local_proxy_ready);
+        assert_eq!(status.last_error.as_deref(), Some(error.to_string().as_str()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exited_and_timed_out_kernels_leave_a_failed_unready_status() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for (script, expected_error) in [
+            ("#!/bin/sh\nexit 7\n", "退出码"),
+            ("#!/bin/sh\nexec /bin/sleep 30\n", "启动超时"),
+        ] {
+            let mixed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let controller = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let options = MihomoConfigOptions {
+                mode: ProxyMode::None,
+                routing_mode: RoutingMode::Global,
+                mixed_port: mixed.local_addr().unwrap().port(),
+                controller_port: controller.local_addr().unwrap().port(),
+                ..MihomoConfigOptions::default()
+            };
+            drop((mixed, controller));
+            let manager = ProxyManager::with_system_proxy(
+                options, Arc::new(FakeSystemProxy::default()),
+            );
+            let selected = node("ss", json!({
+                "server": "example.com", "port": 8388,
+                "cipher": "aes-128-gcm", "password": "test-only"
+            }));
+            let executable = std::env::temp_dir().join(format!(
+                "vproxy-startup-fixture-{}", uuid::Uuid::new_v4()
+            ));
+            std::fs::write(&executable, script).unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+            let result = manager.start_with_path(&selected, &executable).await;
+            let _ = std::fs::remove_file(&executable);
+            let error = result.unwrap_err().to_string();
+            let status = manager.status().await;
+
+            assert!(error.contains(expected_error), "{error}");
+            assert_eq!(status.state, ProxyState::Failed);
+            assert!(!status.local_proxy_ready);
+            assert!(!status.system_proxy_enabled);
+            assert_eq!(status.last_error.as_deref(), Some(error.as_str()));
+        }
     }
 
     #[tokio::test]

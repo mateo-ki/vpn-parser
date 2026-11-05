@@ -490,6 +490,7 @@ pub enum BgMsg {
     AppUpdateDownloaded(Result<std::path::PathBuf, String>),
     AppReleasesListed(Result<Vec<crate::app_update::ReleaseItem>, String>),
     ProxyStatus(ProxyRuntimeStatus),
+    ProxyMaintenanceDone(Option<ProxyRuntimeStatus>),
     /// TUN 热切换结果：ok=true 已生效（message 为状态栏文案）；false 时界面回退整进程重启。
     ProxyModeHotToggled { ok: bool, message: String },
     /// 系统代理热切换结果：ok=true 已生效，未重启进程

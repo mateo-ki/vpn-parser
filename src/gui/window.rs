@@ -142,7 +142,7 @@ impl VpnApp {
                     }
                     if ui
                         .interact(red_rect, ui.id().with("mac_close"), Sense::click())
-                        .on_hover_text("关闭（按设置在托盘里继续常驻）")
+                        .on_hover_text("关闭（按设置在后台继续运行）")
                         .clicked()
                     {
                         action_close = true;
@@ -457,14 +457,29 @@ impl VpnApp {
     }
 
     pub(crate) fn request_window_close(&mut self, ctx: &egui::Context) {
-        if self.settings.close_to_tray && self.tray.supported() && !self.force_quit {
-            crate::startup_log("Title-bar close -> 收进托盘（停放到屏幕外）");
-            if self.park_to_tray() {
+        if self.settings.close_to_tray && !self.force_quit {
+            #[cfg(target_os = "macos")]
+            {
+                // macOS has no tray implementation. Keep the native window in
+                // the Dock so closing it preserves the proxy and remains reversible.
+                crate::startup_log(
+                    "Window close requested -> minimizing to Dock, proxy stays active",
+                );
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                 return;
             }
-            crate::startup_log("[托盘] 停放失败，降级为退出程序");
+            #[cfg(not(target_os = "macos"))]
+            if self.tray.supported() {
+                crate::startup_log("Window close requested -> 收进托盘（停放到屏幕外）");
+                if self.park_to_tray() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    return;
+                }
+                crate::startup_log("[托盘] 停放失败，降级为退出程序");
+            }
         }
-        crate::startup_log("Title-bar close -> quitting application");
+        crate::startup_log("Window close requested -> quitting application");
         self.force_quit = true;
         self.tray.shutdown();
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -493,6 +508,49 @@ impl VpnApp {
                     response.on_hover_cursor(cursor);
                 }
             });
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_window_close_tests {
+    use super::*;
+
+    #[test]
+    fn window_close_preserves_background_runtime_and_respects_explicit_quit() {
+        let mut app = crate::gui::views::nodes::empty_pool_modal_tests::app_with_an_empty_library();
+        for (background_enabled, explicit_quit, expect_background) in [
+            (true, false, true),
+            (true, true, false),
+            (false, false, false),
+        ] {
+            app.settings.close_to_tray = background_enabled;
+            app.force_quit = explicit_quit;
+            let manager = app.proxy_manager.clone();
+            let status_before = app.rt.block_on(manager.status());
+            let ctx = egui::Context::default();
+            let output = crate::gui::run_test_ui(&ctx, egui::RawInput::default(), |ui| {
+                app.request_window_close(ui.ctx());
+            });
+            let commands = &output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .expect("root viewport exists")
+                .commands;
+            assert_eq!(
+                commands.contains(&egui::ViewportCommand::CancelClose),
+                expect_background
+            );
+            assert_eq!(
+                commands.contains(&egui::ViewportCommand::Minimized(true)),
+                expect_background
+            );
+            assert_eq!(
+                commands.contains(&egui::ViewportCommand::Close),
+                !expect_background
+            );
+            assert_eq!(app.force_quit, !expect_background);
+            assert_eq!(app.rt.block_on(manager.status()), status_before);
+        }
     }
 }
 

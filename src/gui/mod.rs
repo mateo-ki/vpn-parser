@@ -1,10 +1,10 @@
 use crate::collector::Collector;
 use crate::db::Database;
+use crate::gui::view_models::nodes_vm::NodeCardAction;
 use crate::kernel::{
     find_kernel_executable, missing_kernel_for, KernelInfo, KernelKind, KernelManager,
     KernelPreference, KernelReleaseInfo, KernelUpdateProgress,
 };
-use crate::gui::view_models::nodes_vm::NodeCardAction;
 use crate::models::{
     AppSettings, CreateSource, FetchResult, Node, NodeGroupSummary, NodeSummary, Source,
     SpeedTestSummary, Stats, UpdateSettings, UpdateSource, GOOGLE_PROXY_TEST_KIND,
@@ -27,10 +27,10 @@ pub mod failover;
 pub mod fonts;
 pub mod icons;
 pub mod paste;
+pub mod perf;
 pub mod poll;
 pub mod prepare;
 pub mod telemetry_view;
-pub mod perf;
 pub mod theme;
 pub mod types;
 pub mod view_models;
@@ -51,6 +51,16 @@ const GIST_PAGE_RETRIES: usize = 2;
 pub(crate) const SIDEBAR_COLLAPSED_WIDTH: f32 = 64.0;
 pub(crate) const SIDEBAR_EXPANDED_WIDTH: f32 = 110.0;
 
+struct ProxyMaintenanceTask(Option<tokio::sync::oneshot::Sender<()>>);
+
+impl Drop for ProxyMaintenanceTask {
+    fn drop(&mut self) {
+        if let Some(stop) = self.0.take() {
+            let _ = stop.send(());
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub struct VpnApp {
     pub(crate) rt: Arc<Runtime>,
@@ -60,6 +70,7 @@ pub struct VpnApp {
     pub(crate) tasks: TaskTracker,
     pub(crate) kernel_manager: KernelManager,
     pub(crate) proxy_manager: ProxyManager,
+    proxy_maintenance_task: Option<ProxyMaintenanceTask>,
     pub(crate) api_controller: crate::api::ApiServerController,
     pub(crate) api_addr: String,
     pub(crate) remote_api_addr: Option<String>,
@@ -93,7 +104,8 @@ pub struct VpnApp {
     /// 上一次写进 startup.log 的代理状态 + 它开始的时间 + 卡住告警是否已发过。
     /// 启动按钮灰掉的三种原因里，只有「卡在 Starting/Stopping」是用户看不到解释的那种，
     /// 所以状态每变一次记一行，卡满 30 秒再补一行。
-    pub(crate) last_proxy_state_log: Option<(ProxyState, std::time::Instant, bool)>,    pub(crate) gist_pages: usize,
+    pub(crate) last_proxy_state_log: Option<(ProxyState, std::time::Instant, bool)>,
+    pub(crate) gist_pages: usize,
     pub(crate) gist_query_flags: Vec<bool>,
     pub(crate) active_source_fetches: HashSet<String>,
     pub(crate) expanded_kernel_groups: HashSet<String>,
@@ -330,11 +342,14 @@ pub struct VpnApp {
     pub(crate) pending_group_pick: Option<(String, String)>,
     pub(crate) active_connections: Vec<ActiveConnectionInfo>,
     /// 节点流量统计记录：node_name -> NodeTrafficRecord
-    pub(crate) node_traffic_records: std::collections::HashMap<String, crate::gui::types::NodeTrafficRecord>,
+    pub(crate) node_traffic_records:
+        std::collections::HashMap<String, crate::gui::types::NodeTrafficRecord>,
     /// 域名流量统计记录：domain -> DomainTrafficRecord
-    pub(crate) domain_traffic_records: std::collections::HashMap<String, crate::gui::types::DomainTrafficRecord>,
+    pub(crate) domain_traffic_records:
+        std::collections::HashMap<String, crate::gui::types::DomainTrafficRecord>,
     /// 软件进程流量统计记录：process -> ProcessTrafficRecord
-    pub(crate) process_traffic_records: std::collections::HashMap<String, crate::gui::types::ProcessTrafficRecord>,
+    pub(crate) process_traffic_records:
+        std::collections::HashMap<String, crate::gui::types::ProcessTrafficRecord>,
     /// 连接上一拍记录的流量：conn_id -> (node_name, prev_upload, prev_download)
     pub(crate) conn_prev_traffic: std::collections::HashMap<String, (String, u64, u64)>,
     /// 节点流量抽屉的排序模式
@@ -368,7 +383,8 @@ pub struct VpnApp {
     pub(crate) show_ip_risk_dialog: bool,
     pub(crate) show_speedtest_dialog: bool,
     pub(crate) show_network_doctor: bool,
-    pub(crate) network_doctor_report: Option<crate::gui::views::proxy::modals::network_doctor::NetworkDoctorReport>,
+    pub(crate) network_doctor_report:
+        Option<crate::gui::views::proxy::modals::network_doctor::NetworkDoctorReport>,
     pub(crate) network_doctor_busy: bool,
     pub(crate) network_doctor_repairing: bool,
     pub(crate) network_doctor_message: Option<String>,
@@ -551,6 +567,7 @@ impl VpnApp {
             proxy_status: ProxyRuntimeStatus::stopped(initial_proxy_config.clone()),
             proxy_config: initial_proxy_config,
             proxy_manager,
+            proxy_maintenance_task: None,
             api_controller,
             api_addr,
             remote_api_addr: None,
@@ -922,6 +939,36 @@ impl VpnApp {
             app.router.set_active(node_id);
         }
         app.reload_all();
+        // AppKit can stop repainting a minimized window. Supervise the kernel
+        // independently so recovery never depends on bringing the GUI forward.
+        let manager = app.proxy_manager.clone();
+        let tx = app.tx.clone();
+        let (stop, mut stopped) = tokio::sync::oneshot::channel();
+        app.rt.spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut previous = None;
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut stopped => break,
+                    _ = tick.tick() => {}
+                }
+                // Finish an in-flight restart before stopping. Aborting here
+                // could discard a system-proxy snapshot held by that restart.
+                if let Some(status) = manager.maintain().await {
+                    // Keep a minimized window from accumulating identical
+                    // status messages for hours in the background queue.
+                    if previous.as_ref() != Some(&status) {
+                        previous = Some(status.clone());
+                        if tx.send(BgMsg::ProxyMaintenanceDone(Some(status))).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        app.proxy_maintenance_task = Some(ProxyMaintenanceTask(Some(stop)));
         app
     }
 
@@ -1055,10 +1102,22 @@ impl VpnApp {
                 probe(client.as_ref(), "https://www.youtube.com"),
             );
             let results = vec![
-                crate::gui::types::ServiceCheck { name: "Google", latency_ms: g },
-                crate::gui::types::ServiceCheck { name: "ChatGPT", latency_ms: c },
-                crate::gui::types::ServiceCheck { name: "GitHub", latency_ms: h },
-                crate::gui::types::ServiceCheck { name: "YouTube", latency_ms: y },
+                crate::gui::types::ServiceCheck {
+                    name: "Google",
+                    latency_ms: g,
+                },
+                crate::gui::types::ServiceCheck {
+                    name: "ChatGPT",
+                    latency_ms: c,
+                },
+                crate::gui::types::ServiceCheck {
+                    name: "GitHub",
+                    latency_ms: h,
+                },
+                crate::gui::types::ServiceCheck {
+                    name: "YouTube",
+                    latency_ms: y,
+                },
             ];
             let _ = tx.send(BgMsg::ServiceChecks(results));
         });
@@ -1167,7 +1226,10 @@ impl VpnApp {
                 .await
                 .map(|p| (p.items, p.total))
                 .map_err(|e| e.to_string());
-            let _ = tx.send(BgMsg::Nodes { req_id, result: res });
+            let _ = tx.send(BgMsg::Nodes {
+                req_id,
+                result: res,
+            });
         });
     }
 
@@ -1248,7 +1310,6 @@ impl VpnApp {
         });
     }
 
-
     pub(crate) fn open_create_form(&mut self) {
         self.editing_id = None;
         self.form_name.clear();
@@ -1265,7 +1326,10 @@ impl VpnApp {
         self.form_url = source.url_template.clone();
         self.form_enabled = source.enabled;
         self.form_remark = source.remark.clone().unwrap_or_default();
-        self.form_user_agent = source.user_agent.clone().unwrap_or_else(|| "clash.meta".to_string());
+        self.form_user_agent = source
+            .user_agent
+            .clone()
+            .unwrap_or_else(|| "clash.meta".to_string());
         self.show_source_form = true;
     }
 
@@ -1419,7 +1483,10 @@ impl VpnApp {
 
         self.rt.spawn(async move {
             let existing_id = match db.list_sources().await {
-                Ok(sources) => sources.into_iter().find(|s| s.url_template == warp_url).map(|s| s.id),
+                Ok(sources) => sources
+                    .into_iter()
+                    .find(|s| s.url_template == warp_url)
+                    .map(|s| s.id),
                 Err(_) => None,
             };
 
@@ -1431,7 +1498,9 @@ impl VpnApp {
                         name: warp_name.into(),
                         url_template: warp_url.into(),
                         enabled: true,
-                        remark: Some("Cloudflare WARP 官方原生 MASQUE 节点池（免第三方仓库）".into()),
+                        remark: Some(
+                            "Cloudflare WARP 官方原生 MASQUE 节点池（免第三方仓库）".into(),
+                        ),
                         user_agent: None,
                     })
                     .await
@@ -1447,7 +1516,9 @@ impl VpnApp {
                 }
             };
 
-            let nodes_res = match crate::parser::warp_masque::register_warp_masque_native(None).await {
+            let nodes_res = match crate::parser::warp_masque::register_warp_masque_native(None)
+                .await
+            {
                 Ok(nodes) => Ok(nodes),
                 Err(err) => {
                     if let Some(ref proxy) = proxy_url {
@@ -1464,7 +1535,10 @@ impl VpnApp {
                     match db.replace_source_nodes(&source_id, &nodes).await {
                         Ok(_) => {
                             let _ = db.mark_source_fetched(&source_id, "ok", count as i64).await;
-                            Ok(format!("🎉 成功原生获取 {} 个 Cloudflare WARP MASQUE 节点！", count))
+                            Ok(format!(
+                                "🎉 成功原生获取 {} 个 Cloudflare WARP MASQUE 节点！",
+                                count
+                            ))
                         }
                         Err(e) => Err(format!("保存 WARP 节点失败: {e}")),
                     }
@@ -1723,13 +1797,21 @@ impl VpnApp {
         self.profile_status = Some(("正在导出完整配置...".to_string(), false));
         self.rt.spawn(async move {
             let res = async {
-                let profile = crate::profile::export_unified_profile(&db, Some(crate::constants::brand::DEFAULT_PROFILE_BACKUP_NAME.into()), true).await?;
+                let profile = crate::profile::export_unified_profile(
+                    &db,
+                    Some(crate::constants::brand::DEFAULT_PROFILE_BACKUP_NAME.into()),
+                    true,
+                )
+                .await?;
                 let yaml = crate::profile::to_yaml(&profile)?;
                 let path = crate::profile::save_backup_file(&yaml)?;
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
                     let _ = clipboard.set_text(yaml);
                 }
-                Ok(format!("配置已成功备份至: {}（已复制到剪贴板）", path.display()))
+                Ok(format!(
+                    "配置已成功备份至: {}（已复制到剪贴板）",
+                    path.display()
+                ))
             }
             .await
             .map_err(|e: anyhow::Error| e.to_string());
@@ -1744,7 +1826,12 @@ impl VpnApp {
         self.profile_status = Some(("正在选择保存路径...".to_string(), false));
         self.rt.spawn(async move {
             let res = async {
-                let profile = crate::profile::export_unified_profile(&db, Some("VProxy 配置文件".into()), true).await?;
+                let profile = crate::profile::export_unified_profile(
+                    &db,
+                    Some("VProxy 配置文件".into()),
+                    true,
+                )
+                .await?;
                 let yaml = crate::profile::to_yaml(&profile)?;
                 let file = rfd::AsyncFileDialog::new()
                     .add_filter("YAML 配置文件", &["yaml", "yml"])
@@ -1775,7 +1862,10 @@ impl VpnApp {
         self.rt.spawn(async move {
             let file = rfd::AsyncFileDialog::new()
                 .set_title("选择统一配置文件进行恢复")
-                .add_filter("统一配置文件 (*.yaml, *.yml, *.json)", &["yaml", "yml", "json"])
+                .add_filter(
+                    "统一配置文件 (*.yaml, *.yml, *.json)",
+                    &["yaml", "yml", "json"],
+                )
                 .add_filter("全部文件 (*.*)", &["*"])
                 .pick_file()
                 .await;
@@ -2189,7 +2279,9 @@ impl VpnApp {
             let res = db.clear_seen_gists().await;
             let _ = tx.send(BgMsg::OpDone {
                 result: res
-                    .map(|count| format!("已清空 {count} 条已见 Gist 记录，现在可以重新发现全部节点"))
+                    .map(|count| {
+                        format!("已清空 {count} 条已见 Gist 记录，现在可以重新发现全部节点")
+                    })
                     .map_err(|e| e.to_string()),
                 unlock: false,
             });
@@ -2267,7 +2359,7 @@ impl VpnApp {
         self.rt.spawn(async move {
             // No source_id: clipboard nodes are not tied to a subscription.
             let nodes = crate::parser::parse_subscription(&text, None);
-                let parsed = nodes.len();
+            let parsed = nodes.len();
             let res = if parsed == 0 {
                 Err("未从剪贴板解析出任何节点".to_string())
             } else {
@@ -2381,12 +2473,16 @@ impl VpnApp {
         }
     }
 
-    pub(crate) fn import_from_local_yaml_file(&mut self, path: String, as_source: bool, source_name: String) {
-        let clean_path = crate::collector::local_file_path(&path)
-            .unwrap_or_else(|| {
-                let trimmed = path.trim();
-                trimmed.trim_matches('"').trim_matches('\'').to_string()
-            });
+    pub(crate) fn import_from_local_yaml_file(
+        &mut self,
+        path: String,
+        as_source: bool,
+        source_name: String,
+    ) {
+        let clean_path = crate::collector::local_file_path(&path).unwrap_or_else(|| {
+            let trimmed = path.trim();
+            trimmed.trim_matches('"').trim_matches('\'').to_string()
+        });
         let p = std::path::PathBuf::from(&clean_path);
         if !p.exists() {
             self.status = format!("找不到指定文件: {}", p.display());
@@ -2420,7 +2516,10 @@ impl VpnApp {
         let tx = self.tx.clone();
         self.busy = true;
         self.status = format!("正在解析本地配置文件「{}」...", p.display());
-        let file_stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "本地配置".to_string());
+        let file_stem = p
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "本地配置".to_string());
         let final_source_name = if source_name.trim().is_empty() {
             format!("本地: {file_stem}")
         } else {
@@ -2605,7 +2704,13 @@ impl VpnApp {
         self.status = "正在测速... 阶段 1/3: 握手延迟与抖动探测".into();
         // 若指定的测速节点与当前内核活动节点不一致，自动切换内核出口为该节点
         if self.selected_proxy_node_id.as_deref() != Some(&id) {
-            if let Some(node) = self.proxy_nodes.iter().chain(self.nodes.iter()).find(|n| n.id == id).cloned() {
+            if let Some(node) = self
+                .proxy_nodes
+                .iter()
+                .chain(self.nodes.iter())
+                .find(|n| n.id == id)
+                .cloned()
+            {
                 self.switch_proxy_node(node.id, node.name, "测速指定节点");
             }
         }
@@ -2907,8 +3012,7 @@ impl VpnApp {
 
     pub(crate) fn switch_proxy_node(&mut self, id: String, name: String, reason: &str) {
         // 出口变化：服务连通性立即重测（先清掉旧结果，卡片转入"检测中"）
-        self.last_service_check =
-            std::time::Instant::now() - std::time::Duration::from_secs(61);
+        self.last_service_check = std::time::Instant::now() - std::time::Duration::from_secs(61);
         self.service_checks = None;
         let from_id = self.selected_proxy_node_id.clone();
         let from_name = self.selected_proxy_node_name.clone();
@@ -3001,18 +3105,8 @@ impl VpnApp {
                         &candidate_blacklist,
                     )
                     .await;
-                    Self::prime_port_mapping_candidates(
-                        &db,
-                        &manager,
-                        &port_mappings,
-                    )
-                    .await;
-                    Self::prime_chain_proxy_candidates(
-                        &db,
-                        &manager,
-                        &chain_options,
-                    )
-                    .await;
+                    Self::prime_port_mapping_candidates(&db, &manager, &port_mappings).await;
+                    Self::prime_chain_proxy_candidates(&db, &manager, &chain_options).await;
                     let res = manager.switch_node(&node).await;
                     res.map(|_| format!("已平滑切换至节点: {}", node.name))
                         .map_err(|e| e.to_string())
@@ -3272,7 +3366,10 @@ impl VpnApp {
             return None;
         }
         let sid = self.proxy_config.subscription_rules_source_id.as_deref()?;
-        self.sources.iter().find(|s| s.id == sid).and_then(|s| s.groups_yaml.clone())
+        self.sources
+            .iter()
+            .find(|s| s.id == sid)
+            .and_then(|s| s.groups_yaml.clone())
     }
 
     pub(crate) fn save_proxy_config(&mut self) {
@@ -3349,7 +3446,10 @@ impl VpnApp {
             let is_tun = self.proxy_config.mode.has_tun();
             let proto = node.protocol.to_ascii_lowercase();
             let is_incomp = (cfg!(windows) && is_tun)
-                || matches!(proto.as_str(), "wireguard" | "wg" | "tuic" | "ssr" | "shadowsocksr" | "masque");
+                || matches!(
+                    proto.as_str(),
+                    "wireguard" | "wg" | "tuic" | "ssr" | "shadowsocksr" | "masque"
+                );
             if is_incomp && find_kernel_executable(KernelKind::Mihomo).is_none() {
                 return Some(KernelKind::Mihomo);
             }
@@ -3389,7 +3489,12 @@ impl VpnApp {
             return kind;
         }
         if let Some(ref node_id) = self.selected_proxy_node_id {
-            if let Some(node) = self.proxy_nodes.iter().chain(self.nodes.iter()).find(|n| &n.id == node_id) {
+            if let Some(node) = self
+                .proxy_nodes
+                .iter()
+                .chain(self.nodes.iter())
+                .find(|n| &n.id == node_id)
+            {
                 if let Ok(kind) = crate::kernel::select_proxy_kernel_preference(
                     &node.protocol,
                     self.proxy_config.kernel_preference,
@@ -3681,10 +3786,15 @@ impl VpnApp {
                 let outcome = match db.top_verified_nodes(2, None).await {
                     Ok(nodes) => match nodes.into_iter().next() {
                         Some(node) => Ok((node.id, node.name)),
-                        None => match db.list_nodes(None, None, None, None, None, 1, 1, None).await {
+                        None => match db
+                            .list_nodes(None, None, None, None, None, 1, 1, None)
+                            .await
+                        {
                             Ok(page) => match page.items.into_iter().next() {
                                 Some(n) => Ok((n.id, n.name)),
-                                None => Err("库里没有可用节点，请先在「订阅源」拉取节点".to_string()),
+                                None => {
+                                    Err("库里没有可用节点，请先在「订阅源」拉取节点".to_string())
+                                }
                             },
                             Err(e) => Err(e.to_string()),
                         },
@@ -3714,9 +3824,7 @@ impl VpnApp {
             let kernel_path = crate::kernel::managed_kernel_path(crate::kernel::KernelKind::Mihomo);
             if !platform::kernel_has_tun_capability(&kernel_path) {
                 let cmd = platform::tun_capability_command(&kernel_path);
-                self.status = format!(
-                    "TUN 模式启动被拦截：内核缺少网络权限，请在终端执行：{cmd}"
-                );
+                self.status = format!("TUN 模式启动被拦截：内核缺少网络权限，请在终端执行：{cmd}");
                 return;
             }
         }
@@ -3771,18 +3879,9 @@ impl VpnApp {
                         &candidate_blacklist,
                     )
                     .await;
-                    Self::prime_port_mapping_candidates(
-                        &db,
-                        &manager,
-                        &options.port_mappings,
-                    )
-                    .await;
-                    Self::prime_chain_proxy_candidates(
-                        &db,
-                        &manager,
-                        &options,
-                    )
-                    .await;
+                    Self::prime_port_mapping_candidates(&db, &manager, &options.port_mappings)
+                        .await;
+                    Self::prime_chain_proxy_candidates(&db, &manager, &options).await;
                     let db_clone = db.clone();
                     let opt_clone = options.clone();
                     tokio::spawn(async move {
@@ -3816,7 +3915,8 @@ impl VpnApp {
                                     status.message
                                 ))
                             } else {
-                                let k_name = status.kernel.map(|k| k.display_name()).unwrap_or("代理");
+                                let k_name =
+                                    status.kernel.map(|k| k.display_name()).unwrap_or("代理");
                                 let mode_str = match mode {
                                     ProxyMode::Tun => "TUN 模式",
                                     ProxyMode::Both => "系统代理与 TUN 模式",
@@ -3824,7 +3924,12 @@ impl VpnApp {
                                     ProxyMode::None => "纯端口模式",
                                 };
                                 let msg = if status.message.contains("回退") {
-                                    let hint = status.message.split('（').nth(1).and_then(|s| s.strip_suffix('）')).unwrap_or(&status.message);
+                                    let hint = status
+                                        .message
+                                        .split('（')
+                                        .nth(1)
+                                        .and_then(|s| s.strip_suffix('）'))
+                                        .unwrap_or(&status.message);
                                     format!("{k_name} 已启动，{mode_str}已启用（{hint}）")
                                 } else {
                                     format!("{k_name} 代理已启动，{mode_str}已启用")
@@ -3857,13 +3962,16 @@ impl VpnApp {
                                 Err(anyhow::anyhow!(
                                     "{message}; 已将该节点标记为不可用，请切换节点"
                                 ))
-                            } else if cfg!(target_os = "linux") && mode.has_tun()
+                            } else if cfg!(target_os = "linux")
+                                && mode.has_tun()
                                 && (message.contains("Operation not permitted")
                                     || message.contains("CAP_NET_ADMIN")
                                     || message.contains("TUNSETIFF")
                                     || message.contains("permission denied"))
                             {
-                                let kernel_path = crate::kernel::managed_kernel_path(crate::kernel::KernelKind::Mihomo);
+                                let kernel_path = crate::kernel::managed_kernel_path(
+                                    crate::kernel::KernelKind::Mihomo,
+                                );
                                 Err(anyhow::anyhow!(
                                     "TUN 模式启动失败：内核进程缺少 CAP_NET_ADMIN 权限。\n\
                                      请在终端执行一次授权命令为内核授权：\n\
@@ -3945,8 +4053,7 @@ impl VpnApp {
                 if stuck && !stuck_logged && elapsed >= 30 {
                     crate::startup_log(&format!(
                         "[代理状态] 在 {state:?} 卡了 {elapsed} 秒，启动按钮此时是灰的：{} busy={}",
-                        self.proxy_status.message,
-                        self.proxy_busy
+                        self.proxy_status.message, self.proxy_busy
                     ));
                     self.last_proxy_state_log = Some((state, since, true));
                 }
@@ -3955,13 +4062,13 @@ impl VpnApp {
         }
         crate::startup_log(&format!(
             "[代理状态] {state:?}（{}）busy={}",
-            self.proxy_status.message,
-            self.proxy_busy
+            self.proxy_status.message, self.proxy_busy
         ));
         self.last_proxy_state_log = Some((state, now, false));
     }
 
-    pub(crate) fn stop_proxy(&mut self) {        let manager = self.proxy_manager.clone();
+    pub(crate) fn stop_proxy(&mut self) {
+        let manager = self.proxy_manager.clone();
         let tx = self.tx.clone();
         self.proxy_busy = true;
         self.proxy_status.state = ProxyState::Stopping;
@@ -3995,7 +4102,11 @@ impl VpnApp {
     }
 
     /// 服务卡探测 Client：经代理与否、混合端口变了才重建（reqwest 的 proxy 绑在 Client 上）。
-    fn service_check_client(&mut self, use_proxy: bool, proxy_port: u16) -> Option<reqwest::Client> {
+    fn service_check_client(
+        &mut self,
+        use_proxy: bool,
+        proxy_port: u16,
+    ) -> Option<reqwest::Client> {
         if let Some((key_use, key_port, client)) = &self.service_check_client {
             if *key_use == use_proxy && *key_port == proxy_port {
                 return Some(client.clone());
@@ -4054,8 +4165,12 @@ impl VpnApp {
                                 }
                                 None => ("tcp".into(), String::new(), String::new(), "-".into()),
                             };
-                            let rule_str = format_connection_rule(c.rule.as_deref(), c.rule_payload.as_deref());
-                            let target_str = format_connection_target(&c.chains, c.rule_payload.as_deref());
+                            let rule_str = format_connection_rule(
+                                c.rule.as_deref(),
+                                c.rule_payload.as_deref(),
+                            );
+                            let target_str =
+                                format_connection_target(&c.chains, c.rule_payload.as_deref());
                             connections.push(ActiveConnectionInfo {
                                 id: c.id,
                                 network,
@@ -4122,7 +4237,13 @@ impl VpnApp {
                 }
                 if !matches!(
                     kind.as_str(),
-                    "select" | "selector" | "url-test" | "urltest" | "load-balance" | "loadbalance" | "fallback"
+                    "select"
+                        | "selector"
+                        | "url-test"
+                        | "urltest"
+                        | "load-balance"
+                        | "loadbalance"
+                        | "fallback"
                 ) {
                     continue;
                 }
@@ -4153,7 +4274,10 @@ impl VpnApp {
             if let Some(g) = self.kernel_groups.iter().find(|g| g.name == group) {
                 // 1. 若为自动调度组 (url-test / fallback / load-balance)，内核不支持手动指定节点，跳过
                 let kind_lower = g.kind.to_ascii_lowercase();
-                if kind_lower.contains("test") || kind_lower.contains("fallback") || kind_lower.contains("balance") {
+                if kind_lower.contains("test")
+                    || kind_lower.contains("fallback")
+                    || kind_lower.contains("balance")
+                {
                     return;
                 }
                 // 2. 校验待选节点 target 是否真实存在于该组 members 中，若不存在则跳过，杜绝 400 proxy not exist
@@ -4166,13 +4290,14 @@ impl VpnApp {
             }
         }
         // 出口变化：服务连通性立即重测（先清掉旧结果，卡片转入"检测中"）
-        self.last_service_check =
-            std::time::Instant::now() - std::time::Duration::from_secs(61);
+        self.last_service_check = std::time::Instant::now() - std::time::Duration::from_secs(61);
         self.service_checks = None;
         let port = self.proxy_status.controller_port;
         let secret = self.proxy_status.controller_secret.clone();
         let tx = self.tx.clone();
-        let encoded_group = percent_encoding::utf8_percent_encode(&group, percent_encoding::NON_ALPHANUMERIC).to_string();
+        let encoded_group =
+            percent_encoding::utf8_percent_encode(&group, percent_encoding::NON_ALPHANUMERIC)
+                .to_string();
         self.status = format!("正在让内核切换 {group} → {target}...");
         self.rt.spawn(async move {
             let client = reqwest::Client::builder()
@@ -4249,6 +4374,7 @@ impl VpnApp {
         let port = self.proxy_status.controller_port;
         let secret = self.proxy_status.controller_secret.clone();
         let active_kernel = self.proxy_status.kernel;
+        let service_snapshot = cfg!(target_os = "macos") && self.proxy_status.mode.has_tun();
         let mixed_port = self.proxy_status.mixed_port;
         let tx = self.tx.clone();
 
@@ -4272,18 +4398,37 @@ impl VpnApp {
                         format!("已同步至全部内核目录 (共 {} 项)", synced.len())
                     };
 
-                    // 3. 如果当前运行的内核具备热重载接口（如 Mihomo），尝试通知热重载
+                    // The macOS TUN service uses a protected copy of these files.
+                    // Reloading that copy cannot apply a user-directory update.
+                    let mut activation = String::new();
                     if running && active_kernel == Some(crate::kernel::KernelKind::Mihomo) {
-                        let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(10)).build().ok();
-                        if let Some(c) = client {
-                            let _ = crate::proxy::with_controller_auth(
-                                c.post(format!("http://127.0.0.1:{port}/configs/geo")),
-                                &secret,
-                            ).send().await;
+                        if service_snapshot {
+                            activation =
+                                "；重启代理后应用新规则，后台服务更新时需要一次系统授权".into();
+                        } else {
+                            let reload = async {
+                                let client = reqwest::Client::builder()
+                                    .no_proxy()
+                                    .timeout(std::time::Duration::from_secs(10))
+                                    .build()?;
+                                crate::proxy::with_controller_auth(
+                                    client.post(format!("http://127.0.0.1:{port}/configs/geo")),
+                                    &secret,
+                                )
+                                .send()
+                                .await?
+                                .error_for_status()?;
+                                Ok::<_, reqwest::Error>(())
+                            }
+                            .await;
+                            activation = match reload {
+                                Ok(()) => "；运行中的内核已重载".into(),
+                                Err(error) => format!("；内核重载失败：{error}，重启代理后生效"),
+                            };
                         }
                     }
 
-                    let msg = format!("Geo 规则库更新成功：{detail}，{sync_summary}");
+                    let msg = format!("Geo 规则文件已更新：{detail}，{sync_summary}{activation}");
                     let _ = tx.send(BgMsg::GeoUpdated(Ok(msg)));
                 }
                 Err(e) => {
@@ -4335,7 +4480,8 @@ impl VpnApp {
         // 已经在查或已有本节点的结果就不重复发起
         if self.ip_risk_busy
             || self.ip_risk_egress_pending
-            || (self.ip_risk_egress.is_some() && self.ip_risk_egress_for.as_deref() == Some(id.as_str()))
+            || (self.ip_risk_egress.is_some()
+                && self.ip_risk_egress_for.as_deref() == Some(id.as_str()))
         {
             return;
         }
@@ -4352,7 +4498,11 @@ impl VpnApp {
                 tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
                 egress = crate::ip_risk::lookup_egress(&client, &url).await;
             }
-            let _ = tx.send(BgMsg::IpEgress(id, egress.map_err(|error| error.to_string()), false));
+            let _ = tx.send(BgMsg::IpEgress(
+                id,
+                egress.map_err(|error| error.to_string()),
+                false,
+            ));
         });
     }
 
@@ -4530,7 +4680,11 @@ impl VpnApp {
                 tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
                 egress = crate::ip_risk::lookup_egress(&client, &url).await;
             }
-            let _ = tx.send(BgMsg::IpEgress(id, egress.map_err(|error| error.to_string()), manual));
+            let _ = tx.send(BgMsg::IpEgress(
+                id,
+                egress.map_err(|error| error.to_string()),
+                manual,
+            ));
         });
     }
 
@@ -4594,10 +4748,18 @@ impl VpnApp {
         if let Some(src) = self.sources.iter().find(|s| s.id == sid) {
             return Some(&src.name);
         }
-        if let Some(grp) = self.node_groups.iter().find(|g| g.source_id.as_deref() == Some(sid)) {
+        if let Some(grp) = self
+            .node_groups
+            .iter()
+            .find(|g| g.source_id.as_deref() == Some(sid))
+        {
             return Some(&grp.source_name);
         }
-        if let Some(grp) = self.proxy_node_groups.iter().find(|g| g.source_id.as_deref() == Some(sid)) {
+        if let Some(grp) = self
+            .proxy_node_groups
+            .iter()
+            .find(|g| g.source_id.as_deref() == Some(sid))
+        {
             return Some(&grp.source_name);
         }
         self.sources
@@ -5021,15 +5183,16 @@ impl VpnApp {
 
     #[allow(dead_code)]
     pub(crate) fn toggle_proxy_panel_visibility(&mut self, panel: ProxyPanel) {
-        let mut active: Vec<String> = if self.edit_console_tabs == "all" || self.edit_console_tabs.trim().is_empty() {
-            ProxyPanel::ALL.iter().map(|p| p.id().to_string()).collect()
-        } else {
-            self.edit_console_tabs
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        };
+        let mut active: Vec<String> =
+            if self.edit_console_tabs == "all" || self.edit_console_tabs.trim().is_empty() {
+                ProxyPanel::ALL.iter().map(|p| p.id().to_string()).collect()
+            } else {
+                self.edit_console_tabs
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            };
 
         let pid = panel.id().to_string();
         if let Some(idx) = active.iter().position(|x| x == &pid) {
@@ -5045,7 +5208,11 @@ impl VpnApp {
 
         // 若当前激活面板被隐藏，切到第一个可见面板
         if !self.is_proxy_panel_visible(self.proxy_panel) {
-            if let Some(first) = ProxyPanel::ALL.iter().copied().find(|p| self.is_proxy_panel_visible(*p)) {
+            if let Some(first) = ProxyPanel::ALL
+                .iter()
+                .copied()
+                .find(|p| self.is_proxy_panel_visible(*p))
+            {
                 self.proxy_panel = first;
             }
         }
@@ -5258,18 +5425,7 @@ impl eframe::App for VpnApp {
         // Intercept window close event according to user setting (close_to_tray vs exit)
         // Guard with frame_count > 5 so false close events during window creation are ignored
         if self.frame_count > 5 && ctx.input(|i| i.viewport().close_requested()) {
-            if self.settings.close_to_tray && self.tray.supported() && !self.force_quit {
-                crate::startup_log("Window close requested -> 尝试收进托盘（停放到屏幕外）");
-                if self.park_to_tray() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                    return;
-                }
-                crate::startup_log("[托盘] 停放失败，降级为正常退出程序");
-            }
-            crate::startup_log("Window close requested -> quitting application");
-            self.force_quit = true;
-            self.tray.shutdown();
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.request_window_close(ctx);
             return;
         }
 
@@ -5435,8 +5591,12 @@ impl eframe::App for VpnApp {
                     if self.busy || self.kernel_busy {
                         ui.spinner();
                         let busy_text = if let Some(kp) = &self.kernel_progress {
-                            if kp.stage == crate::kernel::KernelUpdateStage::Downloading && kp.total > 0 {
-                                let pct = ((kp.downloaded as f64 / kp.total as f64) * 100.0).clamp(0.0, 100.0) as u32;
+                            if kp.stage == crate::kernel::KernelUpdateStage::Downloading
+                                && kp.total > 0
+                            {
+                                let pct = ((kp.downloaded as f64 / kp.total as f64) * 100.0)
+                                    .clamp(0.0, 100.0)
+                                    as u32;
                                 format!("下载内核 {pct}%")
                             } else {
                                 format!("内核{}", kp.stage.label())
@@ -5451,7 +5611,9 @@ impl eframe::App for VpnApp {
                                 .small(),
                         );
                         if let Some(kp) = &self.kernel_progress {
-                            if kp.stage == crate::kernel::KernelUpdateStage::Downloading && kp.total > 0 {
+                            if kp.stage == crate::kernel::KernelUpdateStage::Downloading
+                                && kp.total > 0
+                            {
                                 ui.add(
                                     egui::ProgressBar::new(kp.fraction())
                                         .animate(true)
@@ -5518,20 +5680,18 @@ impl eframe::App for VpnApp {
                     .fill(theme::page_bg())
                     .inner_margin(Margin::symmetric(18, 14)),
             )
-            .show(ui, |ui| {
-                match self.tab {
-                    Tab::Sources => self.ui_sources(ui),
-                    Tab::Nodes => self.ui_nodes(ui),
-                    Tab::Proxy => self.ui_proxy(ui),
-                    Tab::Extensions => self.ui_extensions(ui),
-                    Tab::Settings => self.ui_settings(ui),
-                    Tab::Api => {
-                        self.tab = Tab::Settings;
-                        self.settings_tab = SettingsTab::Api;
-                        self.ui_settings(ui);
-                    }
-                    Tab::About => self.ui_about(ui),
+            .show(ui, |ui| match self.tab {
+                Tab::Sources => self.ui_sources(ui),
+                Tab::Nodes => self.ui_nodes(ui),
+                Tab::Proxy => self.ui_proxy(ui),
+                Tab::Extensions => self.ui_extensions(ui),
+                Tab::Settings => self.ui_settings(ui),
+                Tab::Api => {
+                    self.tab = Tab::Settings;
+                    self.settings_tab = SettingsTab::Api;
+                    self.ui_settings(ui);
                 }
+                Tab::About => self.ui_about(ui),
             });
 
         // 无边框之后系统的缩放手边没有了，这层覆盖只在窗口最外圈 6px 内响应。
@@ -5664,6 +5824,7 @@ impl eframe::App for VpnApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.proxy_maintenance_task.take();
         let _rt_guard = self.rt.enter();
         // 退出路径必须同步完成（runtime 马上要关），但要加超时上限：
         // SQLite 写锁被后台任务占用或内核停止卡住时，退出不能无限期挂死。
@@ -5688,12 +5849,12 @@ impl eframe::App for VpnApp {
         }
         let proxy_manager = self.proxy_manager.clone();
         if let Err(error) = self.rt.block_on(async {
-            match tokio::time::timeout(std::time::Duration::from_secs(8), proxy_manager.stop())
+            match tokio::time::timeout(std::time::Duration::from_secs(25), proxy_manager.stop())
                 .await
             {
                 Ok(res) => res,
                 Err(_) => Err(anyhow::anyhow!(
-                    "proxy stop on GUI exit timed out after 8s; orphan core is cleaned up on next start"
+                    "proxy stop on GUI exit timed out after 25s; orphan core is cleaned up on next start"
                 )),
             }
         }) {
@@ -5712,10 +5873,8 @@ impl VpnApp {
             .expect("load app-icon")
             .to_rgba8();
         let (w, h) = img.dimensions();
-        let color_image = egui::ColorImage::from_rgba_unmultiplied(
-            [w as usize, h as usize],
-            &img.into_raw(),
-        );
+        let color_image =
+            egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &img.into_raw());
         let tex = ctx.load_texture("app-logo", color_image, egui::TextureOptions::LINEAR);
         self.logo_texture = Some(tex.clone());
         tex
@@ -5778,20 +5937,23 @@ mod tests {
         let mut options = crate::proxy::MihomoConfigOptions::default();
         options.mode = ProxyMode::Tun;
         options.url_test_size = 9;
-        let args = VpnApp::tun_handoff_arguments(&options, "node-42").expect("生成交接参数不该失败");
+        let args =
+            VpnApp::tun_handoff_arguments(&options, "node-42").expect("生成交接参数不该失败");
         assert_eq!(args[0], "--elevated-proxy-config-file");
         assert_eq!(args[2], "--start-proxy-node");
         assert_eq!(args[3], "node-42");
         assert_eq!(
-            args.iter()
-                .filter(|token| token.starts_with("--"))
-                .count(),
+            args.iter().filter(|token| token.starts_with("--")).count(),
             2,
             "只该有两个 flag：{args:?}"
         );
         let config_path = std::path::Path::new(&args[1]);
-        let decoded = crate::proxy::read_elevated_proxy_config_file(config_path).expect("读取交接文件失败");
-        assert_eq!(decoded, options, "提权实例读回来的配置和这里发出去的不是同一份");
+        let decoded =
+            crate::proxy::read_elevated_proxy_config_file(config_path).expect("读取交接文件失败");
+        assert_eq!(
+            decoded, options,
+            "提权实例读回来的配置和这里发出去的不是同一份"
+        );
     }
 
     /// 反向对照（#32 那个"一闪就没"）：本进程自己就是带着 `--start-proxy-node` 起来的
@@ -5802,7 +5964,8 @@ mod tests {
     fn the_handoff_never_duplicates_the_node_flag() {
         let current = vec!["--start-proxy-node".to_string(), "old-node".to_string()];
         let options = crate::proxy::MihomoConfigOptions::default();
-        let extra = VpnApp::tun_handoff_arguments(&options, "new-node").expect("生成交接参数不该失败");
+        let extra =
+            VpnApp::tun_handoff_arguments(&options, "new-node").expect("生成交接参数不该失败");
         let temp_file = std::path::PathBuf::from(&extra[1]);
         let assembled = crate::platform::elevated_arguments(&current, &extra);
         let node_flags = assembled
@@ -5820,7 +5983,8 @@ mod tests {
             .position(|token| token.as_str() == "--start-proxy-node")
             .expect("节点 flag 得在");
         assert_eq!(
-            assembled[position + 1], "new-node",
+            assembled[position + 1],
+            "new-node",
             "去重时把要启动的新节点吃掉了：{assembled:?}"
         );
         let _ = std::fs::remove_file(temp_file);
@@ -6050,14 +6214,12 @@ mod tests {
         }))
         .unwrap();
         app.sources = vec![src];
-        app.node_groups = vec![
-            crate::models::NodeGroupSummary {
-                source_id: Some("src-2".into()),
-                source_name: "备用订阅源".into(),
-                total: 5,
-                alive: 5,
-            },
-        ];
+        app.node_groups = vec![crate::models::NodeGroupSummary {
+            source_id: Some("src-2".into()),
+            source_name: "备用订阅源".into(),
+            total: 5,
+            alive: 5,
+        }];
 
         // 匹配已注册订阅源
         assert_eq!(app.source_name_for_id(Some("src-1")), Some("主力优质机场"));
@@ -6066,8 +6228,14 @@ mod tests {
         // 导入节点 / 空 ID / __ungrouped__
         assert_eq!(app.source_name_for_id(None), Some("导入节点"));
         assert_eq!(app.source_name_for_id(Some("")), Some("导入节点"));
-        assert_eq!(app.source_name_for_id(Some(crate::db::UNGROUPED_SOURCE_ID)), Some("导入节点"));
-        assert_eq!(app.source_name_for_id(Some("non-existent-src")), Some("导入节点"));
+        assert_eq!(
+            app.source_name_for_id(Some(crate::db::UNGROUPED_SOURCE_ID)),
+            Some("导入节点")
+        );
+        assert_eq!(
+            app.source_name_for_id(Some("non-existent-src")),
+            Some("导入节点")
+        );
     }
 
     /// 跑一遍标题栏那种"exact_height 面板 + 右上角三个格子"的写法，返回面板真正占掉的
@@ -6178,12 +6346,13 @@ mod tests {
                 !dirs.contains(&Dir::NorthWest),
                 "macOS 左上角必须避开红黄绿交通灯，不然点击关闭与最小化会被缩放手吃掉"
             );
-            assert!(dirs.contains(&Dir::NorthEast), "macOS 右上角无按钮，应保留 NorthEast");
-
-            let lights_area = Rect::from_min_max(
-                egui::pos2(0.0, 0.0),
-                egui::pos2(80.0, TITLE_BAR_H),
+            assert!(
+                dirs.contains(&Dir::NorthEast),
+                "macOS 右上角无按钮，应保留 NorthEast"
             );
+
+            let lights_area =
+                Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(80.0, TITLE_BAR_H));
             for (rect, dir, _) in &handles {
                 let overlap = rect.intersect(lights_area);
                 assert!(

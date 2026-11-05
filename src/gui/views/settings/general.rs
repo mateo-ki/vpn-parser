@@ -103,17 +103,26 @@ impl VpnApp {
 
             ui.add_space(6.0);
 
-            // 开机自启动：默认关（写的是用户注册表，不能擅自开）。
-            // 保存设置时同步 HKCU Run 键；每次启动还会对账一次（exe 挪了位置能自己跟上）。
+            // Startup remains opt-in; macOS also reconnects the saved node only
+            // when entering through its dedicated login LaunchAgent.
+            #[cfg(target_os = "macos")]
+            let (startup_label, startup_help) = (
+                "登录后自动启动并连接上次节点",
+                "为当前用户保存登录启动项；下次登录 macOS 后打开 VProxy，并按已保存的节点和 TUN 设置连接。\
+                 正常退出后不会自动重开；取消勾选不影响当前连接。普通手动打开仍由你点击启动。",
+            );
+            #[cfg(not(target_os = "macos"))]
+            let (startup_label, startup_help) = (
+                "开机自动启动（登录后自动在后台运行本软件）",
+                "写入当前用户的注册表 Run 键（不需要管理员权限），登录 Windows 后自动启动。\
+                 仅指向当前 exe 路径，软件挪动位置后下次启动会自动校正。目前支持 Windows 和 macOS。",
+            );
             if ui
                 .checkbox(
                     &mut self.edit_launch_at_startup,
-                    "开机自动启动（登录后自动在后台运行本软件）",
+                    startup_label,
                 )
-                .on_hover_text(
-                    "写入当前用户的注册表 Run 键（不需要管理员权限），登录 Windows 后自动启动。\
-                     仅指向当前 exe 路径，软件挪动位置后下次启动会自动校正。目前仅 Windows 生效。",
-                )
+                .on_hover_text(startup_help)
                 .changed()
             {
                 auto_save = true;

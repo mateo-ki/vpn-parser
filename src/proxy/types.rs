@@ -294,7 +294,7 @@ impl MihomoConfigOptions {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProxyRuntimeStatus {
     pub state: ProxyState,
     pub kernel: Option<KernelKind>,

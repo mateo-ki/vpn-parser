@@ -664,7 +664,6 @@ impl VpnApp {
     }
 
     /// 运行时长 HH:MM:SS（未运行显示 "—"）。
-    #[allow(dead_code)]
     fn uptime_label(&self) -> String {
         match self.proxy_started_at {
             Some(started) => {
@@ -1874,7 +1873,9 @@ impl VpnApp {
                 ui.add_space(6.0);
 
                 // 顶部状态行
-                let (state_text, _state_color, dot_color) = if is_running {
+                let (state_text, state_color, dot_color) = if self.proxy_status.state == ProxyState::Degraded {
+                    ("降级运行", theme::warning(), apple_amber_dot())
+                } else if is_running {
                     ("已连接", theme::text_primary(), apple_green_dot())
                 } else if is_starting {
                     ("启动中", theme::warning(), apple_amber_dot())
@@ -1887,10 +1888,10 @@ impl VpnApp {
                 ui.horizontal(|ui| {
                     let status_lbl_resp = ui.add(
                         egui::Label::new(
-                            RichText::new("状态")
+                            RichText::new(state_text)
                                 .size(12.5)
                                 .strong()
-                                .color(theme::text_secondary()),
+                                .color(state_color),
                         )
                         .sense(Sense::click()),
                     )
@@ -2003,8 +2004,9 @@ impl VpnApp {
                             painter.rect_stroke(flag_rect, CornerRadius::same(9), Stroke::new(1.0_f32, apple_stroke()), egui::StrokeKind::Inside);
 
                             let country_code = egress_country
-                                .or_else(|| selected_node.as_ref().and_then(|n| n.country.clone()))
-                                .unwrap_or_else(|| "CN".into());
+                                .filter(|country| !country.trim().is_empty())
+                                .or_else(|| selected_node.as_ref().and_then(|n| n.country.clone()).filter(|country| !country.trim().is_empty()))
+                                .unwrap_or_else(|| "—".into());
                             let galley = painter.layout_no_wrap(
                                 country_code,
                                 egui::FontId::proportional(if is_compact { 12.0 } else { 14.0 }),
@@ -2144,20 +2146,17 @@ impl VpnApp {
                             ui.spacing_mut().item_spacing.x = if is_compact { 16.0 } else { 22.0 };
 
                             // 1. 运行时长
-                            let uptime_str = if is_running { "02:47:13" } else { "00:00:00" };
+                            let uptime_str = self.uptime_label();
                             ui.vertical(|ui| {
                                 ui.label(RichText::new("运行时长").size(10.5).color(theme::muted()));
                                 ui.label(RichText::new(uptime_str).size(13.0).strong().color(theme::text_primary()));
                             });
 
                             // 2. 组织
-                            let org_str = if let Some(ref org) = egress_org {
-                                if org.is_empty() { "Chinanet" } else { org.as_str() }
-                            } else if let Some(node) = selected_node {
-                                if node.server.is_empty() { "Chinanet" } else { &node.server }
-                            } else {
-                                "Chinanet"
-                            };
+                            let org_str = egress_org.as_deref()
+                                .map(str::trim)
+                                .filter(|org| !org.is_empty())
+                                .unwrap_or("未知");
                             ui.vertical(|ui| {
                                 ui.label(RichText::new("组织").size(10.5).color(theme::muted()));
                                 ui.add_sized(
@@ -2173,11 +2172,11 @@ impl VpnApp {
                             });
 
                             // 3. 协议
-                            let proto_str = if let Some(node) = selected_node {
-                                node.protocol.to_uppercase()
-                            } else {
-                                "Hysteria2".into()
-                            };
+                            let proto_str = selected_node.as_ref()
+                                .map(|node| node.protocol.trim())
+                                .filter(|protocol| !protocol.is_empty())
+                                .map(str::to_uppercase)
+                                .unwrap_or_else(|| "—".into());
                             ui.vertical(|ui| {
                                 ui.label(RichText::new("协议").size(10.5).color(theme::muted()));
                                 ui.label(RichText::new(proto_str).size(13.0).strong().color(theme::text_primary()));

@@ -318,7 +318,7 @@ impl VpnApp {
                         BgMsg::Settings(Err(e)) => self.status = format!("加载设置失败: {e}"),
                         BgMsg::SettingsSaved(Ok(s)) => {
                             self.settings_saving = false;
-                            // 开机自启动 changed → 立即同步 HKCU Run 键（库已落盘，系统侧跟上）
+                            // 数据库保存后，同步当前用户的登录启动项。
                             let prev_startup = self.settings.launch_at_startup;
                             self.settings = s;
                             self.sync_edit_settings();
@@ -329,17 +329,21 @@ impl VpnApp {
                                 );
                                 if ok {
                                     self.status = if self.settings.launch_at_startup {
-                                        "设置已保存：开机自动启动已开启".into()
+                                        if cfg!(target_os = "macos") {
+                                            "设置已保存：登录自动启动并连接已开启".into()
+                                        } else {
+                                            "设置已保存：登录自动启动已开启".into()
+                                        }
                                     } else {
-                                        "设置已保存：开机自动启动已关闭".into()
+                                        "设置已保存：登录自动启动已关闭".into()
                                     };
                                 } else {
                                     self.status =
-                                        "设置已保存，但开机自启动写入系统失败（详见 startup.log）"
+                                        "设置已保存，但用户登录启动项写入失败（详见 startup.log）"
                                             .into();
                                 }
                                 crate::startup_log(&format!(
-                                    "[开机自启动] 已同步为 {}（HKCU Run 键）",
+                                    "[登录自动启动] 已同步为 {}（当前用户启动项）",
                                     self.settings.launch_at_startup
                                 ));
                             }
@@ -906,6 +910,16 @@ impl VpnApp {
                         BgMsg::ProxyStatus(status) => {
                             self.note_proxy_state_transition(status.state);
                             self.proxy_status = status;
+                        }
+                        BgMsg::ProxyMaintenanceDone(status) => {
+                            // A user operation started while the poll was pending;
+                            // its completion will publish the authoritative state.
+                            if !self.proxy_busy {
+                                if let Some(status) = status {
+                                    self.note_proxy_state_transition(status.state);
+                                    self.proxy_status = status;
+                                }
+                            }
                         }
                         BgMsg::ProxyModeHotToggled { ok, message } => {
                             self.proxy_busy = false;

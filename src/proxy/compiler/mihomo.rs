@@ -1222,6 +1222,25 @@ impl BackendCompiler for MihomoCompiler {
             "mode": mode_str,
             "log-level": "info",
             "ipv6": plan.dns.ipv6,
+            // Keep Fake-IP mappings across core restarts. TCP sniffing also lets
+            // Mihomo recover a domain from a browser's older Fake-IP cache.
+            "profile": { "store-fake-ip": true },
+            "sniffer": {
+                "enable": true,
+                "force-dns-mapping": true,
+                "parse-pure-ip": true,
+                "override-destination": true,
+                // Keep local destinations and their IP-based routing intact.
+                // The benchmarking ranges remain sniffable for Fake-IP recovery.
+                "skip-dst-address": [
+                    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+                    "169.254.0.0/16", "100.64.0.0/10", "::1/128", "fc00::/7", "fe80::/10"
+                ],
+                "sniff": {
+                    "HTTP": { "ports": [80, 8080] },
+                    "TLS": { "ports": [443, 8443] }
+                }
+            },
             "proxies": candidate_proxies,
             "proxy-groups": proxy_groups,
             "dns": {
@@ -1308,5 +1327,173 @@ impl BackendCompiler for MihomoCompiler {
         }
 
         Ok(CompiledArtifact::Json(config))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::Node;
+    use crate::proxy::ir::lower_options_to_ir;
+    use crate::proxy::{MihomoConfigOptions, ProxyMode};
+
+    fn compile(options: MihomoConfigOptions) -> Value {
+        let now = chrono::Utc::now();
+        let node = Node {
+            id: "fake-ip-recovery-fixture".into(),
+            source_id: None,
+            protocol: "ss".into(),
+            name: "test-node".into(),
+            server: "203.0.113.1".into(),
+            port: 8388,
+            raw: String::new(),
+            config: json!({
+                "server": "203.0.113.1",
+                "port": 8388,
+                "cipher": "aes-128-gcm",
+                "password": "test-only"
+            }),
+            country: None,
+            latency_ms: None,
+            latency_ok: None,
+            download_kbps: None,
+            latency_kernel: None,
+            latency_test_kind: None,
+            latency_tested_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let plan = lower_options_to_ir(&options, Some(&node));
+        MihomoCompiler::new()
+            .compile(&plan)
+            .unwrap()
+            .as_json_value()
+            .unwrap()
+    }
+
+    #[test]
+    fn fake_ip_recovery_defaults_persist_and_limit_tcp_sniffing_ports() {
+        for mode in [ProxyMode::System, ProxyMode::Tun] {
+            let config = compile(MihomoConfigOptions {
+                mode,
+                ..MihomoConfigOptions::default()
+            });
+
+            assert_eq!(config["profile"]["store-fake-ip"], true);
+            let sniffer = &config["sniffer"];
+            assert_eq!(sniffer["enable"], true);
+            assert_eq!(sniffer["force-dns-mapping"], true);
+            assert_eq!(sniffer["parse-pure-ip"], true);
+            assert_eq!(sniffer["override-destination"], true);
+            assert_eq!(
+                sniffer["skip-dst-address"],
+                json!([
+                    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+                    "169.254.0.0/16", "100.64.0.0/10", "::1/128", "fc00::/7", "fe80::/10"
+                ])
+            );
+            // Explicit protocol/port lists must not expand to QUIC or all ports.
+            assert_eq!(
+                sniffer["sniff"],
+                json!({
+                    "HTTP": { "ports": [80, 8080] },
+                    "TLS": { "ports": [443, 8443] }
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn fake_ip_recovery_default_pool_matches_target_platform() {
+        let expected = if cfg!(target_os = "macos") {
+            "198.19.0.1/16"
+        } else {
+            "198.18.0.1/16"
+        };
+        for mode in [ProxyMode::System, ProxyMode::Tun] {
+            let config = compile(MihomoConfigOptions {
+                mode,
+                ..MihomoConfigOptions::default()
+            });
+            assert_eq!(config["dns"]["fake-ip-range"], expected);
+        }
+    }
+
+    #[test]
+    fn fake_ip_recovery_yaml_override_can_disable_defaults_without_reordering_rules() {
+        let config = compile(MihomoConfigOptions {
+            override_yaml: Some(
+                r#"
+profile:
+  store-fake-ip: false
+dns:
+  fake-ip-range: 198.18.64.1/18
+sniffer:
+  enable: false
+  sniff:
+    TLS:
+      ports: [9443]
+rules:
+  - DOMAIN,yaml-first.example.com,DIRECT
+  - MATCH,PROXY
+"#
+                .into(),
+            ),
+            ..MihomoConfigOptions::default()
+        });
+
+        assert_eq!(config["profile"]["store-fake-ip"], false);
+        assert_eq!(config["dns"]["fake-ip-range"], "198.18.64.1/18");
+        assert_eq!(config["sniffer"]["enable"], false);
+        assert_eq!(config["sniffer"]["sniff"]["TLS"]["ports"], json!([9443]));
+        assert_eq!(
+            config["rules"],
+            json!(["DOMAIN,yaml-first.example.com,DIRECT", "MATCH,PROXY"])
+        );
+    }
+
+    #[test]
+    fn fake_ip_recovery_script_override_keeps_final_priority() {
+        let config = compile(MihomoConfigOptions {
+            override_yaml: Some(
+                r#"
+profile:
+  store-fake-ip: true
+dns:
+  fake-ip-range: 198.18.64.1/18
+sniffer:
+  enable: true
+rules:
+  - DOMAIN,yaml-first.example.com,DIRECT
+  - MATCH,PROXY
+"#
+                .into(),
+            ),
+            override_script: Some(
+                r#"
+fn main(config) {
+    config["profile"]["store-fake-ip"] = false;
+    config.dns["fake-ip-range"] = "198.18.128.1/17";
+    config.sniffer.enable = false;
+    config.rules.insert(0, "DOMAIN,script-first.example.com,PROXY");
+    return config;
+}
+"#
+                .into(),
+            ),
+            ..MihomoConfigOptions::default()
+        });
+
+        assert_eq!(config["profile"]["store-fake-ip"], false);
+        assert_eq!(config["dns"]["fake-ip-range"], "198.18.128.1/17");
+        assert_eq!(config["sniffer"]["enable"], false);
+        assert_eq!(
+            config["rules"],
+            json!([
+                "DOMAIN,script-first.example.com,PROXY",
+                "DOMAIN,yaml-first.example.com,DIRECT",
+                "MATCH,PROXY"
+            ])
+        );
     }
 }

@@ -111,7 +111,14 @@ pub fn lower_options_to_ir(options: &MihomoConfigOptions, primary_node: Option<&
             "https://8.8.8.8/dns-query".into(),
         ],
         proxy_server_nameservers: options.dns.proxy_server_nameserver.clone(),
-        fake_ip_range: "198.18.0.1/16".into(),
+        // Separate the macOS pool from common clients so cached Fake-IPs do not
+        // silently resolve through another client's existing domain mappings.
+        fake_ip_range: if cfg!(target_os = "macos") {
+            "198.19.0.1/16"
+        } else {
+            "198.18.0.1/16"
+        }
+        .into(),
         fake_ip_filter: DEFAULT_FAKE_IP_FILTERS.iter().map(|&s| s.into()).collect(),
         respect_rules: true,
     };

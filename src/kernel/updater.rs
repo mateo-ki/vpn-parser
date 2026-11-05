@@ -10,11 +10,122 @@ use sha2::{Digest, Sha256};
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::constants::proxy::{MEOW_TAG, MIHOMO_TAG, SHOES_TAG, VPCORE_TAG};
 
 const MAX_ARCHIVE_SIZE: u64 = 150 * 1024 * 1024;
+static INSTALL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+struct StagingCleanup(PathBuf);
+
+impl Drop for StagingCleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Roll back even when the async installation future is cancelled or dropped.
+/// On Unix the old executable stays at its normal path until the atomic rename.
+struct KernelInstallTransaction {
+    target: PathBuf,
+    backup: PathBuf,
+    had_previous: bool,
+    replacing: bool,
+    finished: bool,
+}
+
+impl KernelInstallTransaction {
+    fn begin(target: &Path, backup: &Path) -> Result<Self> {
+        let had_previous = target.is_file();
+        if had_previous {
+            #[cfg(unix)]
+            {
+                let pending = backup.with_extension(format!("backup-staging-{}", uuid::Uuid::new_v4()));
+                let result = (|| -> Result<()> {
+                    std::fs::copy(target, &pending).context("备份旧内核失败")?;
+                    std::fs::File::open(&pending)?.sync_all()?;
+                    std::fs::rename(&pending, backup).context("保存旧内核备份失败")?;
+                    Ok(())
+                })();
+                let _ = std::fs::remove_file(&pending);
+                result?;
+            }
+            #[cfg(not(unix))]
+            {
+                if backup.exists() {
+                    std::fs::remove_file(backup).context("清理旧内核备份失败")?;
+                }
+                std::fs::rename(target, backup).context("备份旧内核失败")?;
+            }
+        }
+        Ok(Self {
+            target: target.into(),
+            backup: backup.into(),
+            had_previous,
+            replacing: false,
+            finished: false,
+        })
+    }
+
+    fn rollback(&mut self) -> Result<()> {
+        if self.finished {
+            return Ok(());
+        }
+        if self.had_previous {
+            #[cfg(not(unix))]
+            if self.target.exists() {
+                std::fs::remove_file(&self.target).context("移除未完成的新内核失败")?;
+            }
+            std::fs::rename(&self.backup, &self.target)
+                .with_context(|| format!("恢复旧内核失败，备份仍位于 {}", self.backup.display()))?;
+        } else if self.replacing && self.target.is_file() {
+            std::fs::remove_file(&self.target).context("移除未完成的新内核失败")?;
+        }
+        self.finished = true;
+        Ok(())
+    }
+
+    fn commit(&mut self) {
+        self.finished = true;
+    }
+}
+
+impl Drop for KernelInstallTransaction {
+    fn drop(&mut self) {
+        if let Err(error) = self.rollback() {
+            tracing::error!(%error, "kernel installation rollback failed");
+        }
+    }
+}
+
+async fn replace_staged_kernel(
+    transaction: &mut KernelInstallTransaction,
+    staging: &Path,
+    cancelled: &AtomicBool,
+) -> Result<bool> {
+    let mut last_failure = String::from("未知替换失败");
+    for round in 0..4 {
+        ensure_not_cancelled(cancelled)?;
+        transaction.replacing = true;
+        // These files are in the same directory. On Unix rename replaces the
+        // destination atomically; copying onto the live path would truncate it.
+        match std::fs::rename(staging, &transaction.target) {
+            Ok(()) => return Ok(false),
+            Err(error) => last_failure = rename_failure_detail(&error),
+        }
+        #[cfg(not(unix))]
+        match std::fs::copy(staging, &transaction.target) {
+            Ok(_) => return Ok(true),
+            Err(error) => last_failure = copy_failure_detail(&error),
+        }
+        if round < 3 {
+            tokio::time::sleep(Duration::from_millis(400 * (1 << round))).await;
+        }
+    }
+    bail!("替换内核失败：{last_failure}")
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KernelReleaseInfo {
@@ -634,17 +745,22 @@ impl KernelUpdater {
     where
         F: Fn(KernelUpdateProgress) + Send + Sync,
     {
+        // GUI and API updates share these paths. A second installation must
+        // not delete the first one's staging file or rollback snapshot.
+        let installation = INSTALL_LOCK.lock().await;
         let total = bytes.len() as u64;
         let kind_dir = self.root.join(kind.directory_name());
         let target = kind_dir.join(kind.executable_name());
         let staging = kind_dir.join(staging_name(kind));
+        let staging_cleanup = Arc::new(StagingCleanup(staging.clone()));
         let legacy_staging = kind_dir.join(format!(".{}.staging", kind.executable_name()));
         let backup = kind_dir.join(format!("{}.backup", kind.executable_name()));
         tokio::fs::create_dir_all(&kind_dir).await?;
-        // 上一次尝试留下的残渣先清掉：残留文件会让"这次到底跑没跑起来"看不出来。
-        let _ = tokio::fs::remove_file(&staging).await;
+        // Each invocation has its own staging path. A cancelled blocking
+        // extractor may still be finishing; never reuse its pathname.
         let _ = tokio::fs::remove_file(&legacy_staging).await;
         let staging_for_extract = staging.clone();
+        let extraction_cleanup = staging_cleanup.clone();
         progress(KernelUpdateProgress {
             kind,
             stage: KernelUpdateStage::Extracting,
@@ -659,10 +775,16 @@ impl KernelUpdater {
             kind.display_name(),
             staging.display()
         ));
-        tokio::task::spawn_blocking(move || {
-            extract_executable(&bytes, format, kind, &staging_for_extract)
+        let (extracted, _installation) = tokio::task::spawn_blocking(move || {
+            // Keep both the cleanup and install lock in the blocking task.
+            // Dropping its async caller cannot race another extraction of
+            // auxiliary files such as Xray's shared geodata.
+            let _cleanup = extraction_cleanup;
+            let extracted = extract_executable(&bytes, format, kind, &staging_for_extract);
+            (extracted, installation)
         })
-        .await??;
+        .await?;
+        extracted?;
 
         // 这一步是整个"预备"最容易被外因（虚拟机 CPU / 杀软）打掉的地方，
         // 所以三种结果都写进 startup.log —— VM 上没有控制台，文件是唯一看得见的证据。
@@ -735,68 +857,39 @@ impl KernelUpdater {
             bytes_per_second: 0.0,
             message: "正在备份并替换内核".into(),
         });
-        let backup_path = if target.is_file() {
-            let _ = tokio::fs::remove_file(&backup).await;
-            tokio::fs::rename(&target, &backup)
-                .await
-                .context("备份旧内核失败")?;
-            Some(backup.clone())
-        } else {
-            None
-        };
-        // Windows 上刚被 `output()` 跑过的那颗 exe，Defender 实时防护常常还要占着它几秒，这时改名
-        // 直接拿 ACCESS_DENIED（`src/kernel/mod.rs` 里那句 15s 超时就是为它放宽的；改名要源文件的
-        // DELETE 权限，复制只要读权限 —— 本机用 FileShare.ReadWrite 占住源文件验过：改名 IOException、复制成功）。
-        let mut last_failure_detail = String::from("未知替换失败");
-        let mut replaced = false;
-        let mut used_copy = false;
-        // 两条路交替试：改名要源文件的 DELETE 权限（杀软占着就是 ACCESS_DENIED），
-        // 复制只要读权限 + 目录能建新文件。总预算约 2.8 秒退避，够 Defender 扫完那颗 22MB 的 exe。
-        for round in 0..4 {
-            match tokio::fs::rename(&staging, &target).await {
-                Ok(()) => {
-                    replaced = true;
-                    break;
-                }
-                Err(error) => last_failure_detail = rename_failure_detail(&error),
+        ensure_not_cancelled(cancelled)?;
+        // Windows FlushFileBuffers requires a handle with write access.
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&staging)?
+            .sync_all()?;
+        let mut transaction = KernelInstallTransaction::begin(&target, &backup)?;
+        let backup_path = transaction.had_previous.then(|| backup.clone());
+        let install_result = async {
+            let used_copy = replace_staged_kernel(&mut transaction, &staging, cancelled).await?;
+            if used_copy {
+                let _ = tokio::fs::remove_file(&staging).await;
             }
-            match tokio::fs::copy(&staging, &target).await {
-                Ok(_) => {
-                    replaced = true;
-                    used_copy = true;
-                    break;
-                }
-                Err(error) => last_failure_detail = copy_failure_detail(&error),
-            }
-            if round < 3 {
-                ensure_not_cancelled(cancelled)?;
-                tokio::time::sleep(Duration::from_millis(400 * (1 << round))).await;
+            ensure_not_cancelled(cancelled)?;
+            let verified = if compat_only {
+                read_kernel_version_with_env(kind, &target, &crate::kernel::GODEBUG_COMPAT).await?
+            } else {
+                read_kernel_version(kind, &target).await?
+            };
+            match verified {
+                Some(version) if version == staged_version => Ok(()),
+                _ => bail!("新内核验证未返回预期版本"),
             }
         }
-        if replaced && used_copy {
-            crate::startup_log(&format!(
-                "[内核] {} 改名被拒（{last_failure_detail}），改用复制落地",
-                kind.display_name()
-            ));
-            let _ = tokio::fs::remove_file(&staging).await;
+        .await;
+        if let Err(error) = install_result {
+            return match transaction.rollback() {
+                Ok(()) => Err(error).context("内核安装未完成，已回滚"),
+                Err(rollback_error) => Err(error).context(format!("内核安装未完成；{rollback_error:#}")),
+            };
         }
-        if !replaced {
-            if backup.is_file() {
-                let _ = tokio::fs::rename(&backup, &target).await;
-            }
-            bail!("替换内核失败：{last_failure_detail}（改名与复制都试过，已尝试回滚）");
-        }
-        if let Err(error) = read_kernel_version(kind, &target).await {
-            crate::startup_log(&format!(
-                "[内核] {} 替换后仍然跑不起来: {error} —— 已回滚到旧内核",
-                kind.display_name()
-            ));
-            let _ = tokio::fs::remove_file(&target).await;
-            if backup.is_file() {
-                let _ = tokio::fs::rename(&backup, &target).await;
-            }
-            return Err(error).context("新内核验证失败，已回滚");
-        }
+        transaction.commit();
 
         crate::startup_log(&format!(
             "[内核] {} 安装完成: {}（版本 {}，备份 {}）",
@@ -1153,55 +1246,71 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
     if kind != KernelKind::Mihomo {
         return None;
     }
-    let (primary_name, primary_digest, primary_size, compat_name, compat_digest, compat_size) =
-        match KernelPlatform::current() {
-            KernelPlatform::Windows => (
+    Some(mihomo_fallback_release(
+        KernelPlatform::current(),
+        std::env::consts::ARCH,
+    ))
+}
+
+fn mihomo_fallback_release(platform: KernelPlatform, arch: &str) -> GithubRelease {
+    let assets = match platform {
+        KernelPlatform::Windows => vec![
+            (
                 format!("mihomo-windows-amd64-{MIHOMO_TAG}.zip"),
                 "sha256:1ac84e795b5b915446e20139677fb6cc013a0778e876e8d4c96f994750b4c4a3",
                 22_492_402_u64,
+            ),
+            (
                 format!("mihomo-windows-amd64-compatible-{MIHOMO_TAG}.zip"),
                 "sha256:974a4d7ad69aed27aa2e8f91d61113573c14dadb14562c63e58effabf59816f0",
                 22_525_067_u64,
             ),
-            KernelPlatform::Linux => (
+        ],
+        KernelPlatform::Linux => vec![
+            (
                 format!("mihomo-linux-amd64-{MIHOMO_TAG}.gz"),
                 "sha256:8451100836c9eda194331c2babfad490b2faf30cebc1a04b0e76fd8ac2d35d10",
                 22_846_526_u64,
+            ),
+            (
                 format!("mihomo-linux-amd64-compatible-{MIHOMO_TAG}.gz"),
                 "sha256:ba3ce607747a07f948fc35780e108a4a7c7f552a38b9bd4d115f313ebcb89c20",
                 22_877_876_u64,
             ),
-            KernelPlatform::MacOS => (
+        ],
+        KernelPlatform::MacOS if arch == "aarch64" => vec![(
+            format!("mihomo-darwin-arm64-{MIHOMO_TAG}.gz"),
+            "sha256:3312a6780652c622890fd4357c6a853bbf865464fd047ac7b7f52dab8de18652",
+            20_756_622_u64,
+        )],
+        KernelPlatform::MacOS => vec![
+            (
                 format!("mihomo-darwin-amd64-{MIHOMO_TAG}.gz"),
                 "sha256:b7de9fc46af2ca985ecfb302a6362170e04ff2023dee1e82addc54133e669bc9",
                 22_276_968_u64,
+            ),
+            (
                 format!("mihomo-darwin-amd64-compatible-{MIHOMO_TAG}.gz"),
                 "sha256:18b382df77bded2ad0fb3db27db5636cb15b20729d5ba995a357eeb9b46bf507",
                 22_302_953_u64,
             ),
-        };
-    Some(GithubRelease {
-        tag_name: MIHOMO_TAG.to_string(),
-        assets: vec![
-            GithubAsset {
-                name: primary_name.clone(),
-                browser_download_url: format!(
-                    "https://github.com/MetaCubeX/mihomo/releases/download/{MIHOMO_TAG}/{primary_name}"
-                ),
-                size: primary_size,
-                digest: Some(primary_digest.to_string()),
-            },
-            GithubAsset {
-                name: compat_name.clone(),
-                browser_download_url: format!(
-                    "https://github.com/MetaCubeX/mihomo/releases/download/{MIHOMO_TAG}/{compat_name}"
-                ),
-                size: compat_size,
-                digest: Some(compat_digest.to_string()),
-            },
         ],
+    };
+    GithubRelease {
+        tag_name: MIHOMO_TAG.to_string(),
+        assets: assets
+            .into_iter()
+            .map(|(name, digest, size)| GithubAsset {
+                browser_download_url: format!(
+                    "https://github.com/MetaCubeX/mihomo/releases/download/{MIHOMO_TAG}/{name}"
+                ),
+                name,
+                size,
+                digest: Some(digest.to_string()),
+            })
+            .collect(),
         fallback: true,
-    })
+    }
 }
 
 /// 暂存内核的文件名：**必须以 `.exe` 结尾、且不带前导点**。
@@ -1211,12 +1320,13 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
 /// 0xC0000005 且零输出"，所以先把这个我们自己造成的变量消掉。
 fn staging_name(kind: KernelKind) -> String {
     let stem = kind.executable_name().trim_end_matches(".exe");
+    let attempt = uuid::Uuid::new_v4();
     // Linux 上没有"杀软把无扩展名文件当数据文件"这回事，硬加 `.exe` 反而会做出一个
     // 名叫 `mihomo.exe` 的 ELF（之后排查"为什么这文件不能执行"时极其误导）。
     if cfg!(windows) {
-        format!("{stem}.staging.exe")
+        format!("{stem}.staging-{attempt}.exe")
     } else {
-        format!("{stem}.staging")
+        format!("{stem}.staging-{attempt}")
     }
 }
 
@@ -1231,6 +1341,7 @@ fn rename_failure_detail(error: &std::io::Error) -> String {
 }
 
 /// 复制也被拒时的详情：同样必须带上系统错误码（理由见 `rename_failure_detail`）。
+#[cfg(not(unix))]
 fn copy_failure_detail(error: &std::io::Error) -> String {
     match error.raw_os_error() {
         Some(code) => format!("复制兜底也失败: {error}（os code {code}）"),
@@ -1385,6 +1496,121 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    fn install_test_directory() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("vproxy-kernel-transaction-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        root
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transaction_keeps_old_kernel_at_normal_path_before_replacement() {
+        let root = install_test_directory();
+        let target = root.join("mihomo");
+        let backup = root.join("mihomo.backup");
+        std::fs::write(&target, b"old kernel").unwrap();
+        let transaction = KernelInstallTransaction::begin(&target, &backup).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"old kernel");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"old kernel");
+        drop(transaction);
+        assert_eq!(std::fs::read(&target).unwrap(), b"old kernel");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn transaction_rolls_back_when_cancelled_after_backup() {
+        let root = install_test_directory();
+        let target = root.join("mihomo");
+        let backup = root.join("mihomo.backup");
+        let staging = root.join("mihomo-staging");
+        std::fs::write(&target, b"old kernel").unwrap();
+        std::fs::write(&staging, b"new kernel").unwrap();
+        let mut transaction = KernelInstallTransaction::begin(&target, &backup).unwrap();
+        let error = replace_staged_kernel(&mut transaction, &staging, &AtomicBool::new(true))
+            .await.unwrap_err();
+        assert!(error.to_string().contains("已取消"));
+        drop(transaction);
+        assert_eq!(std::fs::read(&target).unwrap(), b"old kernel");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn transaction_drop_restores_old_kernel_after_replacement() {
+        let root = install_test_directory();
+        let target = root.join("mihomo");
+        let backup = root.join("mihomo.backup");
+        let staging = root.join("mihomo-staging");
+        std::fs::write(&target, b"old kernel").unwrap();
+        std::fs::write(&staging, b"new kernel").unwrap();
+        let mut transaction = KernelInstallTransaction::begin(&target, &backup).unwrap();
+        replace_staged_kernel(&mut transaction, &staging, &AtomicBool::new(false))
+            .await.unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new kernel");
+        // Equivalent to dropping the update future during version validation.
+        drop(transaction);
+        assert_eq!(std::fs::read(&target).unwrap(), b"old kernel");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_replacement_preserves_old_kernel() {
+        let root = install_test_directory();
+        let target = root.join("mihomo");
+        let backup = root.join("mihomo.backup");
+        std::fs::write(&target, b"old kernel").unwrap();
+        let mut transaction = KernelInstallTransaction::begin(&target, &backup).unwrap();
+        assert!(replace_staged_kernel(&mut transaction, &root.join("missing"), &AtomicBool::new(false)).await.is_err());
+        transaction.rollback().unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"old kernel");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn test_kernel_archive(script: &[u8]) -> Vec<u8> {
+        let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        archive.start_file("mihomo", zip::write::SimpleFileOptions::default()).unwrap();
+        archive.write_all(script).unwrap();
+        archive.finish().unwrap().into_inner()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_final_version_validation_restores_executable_old_kernel() {
+        let root = install_test_directory();
+        let kind_dir = root.join("mihomo");
+        std::fs::create_dir(&kind_dir).unwrap();
+        let target = kind_dir.join("mihomo");
+        let old = b"#!/bin/sh\necho 'Mihomo Meta v1.0.0'\n";
+        std::fs::write(&target, old).unwrap();
+        mark_executable(&target).unwrap();
+        // It passes staging validation but fails at the installed path.
+        let new = b"#!/bin/sh\ncase \"$0\" in *staging*) echo 'Mihomo Meta v2.0.0';; *) exit 1;; esac\n";
+        let updater = KernelUpdater::new(root.clone(), None).unwrap();
+        let result = updater.install_bytes(KernelKind::Mihomo, test_kernel_archive(new), Some("v2.0.0"), KernelArchive::Zip, &AtomicBool::new(false), &|_| {}).await;
+        assert!(result.unwrap_err().to_string().contains("已回滚"));
+        assert_eq!(std::fs::read(&target).unwrap(), old);
+        assert!(read_kernel_version(KernelKind::Mihomo, &target).await.unwrap().unwrap().contains("v1.0.0"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn successful_install_keeps_new_kernel_and_old_backup() {
+        let root = install_test_directory();
+        let kind_dir = root.join("mihomo");
+        std::fs::create_dir(&kind_dir).unwrap();
+        let target = kind_dir.join("mihomo");
+        let old = b"#!/bin/sh\necho 'Mihomo Meta v1.0.0'\n";
+        std::fs::write(&target, old).unwrap();
+        mark_executable(&target).unwrap();
+        let new = b"#!/bin/sh\necho 'Mihomo Meta v2.0.0'\n";
+        let updater = KernelUpdater::new(root.clone(), None).unwrap();
+        let result = updater.install_bytes(KernelKind::Mihomo, test_kernel_archive(new), Some("v2.0.0"), KernelArchive::Zip, &AtomicBool::new(false), &|_| {}).await.unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), new);
+        assert_eq!(std::fs::read(result.backup_path.unwrap()).unwrap(), old);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn rename_failure_detail_keeps_the_os_error_code() {
         let text = rename_failure_detail(&std::io::Error::from_raw_os_error(5));
@@ -1408,16 +1634,21 @@ mod tests {
     fn fallback_release_is_self_consistent() {
         let release = fallback_release(KernelKind::Mihomo).expect("mihomo 有兜底版本");
         assert!(release.fallback);
-        assert_eq!(release.assets.len(), 2);
+        let macos_arm64 = KernelPlatform::current() == KernelPlatform::MacOS
+            && std::env::consts::ARCH == "aarch64";
+        assert_eq!(release.assets.len(), if macos_arm64 { 1 } else { 2 });
         let asset = &release.assets[0];
         assert_eq!(asset.name, KernelKind::Mihomo.asset_name(&release.tag_name));
-        let compat = &release.assets[1];
-        assert!(compat.name.contains("compatible"));
+        if !macos_arm64 {
+            let compat = &release.assets[1];
+            assert!(compat.name.contains("compatible"));
+        }
         // 大小/容器要跟着平台走：这两个号分别是 Windows 的 .zip 和 Linux 的 .gz，
         // 写死任何一个都会在另一个平台上变成"下得来但校验必挂"。
         let (want_size, want_suffix) = match KernelPlatform::current() {
             KernelPlatform::Windows => (22_492_402, ".zip"),
             KernelPlatform::Linux => (22_846_526, ".gz"),
+            KernelPlatform::MacOS if macos_arm64 => (20_756_622, ".gz"),
             KernelPlatform::MacOS => (22_276_968, ".gz"),
         };
         assert_eq!(asset.size, want_size, "兜底大小要对得上当前平台的资产");
@@ -1439,6 +1670,47 @@ mod tests {
             fallback_release(KernelKind::Xray).is_none(),
             "只兜底 mihomo：别的内核没实测过哈希，不许编一个版本号"
         );
+    }
+
+    #[test]
+    fn mihomo_fallback_matches_macos_architecture() {
+        let arm64 = mihomo_fallback_release(KernelPlatform::MacOS, "aarch64");
+        assert_eq!(arm64.assets.len(), 1);
+        let asset = &arm64.assets[0];
+        assert_eq!(asset.name, format!("mihomo-darwin-arm64-{MIHOMO_TAG}.gz"));
+        assert_eq!(asset.size, 20_756_622);
+        assert_eq!(
+            require_sha256(asset).unwrap(),
+            "3312a6780652c622890fd4357c6a853bbf865464fd047ac7b7f52dab8de18652"
+        );
+        for (platform, arch) in [
+            (KernelPlatform::MacOS, "aarch64"),
+            (KernelPlatform::MacOS, "x86_64"),
+            (KernelPlatform::Windows, "aarch64"),
+            (KernelPlatform::Windows, "x86_64"),
+            (KernelPlatform::Linux, "aarch64"),
+            (KernelPlatform::Linux, "x86_64"),
+        ] {
+            let release = mihomo_fallback_release(platform, arch);
+            assert_eq!(
+                release
+                    .assets
+                    .iter()
+                    .map(|a| a.name.clone())
+                    .collect::<Vec<_>>(),
+                KernelKind::Mihomo.asset_candidates_for_arch(platform, MIHOMO_TAG, arch)
+            );
+            for asset in &release.assets {
+                assert_eq!(
+                    asset.browser_download_url,
+                    format!(
+                        "https://github.com/MetaCubeX/mihomo/releases/download/{MIHOMO_TAG}/{}",
+                        asset.name
+                    )
+                );
+                assert!(require_sha256(asset).is_ok());
+            }
+        }
     }
 
     #[test]
@@ -1465,6 +1737,7 @@ mod tests {
     fn staging_files_keep_an_executable_name() {
         for kind in [KernelKind::Mihomo, KernelKind::Xray, KernelKind::SingBox, KernelKind::Shoes] {
             let name = staging_name(kind);
+            assert_ne!(name, staging_name(kind), "不同更新尝试不能复用暂存路径");
             // `.exe` 结尾是 Windows 那侧针对杀软的取证结论，Linux 上反过来是负担
             // （一个叫 `mihomo.exe` 的 ELF 只会误导排障），所以按平台分别要求。
             if cfg!(windows) {

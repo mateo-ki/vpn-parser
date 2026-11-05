@@ -61,6 +61,10 @@ struct Cli {
     #[arg(long, hide = true)]
     start_proxy_node: Option<String>,
 
+    /// macOS LaunchAgent entry; resolve the saved node from the private DB.
+    #[arg(long, hide = true, default_value_t = false, conflicts_with_all = ["headless", "start_proxy_node"])]
+    login_startup: bool,
+
     /// 无头高权限内核守护进程模式
     #[arg(long, hide = true, default_value_t = false)]
     run_elevated_kernel: bool,
@@ -629,6 +633,28 @@ fn main() -> Result<()> {
     } else {
         rt.block_on(db.get_proxy_config())?
     };
+    let app_settings = match rt.block_on(db.get_settings()) {
+        Ok(settings) => settings,
+        // Do not mistake a transient DB read failure for the user disabling
+        // login startup. launchd can retry this nonzero exit after its throttle.
+        Err(error) if cli.login_startup => return Err(error),
+        Err(error) => {
+            tracing::warn!(%error, "读取应用设置失败，本次使用默认设置");
+            Default::default()
+        }
+    };
+    // A still-loaded job can restart after the user disables next-login startup.
+    // Exit successfully so launchd does not keep restarting that obsolete entry.
+    if cli.login_startup && (!cfg!(target_os = "macos") || !app_settings.launch_at_startup || diag) {
+        startup_log("登录自动启动已关闭，本次登录入口正常退出");
+        return Ok(());
+    }
+    let login_proxy_node = login_proxy_node_id(
+        cli.login_startup,
+        app_settings.launch_at_startup,
+        proxy_options.selected_node_id.as_deref(),
+    )
+    .map(str::to_owned);
     let has_override_groups = proxy_options
         .override_yaml
         .as_deref()
@@ -721,12 +747,10 @@ fn main() -> Result<()> {
     );
 
     // Start HTTP API in background if headless or enabled in settings
-    let app_settings = rt.block_on(db.get_settings()).unwrap_or_default();
-
-    // 开机自启动对账：开着就确保 Run 键指向当前 exe（软件挪过位置也能自己跟上），
-    // 关着就清掉残留值。纯 HKCU 注册表读写、亚毫秒级，不挡启动；诊断壳不碰用户注册表。
+    // Keep the per-user startup entry aligned with the current executable.
+    // Diagnostics never change the user's registry or LaunchAgents directory.
     if !diag && !platform::sync_launch_at_startup(app_settings.launch_at_startup) {
-        startup_log("警告：开机自启动同步失败（HKCU Run 键写入被拒绝）");
+        startup_log("警告：登录自动启动同步失败，请检查系统设置和 startup.log");
     }
 
     // 「以管理员方式启动软件」必须在**创建任何窗口之前**决策：提权成功则本实例直接退出，
@@ -825,6 +849,10 @@ fn main() -> Result<()> {
         api_controller.clone(),
         initial_proxy_node.clone(),
     );
+    // The renderer may fall back to a second GUI factory. Start the saved proxy
+    // only once, after app construction, rather than blocking window creation.
+    #[cfg(feature = "gui")]
+    let login_connect_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     #[cfg(feature = "gui")]
     let run_gui = |label: &str, renderer: eframe::Renderer| -> eframe::Result<()> {
@@ -839,6 +867,8 @@ fn main() -> Result<()> {
             api_controller,
             initial_proxy_node,
         ) = gui_handles.clone();
+        let login_proxy_node = login_proxy_node.clone();
+        let login_connect_started = login_connect_started.clone();
         // 窗口大小配置已移除（2026-10-24）：固定中屏 1280x800
         let (window_w, window_h) = (1280.0, 800.0);
         let mut viewport = egui::ViewportBuilder::default()
@@ -916,6 +946,18 @@ fn main() -> Result<()> {
                     initial_proxy_node,
                 );
                 startup_log("VpnApp instantiated successfully!");
+                if let Some(node_id) = login_proxy_node {
+                    if !login_connect_started.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                        rt.spawn(async move {
+                            // No network/authorization work is awaited on the UI
+                            // thread. A temporary startup failure leaves the GUI
+                            // available and manager recovery retains the intent.
+                            if let Err(error) = connect_saved_proxy_at_login(&db, &proxy_manager, &node_id).await {
+                                tracing::warn!(%error, "登录自动连接未完成，保留界面以便恢复或手动启动");
+                            }
+                        });
+                    }
+                }
                 Ok(Box::new(app))
             }),
         )
@@ -976,10 +1018,125 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "gui")]
+async fn connect_saved_proxy_at_login(
+    db: &Database,
+    manager: &ProxyManager,
+    node_id: &str,
+) -> Result<()> {
+    let settings = db.get_settings().await?;
+    let saved = db.get_proxy_config().await?;
+    // Recheck after the GUI has appeared: an intervening manual preference or
+    // selection change wins over the original login request.
+    if login_proxy_node_id(
+        true,
+        settings.launch_at_startup,
+        saved.selected_node_id.as_deref(),
+    ) != Some(node_id)
+    {
+        return Ok(());
+    }
+    let node = db
+        .get_node(node_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("上次节点已不存在，请在界面选择节点"))?;
+    let mut options = manager.config().await;
+    if options.routing_mode == vproxy::proxy::RoutingMode::Subscription {
+        if let Some(source_id) = options.subscription_rules_source_id.as_deref() {
+            if let Some(source) = db.get_source(source_id).await? {
+                options.subscription_rules_yaml = source.rules_yaml;
+                options.subscription_groups_yaml = source.groups_yaml;
+                manager.update_config(options.clone()).await?;
+            }
+        }
+    }
+    if options.url_test
+        || options
+            .override_yaml
+            .as_deref()
+            .is_some_and(|text| text.contains("proxy-groups:") || text.contains("proxy-groups :"))
+    {
+        if let Ok(nodes) = db
+            .top_verified_nodes(options.url_test_size as usize, Some(&node.id))
+            .await
+        {
+            manager.set_url_test_candidates(nodes).await;
+        }
+    }
+    let mut mappings = Vec::new();
+    for mapping in options
+        .port_mappings
+        .iter()
+        .filter(|mapping| mapping.enabled)
+    {
+        if let Some(node) = db.get_node(&mapping.node_id).await? {
+            mappings.push((mapping.port, node));
+        }
+    }
+    manager.set_port_mapping_nodes(mappings).await;
+    if options.chain_proxy_enabled || options.routing_mode == vproxy::proxy::RoutingMode::Chain {
+        if let (Some(entry), Some(exit)) = (
+            options.chain_entry_node_id.as_deref(),
+            options.chain_exit_node_id.as_deref(),
+        ) {
+            if entry != exit {
+                if let (Some(entry), Some(exit)) =
+                    (db.get_node(entry).await?, db.get_node(exit).await?)
+                {
+                    manager.set_chain_nodes(Some((entry, exit))).await;
+                }
+            }
+        }
+    }
+    let settings = db.get_settings().await?;
+    let saved = db.get_proxy_config().await?;
+    if login_proxy_node_id(
+        true,
+        settings.launch_at_startup,
+        saved.selected_node_id.as_deref(),
+    ) != Some(node_id)
+    {
+        return Ok(());
+    }
+    manager.start_automatically(&node).await
+}
+
+/// Manual opens remember selection without connecting. Only the enabled login
+/// entry reconnects, and an absent selection simply opens the GUI for selection.
+fn login_proxy_node_id<'a>(
+    login_entry: bool,
+    enabled: bool,
+    selected: Option<&'a str>,
+) -> Option<&'a str> {
+    if login_entry && enabled {
+        selected.filter(|id| !id.is_empty())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::{login_proxy_node_id, Cli};
     use clap::Parser;
+
+    #[test]
+    fn login_entry_restores_only_when_enabled_and_selected() {
+        assert_eq!(login_proxy_node_id(true, true, Some("saved-node")), Some("saved-node"));
+        assert_eq!(login_proxy_node_id(false, true, Some("saved-node")), None);
+        assert_eq!(login_proxy_node_id(true, false, Some("saved-node")), None);
+        assert_eq!(login_proxy_node_id(true, true, None), None);
+        assert_eq!(login_proxy_node_id(true, true, Some("")), None);
+    }
+
+    #[test]
+    fn login_entry_cannot_enter_blocking_explicit_node_or_headless_branch() {
+        let cli = Cli::try_parse_from(["vproxy", "--login-startup"]).unwrap();
+        assert!(cli.login_startup);
+        assert!(cli.start_proxy_node.is_none());
+        assert!(Cli::try_parse_from(["vproxy", "--login-startup", "--headless"]).is_err());
+        assert!(Cli::try_parse_from(["vproxy", "--login-startup", "--start-proxy-node", "node"]).is_err());
+    }
 
     /// 提权交接会把当前进程的命令行原样带上，再追加新的 `--start-proxy-node`，于是同一个
     /// flag 出现两次 —— clap 对此报 ArgumentConflict 并 exit(2)，提权实例在写下第一行日志

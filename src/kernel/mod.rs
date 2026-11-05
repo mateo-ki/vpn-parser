@@ -225,6 +225,15 @@ impl KernelKind {
     /// shoes: Windows (.zip), Linux (.tar.gz), macOS (.tar.gz)
     /// meow: Windows (.zip), Linux (.tar.gz), macOS (.tar.gz)
     pub fn asset_candidates_for(self, platform: KernelPlatform, tag: &str) -> Vec<String> {
+        self.asset_candidates_for_arch(platform, tag, std::env::consts::ARCH)
+    }
+
+    fn asset_candidates_for_arch(
+        self,
+        platform: KernelPlatform,
+        tag: &str,
+        arch: &str,
+    ) -> Vec<String> {
         let version = tag.trim_start_matches('v');
         match (self, platform) {
             (Self::Mihomo, KernelPlatform::Windows) => vec![
@@ -235,6 +244,9 @@ impl KernelKind {
                 format!("mihomo-linux-amd64-{tag}.gz"),
                 format!("mihomo-linux-amd64-compatible-{tag}.gz"),
             ],
+            (Self::Mihomo, KernelPlatform::MacOS) if arch == "aarch64" => {
+                vec![format!("mihomo-darwin-arm64-{tag}.gz")]
+            }
             (Self::Mihomo, KernelPlatform::MacOS) => vec![
                 format!("mihomo-darwin-amd64-{tag}.gz"),
                 format!("mihomo-darwin-amd64-compatible-{tag}.gz"),
@@ -1461,6 +1473,53 @@ Use tags: with_gvisor
     }
 
     #[test]
+    fn mihomo_assets_follow_macos_architecture() {
+        assert_eq!(
+            KernelKind::Mihomo.asset_candidates_for_arch(
+                KernelPlatform::MacOS,
+                "v1.19.32",
+                "aarch64",
+            ),
+            ["mihomo-darwin-arm64-v1.19.32.gz"]
+        );
+        assert_eq!(
+            KernelKind::Mihomo.asset_candidates_for_arch(
+                KernelPlatform::MacOS,
+                "v1.19.32",
+                "x86_64",
+            ),
+            [
+                "mihomo-darwin-amd64-v1.19.32.gz",
+                "mihomo-darwin-amd64-compatible-v1.19.32.gz",
+            ]
+        );
+        for arch in ["aarch64", "x86_64"] {
+            assert_eq!(
+                KernelKind::Mihomo.asset_candidates_for_arch(
+                    KernelPlatform::Windows,
+                    "v1.19.32",
+                    arch,
+                ),
+                [
+                    "mihomo-windows-amd64-v1.19.32.zip",
+                    "mihomo-windows-amd64-compatible-v1.19.32.zip",
+                ]
+            );
+            assert_eq!(
+                KernelKind::Mihomo.asset_candidates_for_arch(
+                    KernelPlatform::Linux,
+                    "v1.19.32",
+                    arch,
+                ),
+                [
+                    "mihomo-linux-amd64-v1.19.32.gz",
+                    "mihomo-linux-amd64-compatible-v1.19.32.gz",
+                ]
+            );
+        }
+    }
+
+    #[test]
     fn macos_kernel_assets_and_executables() {
         assert_eq!(
             KernelKind::Mihomo.executable_name_for(KernelPlatform::MacOS),
@@ -1484,7 +1543,11 @@ Use tags: with_gvisor
         );
         assert_eq!(
             KernelKind::Mihomo.asset_name_for(KernelPlatform::MacOS, "v1.18.0"),
-            "mihomo-darwin-amd64-v1.18.0.gz"
+            if cfg!(target_arch = "aarch64") {
+                "mihomo-darwin-arm64-v1.18.0.gz"
+            } else {
+                "mihomo-darwin-amd64-v1.18.0.gz"
+            }
         );
         assert_eq!(
             KernelKind::Xray.asset_name_for(KernelPlatform::MacOS, "v1.8.4"),

@@ -362,7 +362,13 @@ fn package_preference() -> Vec<PackageKind> {
     {
         vec![PackageKind::WindowsSetup]
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        // macOS bundles are installed through Finder. Never offer a Linux
+        // package (or a Windows installer) just because its asset is present.
+        Vec::new()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         if is_running_as_appimage() {
             return vec![PackageKind::AppImage];
@@ -1012,11 +1018,15 @@ fn summarize(release: ReleaseJson, current: &str, channel: UpdateChannel) -> App
         .map(PackageKind::label)
         .unwrap_or("本机可用的");
     let message = if asset.is_none() {
-        format!(
-            "{} Release {} 里没有 {wanted}资产",
-            channel.label(),
-            release.tag_name
-        )
+        if cfg!(target_os = "macos") {
+            format!("macOS 暂不支持应用内安装更新，请从官方发布页下载 VProxy.app（Release {}）", release.tag_name)
+        } else {
+            format!(
+                "{} Release {} 里没有 {wanted}资产",
+                channel.label(),
+                release.tag_name
+            )
+        }
     } else if update_available {
         format!(
             "v{} 可更新至 {}{}",
@@ -1283,7 +1293,11 @@ pub fn launch_installer(path: &Path) -> Result<Handoff> {
     if !path.is_file() {
         bail!("安装包不在了: {}", path.display());
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        bail!("macOS 请从官方发布页下载并安装 VProxy.app；此安装包不适用于 macOS");
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let ext_lower = path
             .extension()
@@ -1329,6 +1343,29 @@ pub fn launch_installer(path: &Path) -> Result<Handoff> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_never_offers_linux_or_windows_installers() {
+        let assets = vec![
+            asset("vproxy_1.2.2_amd64.deb", None),
+            asset("vproxy-1.2.2.x86_64.rpm", None),
+            asset("vproxy-1.2.2.AppImage", None),
+            asset("vproxy-1.2.2-windows-x64-setup.exe", None),
+        ];
+        assert!(pick_installer_asset(&assets, "v1.2.2").is_none());
+        let summary = summarize(release("v1.2.2", assets), "1.2.1", UpdateChannel::Stable);
+        assert!(!summary.update_available);
+        assert!(summary.asset.is_none());
+        assert!(summary.message.contains("macOS 暂不支持应用内安装更新"));
+        let directory = std::env::temp_dir().join(format!("vproxy-mac-update-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let package = directory.join("vproxy.deb");
+        std::fs::write(&package, b"test package").unwrap();
+        let error = launch_installer(&package).unwrap_err();
+        assert!(error.to_string().contains("不适用于 macOS"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     fn asset(name: &str, digest: Option<&str>) -> AssetJson {
         AssetJson {
@@ -1511,7 +1548,7 @@ ID-LIKE=\"debian\"
             asset("sha256.txt", None),
             asset("vpn-parser-1.2.2-windows-x64-setup.exe", None),
         ];
-        let picked = pick_installer_asset(&assets, "v1.2.2").expect("有安装包");
+        let picked = pick_one_kind(&assets, PackageKind::WindowsSetup, "1.2.2").expect("有安装包");
         assert_eq!(picked.name, "vpn-parser-1.2.2-windows-x64-setup.exe");
         assert_eq!(
             picked.url,
@@ -1520,21 +1557,21 @@ ID-LIKE=\"debian\"
         // 名字对不上 tag（比如 tag 打错、资产手工传过）时退到后缀匹配的最后一个。
         let loose = vec![asset("vpn-parser-0.9.0-windows-x64-setup.exe", None)];
         assert_eq!(
-            pick_installer_asset(&loose, "v1.2.2").unwrap().name,
+            pick_one_kind(&loose, PackageKind::WindowsSetup, "1.2.2").unwrap().name,
             "vpn-parser-0.9.0-windows-x64-setup.exe"
         );
-        assert!(pick_installer_asset(&[asset("sha256.txt", None)], "v1.2.2").is_none());
+        assert!(pick_one_kind(&[asset("sha256.txt", None)], PackageKind::WindowsSetup, "1.2.2").is_none());
 
         // 双发场景下，新版优先挑 vproxy 包；历史 Release 仅有 vpn-parser 时自动回退
         let dual_assets = vec![
             asset("vpn-parser-1.16.0-windows-x64-setup.exe", None),
             asset("vproxy-1.16.0-windows-x64-setup.exe", None),
         ];
-        let picked_vproxy = pick_installer_asset(&dual_assets, "v1.16.0").expect("优先命中 vproxy 安装包");
+        let picked_vproxy = pick_one_kind(&dual_assets, PackageKind::WindowsSetup, "1.16.0").expect("优先命中 vproxy 安装包");
         assert_eq!(picked_vproxy.name, "vproxy-1.16.0-windows-x64-setup.exe");
 
         let legacy_only = vec![asset("vpn-parser-1.16.0-windows-x64-setup.exe", None)];
-        let picked_legacy = pick_installer_asset(&legacy_only, "v1.16.0").expect("兼容历史 vpn-parser 安装包");
+        let picked_legacy = pick_one_kind(&legacy_only, PackageKind::WindowsSetup, "1.16.0").expect("兼容历史 vpn-parser 安装包");
         assert_eq!(picked_legacy.name, "vpn-parser-1.16.0-windows-x64-setup.exe");
     }
 
@@ -1589,6 +1626,7 @@ ID-LIKE=\"debian\"
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn release_summary_reports_both_directions_and_missing_asset() {
         let hex = "c".repeat(64);
         let info = summarize(
@@ -1649,6 +1687,7 @@ ID-LIKE=\"debian\"
 
     /// 预发通道拿到的 beta 必须在界面上说清楚它是预发版。
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn prerelease_summary_says_so() {
         let mut beta = release(
             "v1.4.0-beta.1",
@@ -1927,7 +1966,11 @@ ID-LIKE=\"debian\"
         assert_eq!(items[0].published_at.as_deref(), Some("2026-10-26"));
         assert!(items[0].is_current);
         assert!(!items[0].prerelease);
-        assert!(items[0].asset_name.is_some());
+        if cfg!(target_os = "macos") {
+            assert!(items[0].asset_name.is_none());
+        } else {
+            assert!(items[0].asset_name.is_some());
+        }
         assert!(items[0].hash_index_url.is_some());
 
         assert_eq!(items[1].tag, "v1.13.0");

@@ -354,6 +354,14 @@ fn read_frame<T: for<'a> Deserialize<'a>>(stream: &mut UnixStream) -> Result<T> 
     Ok(serde_json::from_slice(&body)?)
 }
 
+fn prepare_accepted_stream(stream: &UnixStream) -> io::Result<()> {
+    // Darwin inherits O_NONBLOCK from the listener. Frame reads must wait for
+    // the GUI to send its header/body; socket timeouts alone do not clear it.
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(IO_TIMEOUT))?;
+    stream.set_write_timeout(Some(IO_TIMEOUT))
+}
+
 fn rpc(paths: &Paths, request: &Request, timeout: Duration) -> Result<Response> {
     // A normal user cannot replace the root-owned parent directory or its socket.
     let parent = fs::symlink_metadata(&paths.socket_dir)?;
@@ -422,7 +430,7 @@ fn daemon_plist(paths: &Paths, uid: u32, gid: u32) -> String {
     let exe = paths.install.join("VProxyHelper.app/Contents/MacOS/vproxy");
     // A universal GUI may run under Rosetta. Pin launchd to the same slice so
     // mutual CDHash authentication compares the same signed executable slice.
-    format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>{}</string><key>ProgramArguments</key><array><string>/usr/bin/arch</string><string>-{}</string><string>{}</string><string>--macos-tun-helper</string><string>{uid}</string><string>{gid}</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>AbandonProcessGroup</key><false/><key>ThrottleInterval</key><integer>5</integer><key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string></dict></plist>\n", xml_escape(&paths.label), helper_architecture(), xml_escape(&exe.to_string_lossy()))
+    format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>{}</string><key>ProgramArguments</key><array><string>/usr/bin/arch</string><string>-{}</string><string>{}</string><string>--macos-tun-helper</string><string>{uid}</string><string>{gid}</string></array><key>ProcessType</key><string>Interactive</string><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>AbandonProcessGroup</key><false/><key>ThrottleInterval</key><integer>5</integer><key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string></dict></plist>\n", xml_escape(&paths.label), helper_architecture(), xml_escape(&exe.to_string_lossy()))
 }
 
 /// Read-only installation check, invoked as the GUI user by the authorized
@@ -462,7 +470,7 @@ fn install_transaction_prelude(
     plist_stage: &Path,
     plist_backup: &Path,
 ) -> Result<String> {
-    Ok(format!(
+    let mut script = format!(
         r#"set -eu
 umask 077
 vproxy_stage={stage}
@@ -478,24 +486,6 @@ vproxy_old_install=0
 vproxy_new_plist=0
 vproxy_old_plist=0
 vproxy_committed=0
-vproxy_cleanup() {{
-  vproxy_result=$?
-  trap - EXIT HUP INT TERM
-  if test "$vproxy_committed" -eq 0 && test "$vproxy_swapping" -eq 1; then
-    /bin/launchctl bootout "$vproxy_job" 2>/dev/null || true
-    if test "$vproxy_new_install" -eq 1; then /bin/mv "$vproxy_install" "$vproxy_stage" || /bin/echo 'Could not move the failed TUN installation aside' >&2; fi
-    if test "$vproxy_old_install" -eq 1; then /bin/mv "$vproxy_backup" "$vproxy_install" || /bin/echo "Could not restore the previous TUN installation; retained at $vproxy_backup" >&2; fi
-    if test "$vproxy_new_plist" -eq 1; then /bin/rm -f "$vproxy_plist" || /bin/echo 'Could not remove the failed TUN service plist' >&2; fi
-    if test "$vproxy_old_plist" -eq 1; then /bin/mv "$vproxy_plist_backup" "$vproxy_plist" || /bin/echo "Could not restore the previous TUN plist; retained at $vproxy_plist_backup" >&2; fi
-    if test -f "$vproxy_plist"; then /bin/launchctl bootstrap system "$vproxy_plist" 2>/dev/null || /bin/echo 'Could not restart the previous TUN service' >&2; fi
-  fi
-  # Recursive cleanup is limited to this invocation's generated root staging path.
-  /bin/rm -rf "$vproxy_stage" || true
-  /bin/rm -f "$vproxy_plist_stage" || true
-  exit "$vproxy_result"
-}}
-trap vproxy_cleanup EXIT
-trap 'exit 1' HUP INT TERM
 "#,
         stage = path_quote(stage)?,
         backup = path_quote(backup)?,
@@ -504,7 +494,79 @@ trap 'exit 1' HUP INT TERM
         install = path_quote(&paths.install)?,
         plist = path_quote(&paths.plist)?,
         job = shell_quote(&format!("system/{}", paths.label))
-    ))
+    );
+    // bootout may return while launchd is still removing the old job. Do not
+    // replace its files or bootstrap a replacement until removal completes.
+    script.push_str(r#"vproxy_stop_service() {
+  vproxy_bootout_error=$(/bin/launchctl bootout "$vproxy_job" 2>&1) || true
+  vproxy_removal_attempt=0
+  while /bin/launchctl print "$vproxy_job" >/dev/null 2>&1; do
+    if test "$vproxy_removal_attempt" -ge 50; then
+      /bin/echo "Timed out waiting for TUN service removal: $vproxy_job" >&2
+      if test -n "$vproxy_bootout_error"; then /usr/bin/printf '%s\n' "$vproxy_bootout_error" >&2; fi
+      return 1
+    fi
+    vproxy_removal_attempt=$((vproxy_removal_attempt + 1))
+    /bin/sleep 0.1
+  done
+  return 0
+}
+vproxy_bootstrap_service() {
+  vproxy_bootstrap_attempt=0
+  while true; do
+    if vproxy_bootstrap_error=$(/bin/launchctl bootstrap system "$vproxy_plist" 2>&1); then
+      return 0
+    else
+      vproxy_bootstrap_status=$?
+    fi
+    vproxy_bootstrap_attempt=$((vproxy_bootstrap_attempt + 1))
+    # launchctl maps launchd's EINPROGRESS to the generic exit status 5.
+    # Retry that status briefly even after print no longer sees the old job.
+    if test "$vproxy_bootstrap_status" -ne 5 || test "$vproxy_bootstrap_attempt" -ge 50; then
+      /usr/bin/printf '%s\n' "$vproxy_bootstrap_error" >&2
+      /bin/echo "Could not register TUN service after $vproxy_bootstrap_attempt attempt(s): $vproxy_job" >&2
+      return "$vproxy_bootstrap_status"
+    fi
+    /bin/sleep 0.1
+  done
+}
+vproxy_cleanup() {
+  vproxy_result=$?
+  trap - EXIT HUP INT TERM
+  if test "$vproxy_committed" -eq 0 && test "$vproxy_swapping" -eq 1; then
+    if vproxy_stop_service; then
+      if test "$vproxy_new_install" -eq 1; then /bin/mv "$vproxy_install" "$vproxy_stage" || /bin/echo 'Could not move the failed TUN installation aside' >&2; fi
+      if test "$vproxy_old_install" -eq 1; then /bin/mv "$vproxy_backup" "$vproxy_install" || /bin/echo "Could not restore the previous TUN installation; retained at $vproxy_backup" >&2; fi
+      if test "$vproxy_new_plist" -eq 1; then /bin/rm -f "$vproxy_plist" || /bin/echo 'Could not remove the failed TUN service plist' >&2; fi
+      if test "$vproxy_old_plist" -eq 1; then /bin/mv "$vproxy_plist_backup" "$vproxy_plist" || /bin/echo "Could not restore the previous TUN plist; retained at $vproxy_plist_backup" >&2; fi
+      if test -f "$vproxy_plist"; then vproxy_bootstrap_service || /bin/echo 'Could not restart the previous TUN service' >&2; fi
+    else
+      /bin/echo "Could not stop the failed TUN service; previous files retained at $vproxy_backup and $vproxy_plist_backup" >&2
+    fi
+  fi
+  # Recursive cleanup is limited to this invocation's generated root staging path.
+  /bin/rm -rf "$vproxy_stage" || true
+  /bin/rm -f "$vproxy_plist_stage" || true
+  exit "$vproxy_result"
+}
+trap vproxy_cleanup EXIT
+trap 'exit 1' HUP INT TERM
+"#);
+    Ok(script)
+}
+
+fn install_service_swap_script() -> &'static str {
+    r#"vproxy_swapping=1
+    vproxy_stop_service
+    if test -e "$vproxy_install"; then /bin/mv "$vproxy_install" "$vproxy_backup"; vproxy_old_install=1; fi
+    if test -e "$vproxy_plist"; then /bin/mv "$vproxy_plist" "$vproxy_plist_backup"; vproxy_old_plist=1; fi
+    /bin/mv "$vproxy_stage" "$vproxy_install"
+    vproxy_new_install=1
+    /bin/mv "$vproxy_plist_stage" "$vproxy_plist"
+    vproxy_new_plist=1
+    vproxy_bootstrap_service
+    /bin/launchctl kickstart "$vproxy_job"
+"#
 }
 
 struct InstallScriptInputs<'a> {
@@ -597,19 +659,8 @@ fn installation_script(input: InstallScriptInputs<'_>) -> Result<String> {
     script.push_str(&format!("/usr/sbin/chown -R root:wheel {}\n/bin/chmod -R go-w {}\n/bin/chmod 755 {} {}\n/usr/sbin/chown root:wheel {}\n/bin/chmod 644 {}\n/usr/bin/plutil -lint {} >/dev/null\n", q(&staging_root)?, q(&staging_root)?, q(&staging_root)?, q(&staging_root.join("mihomo"))?, q(&plist_staging)?, q(&plist_staging)?, q(&plist_staging)?));
     // Keep both the app/core snapshot and plist until the new authenticated
     // service is ready. Any failure in the transaction restores the old pair.
-    script.push_str(r#"vproxy_swapping=1
-    /bin/launchctl bootout "$vproxy_job" 2>/dev/null || true
-    if test -e "$vproxy_install"; then /bin/mv "$vproxy_install" "$vproxy_backup"; vproxy_old_install=1; fi
-    if test -e "$vproxy_plist"; then /bin/mv "$vproxy_plist" "$vproxy_plist_backup"; vproxy_old_plist=1; fi
-    /bin/mv "$vproxy_stage" "$vproxy_install"
-    vproxy_new_install=1
-    /bin/mv "$vproxy_plist_stage" "$vproxy_plist"
-    vproxy_new_plist=1
-    /bin/launchctl bootstrap system "$vproxy_plist"
-    /bin/launchctl kickstart "$vproxy_job"
-    vproxy_ready=0
-    vproxy_attempt=0
-    "#);
+    script.push_str(install_service_swap_script());
+    script.push_str("vproxy_ready=0\nvproxy_attempt=0\n");
     let checker = paths.install.join("VProxyHelper.app/Contents/MacOS/vproxy");
     script.push_str(&format!("while test \"$vproxy_attempt\" -lt 40; do\n  if /usr/bin/sudo -u {} -- /usr/bin/arch -{} {} --macos-tun-helper-check {} >/dev/null 2>&1; then vproxy_ready=1; break; fi\n  vproxy_attempt=$((vproxy_attempt + 1))\n  /bin/sleep 0.1\ndone\n", shell_quote(&format!("#{}", user.uid)), helper_architecture(), q(&checker)?, user.uid));
     script.push_str(r#"if test "$vproxy_ready" -ne 1; then /bin/echo 'TUN helper did not pass the authenticated installation check' >&2; exit 1; fi
@@ -696,6 +747,101 @@ pub fn start(
     config: &Path,
     log: &Path,
 ) -> Result<MacChild> {
+    start_impl(kernel, executable, data_root, config, log, true)
+}
+
+/// Automatic startup/recovery must never open an administrator prompt.
+pub fn start_existing(
+    kernel: KernelKind,
+    executable: &Path,
+    data_root: &Path,
+    config: &Path,
+    log: &Path,
+) -> Result<MacChild> {
+    start_impl(kernel, executable, data_root, config, log, false)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum HelperPreparation {
+    Wait,
+    Install,
+}
+
+fn helper_preparation(installed_matches: bool, allow_install: bool) -> Result<HelperPreparation> {
+    if installed_matches {
+        // launchd recreates /var/run sockets at boot and after helper crashes.
+        // A single missed Hello must not reinstall an unchanged service.
+        Ok(HelperPreparation::Wait)
+    } else if allow_install {
+        Ok(HelperPreparation::Install)
+    } else {
+        bail!("TUN 后台服务需要安装或更新授权，请在 VProxy 界面手动启用 TUN 完成一次管理员验证");
+    }
+}
+
+fn installed_manifest_matches(paths: &Paths, expected: &Manifest) -> bool {
+    let read = (|| -> Result<Manifest> {
+        let mut bytes = Vec::new();
+        root_file(&paths.install.join("manifest.json"))?
+            .take(MAX_FRAME as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > MAX_FRAME {
+            bail!("Installed manifest is too large");
+        }
+        Ok(serde_json::from_slice(&bytes)?)
+    })();
+    read.is_ok_and(|installed| installed == *expected)
+}
+
+fn wait_for_helper_ready(
+    timeout: Duration,
+    interval: Duration,
+    mut probe: impl FnMut() -> bool,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if probe() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!("TUN 后台服务暂未就绪：已安装的服务未响应，请检查系统设置中的后台项目后重试；未重复请求管理员授权");
+        }
+        std::thread::sleep(interval.min(deadline.saturating_duration_since(Instant::now())));
+    }
+}
+
+fn start_rpc_error(error: anyhow::Error) -> anyhow::Error {
+    let transient = error.chain().any(|cause| {
+        cause.downcast_ref::<io::Error>().is_some_and(|error| {
+            matches!(
+                error.kind(),
+                io::ErrorKind::NotFound
+                    | io::ErrorKind::ConnectionRefused
+                    | io::ErrorKind::ConnectionAborted
+                    | io::ErrorKind::ConnectionReset
+                    | io::ErrorKind::TimedOut
+                    | io::ErrorKind::WouldBlock
+                    | io::ErrorKind::BrokenPipe
+                    | io::ErrorKind::UnexpectedEof
+                    | io::ErrorKind::Interrupted
+            )
+        })
+    });
+    if transient {
+        error.context("TUN 后台服务暂未就绪：服务连接中断，请稍后重试")
+    } else {
+        error
+    }
+}
+
+fn start_impl(
+    kernel: KernelKind,
+    executable: &Path,
+    data_root: &Path,
+    config: &Path,
+    log: &Path,
+    allow_install: bool,
+) -> Result<MacChild> {
     if kernel != KernelKind::Mihomo {
         bail!("macOS TUN 后台服务目前仅支持 Mihomo，请选择 Mihomo 内核");
     }
@@ -719,18 +865,16 @@ pub fn start(
     let manifest = current_manifest(executable, data_root)?;
     let ready = matches!(rpc(&paths, &Request::Hello {}, IO_TIMEOUT), Ok(Response::Ready { manifest: installed }) if installed == manifest);
     if !ready {
-        install(&paths, &user, executable, data_root, &manifest)?;
-        let deadline = Instant::now() + Duration::from_secs(8);
-        loop {
-            if matches!(rpc(&paths, &Request::Hello {}, IO_TIMEOUT), Ok(Response::Ready { manifest: installed }) if installed == manifest)
-            {
-                break;
-            }
-            if Instant::now() >= deadline {
-                bail!("TUN 后台服务安装后未就绪，请检查系统设置中的后台项目");
-            }
-            std::thread::sleep(Duration::from_millis(100));
+        if helper_preparation(installed_manifest_matches(&paths, &manifest), allow_install)?
+            == HelperPreparation::Install
+        {
+            install(&paths, &user, executable, data_root, &manifest)?;
         }
+        wait_for_helper_ready(
+            Duration::from_secs(8),
+            Duration::from_millis(100),
+            || matches!(rpc(&paths, &Request::Hello {}, IO_TIMEOUT), Ok(Response::Ready { manifest: installed }) if installed == manifest),
+        )?;
     }
     match rpc(
         &paths,
@@ -740,7 +884,9 @@ pub fn start(
             log: log.into(),
         },
         Duration::from_secs(3),
-    )? {
+    )
+    .map_err(start_rpc_error)?
+    {
         Response::Running { session, pid } => Ok(MacChild {
             paths,
             session,
@@ -836,6 +982,23 @@ struct Running {
     status: Option<ExitStatus>,
 }
 
+fn poll_child_until(
+    timeout: Duration,
+    interval: Duration,
+    mut poll: impl FnMut() -> io::Result<Option<ExitStatus>>,
+) -> io::Result<Option<ExitStatus>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = poll()? {
+            return Ok(Some(status));
+        }
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
+        std::thread::sleep(interval.min(deadline.saturating_duration_since(Instant::now())));
+    }
+}
+
 impl Running {
     fn poll(&mut self) -> io::Result<Option<ExitStatus>> {
         if self.status.is_none() {
@@ -850,19 +1013,29 @@ impl Running {
         unsafe {
             libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM);
         }
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
+        if let Some(status) =
+            poll_child_until(Duration::from_secs(2), Duration::from_millis(20), || {
+                self.poll()
+            })?
+        {
+            return Ok(status);
+        }
+        if let Err(error) = self.child.kill() {
+            // The process may exit between the last poll and SIGKILL.
             if let Some(status) = self.poll()? {
                 return Ok(status);
             }
-            if Instant::now() >= deadline {
-                self.child.kill()?;
-                let status = self.child.wait()?;
-                self.status = Some(status);
-                return Ok(status);
-            }
-            std::thread::sleep(Duration::from_millis(20));
+            return Err(error);
         }
+        poll_child_until(Duration::from_secs(2), Duration::from_millis(20), || {
+            self.poll()
+        })?
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "TUN kernel did not exit within the bounded stop deadline",
+            )
+        })
     }
 }
 
@@ -979,8 +1152,7 @@ pub fn run_helper(uid: u32, gid: u32) -> Result<()> {
         }
         match listener.accept() {
             Ok((mut stream, _)) => {
-                stream.set_read_timeout(Some(IO_TIMEOUT))?;
-                stream.set_write_timeout(Some(IO_TIMEOUT))?;
+                prepare_accepted_stream(&stream)?;
                 let response = (|| -> Result<Response> {
                     let pid = authenticated_peer(&stream, uid, &own_hash)?;
                     let request: Request = read_frame(&mut stream)?;
@@ -1094,6 +1266,130 @@ pub fn run_helper(uid: u32, gid: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unchanged_installed_helper_waits_without_another_authorization() {
+        assert_eq!(
+            helper_preparation(true, true).unwrap(),
+            HelperPreparation::Wait
+        );
+        assert_eq!(
+            helper_preparation(true, false).unwrap(),
+            HelperPreparation::Wait
+        );
+        assert_eq!(
+            helper_preparation(false, true).unwrap(),
+            HelperPreparation::Install
+        );
+        let error = helper_preparation(false, false).unwrap_err();
+        assert!(error.to_string().contains("需要安装或更新授权"));
+    }
+
+    #[test]
+    fn helper_wait_retries_transient_startup_and_reports_bounded_offline_failure() {
+        let mut attempts = 0;
+        wait_for_helper_ready(Duration::from_secs(1), Duration::ZERO, || {
+            attempts += 1;
+            attempts == 3
+        })
+        .unwrap();
+        assert_eq!(attempts, 3);
+        let error = wait_for_helper_ready(Duration::ZERO, Duration::ZERO, || false).unwrap_err();
+        assert!(error.to_string().starts_with("TUN 后台服务暂未就绪"));
+    }
+
+    #[test]
+    fn disconnected_start_is_retryable_but_authorization_errors_are_preserved() {
+        let error = start_rpc_error(io::Error::from(io::ErrorKind::ConnectionRefused).into());
+        assert!(error.to_string().starts_with("TUN 后台服务暂未就绪"));
+        let message = "内核或程序已更新，请重新授权安装 TUN 后台服务";
+        assert_eq!(start_rpc_error(anyhow!(message)).to_string(), message);
+    }
+
+    #[test]
+    fn child_exit_poll_is_bounded_and_propagates_io_errors() {
+        let mut polls = 0;
+        let status = poll_child_until(Duration::ZERO, Duration::ZERO, || {
+            polls += 1;
+            Ok(None)
+        })
+        .unwrap();
+        assert!(status.is_none());
+        assert_eq!(polls, 1);
+        let error = poll_child_until(Duration::ZERO, Duration::ZERO, || {
+            Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn running_stop_reaps_a_controlled_process_that_handles_sigterm() {
+        use std::io::{BufRead, BufReader};
+        let mut child = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "trap 'exit 0' TERM; printf 'ready\\n'; while :; do /bin/sleep 0.1; done",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready, "ready\n");
+        let mut running = Running {
+            session: "test-session".into(),
+            parent: unsafe { libc::getpid() },
+            parent_instance: (0, 0),
+            child,
+            status: None,
+        };
+        let status = running.stop().unwrap();
+        assert!(status.success());
+        assert_eq!(running.poll().unwrap(), Some(status));
+    }
+    #[test]
+    fn accepted_nonblocking_listener_reads_a_delayed_fragmented_frame() {
+        let root = std::env::temp_dir().join(format!("vpi-{}", Uuid::new_v4().simple()));
+        fs::create_dir(&root).unwrap();
+        let socket = root.join("s");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let (connected_tx, connected_rx) = std::sync::mpsc::channel();
+        let (send_tx, send_rx) = std::sync::mpsc::channel();
+        let sender = std::thread::spawn(move || {
+            let mut client = UnixStream::connect(socket).unwrap();
+            connected_tx.send(()).unwrap();
+            send_rx.recv().unwrap();
+            let body = serde_json::to_vec(&Request::Hello {}).unwrap();
+            let length = (body.len() as u32).to_be_bytes();
+            // The server has started reading before either header fragment or
+            // the body arrives, exposing inherited nonblocking I/O on Darwin.
+            std::thread::sleep(Duration::from_millis(50));
+            client.write_all(&length[..2]).unwrap();
+            std::thread::sleep(Duration::from_millis(25));
+            client.write_all(&length[2..]).unwrap();
+            std::thread::sleep(Duration::from_millis(25));
+            client.write_all(&body).unwrap();
+        });
+        connected_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        prepare_accepted_stream(&stream).unwrap();
+        let flags = unsafe { libc::fcntl(stream.as_raw_fd(), libc::F_GETFL) };
+        send_tx.send(()).unwrap();
+        let request = read_frame::<Request>(&mut stream);
+        let sent = sender.join();
+        drop(stream);
+        drop(listener);
+        fs::remove_dir_all(&root).unwrap();
+        assert!(flags >= 0 && flags & libc::O_NONBLOCK == 0);
+        sent.unwrap();
+        assert!(matches!(request.unwrap(), Request::Hello {}));
+    }
+
     #[test]
     fn ipc_rejects_oversized_frames_before_allocating() {
         let (mut server, mut client) = UnixStream::pair().unwrap();
@@ -1189,57 +1485,230 @@ mod tests {
         assert_eq!(shell_quote("a'b"), "'a'\\''b'");
         assert_eq!(apple_quote("a\"b\\c\nd"), "\"a\\\"b\\\\c\\nd\"");
     }
-    #[test]
-    fn failed_install_transaction_restores_old_app_and_plist() {
-        let root = std::env::temp_dir().join(format!("vproxy-rollback-test-{}", Uuid::new_v4()));
-        fs::create_dir(&root).unwrap();
-        let mut paths = Paths::new(501);
-        paths.install = root.join("installed");
-        paths.plist = root.join("installed.plist");
-        let stage = root.join("new-stage");
-        let backup = root.join("previous-install");
-        let plist_stage = root.join("new.plist");
-        let plist_backup = root.join("previous.plist");
-        fs::create_dir(&paths.install).unwrap();
-        fs::write(paths.install.join("marker"), "old app").unwrap();
-        fs::write(&paths.plist, "old plist").unwrap();
-        fs::create_dir(&stage).unwrap();
-        fs::write(stage.join("marker"), "new app").unwrap();
-        fs::write(&plist_stage, "new plist").unwrap();
-        // Exercise the real EXIT trap as an ordinary user using only this test's
-        // directory. No launchd operation is performed by the test.
-        let mut script =
-            install_transaction_prelude(&paths, &stage, &backup, &plist_stage, &plist_backup)
-                .unwrap()
-                .replace("/bin/launchctl", "/usr/bin/true");
-        script.push_str(
-            r#"vproxy_swapping=1
-/bin/mv "$vproxy_install" "$vproxy_backup"
-vproxy_old_install=1
-/bin/mv "$vproxy_plist" "$vproxy_plist_backup"
-vproxy_old_plist=1
-/bin/mv "$vproxy_stage" "$vproxy_install"
-vproxy_new_install=1
-/bin/mv "$vproxy_plist_stage" "$vproxy_plist"
-vproxy_new_plist=1
-exit 17
-"#,
-        );
-        let status = Command::new("/bin/sh")
-            .args(["-c", &script])
-            .status()
+    struct InstallTransactionFixture {
+        root: PathBuf,
+        paths: Paths,
+        stage: PathBuf,
+        backup: PathBuf,
+        plist_stage: PathBuf,
+        plist_backup: PathBuf,
+    }
+
+    impl InstallTransactionFixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("vproxy-install-test-{}", Uuid::new_v4()));
+            fs::create_dir(&root).unwrap();
+            let mut paths = Paths::new(501);
+            paths.install = root.join("installed");
+            paths.plist = root.join("installed.plist");
+            let fixture = Self {
+                stage: root.join("new-stage"),
+                backup: root.join("previous-install"),
+                plist_stage: root.join("new.plist"),
+                plist_backup: root.join("previous.plist"),
+                paths,
+                root,
+            };
+            fs::create_dir(&fixture.paths.install).unwrap();
+            fs::write(fixture.paths.install.join("marker"), "old app").unwrap();
+            fs::write(&fixture.paths.plist, "old plist").unwrap();
+            fs::create_dir(&fixture.stage).unwrap();
+            fs::write(fixture.stage.join("marker"), "new app").unwrap();
+            fs::write(&fixture.plist_stage, "new plist").unwrap();
+            fs::write(fixture.root.join("job"), "old app").unwrap();
+            fs::write(fixture.root.join("busy-new"), "2").unwrap();
+            let launchctl = fixture.root.join("launchctl");
+            // Model asynchronous removal and launchctl's generic status 5.
+            // Every operation is confined to this fixture; no launchd IPC occurs.
+            fs::write(&launchctl, r#"#!/bin/sh
+set -eu
+fixture=$VPROXY_TEST_FIXTURE
+case "$1" in
+  bootout)
+    test "$2" = system/com.mateoki.vproxy.tun.501
+    test -f "$fixture/job" || exit 113
+    /usr/bin/printf 'bootout:%s\n' "$(/bin/cat "$fixture/job")" >> "$fixture/events"
+    /bin/echo 3 > "$fixture/pending"
+    ;;
+  print)
+    test "$2" = system/com.mateoki.vproxy.tun.501
+    test -f "$fixture/job" || exit 113
+    job=$(/bin/cat "$fixture/job")
+    marker=$(/bin/cat "$fixture/installed/marker")
+    if test "$job" != "$marker"; then /bin/echo 'VIOLATION: files replaced before removal' >> "$fixture/events"; fi
+    if test -f "$fixture/stall-removal"; then exit 0; fi
+    if test -f "$fixture/pending"; then
+      remaining=$(/bin/cat "$fixture/pending")
+      if test "$remaining" -eq 0; then
+        /bin/rm "$fixture/job" "$fixture/pending"
+        /usr/bin/printf 'removed:%s\n' "$job" >> "$fixture/events"
+        exit 113
+      fi
+      /bin/echo $((remaining - 1)) > "$fixture/pending"
+      /usr/bin/printf 'pending:%s\n' "$job" >> "$fixture/events"
+    fi
+    ;;
+  bootstrap)
+    test "$2" = system
+    test "$3" = "$fixture/installed.plist"
+    marker=$(/bin/cat "$fixture/installed/marker")
+    /usr/bin/printf 'bootstrap:%s\n' "$marker" >> "$fixture/events"
+    if test -f "$fixture/job"; then
+      /bin/echo 'VIOLATION: bootstrap before removal' >> "$fixture/events"
+      /bin/echo 'Bootstrap failed: 5: mock job removal in progress' >&2
+      exit 5
+    fi
+    if test "$marker" = 'new app'; then
+      if test -f "$fixture/fail-new-status"; then
+        status=$(/bin/cat "$fixture/fail-new-status")
+        /bin/echo "Bootstrap failed: $status: mock registration error" >&2
+        exit "$status"
+      fi
+      remaining=$(/bin/cat "$fixture/busy-new")
+      if test "$remaining" -gt 0; then
+        /bin/echo $((remaining - 1)) > "$fixture/busy-new"
+        /bin/echo 'Bootstrap failed: 5: mock registration in progress' >&2
+        exit 5
+      fi
+    fi
+    /bin/cp "$fixture/installed/marker" "$fixture/job"
+    /usr/bin/printf 'registered:%s\n' "$marker" >> "$fixture/events"
+    ;;
+  kickstart)
+    test "$2" = system/com.mateoki.vproxy.tun.501
+    test -f "$fixture/job"
+    ;;
+  *) exit 97 ;;
+esac
+"#).unwrap();
+            fs::set_permissions(&launchctl, fs::Permissions::from_mode(0o700)).unwrap();
+            fixture
+        }
+
+        fn run(&self, tail: &str) -> std::process::Output {
+            let mut script = install_transaction_prelude(
+                &self.paths,
+                &self.stage,
+                &self.backup,
+                &self.plist_stage,
+                &self.plist_backup,
+            )
             .unwrap();
-        assert_eq!(status.code(), Some(17));
-        assert_eq!(
-            fs::read_to_string(paths.install.join("marker")).unwrap(),
-            "old app"
+            script.push_str(install_service_swap_script());
+            script.push_str(tail);
+            // Use the production shell transaction with only launchctl and
+            // sleeping substituted. The real filesystem swap and trap execute.
+            let script = script
+                .replace(
+                    "/bin/launchctl",
+                    &path_quote(&self.root.join("launchctl")).unwrap(),
+                )
+                .replace("/bin/sleep", "/usr/bin/true");
+            Command::new("/bin/sh")
+                .args(["-c", &script])
+                .env("VPROXY_TEST_FIXTURE", &self.root)
+                .output()
+                .unwrap()
+        }
+
+        fn events(&self) -> String {
+            fs::read_to_string(self.root.join("events")).unwrap()
+        }
+
+        fn assert_old_restored(&self) {
+            assert_eq!(
+                fs::read_to_string(self.paths.install.join("marker")).unwrap(),
+                "old app"
+            );
+            assert_eq!(fs::read_to_string(&self.paths.plist).unwrap(), "old plist");
+            assert_eq!(
+                fs::read_to_string(self.root.join("job")).unwrap(),
+                "old app"
+            );
+            assert!(!self.events().contains("VIOLATION"));
+        }
+    }
+
+    impl Drop for InstallTransactionFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn installation_waits_for_removal_and_retries_busy_registration() {
+        let fixture = InstallTransactionFixture::new();
+        let output = fixture.run("vproxy_committed=1\n");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(fs::read_to_string(&paths.plist).unwrap(), "old plist");
-        assert!(!stage.exists());
-        assert!(!backup.exists());
-        assert!(!plist_stage.exists());
-        assert!(!plist_backup.exists());
-        fs::remove_dir_all(root).unwrap();
+        let events = fixture.events();
+        assert_eq!(events.matches("pending:old app").count(), 3);
+        assert_eq!(events.matches("bootstrap:new app").count(), 3);
+        assert!(
+            events.find("removed:old app").unwrap() < events.find("bootstrap:new app").unwrap()
+        );
+        assert!(events.contains("registered:new app"));
+        assert!(!events.contains("VIOLATION"));
+        assert_eq!(
+            fs::read_to_string(fixture.paths.install.join("marker")).unwrap(),
+            "new app"
+        );
+        assert_eq!(
+            fs::read_to_string(&fixture.paths.plist).unwrap(),
+            "new plist"
+        );
+    }
+
+    #[test]
+    fn failed_install_transaction_waits_then_restores_old_app_and_plist() {
+        let fixture = InstallTransactionFixture::new();
+        let output = fixture.run("exit 17\n");
+        assert_eq!(output.status.code(), Some(17));
+        fixture.assert_old_restored();
+        let events = fixture.events();
+        assert_eq!(events.matches("pending:new app").count(), 3);
+        assert!(
+            events.find("removed:new app").unwrap() < events.find("bootstrap:old app").unwrap()
+        );
+        assert!(!fixture.stage.exists());
+        assert!(!fixture.backup.exists());
+        assert!(!fixture.plist_stage.exists());
+        assert!(!fixture.plist_backup.exists());
+    }
+
+    #[test]
+    fn permanent_bootstrap_errors_are_bounded_preserved_and_rolled_back() {
+        for (status, attempts) in [(5, 50), (64, 1)] {
+            let fixture = InstallTransactionFixture::new();
+            fs::write(fixture.root.join("fail-new-status"), status.to_string()).unwrap();
+            let output = fixture.run("vproxy_committed=1\n");
+            assert_eq!(output.status.code(), Some(status));
+            assert!(String::from_utf8_lossy(&output.stderr).contains(&format!(
+                "Bootstrap failed: {status}: mock registration error"
+            )));
+            assert_eq!(
+                fixture.events().matches("bootstrap:new app").count(),
+                attempts
+            );
+            fixture.assert_old_restored();
+        }
+    }
+
+    #[test]
+    fn removal_timeout_keeps_installed_files_untouched() {
+        let fixture = InstallTransactionFixture::new();
+        fs::write(fixture.root.join("stall-removal"), "").unwrap();
+        let output = fixture.run("vproxy_committed=1\n");
+        assert_eq!(output.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&output.stderr)
+            .contains("Timed out waiting for TUN service removal"));
+        fixture.assert_old_restored();
+        assert!(!fixture.events().contains("bootstrap:"));
+        assert!(!fixture.backup.exists());
+        assert!(!fixture.plist_backup.exists());
     }
     #[test]
     fn complete_installation_script_has_valid_shell_syntax() {
@@ -1277,6 +1746,34 @@ exit 17
             .unwrap()
             .success());
     }
+    #[test]
+    fn launchd_uses_interactive_process_policy() {
+        let plist = daemon_plist(&Paths::new(501), 501, 20);
+        let mut parser = Command::new("/usr/bin/plutil")
+            .args(["-convert", "json", "-o", "-", "--", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        parser
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(plist.as_bytes())
+            .unwrap();
+        let output = parser.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(parsed["ProcessType"], "Interactive");
+        // launchd must reap children in the helper's process group after SIGKILL.
+        assert_eq!(parsed["AbandonProcessGroup"], false);
+    }
+
     #[test]
     fn launchd_runs_only_fixed_installed_helper() {
         let paths = Paths::new(501);

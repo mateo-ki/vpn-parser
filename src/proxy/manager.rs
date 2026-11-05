@@ -29,6 +29,11 @@ pub const STARTUP_SYSTEM_PROXY_RESERVE: Duration = Duration::from_millis(250);
 pub const STARTUP_PORT_CONNECT_TIMEOUT: Duration = Duration::from_millis(60);
 pub const VERIFY_CONNECTIVITY_ON_START: bool = true;
 pub const STARTUP_PROXY_VERIFY_URLS: [&str; 1] = [PROXY_CONNECTIVITY_TEST_URL];
+const RECOVERY_DELAYS: [Duration; 3] = [
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+    Duration::from_secs(15),
+];
 
 #[derive(Debug)]
 pub struct ProxyWorkDir {
@@ -140,9 +145,95 @@ pub(crate) struct ProxyRuntime {
     pub(crate) work_dir: Option<ProxyWorkDir>,
     pub(crate) system_proxy_snapshot: Option<SystemProxySnapshot>,
     pub(crate) current_node: Option<Node>,
+    pub(crate) generation: u64,
+    pub(crate) recovery_target: Option<(Node, Option<KernelPreference>)>,
+    pub(crate) recovery_pending: bool,
+    pub(crate) recovery_attempts: usize,
+    pub(crate) recovery_due: Option<tokio::time::Instant>,
+    pub(crate) stable_since: Option<tokio::time::Instant>,
+    last_route_available: Option<bool>,
+    recovery_waiting_for_route: bool,
 }
 
 impl ProxyRuntime {
+    fn cancel_recovery(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.recovery_target = None;
+        self.recovery_pending = false;
+        self.recovery_due = None;
+        self.recovery_waiting_for_route = false;
+    }
+
+    fn request_start(&mut self, node: &Node, preference: Option<KernelPreference>) {
+        self.generation = self.generation.wrapping_add(1);
+        self.recovery_target = Some((node.clone(), preference));
+        self.recovery_pending = false;
+        self.recovery_attempts = 0;
+        self.recovery_due = None;
+        self.stable_since = None;
+        self.recovery_waiting_for_route = false;
+    }
+
+    fn observe_route(&mut self, available: bool) {
+        let returned = self.last_route_available == Some(false) && available;
+        self.last_route_available = Some(available);
+        if returned && self.child.is_none() && self.recovery_waiting_for_route
+            && self.recovery_target.is_some()
+        {
+            self.recovery_pending = true;
+            self.recovery_attempts = 0;
+            self.recovery_due = None;
+            self.recovery_waiting_for_route = false;
+        }
+    }
+
+    fn apply_connectivity_result(&mut self, generation: u64, error: Option<String>) {
+        if self.generation != generation || !self.status.local_proxy_ready {
+            return;
+        }
+        match error {
+            Some(message) if self.status.state == ProxyState::Running => {
+                self.status.state = ProxyState::Degraded;
+                self.status.last_error = Some(message.clone());
+                self.status.message = message;
+            }
+            None if self.status.state == ProxyState::Degraded
+                && self.status.last_error.as_deref().is_some_and(
+                    crate::proxy::types::is_node_connectivity_failure,
+                ) =>
+            {
+                self.status.state = ProxyState::Running;
+                self.status.last_error = None;
+                self.status.message = "代理连通性已恢复，内核继续运行".into();
+            }
+            _ => {}
+        }
+    }
+
+    fn recovery_to_attempt(&mut self, now: tokio::time::Instant) -> Option<(Node, Option<KernelPreference>)> {
+        if self.child.is_some() {
+            if self.stable_since.is_some_and(|since| now.saturating_duration_since(since) >= Duration::from_secs(60)) {
+                self.recovery_attempts = 0;
+            }
+            return None;
+        }
+        if !self.recovery_pending || self.recovery_target.is_none() {
+            return None;
+        }
+        let attempt = self.recovery_attempts;
+        if attempt >= RECOVERY_DELAYS.len() {
+            self.recovery_pending = false;
+            self.status.message = "内核自动恢复已尝试 3 次，请检查错误后手动启动".into();
+            return None;
+        }
+        let due = *self.recovery_due.get_or_insert(now + RECOVERY_DELAYS[attempt]);
+        if now < due {
+            return None;
+        }
+        self.recovery_attempts += 1;
+        self.recovery_due = None;
+        self.recovery_target.clone()
+    }
     /// 界面传进来的配置里，一次性控制器密钥和 url-test 候选都是空的（两者都不持久
     /// 化）。直接覆盖会让鉴权失效、自动选路丢候选，所以空值一律沿用运行时当前的。
     pub(crate) fn apply_options(&mut self, mut options: MihomoConfigOptions) {
@@ -213,6 +304,14 @@ impl ProxyManager {
                 work_dir: None,
                 system_proxy_snapshot: None,
                 current_node: None,
+                generation: 0,
+                recovery_target: None,
+                recovery_pending: false,
+                recovery_attempts: 0,
+                recovery_due: None,
+                stable_since: None,
+                last_route_available: None,
+                recovery_waiting_for_route: false,
             })),
             operation: Arc::new(Mutex::new(())),
             system_proxy,
@@ -277,7 +376,20 @@ impl ProxyManager {
         let cleanup = {
             let mut runtime = self.runtime.lock().await;
             let exit_status = match runtime.child.as_mut().map(ProxyChild::try_wait) {
-                Some(Ok(status)) => status,
+                Some(Ok(status)) => {
+                    if status.is_none()
+                        && runtime.status.state == ProxyState::Degraded
+                        && runtime.status.local_proxy_ready
+                        && runtime.status.last_error.as_deref().is_some_and(|message| {
+                            message.starts_with("读取内核或 TUN 后台服务状态失败:")
+                        })
+                    {
+                        runtime.status.state = ProxyState::Running;
+                        runtime.status.last_error = None;
+                        runtime.status.message = "TUN 后台服务状态查询已恢复".into();
+                    }
+                    status
+                }
                 Some(Err(error)) => {
                     runtime.status.state = ProxyState::Degraded;
                     runtime.status.last_error = Some(format!("读取内核或 TUN 后台服务状态失败: {error}"));
@@ -294,6 +406,10 @@ impl ProxyManager {
                     .map(KernelKind::display_name)
                     .unwrap_or("代理内核");
                 runtime.child = None;
+                runtime.generation = runtime.generation.wrapping_add(1);
+                runtime.recovery_pending = runtime.recovery_target.is_some();
+                runtime.recovery_waiting_for_route = runtime.recovery_pending;
+                runtime.stable_since = None;
                 let message = format!("{kernel_name} 已退出: {exit_status}");
                 runtime.status.state = if runtime.system_proxy_snapshot.is_some() {
                     ProxyState::Degraded
@@ -319,10 +435,43 @@ impl ProxyManager {
         self.runtime.lock().await.options.clone()
     }
 
+    /// Local process supervision is independent of node failover. A disconnected
+    /// Wi-Fi or an HTTP timeout never restarts a live kernel or changes its node.
+    pub async fn maintain(&self) -> Option<ProxyRuntimeStatus> {
+        let _operation = self.operation.try_lock().ok()?;
+        self.status().await;
+        self.runtime.lock().await.observe_route(local_route_available());
+        let target = self.runtime.lock().await.recovery_to_attempt(tokio::time::Instant::now());
+        if let Some((node, preference)) = target {
+            // The existing helper may be restarting under launchd. Automatic
+            // recovery must never install software or ask for administrator auth.
+            let result = self.restart_inner(&node, preference, false).await;
+            if let Err(error) = result {
+                tracing::warn!(error = %error, "内核自动恢复失败");
+            }
+        } else {
+            let should_recheck = {
+                let runtime = self.runtime.lock().await;
+                runtime.child.is_some()
+                    && runtime.status.state == ProxyState::Degraded
+                    && runtime.status.last_error.as_deref().is_some_and(
+                        crate::proxy::types::is_node_connectivity_failure,
+                    )
+            };
+            if should_recheck {
+                self.probe_health(Duration::from_secs(3)).await;
+            }
+        }
+        Some(self.status().await)
+    }
+
     /// 自动切换用的轻量健康探测：经**正在运行的** mixed 端口取一次 generate_204，
     /// 返回 (是否连通, 端到端耗时 ms)。不新起进程、不重启内核，所以可以高频调用。
     pub async fn probe_health(&self, timeout: Duration) -> (bool, u64) {
-        let port = self.runtime.lock().await.options.mixed_port;
+        let (port, generation) = {
+            let runtime = self.runtime.lock().await;
+            (runtime.options.mixed_port, runtime.generation)
+        };
         let started = tokio::time::Instant::now();
         let connect_timeout = timeout.min(Duration::from_millis(3_500)).max(Duration::from_millis(1_500));
         let built = reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))
@@ -355,6 +504,9 @@ impl ProxyManager {
             }
             Err(_) => false,
         };
+        if ok {
+            self.runtime.lock().await.apply_connectivity_result(generation, None);
+        }
         (ok, started.elapsed().as_millis() as u64)
     }
 
@@ -848,6 +1000,7 @@ impl ProxyManager {
         let _operation = self.operation.lock().await;
         {
             let mut runtime = self.runtime.lock().await;
+            runtime.request_start(node, Some(options.kernel_preference));
             runtime.apply_options(options.clone());
             runtime.status.mode = options.mode;
             runtime.status.routing_mode = options.routing_mode;
@@ -860,10 +1013,26 @@ impl ProxyManager {
             ProxyState::Running | ProxyState::Degraded
         );
         if running {
-            self.restart_inner(node, Some(options.kernel_preference)).await
+            self.restart_inner(node, Some(options.kernel_preference), true).await
         } else {
-            self.start_inner_with_preference(node, None, Some(options.kernel_preference)).await
+            self.start_inner_with_preference(node, None, Some(options.kernel_preference), true).await
         }
+    }
+
+    /// Login recovery reuses the previously authorized service. Any temporary
+    /// service-start race is retried by maintain(), without an authorization loop.
+    pub async fn start_automatically(&self, node: &Node) -> Result<()> {
+        let _operation = self.operation.lock().await;
+        {
+            let mut runtime = self.runtime.lock().await;
+            if runtime.generation != 0
+                || !matches!(runtime.status.state, ProxyState::Stopped | ProxyState::Failed)
+            {
+                return Ok(());
+            }
+            runtime.request_start(node, None);
+        }
+        self.start_inner_with_preference(node, None, None, false).await
     }
 
     pub fn connect<'a>(
@@ -873,14 +1042,15 @@ impl ProxyManager {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let _operation = self.operation.lock().await;
+            self.runtime.lock().await.request_start(node, kernel_override);
             let running = matches!(
                 self.runtime.lock().await.status.state,
                 ProxyState::Running | ProxyState::Degraded
             );
             if running {
-                self.restart_inner(node, kernel_override).await
+                self.restart_inner(node, kernel_override, true).await
             } else {
-                self.start_inner_with_preference(node, None, kernel_override)
+                self.start_inner_with_preference(node, None, kernel_override, true)
                     .await
             }
         })
@@ -891,7 +1061,10 @@ impl ProxyManager {
         node: &Node,
         preserved_system_proxy_snapshot: Option<SystemProxySnapshot>,
         kernel_override: Option<KernelPreference>,
+        allow_install: bool,
     ) -> Result<()> {
+        #[cfg(not(target_os = "macos"))]
+        let _ = allow_install;
         let options = self.runtime.lock().await.options.clone();
         let preference = kernel_override.unwrap_or(options.kernel_preference);
         let (kernel, fallback_notice) = match select_proxy_kernel_preference_for_node(
@@ -911,7 +1084,7 @@ impl ProxyManager {
             self.set_failed(message.clone()).await;
             return Err(anyhow!(message));
         };
-        self.start_with_path_inner(node, kernel, &path, preserved_system_proxy_snapshot)
+        self.start_with_path_inner(node, kernel, &path, preserved_system_proxy_snapshot, allow_install)
             .await?;
         if let Some(notice) = fallback_notice {
             let mut rt = self.runtime.lock().await;
@@ -934,7 +1107,7 @@ impl ProxyManager {
         executable_path: &Path,
     ) -> Result<()> {
         let _operation = self.operation.lock().await;
-        self.start_with_path_inner(node, kernel, executable_path, None)
+        self.start_with_path_inner(node, kernel, executable_path, None, true)
             .await
     }
 
@@ -944,6 +1117,7 @@ impl ProxyManager {
         kernel: KernelKind,
         executable_path: &Path,
         mut preserved_system_proxy_snapshot: Option<SystemProxySnapshot>,
+        allow_install: bool,
     ) -> Result<()> {
         let mut runtime = self.runtime.lock().await;
         if matches!(
@@ -1007,6 +1181,8 @@ impl ProxyManager {
         let startup_started = tokio::time::Instant::now();
         let mut startup_deadline = startup_started + STARTUP_PROXY_TOTAL_TIMEOUT;
 
+        runtime.generation = runtime.generation.wrapping_add(1);
+        let generation = runtime.generation;
         runtime.status.state = ProxyState::Starting;
         runtime.status.kernel = Some(kernel);
         runtime.status.node_id = Some(node.id.clone());
@@ -1025,8 +1201,7 @@ impl ProxyManager {
         let config = match build_kernel_config(kernel, node, runtime.options.clone()) {
             Ok(config) => config,
             Err(error) => {
-                runtime.status.state = ProxyState::Failed;
-                runtime.status.message = error.to_string();
+                mark_failed(&mut runtime, error.to_string());
                 return Err(error);
             }
         };
@@ -1097,6 +1272,12 @@ impl ProxyManager {
                 let log_path = work_dir.log_path();
                 // The OS authorization dialog must not block Tokio's worker threads.
                 let elevated = tokio::task::spawn_blocking(move || {
+                    #[cfg(target_os = "macos")]
+                    if !allow_install {
+                        return crate::platform::macos_helper::start_existing(
+                            kernel, &executable, &data, &config, &log_path,
+                        );
+                    }
                     crate::platform::start_elevated_kernel_runner(
                         kernel, &executable, &data, &config, &log_path,
                     )
@@ -1144,8 +1325,7 @@ impl ProxyManager {
                 Err(error) => {
                     let _ = work_dir.cleanup().await;
                     let message = format!("启动 {} 失败: {error}", kernel.display_name());
-                    runtime.status.state = ProxyState::Failed;
-                    runtime.status.message = message.clone();
+                    mark_failed(&mut runtime, message.clone());
                     return Err(anyhow!(message));
                 }
             }
@@ -1157,12 +1337,12 @@ impl ProxyManager {
             elapsed_ms = startup_started.elapsed().as_millis() as u64,
             "代理启动阶段完成"
         );
-        runtime.status.local_proxy_ready = true;
-
         for port in required_startup_ports(kernel, &runtime.options) {
             let startup_timeout =
                 startup_deadline.saturating_duration_since(tokio::time::Instant::now());
-            if !wait_for_port(&mut child, port, startup_timeout).await {
+            let readiness = wait_for_port(&mut child, port, startup_timeout).await;
+            if !matches!(readiness, Ok(true)) {
+                let readiness_error = readiness.err();
                 // 先探测内核进程在超时前是否已自行退出
                 let exit_status = child.try_wait().ok().flatten();
                 if exit_status.is_none() {
@@ -1204,7 +1384,9 @@ impl ProxyManager {
                     || detail.contains("not found in")
                     || (detail.contains("category") && detail.contains("not found"));
 
-                let message = if is_not_found {
+                let message = if let Some(error) = readiness_error {
+                    format!("{} 启动失败: {error:#}", kernel.display_name())
+                } else if is_not_found {
                     format!(
                         "{} 启动失败：分流规则中引用了不存在的分类（已保留规则库，无需重新下载）。请检查自定义规则或切换默认推荐规则。",
                         kernel.display_name()
@@ -1247,8 +1429,7 @@ impl ProxyManager {
                         STARTUP_PROXY_TOTAL_TIMEOUT.as_secs()
                     )
                 };
-                runtime.status.state = ProxyState::Failed;
-                runtime.status.message = message.clone();
+                mark_failed(&mut runtime, message.clone());
                 return Err(anyhow!(message));
             }
         }
@@ -1380,11 +1561,15 @@ impl ProxyManager {
         let elapsed_ms = startup_started.elapsed().as_millis() as u64;
         runtime.status.state = ProxyState::Running;
         runtime.status.routing_mode = runtime.options.routing_mode;
-        // 这个字段的意思是"本地 mixed 端口已经就绪"（刚 spawn 就置真的那几处是同一个意思），
+        // 这个字段的意思是"本地 mixed 端口已经就绪"，必须等端口检查通过后才置真，
         // 不是"系统代理归我们"。归属由 `system_proxy_enabled` 表达，别在这儿混用。
         runtime.status.local_proxy_ready = true;
         runtime.status.system_proxy_enabled = runtime.system_proxy_snapshot.is_some();
         runtime.status.last_error = None;
+        runtime.recovery_pending = false;
+        runtime.recovery_due = None;
+        runtime.stable_since = Some(tokio::time::Instant::now());
+        runtime.recovery_waiting_for_route = false;
         runtime.status.message = start_success_message(
             kernel.display_name(),
             elapsed_ms,
@@ -1422,12 +1607,16 @@ impl ProxyManager {
 
                     // 如果当前是 Meow 发生连通性超时，触发自动熔断保护，平滑切换到工业级 Mihomo 接管
                     if kernel == KernelKind::Meow && find_kernel_executable(KernelKind::Mihomo).is_some() {
+                        let _operation = manager_clone.operation.lock().await;
+                        if runtime_clone.lock().await.generation != generation {
+                            return;
+                        }
                         tracing::warn!(
                             kernel = %kernel_name,
                             %error,
                             "Meow 内核网络连接全部超时，触发熔断保护，自动平滑切换至 Mihomo"
                         );
-                        if let Ok(()) = manager_clone.connect(&current_node, Some(KernelPreference::Mihomo)).await {
+                        if let Ok(()) = manager_clone.restart_inner(&current_node, Some(KernelPreference::Mihomo), false).await {
                             let mut rt = runtime_clone.lock().await;
                             if rt.status.state == ProxyState::Running {
                                 rt.status.message = "Meow 连通超时，已自动触发熔断切换至 Mihomo 接管网络".to_string();
@@ -1437,18 +1626,17 @@ impl ProxyManager {
                     }
 
                     let mut rt = runtime_clone.lock().await;
-                    if rt.status.state == ProxyState::Running && rt.options.mixed_port == mixed_port {
+                    if rt.generation == generation && rt.status.state == ProxyState::Running {
                         let message = if detail.trim().is_empty() {
                             format!("节点连通性验证失败: {error}")
                         } else {
                             format!("节点连通性验证失败: {error}; {kernel_name}: {diagnostic}")
                         };
                         tracing::warn!(kernel = %kernel_name, %message, "后台连通性验证未通过，置为降级运行");
-                        rt.status.state = ProxyState::Degraded;
-                        rt.status.last_error = Some(message.clone());
-                        rt.status.message = format!("{kernel_name} 降级运行: {message}");
+                        rt.apply_connectivity_result(generation, Some(message));
                     }
                 } else {
+                    runtime_clone.lock().await.apply_connectivity_result(generation, None);
                     tracing::info!(
                         kernel = %kernel_name,
                         stage = "connectivity_verified",
@@ -1464,7 +1652,11 @@ impl ProxyManager {
     }
 
     pub async fn stop(&self) -> Result<()> {
+        self.runtime.lock().await.cancel_recovery();
         let _operation = self.operation.lock().await;
+        // A start queued ahead of Stop may have recreated its intent while we
+        // waited. Stop must remain the last word once it owns the operation lock.
+        self.runtime.lock().await.cancel_recovery();
         self.stop_inner().await
     }
 
@@ -1484,6 +1676,7 @@ impl ProxyManager {
     ) -> Result<Option<SystemProxySnapshot>> {
         let (mut child, work_dir, snapshot, options, kernel) = {
             let mut runtime = self.runtime.lock().await;
+            runtime.generation = runtime.generation.wrapping_add(1);
             let kernel = runtime.status.kernel;
             runtime.status.state = ProxyState::Stopping;
             runtime.status.message = format!(
@@ -1501,18 +1694,33 @@ impl ProxyManager {
         let kernel_name = kernel.map(KernelKind::display_name).unwrap_or("代理内核");
 
         let mut errors = Vec::new();
-        if let Some(child) = child.as_mut() {
-            match child.try_wait() {
-                Ok(None) => {
-                    if let Err(error) = child.kill().await {
-                        errors.push(format!("停止 {kernel_name} 失败: {error}"));
-                    }
+        if let Some(process) = child.as_mut() {
+            let exited = matches!(process.try_wait(), Ok(Some(_)));
+            if !exited {
+                // A missed helper status RPC does not mean Stop should be skipped.
+                match tokio::time::timeout(Duration::from_secs(3), process.kill()).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::warn!(%error, "停止内核请求失败，继续确认退出状态"),
+                    Err(_) => tracing::warn!("停止内核请求超时，继续确认退出状态"),
                 }
-                Ok(Some(_)) => {}
-                Err(error) => errors.push(format!("读取 {kernel_name} 状态失败: {error}")),
             }
-            if let Err(error) = child.wait().await {
-                errors.push(format!("等待 {kernel_name} 退出失败: {error}"));
+            let stopped = tokio::time::timeout(Duration::from_secs(3), process.wait()).await;
+            let stop_error = match stopped {
+                Ok(Ok(_)) => None,
+                Ok(Err(error)) => Some(format!("等待 {kernel_name} 退出失败: {error}")),
+                Err(_) => Some(format!("等待 {kernel_name} 退出超时")),
+            };
+            if let Some(message) = stop_error {
+                // Never discard an unconfirmed session: the root helper may still
+                // own a live TUN. Keep all handles/configs so the next Stop retries.
+                let mut runtime = self.runtime.lock().await;
+                runtime.child = child;
+                runtime.work_dir = work_dir;
+                runtime.system_proxy_snapshot = snapshot;
+                runtime.status.state = ProxyState::Degraded;
+                runtime.status.last_error = Some(message.clone());
+                runtime.status.message = format!("停止尚未确认，已保留会话供重试: {message}");
+                return Err(anyhow!(message));
             }
         }
         if let Some(work_dir) = work_dir {
@@ -1571,10 +1779,11 @@ impl ProxyManager {
 
     pub async fn switch_node(&self, node: &Node) -> Result<()> {
         let _operation = self.operation.lock().await;
+        self.runtime.lock().await.request_start(node, None);
         if self.try_hot_reload_mihomo(node).await? {
             return Ok(());
         }
-        self.restart_inner(node, None).await
+        self.restart_inner(node, None, true).await
     }
 
     pub(crate) async fn try_hot_reload_mihomo(&self, node: &Node) -> Result<bool> {
@@ -1685,11 +1894,13 @@ impl ProxyManager {
         }
     }
 
-    async fn restart_inner(
-        &self,
-        node: &Node,
+    fn restart_inner<'a>(
+        &'a self,
+        node: &'a Node,
         kernel_override: Option<KernelPreference>,
-    ) -> Result<()> {
+        allow_install: bool,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
         let restart_started = tokio::time::Instant::now();
         let snapshot = self.stop_inner_for_restart().await?;
         tracing::info!(
@@ -1698,7 +1909,7 @@ impl ProxyManager {
             "代理重启阶段完成"
         );
         match self
-            .start_inner_with_preference(node, snapshot.clone(), kernel_override)
+            .start_inner_with_preference(node, snapshot.clone(), kernel_override, allow_install)
             .await
         {
             Ok(()) => {
@@ -1725,6 +1936,7 @@ impl ProxyManager {
                 Err(error)
             }
         }
+        })
     }
 
     pub async fn recent_log(&self, max_chars: usize) -> Result<String> {
@@ -1755,8 +1967,7 @@ impl ProxyManager {
 
     async fn set_failed(&self, message: String) {
         let mut runtime = self.runtime.lock().await;
-        runtime.status.state = ProxyState::Failed;
-        runtime.status.message = message;
+        mark_failed(&mut runtime, message);
     }
 }
 
@@ -1776,11 +1987,19 @@ pub fn configure_kernel_command(command: &mut Command, kernel: KernelKind, work_
     kernel_adapter(kernel).configure_command(command, work_dir);
 }
 
-pub(crate) async fn wait_for_port(child: &mut ProxyChild, port: u16, timeout: Duration) -> bool {
+pub(crate) async fn wait_for_port(child: &mut ProxyChild, port: u16, timeout: Duration) -> Result<bool> {
+    wait_for_port_with_status(|| child.try_wait(), port, timeout).await
+}
+
+async fn wait_for_port_with_status(
+    mut try_wait: impl FnMut() -> std::io::Result<Option<std::process::ExitStatus>>,
+    port: u16,
+    timeout: Duration,
+) -> Result<bool> {
     let started = tokio::time::Instant::now();
     while started.elapsed() < timeout {
-        if let Ok(Some(_)) = child.try_wait() {
-            return false;
+        if try_wait().context("读取内核或 TUN 后台服务状态失败")?.is_some() {
+            return Ok(false);
         }
         let remaining = timeout.saturating_sub(started.elapsed());
         let connect_timeout = remaining.min(STARTUP_PORT_CONNECT_TIMEOUT);
@@ -1788,11 +2007,58 @@ pub(crate) async fn wait_for_port(child: &mut ProxyChild, port: u16, timeout: Du
             .await
             .is_ok_and(|result| result.is_ok())
         {
-            return true;
+            return Ok(true);
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    false
+    Ok(false)
+}
+
+#[cfg(test)]
+mod port_readiness_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn reports_status_errors_even_when_the_port_accepts_connections() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let error = wait_for_port_with_status(
+            || Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "helper disconnected")),
+            port,
+            Duration::from_secs(1),
+        ).await.unwrap_err();
+
+        let message = format!("{error:#}");
+        assert!(message.contains("读取内核或 TUN 后台服务状态失败"), "{message}");
+        assert!(message.contains("helper disconnected"), "{message}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_exited_child_does_not_claim_an_open_port() {
+        use std::os::unix::process::ExitStatusExt;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let ready = wait_for_port_with_status(
+            || Ok(Some(std::process::ExitStatus::from_raw(7 << 8))),
+            port,
+            Duration::from_secs(1),
+        ).await.unwrap();
+
+        assert!(!ready);
+    }
+
+    #[tokio::test]
+    async fn a_live_child_needs_an_open_port_before_it_is_ready() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(wait_for_port_with_status(|| Ok(None), port, Duration::from_secs(1))
+            .await.unwrap());
+
+        drop(listener);
+        assert!(!wait_for_port_with_status(|| Ok(None), port, Duration::from_millis(30))
+            .await.unwrap());
+    }
 }
 
 pub async fn verify_local_proxy(port: u16, timeout: Duration) -> Result<()> {
@@ -1944,10 +2210,226 @@ pub async fn verify_nodes_with_kernel_progress(
 }
 
 pub(crate) fn mark_failed(runtime: &mut ProxyRuntime, message: String) {
+    runtime.recovery_pending = runtime.recovery_target.is_some()
+        && retryable_local_start_failure(&message);
+    runtime.recovery_waiting_for_route = runtime.recovery_pending;
+    runtime.stable_since = None;
     runtime.status.state = ProxyState::Failed;
     runtime.status.local_proxy_ready = false;
     runtime.status.last_error = Some(message.clone());
     runtime.status.message = message;
+}
+
+fn retryable_local_start_failure(message: &str) -> bool {
+    message.contains("TUN 后台服务暂未就绪")
+        || message.contains("端口") && message.contains("已被占用")
+        || message.contains("启动超时")
+        || message.contains("内核进程在就绪前异常退出")
+        || ["network is unreachable", "no route to host", "no available interface",
+            "no default route", "failed to get default interface", "no such network interface"]
+            .iter().any(|text| message.to_ascii_lowercase().contains(text))
+}
+
+fn local_route_available() -> bool {
+    // connect() on UDP selects a local route without sending a packet or relying
+    // on DNS/the Internet. IPv6-only local networks are supported as well.
+    [("0.0.0.0:0", "192.0.2.1:9"), ("[::]:0", "[2001:db8::1]:9")]
+        .iter().any(|(bind, remote)| {
+            std::net::UdpSocket::bind(bind).is_ok_and(|socket| socket.connect(remote).is_ok())
+        })
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    fn selected_node(id: &str) -> Node {
+        let now = chrono::Utc::now();
+        Node {
+            id: id.into(), source_id: None, protocol: "ss".into(), name: "local-test".into(),
+            server: "127.0.0.1".into(), port: 8388, raw: String::new(),
+            config: serde_json::json!({"server":"127.0.0.1", "port":8388,
+                "cipher":"aes-128-gcm", "password":"test-only"}),
+            country: None, latency_ms: None, latency_ok: None, download_kbps: None,
+            latency_kernel: None, latency_test_kind: None, latency_tested_at: None,
+            created_at: now, updated_at: now,
+        }
+    }
+
+    fn manager() -> ProxyManager {
+        ProxyManager::new(MihomoConfigOptions { mode: ProxyMode::None, ..Default::default() })
+    }
+
+    #[tokio::test]
+    async fn stale_probe_failure_does_not_degrade_a_restarted_session() {
+        let manager = manager();
+        let mut runtime = manager.runtime.lock().await;
+        runtime.request_start(&selected_node("old"), None);
+        let old = runtime.generation;
+        runtime.request_start(&selected_node("new"), None);
+        runtime.status.state = ProxyState::Running;
+        runtime.status.local_proxy_ready = true;
+        runtime.apply_connectivity_result(old, Some("节点连通性验证失败: old timeout".into()));
+        assert_eq!(runtime.status.state, ProxyState::Running);
+        assert!(runtime.status.last_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn recovered_network_clears_only_the_current_connectivity_error() {
+        let manager = manager();
+        let mut runtime = manager.runtime.lock().await;
+        runtime.request_start(&selected_node("active"), None);
+        let generation = runtime.generation;
+        runtime.status.state = ProxyState::Running;
+        runtime.status.local_proxy_ready = true;
+        runtime.status.kernel_pid = Some(12345);
+        runtime.apply_connectivity_result(generation, Some("节点连通性验证失败: offline".into()));
+        assert_eq!(runtime.status.state, ProxyState::Degraded);
+        runtime.apply_connectivity_result(generation.wrapping_sub(1), None);
+        assert_eq!(runtime.status.state, ProxyState::Degraded, "old success is also stale");
+        runtime.apply_connectivity_result(generation, None);
+        assert_eq!(runtime.status.state, ProxyState::Running);
+        assert_eq!(runtime.status.kernel_pid, Some(12345));
+        runtime.status.state = ProxyState::Degraded;
+        runtime.status.last_error = Some("恢复系统代理失败".into());
+        runtime.apply_connectivity_result(generation, None);
+        assert_eq!(runtime.status.state, ProxyState::Degraded);
+        assert_eq!(runtime.status.last_error.as_deref(), Some("恢复系统代理失败"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn confirmed_kernel_exit_retains_the_node_and_stop_cancels_recovery() {
+        let manager = manager();
+        let mut child = Command::new("/bin/sh").args(["-c", "exit 7"])
+            .kill_on_drop(true).spawn().unwrap();
+        child.wait().await.unwrap();
+        {
+            let mut runtime = manager.runtime.lock().await;
+            runtime.request_start(&selected_node("original"), Some(KernelPreference::Mihomo));
+            runtime.status.state = ProxyState::Running;
+            runtime.status.local_proxy_ready = true;
+            runtime.child = Some(ProxyChild::Standard(child));
+        }
+        let status = manager.status().await;
+        assert_eq!(status.state, ProxyState::Failed);
+        assert!(!status.local_proxy_ready);
+        {
+            let runtime = manager.runtime.lock().await;
+            assert!(runtime.recovery_pending);
+            assert_eq!(runtime.recovery_target.as_ref().unwrap().0.id, "original");
+        }
+        manager.maintain().await;
+        manager.stop().await.unwrap();
+        manager.maintain().await;
+        let runtime = manager.runtime.lock().await;
+        assert_eq!(runtime.status.state, ProxyState::Stopped);
+        assert!(runtime.recovery_target.is_none());
+        assert!(!runtime.recovery_pending);
+    }
+
+    #[tokio::test]
+    async fn failed_start_retries_are_bounded_until_a_local_route_returns() {
+        let manager = manager();
+        let mut runtime = manager.runtime.lock().await;
+        runtime.request_start(&selected_node("offline-login"), None);
+        mark_failed(&mut runtime, "TUN 后台服务暂未就绪".into());
+        runtime.observe_route(false);
+        let mut now = tokio::time::Instant::now();
+        for delay in RECOVERY_DELAYS {
+            assert!(runtime.recovery_to_attempt(now).is_none(), "backoff must wait");
+            now += delay;
+            assert_eq!(runtime.recovery_to_attempt(now).unwrap().0.id, "offline-login");
+        }
+        assert!(runtime.recovery_to_attempt(now + Duration::from_secs(600)).is_none());
+        assert!(!runtime.recovery_pending, "no endless retry loop");
+        runtime.observe_route(false);
+        assert!(!runtime.recovery_pending);
+        runtime.observe_route(true);
+        assert!(runtime.recovery_pending);
+        assert_eq!(runtime.recovery_attempts, 0);
+        runtime.recovery_attempts = 2;
+        runtime.observe_route(true);
+        assert_eq!(runtime.recovery_attempts, 2, "unchanged routes do not reset the budget");
+    }
+
+    #[tokio::test]
+    async fn invalid_configuration_and_update_authorization_are_not_retried() {
+        let manager = manager();
+        let mut runtime = manager.runtime.lock().await;
+        runtime.request_start(&selected_node("configured"), None);
+        for message in ["未找到 Mihomo 可执行文件", "配置无效", "内核或程序已更新，请重新授权安装 TUN 后台服务"] {
+            mark_failed(&mut runtime, message.into());
+            runtime.observe_route(false);
+            runtime.observe_route(true);
+            assert!(!runtime.recovery_pending, "{message}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_live_kernel_is_not_restarted_for_network_timeouts() {
+        let manager = manager();
+        let child = Command::new("/bin/sleep").arg("30").kill_on_drop(true).spawn().unwrap();
+        let pid = child.id();
+        {
+            let mut runtime = manager.runtime.lock().await;
+            runtime.request_start(&selected_node("same-node"), None);
+            runtime.child = Some(ProxyChild::Standard(child));
+            runtime.status.state = ProxyState::Degraded;
+            runtime.recovery_pending = true;
+            runtime.recovery_waiting_for_route = true;
+            runtime.observe_route(false);
+            runtime.observe_route(true);
+            assert!(runtime.recovery_to_attempt(tokio::time::Instant::now() + Duration::from_secs(60)).is_none());
+            assert_eq!(runtime.child.as_ref().unwrap().id(), pid);
+            assert_eq!(runtime.recovery_attempts, 0);
+        }
+        manager.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn login_autostart_cannot_override_an_earlier_manual_stop() {
+        let manager = manager();
+        manager.stop().await.unwrap();
+        manager.start_automatically(&selected_node("saved-login-node")).await.unwrap();
+        let runtime = manager.runtime.lock().await;
+        assert_eq!(runtime.status.state, ProxyState::Stopped);
+        assert!(runtime.recovery_target.is_none());
+        assert!(runtime.child.is_none());
+    }
+
+    #[tokio::test]
+    async fn login_autostart_cannot_override_a_new_manual_target() {
+        let manager = manager();
+        manager.runtime.lock().await.request_start(&selected_node("new-user-choice"), None);
+        manager.start_automatically(&selected_node("saved-login-node")).await.unwrap();
+        let runtime = manager.runtime.lock().await;
+        assert_eq!(runtime.recovery_target.as_ref().unwrap().0.id, "new-user-choice");
+        assert!(runtime.child.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_stop_queued_after_start_also_cancels_the_new_start_intent() {
+        let manager = manager();
+        let operation = manager.operation.lock().await;
+        let starting = manager.clone();
+        let start = tokio::spawn(async move {
+            let _operation = starting.operation.lock().await;
+            starting.runtime.lock().await.request_start(&selected_node("queued-start"), None);
+        });
+        tokio::task::yield_now().await;
+        let stopping = manager.clone();
+        let stop = tokio::spawn(async move { stopping.stop().await });
+        tokio::task::yield_now().await;
+        drop(operation);
+        start.await.unwrap();
+        stop.await.unwrap().unwrap();
+        let runtime = manager.runtime.lock().await;
+        assert_eq!(runtime.status.state, ProxyState::Stopped);
+        assert!(runtime.recovery_target.is_none());
+        assert!(!runtime.recovery_pending);
+    }
 }
 
 pub fn start_success_message(

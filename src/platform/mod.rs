@@ -4,6 +4,8 @@ use anyhow::{anyhow, Result};
 pub mod firewall;
 #[cfg(target_os = "macos")]
 pub mod macos_helper;
+#[cfg(target_os = "macos")]
+mod macos_startup;
 #[cfg(all(target_os = "macos", feature = "macos-tun-probe"))]
 pub mod macos_probe;
 pub mod tray;
@@ -1899,8 +1901,19 @@ pub fn sync_launch_at_startup(enabled: bool) -> bool {
     }
 }
 
-#[cfg(not(windows))]
-/// 目前只有 Windows 实装开机自启；其它平台是 no-op（设置照常保存，只是不生效）。
+#[cfg(target_os = "macos")]
+pub fn sync_launch_at_startup(enabled: bool) -> bool {
+    match macos_startup::sync(enabled) {
+        Ok(()) => true,
+        Err(error) => {
+            crate::startup_log(&format!("macOS 登录自动启动同步失败: {error:#}"));
+            false
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+/// Other platforms currently retain the preference without installing an entry.
 pub fn sync_launch_at_startup(_enabled: bool) -> bool {
     true
 }
