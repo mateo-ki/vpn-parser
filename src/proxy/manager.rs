@@ -1119,6 +1119,7 @@ impl ProxyManager {
         mut preserved_system_proxy_snapshot: Option<SystemProxySnapshot>,
         allow_install: bool,
     ) -> Result<()> {
+        let _ = allow_install;
         let mut runtime = self.runtime.lock().await;
         if matches!(
             runtime.status.state,

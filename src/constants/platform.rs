@@ -31,7 +31,10 @@ pub const UNIX_SOCKET_NAME: &str = "vproxy.sock";
 pub const LEGACY_UNIX_SOCKET_NAME: &str = "vpn-parser.sock";
 
 /// 诊断模式环境变量名
-pub const DIAG_ENV_VAR: &str = "VPN_PARSER_DIAG";
+pub const DIAG_ENV_VAR: &str = "VPROXY_DIAG";
+
+/// 历史兼容的诊断模式环境变量名
+pub const LEGACY_DIAG_ENV_VAR: &str = "VPN_PARSER_DIAG";
 
 /// 诊断实例屏蔽修改系统代理时的提示文案
-pub const DIAG_BLOCKED_MSG: &str = "诊断实例（VPN_PARSER_DIAG）不写系统代理与终端代理设置";
+pub const DIAG_BLOCKED_MSG: &str = "诊断实例（VPROXY_DIAG / VPN_PARSER_DIAG）不写系统代理与终端代理设置";

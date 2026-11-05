@@ -677,7 +677,7 @@ fn run_tray_loop(
     nid.uCallbackMessage = WM_TRAY_CALLBACK;
     nid.hIcon = h_icon;
 
-    let tip = "VPN Parser - 网络代理控制台\0"
+    let tip = format!("{} - 网络代理工作台\0", crate::constants::brand::APP_NAME)
         .encode_utf16()
         .collect::<Vec<u16>>();
     for (i, &ch) in tip.iter().take(nid.szTip.len() - 1).enumerate() {
@@ -797,7 +797,7 @@ mod tests {
         let tray = TrayHandle::new();
         tray.set_waker(|| {});
         tray.set_proxy_running(true);
-        tray.set_tooltip("VPN Parser Test");
+        tray.set_tooltip("VProxy Test");
         assert_eq!(tray.try_recv_event(), None);
         tray.shutdown();
     }

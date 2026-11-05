@@ -88,14 +88,34 @@ pub fn decode_maybe_base64(input: &str) -> Option<String> {
         return None;
     }
 
-    for engine in [&STANDARD, &STANDARD_NO_PAD, &URL_SAFE, &URL_SAFE_NO_PAD] {
-        if let Ok(bytes) = engine.decode(&cleaned) {
-            if let Ok(s) = String::from_utf8(bytes) {
-                let printable = s
+    let mut padded = cleaned.clone();
+    while padded.len() % 4 != 0 {
+        padded.push('=');
+    }
+
+    for candidate in [&cleaned, &padded] {
+        for engine in [&STANDARD, &STANDARD_NO_PAD, &URL_SAFE, &URL_SAFE_NO_PAD] {
+            if let Ok(bytes) = engine.decode(candidate) {
+                let s = String::from_utf8_lossy(&bytes);
+                if s.is_empty() {
+                    continue;
+                }
+                // 包含代理特征协议或结构（支持脏字符、非标准 C1 控制符或部分乱码节点容错）
+                let has_proxy_features = s.contains("://")
+                    || s.contains("proxies:")
+                    || s.contains("outbounds:")
+                    || s.contains("server:")
+                    || s.contains("port:");
+                if has_proxy_features {
+                    return Some(s.into_owned());
+                }
+                let total_chars = s.chars().count();
+                let bad_control_count = s
                     .chars()
-                    .all(|c| !c.is_control() || c == '\n' || c == '\r' || c == '\t');
-                if printable {
-                    return Some(s);
+                    .filter(|c| c.is_control() && *c != '\n' && *c != '\r' && *c != '\t')
+                    .count();
+                if bad_control_count as f32 / total_chars as f32 <= 0.02 {
+                    return Some(s.into_owned());
                 }
             }
         }
@@ -263,3 +283,25 @@ pub fn looks_like_uuid(s: &str) -> bool {
         && b[23] == b'-'
         && s.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decode_maybe_base64_with_dirty_characters() {
+        // Construct a payload containing valid proxy links but with dirty Latin-1 / C1 bytes
+        let mut raw = b"vmess://eyJhZGQiOiIxLjEuMS4xIiwicG9ydCI6NDQzLCJpZCI6ImFiYyJ9\n".to_vec();
+        // Insert a malformed Latin-1 character like 0x80 or 0x93
+        raw.extend_from_slice(&[0x80, 0x93]);
+        raw.extend_from_slice(b"\nvless://uuid@1.1.1.1:443?encryption=none\n");
+
+        let encoded = STANDARD.encode(&raw);
+        let decoded = decode_maybe_base64(&encoded);
+        assert!(decoded.is_some(), "Should decode dirty base64 payload");
+        let decoded_str = decoded.unwrap();
+        assert!(decoded_str.contains("vmess://"));
+        assert!(decoded_str.contains("vless://"));
+    }
+}
+

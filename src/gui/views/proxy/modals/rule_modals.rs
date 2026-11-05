@@ -28,7 +28,7 @@ impl VpnApp {
             });
 
         egui::Window::new("导入分流规则")
-            .id(egui::Id::new("vpn-parser:rule-import"))
+            .id(egui::Id::new("vproxy:rule-import"))
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .order(egui::Order::Tooltip)
             .default_width(680.0)
@@ -300,7 +300,7 @@ pub fn ui_rule_import_help_window(ctx: &egui::Context) -> (RuleHelpMsg, egui::Re
     let mut msg = RuleHelpMsg::Nothing;
     // `Window::open` 借走了 `open`，闭包里只记一笔，出框之后再合。
     let shown = egui::Window::new("导入格式示范")
-        .id(egui::Id::new("vpn-parser:rule-import-help"))
+        .id(egui::Id::new("vproxy:rule-import-help"))
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .order(egui::Order::Tooltip)
         .default_width(width)

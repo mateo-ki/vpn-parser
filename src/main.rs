@@ -45,7 +45,7 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     headless: bool,
 
-    /// Bearer token required by the HTTP API; can also be set with VPN_PARSER_API_TOKEN
+    /// Bearer token required by the HTTP API; can also be set with VPROXY_API_TOKEN (or legacy VPN_PARSER_API_TOKEN)
     #[arg(long)]
     api_token: Option<String>,
 
@@ -457,6 +457,7 @@ fn main() -> Result<()> {
     let api_token = cli
         .api_token
         .clone()
+        .or_else(|| std::env::var("VPROXY_API_TOKEN").ok())
         .or_else(|| std::env::var("VPN_PARSER_API_TOKEN").ok())
         .filter(|token| !token.trim().is_empty())
         .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
@@ -489,7 +490,7 @@ fn main() -> Result<()> {
             }
             if guard.is_none() {
                 startup_log("Parent process still holds mutex after 3s; killing duplicate parent/zombie instances...");
-                let killed = platform::kill_duplicate_vpn_parser_instances();
+                let killed = platform::kill_duplicate_instances();
                 startup_log(&format!(
                     "Killed {killed} duplicate instances; retrying mutex acquisition..."
                 ));
@@ -542,7 +543,7 @@ fn main() -> Result<()> {
     }
 
     if _single_instance.is_some() {
-        let killed_zombies = platform::kill_duplicate_vpn_parser_instances();
+        let killed_zombies = platform::kill_duplicate_instances();
         if killed_zombies > 0 {
             startup_log(&format!(
                 "Cleaned up {killed_zombies} orphan vproxy zombie processes."
@@ -649,6 +650,7 @@ fn main() -> Result<()> {
         startup_log("登录自动启动已关闭，本次登录入口正常退出");
         return Ok(());
     }
+    #[cfg(feature = "gui")]
     let login_proxy_node = login_proxy_node_id(
         cli.login_startup,
         app_settings.launch_at_startup,
@@ -798,7 +800,10 @@ fn main() -> Result<()> {
     if cli.headless || !cfg!(feature = "gui") {
         info!("running in headless mode, press Ctrl+C to exit");
         // 无界面时没有别的地方能看到自动生成的令牌，只在它确实是随机生成的那次打印一次。
-        if cli.api_token.is_none() && std::env::var("VPN_PARSER_API_TOKEN").is_err() {
+        if cli.api_token.is_none()
+            && std::env::var("VPROXY_API_TOKEN").is_err()
+            && std::env::var("VPN_PARSER_API_TOKEN").is_err()
+        {
             println!("HTTP API 访问令牌（本次启动随机生成）: {api_token}");
         }
         rt.block_on(async {
@@ -909,7 +914,10 @@ fn main() -> Result<()> {
             renderer,
             ..Default::default()
         };
-        let options = if diag::enabled() && std::env::var_os("VPN_PARSER_DIAG_ONSCREEN").is_none() {
+        let options = if diag::enabled()
+            && std::env::var_os("VPROXY_DIAG_ONSCREEN").is_none()
+            && std::env::var_os("VPN_PARSER_DIAG_ONSCREEN").is_none()
+        {
             // 诊断壳摆到屏幕外、也不抢焦点：验收要靠 PrintWindow 抓图和 PostMessage
             // 合成点击，都不需要它出现在用户眼前或抢走键盘。
             startup_log("DIAG: 窗口移到屏幕外且不激活，避免打扰当前桌面");
@@ -927,7 +935,7 @@ fn main() -> Result<()> {
         };
         startup_log(&format!("Calling eframe::run_native with {label}..."));
         eframe::run_native(
-            "VPN Parser",
+            vproxy::constants::brand::APP_NAME,
             options,
             Box::new(move |cc| {
                 startup_log("Inside eframe setup closure, configuring fonts...");
@@ -970,8 +978,9 @@ fn main() -> Result<()> {
         // 跨平台默认统一首选 Glow（OpenGL），由系统合成器（Windows DWM）稳定呈现，
         // 彻底规避 wgpu 30 在 Windows DirectX 12 下因即时模式突发重绘触发的显示器 VRR / G-SYNC 物理背光频闪。
         // 若环境缺少可用 OpenGL（如未开启 3D 加速的虚拟机），下方自动降级回退至 Wgpu（D3D12 / WARP）。
-        // 仍支持 VPN_PARSER_RENDERER 环境变量覆盖（如设置 VPN_PARSER_RENDERER=wgpu 强制使用 Wgpu）。
-        let force_wgpu = std::env::var("VPN_PARSER_RENDERER")
+        // 仍支持 VPROXY_RENDERER（或历史兼容的 VPN_PARSER_RENDERER）环境变量覆盖（如设置 VPROXY_RENDERER=wgpu 强制使用 Wgpu）。
+        let force_wgpu = std::env::var("VPROXY_RENDERER")
+            .or_else(|_| std::env::var("VPN_PARSER_RENDERER"))
             .map(|v| v.eq_ignore_ascii_case("wgpu"))
             .unwrap_or(false);
         let preferred = if force_wgpu {
@@ -1103,6 +1112,7 @@ async fn connect_saved_proxy_at_login(
 
 /// Manual opens remember selection without connecting. Only the enabled login
 /// entry reconnects, and an absent selection simply opens the GUI for selection.
+#[cfg(any(feature = "gui", test))]
 fn login_proxy_node_id<'a>(
     login_entry: bool,
     enabled: bool,

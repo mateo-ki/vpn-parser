@@ -12,7 +12,9 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use crate::constants::platform::{DIAG_BLOCKED_MSG as BLOCKED_MSG, DIAG_ENV_VAR as FLAG};
+use crate::constants::platform::{
+    DIAG_BLOCKED_MSG as BLOCKED_MSG, DIAG_ENV_VAR as FLAG, LEGACY_DIAG_ENV_VAR as LEGACY_FLAG,
+};
 
 /// 判定口径单独抽出来，好让"什么算开了"这件事有测试。只认 `1` / `true`（不区分大小写）。
 pub fn enabled_from_value(value: Option<&str>) -> bool {
@@ -26,14 +28,21 @@ pub fn enabled_from_value(value: Option<&str>) -> bool {
 /// 读一次才能保证"半诊断"状态不可能出现。
 pub fn enabled() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| enabled_from_value(std::env::var(FLAG).ok().as_deref()))
+    *CACHED.get_or_init(|| {
+        enabled_from_value(
+            std::env::var(FLAG)
+                .or_else(|_| std::env::var(LEGACY_FLAG))
+                .ok()
+                .as_deref(),
+        )
+    })
 }
 
-/// 诊断实例的工作目录：`%TEMP%\vpn-parser-diag-<pid>`。启动时把 cwd 切到这里，
+/// 诊断实例的工作目录：`%TEMP%\vproxy-diag-<pid>`。启动时把 cwd 切到这里，
 /// `--db` 的默认相对路径、`startup.log`、`panic.log`、`data/kernels` 就全都隔离了
 /// —— 一个改动都不用碰 D 盘那份真实数据。
 pub fn home() -> PathBuf {
-    std::env::temp_dir().join(format!("vpn-parser-diag-{}", std::process::id()))
+    std::env::temp_dir().join(format!("vproxy-diag-{}", std::process::id()))
 }
 
 pub fn prepare_home() -> std::io::Result<PathBuf> {
@@ -42,48 +51,48 @@ pub fn prepare_home() -> std::io::Result<PathBuf> {
     Ok(home)
 }
 
-/// 诊断壳专用：`VPN_PARSER_DIAG_TAB=settings`（或 `proxy` + `VPN_PARSER_DIAG_PANEL=rules`）
+fn diag_var(name: &str) -> Option<String> {
+    std::env::var(format!("VPROXY_DIAG_{name}"))
+        .or_else(|_| std::env::var(format!("VPN_PARSER_DIAG_{name}")))
+        .ok()
+}
+
+/// 诊断壳专用：`VPROXY_DIAG_TAB=settings`（或 `proxy` + `VPROXY_DIAG_PANEL=rules`）
 /// 让实例一起来就停在要验收的那一页。诊断窗口停在屏幕外、点不到，没有这个就只能看默认页。
 pub fn starting_tab() -> Option<String> {
     if !enabled() {
         return None;
     }
-    std::env::var("VPN_PARSER_DIAG_TAB")
-        .ok()
+    diag_var("TAB")
         .map(|v| v.trim().to_ascii_lowercase())
         .filter(|v| !v.is_empty())
 }
 
-/// 诊断壳专用：`VPN_PARSER_DIAG_SCALE=1.1` 直接指定界面缩放。
+/// 诊断壳专用：`VPROXY_DIAG_SCALE=1.1` 直接指定界面缩放。
 /// 字体缩放和"窗口逻辑宽度"是一对耦合量，很多问题只在 zoom≠1 时露出来。
 pub fn starting_scale() -> Option<f32> {
     if !enabled() {
         return None;
     }
-    std::env::var("VPN_PARSER_DIAG_SCALE")
-        .ok()
-        .and_then(|v| v.trim().parse::<f32>().ok())
+    diag_var("SCALE").and_then(|v| v.trim().parse::<f32>().ok())
 }
 
-/// 诊断壳专用：`VPN_PARSER_DIAG_DARK=1` 让这个实例以夜间启动，用来验深色那套锚点在
+/// 诊断壳专用：`VPROXY_DIAG_DARK=1` 让这个实例以夜间启动，用来验深色那套锚点在
 /// 真界面上跑不跑得起来（像素仍然看不见，但 `apply(ctx, id, dark)` 接错线会当场露出来）。
 pub fn starting_dark() -> Option<bool> {
     if !enabled() {
         return None;
     }
-    std::env::var("VPN_PARSER_DIAG_DARK")
-        .ok()
-        .map(|value| enabled_from_value(Some(&value)))
+    diag_var("DARK").map(|value| enabled_from_value(Some(&value)))
 }
 
-/// 诊断壳专用：`VPN_PARSER_DIAG_VERSION=1.3.0` 让这个实例自报是老版本，
+/// 诊断壳专用：`VPROXY_DIAG_VERSION=1.3.0` 让这个实例自报是老版本，
 /// 用来验证"发现新版 → 侧栏亮绿色↑ → 点它去关于页"整条链路。
 pub fn forced_version() -> Option<String> {
     if !enabled() {
         return None;
     }
-    std::env::var("VPN_PARSER_DIAG_VERSION")
-        .ok()
+    diag_var("VERSION")
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
 }
@@ -93,8 +102,7 @@ pub fn starting_panel() -> Option<String> {
     if !enabled() {
         return None;
     }
-    std::env::var("VPN_PARSER_DIAG_PANEL")
-        .ok()
+    diag_var("PANEL")
         .map(|v| v.trim().to_ascii_lowercase())
         .filter(|v| !v.is_empty())
 }
@@ -104,8 +112,7 @@ pub fn starting_drawer() -> Option<String> {
     if !enabled() {
         return None;
     }
-    std::env::var("VPN_PARSER_DIAG_DRAWER")
-        .ok()
+    diag_var("DRAWER")
         .map(|v| v.trim().to_ascii_lowercase())
         .filter(|v| !v.is_empty())
 }
@@ -144,6 +151,7 @@ pub fn startup_log(msg: &str) {
     let line = format!("[{now}] {msg}");
     for candidate in [
         std::path::PathBuf::from("startup.log"),
+        std::env::temp_dir().join("vproxy-startup.log"),
         std::env::temp_dir().join("vpn-parser-startup.log"),
     ] {
         if should_rotate(
@@ -187,7 +195,7 @@ mod tests {
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .starts_with("vpn-parser-diag-"));
+            .starts_with("vproxy-diag-"));
         assert!(path
             .to_string_lossy()
             .contains(&std::process::id().to_string()));

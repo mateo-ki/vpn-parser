@@ -491,7 +491,7 @@ impl VpnApp {
         let screen = ctx.viewport_rect();
         let min = screen.min;
         let handles = resize_handle_rects(screen);
-        egui::Area::new(egui::Id::new("vpn-parser-resize-handles"))
+        egui::Area::new(egui::Id::new("vproxy-resize-handles"))
             .fixed_pos(min)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {

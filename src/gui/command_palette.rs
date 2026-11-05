@@ -126,7 +126,7 @@ impl VpnApp {
         let drop_from = ctx.viewport_rect().height() * 0.18;
 
         egui::Window::new("命令面板")
-            .id(egui::Id::new("vpn-parser-command-palette"))
+            .id(egui::Id::new("vproxy-command-palette"))
             .title_bar(false)
             .movable(false)
             .resizable(false)

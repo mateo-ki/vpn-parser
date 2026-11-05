@@ -113,12 +113,25 @@ async fn replace_staged_kernel(
         // destination atomically; copying onto the live path would truncate it.
         match std::fs::rename(staging, &transaction.target) {
             Ok(()) => return Ok(false),
-            Err(error) => last_failure = rename_failure_detail(&error),
-        }
-        #[cfg(not(unix))]
-        match std::fs::copy(staging, &transaction.target) {
-            Ok(_) => return Ok(true),
-            Err(error) => last_failure = copy_failure_detail(&error),
+            Err(error) => {
+                let failure = rename_failure_detail(&error);
+                #[cfg(unix)]
+                {
+                    last_failure = failure;
+                }
+                #[cfg(not(unix))]
+                {
+                    match std::fs::copy(staging, &transaction.target) {
+                        Ok(_) => return Ok(true),
+                        Err(copy_err) => {
+                            last_failure = format!(
+                                "{failure}；尝试覆盖失败：{}",
+                                copy_failure_detail(&copy_err)
+                            );
+                        }
+                    }
+                }
+            }
         }
         if round < 3 {
             tokio::time::sleep(Duration::from_millis(400 * (1 << round))).await;

@@ -1,6 +1,6 @@
 //! 统一配置文件模型与导入/导出/备份引擎 (Unified Profile Schema & Migration Engine)
 //!
-//! 负责 VPN Parser 的全量配置归一化抽象、备份归档、无损导入与多端同步中间层。
+//! 负责 VProxy 的全量配置归一化抽象、备份归档、无损导入与多端同步中间层。
 //!
 //! 架构设计：
 //! 1. 订阅源集合 (Sources)
@@ -20,7 +20,7 @@ use std::path::PathBuf;
 /// 统一 Profile Schema 规范版本号
 pub const PROFILE_SCHEMA_VERSION: u32 = 1;
 
-/// VPN Parser 统一配置文件顶层结构
+/// VProxy 统一配置文件顶层结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnifiedProfile {
     #[serde(default = "default_schema_version")]
@@ -184,7 +184,7 @@ pub fn save_backup_file(yaml_content: &str) -> Result<PathBuf> {
             .with_context(|| format!("创建配置备份目录失败: {}", dir.display()))?;
     }
     let now = chrono::Local::now();
-    let filename = format!("vpn-parser-profile-{}.yaml", now.format("%Y%m%d_%H%M%S"));
+    let filename = format!("vproxy-profile-{}.yaml", now.format("%Y%m%d_%H%M%S"));
     let path = dir.join(filename);
     std::fs::write(&path, yaml_content)
         .with_context(|| format!("写入备份文件失败: {}", path.display()))?;

@@ -808,7 +808,7 @@ pub fn count_orphan_proxy_cores() -> usize {
 }
 
 #[cfg(windows)]
-pub fn kill_duplicate_vpn_parser_instances() -> usize {
+pub fn kill_duplicate_instances() -> usize {
     use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
@@ -872,6 +872,9 @@ pub fn kill_duplicate_vpn_parser_instances() -> usize {
 
     killed_count
 }
+
+#[cfg(windows)]
+pub use kill_duplicate_instances as kill_duplicate_vpn_parser_instances;
 
 #[cfg(windows)]
 pub fn is_our_proxy_core_path(path_str: &str) -> bool {
@@ -1050,9 +1053,12 @@ pub fn count_orphan_proxy_cores() -> usize {
 /// 第二个 GUI 实例：在 Linux 上通过 Unix Domain Socket 进行优雅探测并唤醒已有窗口，
 /// 绝不强行杀掉已在运行的旧实例，以保护已有代理连接和数据库操作不被中断。
 #[cfg(not(windows))]
-pub fn kill_duplicate_vpn_parser_instances() -> usize {
+pub fn kill_duplicate_instances() -> usize {
     0
 }
+
+#[cfg(not(windows))]
+pub use kill_duplicate_instances as kill_duplicate_vpn_parser_instances;
 
 /// `/proc` 下的数字目录 = 进程号。
 #[cfg(not(windows))]

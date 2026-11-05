@@ -89,7 +89,7 @@ impl VpnApp {
         let mut open = true;
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         egui::Window::new("出口切换记录")
-            .id(egui::Id::new("vpn-parser-switch-log"))
+            .id(egui::Id::new("vproxy-switch-log"))
             .open(&mut open)
             .default_width(660.0)
             .show(ctx, |ui| {

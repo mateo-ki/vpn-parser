@@ -16,7 +16,7 @@ use eframe::egui::{self, Color32, RichText, Ui};
 /// 新加文本框时记得调 `note_text_field`，漏了的后果是"在那个框里按 Ctrl+V 也会走识别"，
 /// 是吵，不是哑 —— 挑这一侧是因为另一侧用户完全看不出来。
 fn text_field_slot() -> egui::Id {
-    egui::Id::new("vpn-parser:text-field-focus")
+    egui::Id::new("vproxy:text-field-focus")
 }
 
 /// 每个文本输入框画完之后调一次；只有它真的有焦点时才写。

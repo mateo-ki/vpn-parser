@@ -739,8 +739,8 @@ impl VpnApp {
 
         const MODAL_WIDTH: f32 = 380.0;
 
-        egui::Window::new("vpn-parser:release-notes-modal-v5")
-            .id(egui::Id::new("vpn-parser:release-notes-modal-v5"))
+        egui::Window::new("vproxy:release-notes-modal-v5")
+            .id(egui::Id::new("vproxy:release-notes-modal-v5"))
             .title_bar(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .order(egui::Order::Tooltip)
