@@ -2220,8 +2220,12 @@ mod port_readiness_tests {
         }
     }
 
+    // Exercise the Darwin-only production path on its actual socket stack.
+    // Closed-port connect timing on other platforms is outside this contract;
+    // the injected probes below cover the decision branches on every platform.
+    #[cfg(target_os = "macos")]
     #[tokio::test]
-    async fn elevated_macos_preflight_rejects_a_real_listener_and_accepts_refusal() {
+    async fn macos_listener_only_preflight_rejects_a_real_listener_and_accepts_refusal() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let preflight = startup_port_preflight(true, false, ProxyMode::Tun);
