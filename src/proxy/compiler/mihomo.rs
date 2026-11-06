@@ -1401,6 +1401,23 @@ impl BackendCompiler for MihomoCompiler {
             }
         }
 
+        // macOS can send interface-scoped DNS directly to an excluded LAN
+        // resolver. Native mode registers a temporary catch-all resolver without
+        // overwriting existing services. Apply this only while both final TUN
+        // and DNS are enabled, and preserve every explicit YAML/Rhai mode.
+        #[cfg(target_os = "macos")]
+        if config["dns"]["enable"] == true
+            && config
+                .get("tun")
+                .and_then(Value::as_object)
+                .is_some_and(|tun| {
+                    tun.get("enable").and_then(Value::as_bool) == Some(true)
+                        && !tun.contains_key("dns-mode")
+                })
+        {
+            config["tun"]["dns-mode"] = json!("native");
+        }
+
         Ok(CompiledArtifact::Json(config))
     }
 }
@@ -1467,6 +1484,82 @@ mod tests {
 
     fn compile(options: MihomoConfigOptions) -> Value {
         compile_result(options).unwrap()
+    }
+
+    #[test]
+    fn native_dns_default_is_limited_to_macos_tun_modes() {
+        for mode in [
+            ProxyMode::None,
+            ProxyMode::System,
+            ProxyMode::Tun,
+            ProxyMode::Both,
+        ] {
+            let config = compile(MihomoConfigOptions {
+                mode,
+                ..MihomoConfigOptions::default()
+            });
+            if mode.has_tun() {
+                assert_eq!(config["tun"]["enable"], true);
+                if cfg!(target_os = "macos") {
+                    assert_eq!(config["tun"]["dns-mode"], "native");
+                } else {
+                    assert!(config["tun"].get("dns-mode").is_none());
+                }
+            } else {
+                assert!(config.get("tun").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_yaml_dns_mode_overrides_the_platform_default() {
+        for mode in ["disabled", "hijack", ""] {
+            let config = compile(MihomoConfigOptions {
+                mode: ProxyMode::Tun,
+                override_yaml: Some(format!("tun:\n  dns-mode: '{mode}'\n")),
+                ..MihomoConfigOptions::default()
+            });
+            assert_eq!(config["tun"]["enable"], true);
+            assert_eq!(config["tun"]["dns-mode"], mode);
+        }
+        let config = compile(MihomoConfigOptions {
+            mode: ProxyMode::Tun,
+            override_yaml: Some("tun:\n  dns-mode: null\n".into()),
+            ..MihomoConfigOptions::default()
+        });
+        assert_eq!(config["tun"]["dns-mode"], Value::Null);
+        assert!(config["tun"].get("dns-mode").is_some());
+    }
+
+    #[test]
+    fn rhai_dns_mode_override_remains_final_after_yaml() {
+        let config = compile(MihomoConfigOptions {
+            mode: ProxyMode::Both,
+            override_yaml: Some("tun:\n  dns-mode: hijack\n".into()),
+            override_script: Some("config.tun[\"dns-mode\"] = \"disabled\";".into()),
+            ..MihomoConfigOptions::default()
+        });
+        assert_eq!(config["tun"]["enable"], true);
+        assert_eq!(config["tun"]["dns-mode"], "disabled");
+    }
+
+    #[test]
+    fn disabled_final_dns_or_tun_does_not_register_a_default_resolver() {
+        for yaml in ["dns:\n  enable: false\n", "tun:\n  enable: false\n"] {
+            let config = compile(MihomoConfigOptions {
+                mode: ProxyMode::Tun,
+                override_yaml: Some(yaml.into()),
+                ..MihomoConfigOptions::default()
+            });
+            assert!(config["tun"].get("dns-mode").is_none());
+        }
+        let config = compile(MihomoConfigOptions {
+            mode: ProxyMode::Both,
+            override_script: Some("config.dns.enable = false;".into()),
+            ..MihomoConfigOptions::default()
+        });
+        assert_eq!(config["dns"]["enable"], false);
+        assert!(config["tun"].get("dns-mode").is_none());
     }
 
     #[test]
