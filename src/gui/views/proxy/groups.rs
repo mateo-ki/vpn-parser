@@ -12,6 +12,80 @@ use crate::models::NodeSummary;
 use crate::proxy::ProxyState;
 use eframe::egui::{self, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
 
+fn override_text_editor(
+    ui: &mut Ui,
+    text: &mut String,
+    editable: bool,
+    hint: &str,
+) -> egui::Response {
+    ui.add_enabled(
+        editable,
+        egui::TextEdit::multiline(text)
+            // A focused egui TextEdit otherwise keeps processing keyboard input
+            // for one frame after its containing UI becomes disabled.
+            .interactive(editable)
+            .font(egui::TextStyle::Monospace)
+            .desired_width(f32::INFINITY)
+            .desired_rows(22)
+            .hint_text(hint),
+    )
+}
+
+#[cfg(test)]
+mod editor_tests {
+    use super::*;
+
+    fn editor_frame(
+        ctx: &egui::Context,
+        text: &mut String,
+        editable: bool,
+        events: Vec<egui::Event>,
+    ) -> egui::Id {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut editor_id = None;
+        crate::gui::run_test_ui(ctx, input, |ui| {
+            let response = override_text_editor(ui, text, editable, "");
+            assert_eq!(response.enabled(), editable);
+            editor_id = Some(response.id);
+        });
+        editor_id.unwrap()
+    }
+
+    #[test]
+    fn saving_override_editor_rejects_input_and_accepts_it_after_save() {
+        for original in ["dns:\n  enable: true", "fn main(config) { config }"] {
+            let ctx = egui::Context::default();
+            let mut text = original.to_owned();
+            let editor = editor_frame(&ctx, &mut text, true, Vec::new());
+            ctx.memory_mut(|memory| memory.request_focus(editor));
+            editor_frame(
+                &ctx,
+                &mut text,
+                false,
+                vec![egui::Event::Text("during-save".into())],
+            );
+            assert_eq!(text, original, "saving must not accept edits that a response would erase");
+
+            let editor = editor_frame(&ctx, &mut text, true, Vec::new());
+            ctx.memory_mut(|memory| memory.request_focus(editor));
+            editor_frame(
+                &ctx,
+                &mut text,
+                true,
+                vec![egui::Event::Text("after-save".into())],
+            );
+            assert!(text.contains("after-save"), "the editor must become editable again");
+        }
+    }
+}
+
 impl VpnApp {
     pub(crate) fn ui_proxy_groups(&mut self, ui: &mut Ui) {
         ui.set_width(ui.available_width());
@@ -363,13 +437,13 @@ impl VpnApp {
                                             save_clicked = true;
                                         }
                                         if ui
-                                            .button("⚡ 一键载入推荐规则")
+                                            .add_enabled(!self.proxy_busy, egui::Button::new("⚡ 一键载入推荐规则"))
                                             .on_hover_text("填入经典的 AI、Google、多线下载与国内直连分流配置")
                                             .clicked()
                                         {
                                             load_recommended = true;
                                         }
-                                        if ui.button("清空覆写").clicked() {
+                                        if ui.add_enabled(!self.proxy_busy, egui::Button::new("清空覆写")).clicked() {
                                             clear_override = true;
                                         }
                                     });
@@ -395,12 +469,11 @@ impl VpnApp {
                                     .max_height(max_editor_height)
                                     .id_salt("proxy_override_yaml_editor_scroll")
                                     .show(ui, |ui| {
-                                        let editor = ui.add(
-                                            egui::TextEdit::multiline(&mut text)
-                                                .font(egui::TextStyle::Monospace)
-                                                .desired_width(f32::INFINITY)
-                                                .desired_rows(22)
-                                                .hint_text("# 支持 Clash Party 规范 YAML 深度合并与修饰符\n# 示例 1: 前置插入高优先级规则\n+rules:\n  - DOMAIN-SUFFIX,openai.com,AI分组\n# 示例 2: 递归合并修改 DNS 配置\ndns:\n  +nameserver:\n    - 1.1.1.1\n# 示例 3: 强制覆盖整个配置块\ntun!:\n  enable: false"),
+                                        let editor = override_text_editor(
+                                            ui,
+                                            &mut text,
+                                            !self.proxy_busy,
+                                            "# 支持 Clash Party 规范 YAML 深度合并与修饰符\n# 示例 1: 前置插入高优先级规则\n+rules:\n  - DOMAIN-SUFFIX,openai.com,AI分组\n# 示例 2: 递归合并修改 DNS 配置\ndns:\n  +nameserver:\n    - 1.1.1.1\n# 示例 3: 强制覆盖整个配置块\ntun!:\n  enable: false",
                                         );
                                         if editor.changed() {
                                             self.proxy_config.override_yaml = if text.trim().is_empty() {
@@ -467,13 +540,13 @@ impl VpnApp {
                                             validate_clicked = true;
                                         }
                                         if ui
-                                            .button("⚡ 载入模板")
+                                            .add_enabled(!self.proxy_busy, egui::Button::new("⚡ 载入模板"))
                                             .on_hover_text("填入经典的主流脚本模板 (DNS增强、规则插入与动态节点过滤)")
                                             .clicked()
                                         {
                                             load_template = true;
                                         }
-                                        if ui.button("清空脚本").clicked() {
+                                        if ui.add_enabled(!self.proxy_busy, egui::Button::new("清空脚本")).clicked() {
                                             clear_script = true;
                                         }
                                     });
@@ -530,12 +603,11 @@ impl VpnApp {
                                     .max_height(max_editor_height)
                                     .id_salt("proxy_override_rhai_editor_scroll")
                                     .show(ui, |ui| {
-                                        let editor = ui.add(
-                                            egui::TextEdit::multiline(&mut script_text)
-                                                .font(egui::TextStyle::Monospace)
-                                                .desired_width(f32::INFINITY)
-                                                .desired_rows(22)
-                                                .hint_text("// Rhai 动态配置覆写脚本\n// 纯 Rust 沙箱执行，自带 100,000 步指令防死循环看门狗\nfn main(config) {\n    // 1. 修改 DNS 增强模式\n    config.dns.enhanced_mode = \"fake-ip\";\n\n    // 2. 规则最前排插入高优先级规则\n    config.rules.insert(0, \"DOMAIN-SUFFIX,openai.com,AI分组\");\n\n    // 3. 编程式过滤节点\n    let clean = [];\n    for p in config.proxies {\n        if !p.name.contains(\"2x\") {\n            clean.push(p);\n        }\n    }\n    if clean.len() > 0 {\n        config.proxies = clean;\n    }\n\n    return config;\n}"),
+                                        let editor = override_text_editor(
+                                            ui,
+                                            &mut script_text,
+                                            !self.proxy_busy,
+                                            "// Rhai 动态配置覆写脚本\n// 纯 Rust 沙箱执行，自带 100,000 步指令防死循环看门狗\nfn main(config) {\n    // 1. 修改 DNS 增强模式\n    config.dns.enhanced_mode = \"fake-ip\";\n\n    // 2. 规则最前排插入高优先级规则\n    config.rules.insert(0, \"DOMAIN-SUFFIX,openai.com,AI分组\");\n\n    // 3. 编程式过滤节点\n    let clean = [];\n    for p in config.proxies {\n        if !p.name.contains(\"2x\") {\n            clean.push(p);\n        }\n    }\n    if clean.len() > 0 {\n        config.proxies = clean;\n    }\n\n    return config;\n}",
                                         );
                                         if editor.changed() {
                                             self.proxy_config.override_script = if script_text.trim().is_empty() {

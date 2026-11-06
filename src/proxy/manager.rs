@@ -14,6 +14,7 @@ use serde_json::Value;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
@@ -363,6 +364,7 @@ pub(crate) struct ProxyConfigSnapshot {
 pub struct ProxyManager {
     pub(crate) runtime: Arc<Mutex<ProxyRuntime>>,
     operation: Arc<Mutex<()>>,
+    request_epoch: Arc<AtomicU64>,
     configuration_save: Arc<Mutex<()>>,
     system_proxy: Arc<dyn SystemProxyControl>,
 }
@@ -400,9 +402,24 @@ impl ProxyManager {
                 recovery_waiting_for_route: false,
             })),
             operation: Arc::new(Mutex::new(())),
+            request_epoch: Arc::new(AtomicU64::new(0)),
             configuration_save: Arc::new(Mutex::new(())),
             system_proxy,
         }
+    }
+
+    /// Reserve intent before asynchronous GUI preparation. A later Stop or Start
+    /// invalidates work that has not acquired the operation lock yet.
+    pub fn reserve_request(&self) -> u64 {
+        self.request_epoch.fetch_add(1, Ordering::SeqCst).wrapping_add(1)
+    }
+
+    pub fn request_is_current(&self, request: u64) -> bool {
+        self.current_request() == request
+    }
+
+    pub fn current_request(&self) -> u64 {
+        self.request_epoch.load(Ordering::SeqCst)
     }
 
     /// 系统代理被外部改掉之后，把它写回本程序的地址。只在设置里那条「自动写回」开着时才会被调用
@@ -426,7 +443,17 @@ impl ProxyManager {
 
     /// 运行中免停热切换系统代理开关（修改 Windows 注册表，无需重启内核进程、不断开已有连接）
     pub async fn hot_toggle_system_proxy(&self, enable: bool) -> Result<String> {
+        let request = self.reserve_request();
+        self.hot_toggle_system_proxy_for_request(enable, request).await
+    }
+
+    pub(crate) async fn hot_toggle_system_proxy_for_request(
+        &self, enable: bool, request: u64,
+    ) -> Result<String> {
         let _operation = self.operation.lock().await;
+        if !self.request_is_current(request) {
+            return Ok("已取消过期的系统代理切换".into());
+        }
         let mut runtime = self.runtime.lock().await;
         let port = runtime.options.mixed_port;
         if enable {
@@ -784,13 +811,27 @@ impl ProxyManager {
     }
 
     /// TUN 开关热切换：代理运行中改 TUN 启停不重启内核进程、不断已建立连接。
-    /// - Mihomo：PATCH /configs 只提交 tun 段差量（内核即时建/删 Wintun 网卡与路由）；
+    /// - Mihomo：PATCH /configs 提交最终编译的 tun 段，再 GET 确认启停与 DNS 模式；
     /// - VP-Core：重新编译全量配置后 PUT /configs 热重载（内核按 tun.enable 差量同步入站）；
     /// - 其余内核（SingBox / Xray / Shoes / Meow）没有运行时 TUN API：返回 Ok(false)，
     ///   由调用方回退整进程重启。
-    /// 返回 Ok(true) = 热切换已生效；Ok(false) = 内核不支持或热切换失败（可安全回退重启）。
-    pub async fn try_hot_toggle_tun(&self, mut options: MihomoConfigOptions) -> Result<bool> {
+    /// 返回 Ok(true) = 热切换已确认；Ok(false) = 需要重连或请求已取消；
+    /// Err = 配置冲突或请求/确认失败，不能据此认定请求未生效并自动重启。
+    pub async fn try_hot_toggle_tun(&self, options: MihomoConfigOptions) -> Result<bool> {
+        let request = self.reserve_request();
+        self.try_hot_toggle_tun_for_request(options, request).await
+    }
+
+    pub(crate) async fn try_hot_toggle_tun_for_request(
+        &self,
+        mut options: MihomoConfigOptions,
+        request: u64,
+    ) -> Result<bool> {
         options.validate()?;
+        let _operation = self.operation.lock().await;
+        if !self.request_is_current(request) {
+            return Ok(false);
+        }
         let started = tokio::time::Instant::now();
         let tun_on = options.mode.has_tun();
 
@@ -853,6 +894,7 @@ impl ProxyManager {
         };
 
         let client = match reqwest::Client::builder()
+            .no_proxy()
             .timeout(Duration::from_millis(2500))
             .build()
         {
@@ -865,35 +907,31 @@ impl ProxyManager {
 
         let hot_applied = match kernel {
             KernelKind::Mihomo => {
-                // PATCH 只提交 tun 段差量，字段与 mihomo 编译器保持一致
-                let mut dns_hijack = options.tun.dns_hijack.clone();
-                if !dns_hijack.iter().any(|h| h.contains("tcp://")) {
-                    dns_hijack.push("tcp://any:53".into());
-                }
-                let payload = serde_json::json!({
-                    "tun": {
-                        "enable": tun_on,
-                        "stack": options.tun.stack.as_mihomo_value(),
-                        "dns-hijack": dns_hijack,
-                        "auto-route": options.tun.auto_route,
-                        "auto-detect-interface": options.tun.auto_detect_interface,
-                        "strict-route": true,
-                        "endpoint-independent-nat": true,
-                    }
-                });
+                let node = node.as_ref().ok_or_else(|| anyhow!("Mihomo TUN 热切换缺少当前节点"))?;
+                let config = build_kernel_config(KernelKind::Mihomo, node, options.clone())
+                    .context("构建 Mihomo TUN 热切换配置失败")?;
+                let payload = mihomo_tun_patch_payload(&config, tun_on)?;
                 let url = format!("http://127.0.0.1:{controller_port}/configs");
-                let request = with_controller_auth(client.patch(&url).json(&payload), &controller_secret);
-                match request.send().await {
-                    Ok(response) if response.status().is_success() => true,
-                    Ok(response) => {
-                        tracing::warn!(status = %response.status(), "Mihomo TUN 热切换 PATCH 失败");
-                        false
-                    }
-                    Err(error) => {
-                        tracing::warn!("请求 Mihomo TUN 热切换失败: {error}");
-                        false
-                    }
-                }
+                apply_mihomo_tun_patch_with_confirmation(
+                    &payload,
+                    async {
+                        let response = with_controller_auth(client.patch(&url).json(&payload), &controller_secret)
+                            .send().await.context("请求 Mihomo TUN 热切换失败，未确认当前 TUN 状态")?;
+                        if !response.status().is_success() {
+                            return Err(anyhow!("Mihomo TUN 热切换 PATCH 返回 {}", response.status()));
+                        }
+                        Ok(())
+                    },
+                    async {
+                        let response = with_controller_auth(client.get(&url), &controller_secret)
+                            .send().await.context("读取 Mihomo TUN 状态失败，请求可能已经生效")?;
+                        if !response.status().is_success() {
+                            return Err(anyhow!("读取 Mihomo TUN 状态返回 {}，未确认当前状态", response.status()));
+                        }
+                        response.json::<Value>().await.context("解析 Mihomo TUN 状态失败，未确认当前状态")
+                    },
+                ).await?;
+                true
             }
             KernelKind::VpCore => {
                 let Some(node) = node else {
@@ -981,6 +1019,17 @@ impl ProxyManager {
     /// 实现微秒/毫秒级无感热切，不重启进程、不断开已有 TCP/UDP 连接。
     /// 若内核不支持或热切换失败返回 Ok(false)。
     pub async fn try_hot_switch_routing_mode(&self, routing_mode: RoutingMode) -> Result<bool> {
+        let request = self.reserve_request();
+        self.try_hot_switch_routing_mode_for_request(routing_mode, request).await
+    }
+
+    pub(crate) async fn try_hot_switch_routing_mode_for_request(
+        &self, routing_mode: RoutingMode, request: u64,
+    ) -> Result<bool> {
+        let _operation = self.operation.lock().await;
+        if !self.request_is_current(request) {
+            return Ok(false);
+        }
         let started = tokio::time::Instant::now();
         let (kernel, config_path, controller_port, controller_secret) = {
             let mut runtime = self.runtime.lock().await;
@@ -1110,8 +1159,18 @@ impl ProxyManager {
     }
 
     pub async fn start_with_options(&self, node: &Node, options: MihomoConfigOptions) -> Result<()> {
+        let request = self.reserve_request();
+        self.start_with_options_for_request(node, options, request).await
+    }
+
+    pub async fn start_with_options_for_request(
+        &self, node: &Node, options: MihomoConfigOptions, request: u64,
+    ) -> Result<()> {
         options.validate()?;
         let _operation = self.operation.lock().await;
+        if !self.request_is_current(request) {
+            return Ok(());
+        }
         {
             let mut runtime = self.runtime.lock().await;
             runtime.request_start(node, Some(options.kernel_preference));
@@ -1139,7 +1198,7 @@ impl ProxyManager {
         let _operation = self.operation.lock().await;
         {
             let mut runtime = self.runtime.lock().await;
-            if runtime.generation != 0
+            if !self.request_is_current(0) || runtime.generation != 0
                 || !matches!(runtime.status.state, ProxyState::Stopped | ProxyState::Failed)
             {
                 return Ok(());
@@ -1154,8 +1213,12 @@ impl ProxyManager {
         node: &'a Node,
         kernel_override: Option<KernelPreference>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        let request = self.reserve_request();
         Box::pin(async move {
             let _operation = self.operation.lock().await;
+            if !self.request_is_current(request) {
+                return Ok(());
+            }
             self.runtime.lock().await.request_start(node, kernel_override);
             let running = matches!(
                 self.runtime.lock().await.status.state,
@@ -1796,11 +1859,28 @@ impl ProxyManager {
     }
 
     pub async fn stop(&self) -> Result<()> {
-        self.runtime.lock().await.cancel_recovery();
+        let request = self.reserve_request();
+        self.stop_for_request(request).await
+    }
+
+    pub async fn stop_for_request(&self, request: u64) -> Result<()> {
+        {
+            let mut runtime = self.runtime.lock().await;
+            if !self.request_is_current(request) {
+                return Ok(());
+            }
+            runtime.cancel_recovery();
+        }
         let _operation = self.operation.lock().await;
-        // A start queued ahead of Stop may have recreated its intent while we
-        // waited. Stop must remain the last word once it owns the operation lock.
-        self.runtime.lock().await.cancel_recovery();
+        {
+            let mut runtime = self.runtime.lock().await;
+            if !self.request_is_current(request) {
+                return Ok(());
+            }
+            // A start queued ahead of Stop may have recreated its intent while
+            // we waited. Check the request again before canceling that intent.
+            runtime.cancel_recovery();
+        }
         self.stop_inner().await
     }
 
@@ -1922,7 +2002,15 @@ impl ProxyManager {
     }
 
     pub async fn switch_node(&self, node: &Node) -> Result<()> {
+        let request = self.reserve_request();
+        self.switch_node_for_request(node, request).await
+    }
+
+    pub async fn switch_node_for_request(&self, node: &Node, request: u64) -> Result<()> {
         let _operation = self.operation.lock().await;
+        if !self.request_is_current(request) {
+            return Ok(());
+        }
         self.runtime.lock().await.request_start(node, None);
         if self.try_hot_reload_mihomo(node).await? {
             return Ok(());
@@ -2129,6 +2217,168 @@ pub fn serialize_kernel_config(kernel: KernelKind, config: &Value) -> Result<Str
 
 pub fn configure_kernel_command(command: &mut Command, kernel: KernelKind, work_dir: &ProxyWorkDir) {
     kernel_adapter(kernel).configure_command(command, work_dir);
+}
+
+fn mihomo_tun_patch_payload(config: &Value, requested_on: bool) -> Result<Value> {
+    let mut tun = match config.get("tun") {
+        None | Some(Value::Null) => serde_json::Map::new(),
+        Some(Value::Object(tun)) => tun.clone(),
+        _ => return Err(anyhow!("Mihomo TUN 覆写必须是配置对象")),
+    };
+    let enabled = match tun.get("enable") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(enabled)) => *enabled,
+        _ => return Err(anyhow!("Mihomo TUN enable 覆写必须是布尔值")),
+    };
+    if enabled != requested_on {
+        return Err(anyhow!("Mihomo TUN 覆写与开关请求冲突：请先检查 YAML/Rhai 中的 tun.enable"));
+    }
+    tun.insert("enable".into(), serde_json::json!(enabled));
+    match tun.get("dns-mode") {
+        // Mihomo's PATCH uses *string: omitted/null means keep the old value.
+        // A full compiled configuration instead decodes both to the empty mode
+        // (disabled on Darwin). Send that empty string to clear a prior native.
+        None | Some(Value::Null) => {
+            tun.insert("dns-mode".into(), serde_json::json!(""));
+        }
+        Some(Value::String(mode)) if matches!(mode.as_str(), "" | "disabled" | "native" | "hijack") => {}
+        _ => return Err(anyhow!("Mihomo TUN dns-mode 必须为空、disabled、native 或 hijack")),
+    }
+    // This remains a TUN-only PATCH: omitted optional route fields retain the
+    // core's current values. Saving/removing those overrides needs a full reload.
+    Ok(serde_json::json!({ "tun": tun }))
+}
+
+async fn apply_mihomo_tun_patch_with_confirmation(
+    payload: &Value,
+    patch: impl std::future::Future<Output = Result<()>>,
+    read_config: impl std::future::Future<Output = Result<Value>>,
+) -> Result<()> {
+    patch.await?;
+    let actual = read_config.await?;
+    let expected = &payload["tun"];
+    let tun = actual.get("tun").and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("Mihomo 未返回 TUN 配置，热切换请求已发送但尚未确认状态"))?;
+    if tun.get("enable") != expected.get("enable")
+        || tun.get("dns-mode") != expected.get("dns-mode")
+    {
+        return Err(anyhow!("Mihomo TUN 状态与请求不一致，未确认热切换生效（enable / dns-mode）"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod mihomo_tun_patch_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn compiled(options: MihomoConfigOptions) -> Value {
+        let node: Node = serde_json::from_value(json!({
+            "id": "tun-patch-fixture", "protocol": "ss", "name": "test-node",
+            "server": "203.0.113.1", "port": 8388, "raw": "",
+            "config": { "server": "203.0.113.1", "port": 8388,
+                "cipher": "aes-128-gcm", "password": "test-only" },
+            "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"
+        })).unwrap();
+        build_kernel_config(KernelKind::Mihomo, &node, options).unwrap()
+    }
+
+    #[test]
+    fn hot_tun_patch_uses_compiler_defaults_and_final_overrides() {
+        let config = compiled(MihomoConfigOptions { mode: ProxyMode::Tun, ..Default::default() });
+        let payload = mihomo_tun_patch_payload(&config, true).unwrap();
+        assert_eq!(payload["tun"]["dns-hijack"], config["tun"]["dns-hijack"]);
+        assert_eq!(payload["tun"]["dns-mode"], if cfg!(target_os = "macos") { "native" } else { "" });
+
+        let config = compiled(MihomoConfigOptions {
+            mode: ProxyMode::Both,
+            override_yaml: Some("tun:\n  dns-mode: disabled\n  stack: system\n".into()),
+            override_script: Some(r#"
+                config.tun["dns-mode"] = "hijack";
+                config.tun["route-exclude-address"] = ["203.0.113.0/24"];
+            "#.into()),
+            ..Default::default()
+        });
+        let payload = mihomo_tun_patch_payload(&config, true).unwrap();
+        assert_eq!(payload["tun"], config["tun"]);
+        assert_eq!(payload["tun"]["dns-mode"], "hijack");
+        assert_eq!(payload["tun"]["stack"], "system");
+        assert_eq!(payload["tun"]["route-exclude-address"], json!(["203.0.113.0/24"]));
+    }
+
+    #[test]
+    fn hot_tun_patch_clears_previous_native_for_empty_null_or_disabled_dns() {
+        for (yaml, expected) in [
+            ("tun:\n  dns-mode: null\n", ""),
+            ("tun:\n  dns-mode: ''\n", ""),
+            ("tun:\n  dns-mode: disabled\n", "disabled"),
+            ("dns:\n  enable: false\n", ""),
+        ] {
+            let config = compiled(MihomoConfigOptions {
+                mode: ProxyMode::Tun, override_yaml: Some(yaml.into()), ..Default::default()
+            });
+            let payload = mihomo_tun_patch_payload(&config, true).unwrap();
+            assert_eq!(payload["tun"]["dns-mode"], expected, "{yaml}");
+            assert!(payload["tun"]["dns-mode"].is_string());
+        }
+        let config = compiled(MihomoConfigOptions { mode: ProxyMode::System, ..Default::default() });
+        assert_eq!(mihomo_tun_patch_payload(&config, false).unwrap(), json!({
+            "tun": { "enable": false, "dns-mode": "" }
+        }));
+    }
+
+    #[test]
+    fn conflicting_final_tun_enable_is_rejected_before_applying() {
+        for (mode, yaml, requested) in [
+            (ProxyMode::Tun, "tun:\n  enable: false\n", true),
+            (ProxyMode::System, "tun:\n  enable: true\n", false),
+        ] {
+            let config = compiled(MihomoConfigOptions {
+                mode, override_yaml: Some(yaml.into()), ..Default::default()
+            });
+            assert!(mihomo_tun_patch_payload(&config, requested).unwrap_err().to_string().contains("开关请求冲突"));
+        }
+        assert!(mihomo_tun_patch_payload(&json!({"tun": {"enable": true, "dns-mode": 7}}), true).is_err());
+    }
+
+    #[tokio::test]
+    async fn successful_patch_reply_still_requires_matching_get_confirmation() {
+        let payload = json!({"tun": {"enable": true, "dns-mode": "native"}});
+        for actual in [
+            json!({"tun": {"enable": false, "dns-mode": "native"}}),
+            json!({"tun": {"enable": true, "dns-mode": "disabled"}}),
+            json!({"tun": {"enable": true}}),
+            json!({}),
+        ] {
+            let error = apply_mihomo_tun_patch_with_confirmation(
+                &payload, async { Ok(()) }, async { Ok(actual) },
+            ).await.unwrap_err();
+            assert!(error.to_string().contains("未确认"), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn confirmation_reads_only_after_a_successful_patch() {
+        let payload = json!({"tun": {"enable": false, "dns-mode": ""}});
+        let patched = std::cell::Cell::new(false);
+        apply_mihomo_tun_patch_with_confirmation(
+            &payload,
+            async { patched.set(true); Ok(()) },
+            async { assert!(patched.get()); Ok(payload.clone()) },
+        ).await.unwrap();
+        let error = apply_mihomo_tun_patch_with_confirmation(
+            &payload,
+            async { Err(anyhow!("mock PATCH rejected")) },
+            async { panic!("GET must not run after a rejected PATCH") },
+        ).await.unwrap_err();
+        assert!(error.to_string().contains("PATCH rejected"));
+        let error = apply_mihomo_tun_patch_with_confirmation(
+            &payload,
+            async { Ok(()) },
+            async { Err(anyhow!("mock GET failed after applying")) },
+        ).await.unwrap_err();
+        assert!(error.to_string().contains("GET failed"));
+    }
 }
 
 pub(crate) async fn wait_for_port(child: &mut ProxyChild, port: u16, timeout: Duration) -> Result<bool> {
@@ -2579,6 +2829,121 @@ mod recovery_tests {
 
     fn manager() -> ProxyManager {
         ProxyManager::new(MihomoConfigOptions { mode: ProxyMode::None, ..Default::default() })
+    }
+
+    #[tokio::test]
+    async fn request_epoch_delayed_start_and_switch_cannot_revive_after_stop() {
+        let manager = manager();
+        let options = manager.config().await;
+        let old_port = options.mixed_port;
+        let start_request = manager.reserve_request();
+        let switch_request = manager.reserve_request();
+        let (release_start, wait_start) = tokio::sync::oneshot::channel();
+        let (release_switch, wait_switch) = tokio::sync::oneshot::channel();
+        let starting = manager.clone();
+        let start = tokio::spawn(async move {
+            wait_start.await.unwrap(); // Simulate a DB lookup finishing after Stop.
+            let mut options = options;
+            options.mixed_port = 19931;
+            starting.start_with_options_for_request(
+                &selected_node("old-start"), options, start_request,
+            ).await.unwrap();
+        });
+        let switching = manager.clone();
+        let switch = tokio::spawn(async move {
+            wait_switch.await.unwrap();
+            switching.switch_node_for_request(&selected_node("old-switch"), switch_request)
+                .await.unwrap();
+        });
+        manager.stop().await.unwrap();
+        let stopped_generation = manager.runtime.lock().await.generation;
+        release_start.send(()).unwrap();
+        release_switch.send(()).unwrap();
+        start.await.unwrap();
+        switch.await.unwrap();
+        let runtime = manager.runtime.lock().await;
+        assert_eq!(runtime.generation, stopped_generation);
+        assert_eq!(runtime.status.state, ProxyState::Stopped);
+        assert_eq!(runtime.options.mixed_port, old_port);
+        assert!(runtime.recovery_target.is_none());
+        assert!(runtime.child.is_none());
+    }
+
+    #[tokio::test]
+    async fn request_epoch_rechecks_a_start_queued_on_the_operation_lock() {
+        let manager = manager();
+        let options = manager.config().await;
+        let held = manager.operation.lock().await;
+        let request = manager.reserve_request();
+        let starting = manager.clone();
+        let (entered, waiting) = tokio::sync::oneshot::channel();
+        let start = tokio::spawn(async move {
+            entered.send(()).unwrap();
+            starting.start_with_options_for_request(&selected_node("queued"), options, request)
+                .await.unwrap();
+        });
+        waiting.await.unwrap();
+        let stop_request = manager.reserve_request();
+        drop(held);
+        start.await.unwrap();
+        manager.stop_for_request(stop_request).await.unwrap();
+        let runtime = manager.runtime.lock().await;
+        assert!(runtime.recovery_target.is_none());
+        assert!(runtime.child.is_none());
+        assert_eq!(runtime.status.state, ProxyState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn request_epoch_stale_stop_does_not_cancel_a_newer_manual_intent() {
+        let manager = manager();
+        let mut held = manager.runtime.lock().await;
+        let stop_request = manager.reserve_request();
+        let stopping = manager.clone();
+        let (entered, waiting) = tokio::sync::oneshot::channel();
+        let stop = tokio::spawn(async move {
+            entered.send(()).unwrap();
+            stopping.stop_for_request(stop_request).await.unwrap();
+        });
+        waiting.await.unwrap();
+        let new_request = manager.reserve_request();
+        held.request_start(&selected_node("new-manual-choice"), None);
+        drop(held);
+        stop.await.unwrap();
+        assert!(manager.request_is_current(new_request));
+        let runtime = manager.runtime.lock().await;
+        assert_eq!(runtime.recovery_target.as_ref().unwrap().0.id, "new-manual-choice");
+    }
+
+    #[tokio::test]
+    async fn request_epoch_cancels_late_hot_work_and_allows_a_fresh_request() {
+        let manager = manager();
+        let options = manager.config().await;
+        let stale_request = manager.reserve_request();
+        manager.stop().await.unwrap();
+        // Every stale path returns before a controller or system-proxy call.
+        assert!(!manager.try_hot_toggle_tun_for_request(options, stale_request).await.unwrap());
+        manager.hot_toggle_system_proxy_for_request(true, stale_request).await.unwrap();
+        assert!(!manager.try_hot_switch_routing_mode_for_request(RoutingMode::Global, stale_request)
+            .await.unwrap());
+        let fresh_request = manager.reserve_request();
+        assert!(manager.try_hot_switch_routing_mode_for_request(RoutingMode::Global, fresh_request)
+            .await.unwrap());
+        let runtime = manager.runtime.lock().await;
+        assert_eq!(runtime.options.routing_mode, RoutingMode::Global);
+        assert!(!runtime.status.system_proxy_enabled);
+        assert!(runtime.recovery_target.is_none());
+        assert!(runtime.child.is_none());
+    }
+
+    #[tokio::test]
+    async fn request_epoch_pending_manual_preparation_already_cancels_login_autostart() {
+        let manager = manager();
+        manager.reserve_request(); // No runtime generation yet: GUI is reading DB.
+        manager.start_automatically(&selected_node("saved-login-node")).await.unwrap();
+        let runtime = manager.runtime.lock().await;
+        assert_eq!(runtime.generation, 0);
+        assert!(runtime.recovery_target.is_none());
+        assert!(runtime.child.is_none());
     }
 
     #[tokio::test]

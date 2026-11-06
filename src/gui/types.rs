@@ -35,6 +35,7 @@ pub enum ProxyOperationKind {
 #[derive(Debug, Clone, Copy)]
 pub struct ProxyOperation {
     pub id: u64,
+    pub request: u64,
     pub kind: ProxyOperationKind,
     pub previous_kernel_pid: Option<u32>,
 }
@@ -458,7 +459,7 @@ pub enum BgMsg {
     FirewallApplied(Result<String, String>),
     /// 自动选路模式下替用户挑一个锚点节点（id, name）：左键点卡片不再选节点，
     /// 若仍要求"先有节点才能启动"，启动代理就永远点不动。
-    AutoAnchorStart(Result<(String, String), String>),
+    AutoAnchorStart { request: u64, result: Result<(String, String), String> },
     Stats(Result<Stats, String>),
     Settings(Result<AppSettings, String>),
     SettingsSaved(Result<AppSettings, String>),
@@ -538,19 +539,25 @@ pub enum BgMsg {
     AppUpdateProgress(crate::app_update::AppUpdateProgress),
     AppUpdateDownloaded(Result<std::path::PathBuf, String>),
     AppReleasesListed(Result<Vec<crate::app_update::ReleaseItem>, String>),
-    ProxyStatus(ProxyRuntimeStatus),
-    ProxyMaintenanceDone(Option<ProxyRuntimeStatus>),
-    /// TUN 热切换结果：ok=true 已生效（message 为状态栏文案）；false 时界面回退整进程重启。
-    ProxyModeHotToggled { ok: bool, message: String },
+    ProxyStatus { request: u64, status: ProxyRuntimeStatus },
+    ProxyMaintenanceDone { request: u64, status: Option<ProxyRuntimeStatus> },
+    /// Only unsupported hot switching may fall back to a restart; errors stay visible.
+    ProxyModeHotToggled { request: u64, result: Result<bool, String>, message: String },
     /// 系统代理热切换结果：ok=true 已生效，未重启进程
-    SystemProxyHotToggled { ok: bool, message: String },
+    SystemProxyHotToggled { request: u64, ok: bool, message: String },
     /// 分流出站模式（规则 / 全局 / 直连）免停热切结果
     ProxyRoutingModeHotSwitched {
+        request: u64,
         ok: bool,
         mode: RoutingMode,
         message: String,
     },
-    ProxyConfig(Result<MihomoConfigOptions, String>),
+    ProxyConfig {
+        /// None is an explicit restore/import; background refreshes carry the
+        /// UI snapshot that was current when they were requested.
+        baseline: Option<MihomoConfigOptions>,
+        result: Result<MihomoConfigOptions, String>,
+    },
     ProxyConfigSaved(Result<ProxyConfigSaveResult, String>),
     ProxyConfigQuietSaved(Result<ProxyConfigSaveResult, String>),
     ProxyLog(Result<String, String>),
@@ -558,6 +565,7 @@ pub enum BgMsg {
     ApiServerStatus(Result<String, String>),
     ProxySwitchDone {
         seq: u64,
+        request: u64,
         node_id: String,
         result: Result<String, String>,
     },
@@ -909,7 +917,7 @@ mod failed_start_notice_tests {
     #[test]
     fn recovery_requires_the_owned_failure_and_a_new_ready_kernel() {
         let notice = FailedProxyStartNotice {
-            operation: ProxyOperation { id: 4, kind: ProxyOperationKind::Start, previous_kernel_pid: Some(100) },
+            operation: ProxyOperation { id: 4, request: 4, kind: ProxyOperationKind::Start, previous_kernel_pid: Some(100) },
             footer: "代理操作失败: 代理端口 9980 已被占用".into(),
         };
         assert!(notice.recovered_by(4, &notice.footer, &running(101)));
@@ -929,7 +937,7 @@ mod failed_start_notice_tests {
     #[test]
     fn a_failed_stop_is_not_resolved_by_a_running_kernel() {
         let notice = FailedProxyStartNotice {
-            operation: ProxyOperation { id: 7, kind: ProxyOperationKind::Stop, previous_kernel_pid: Some(100) },
+            operation: ProxyOperation { id: 7, request: 7, kind: ProxyOperationKind::Stop, previous_kernel_pid: Some(100) },
             footer: "代理操作失败: 停止超时".into(),
         };
         assert!(!notice.recovered_by(7, &notice.footer, &running(101)));
