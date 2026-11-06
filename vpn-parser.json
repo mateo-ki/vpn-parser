@@ -6,7 +6,7 @@
   "architecture": {
     "64bit": {
       "url": "https://github.com/mateo-ki/vproxy/releases/download/v1.16.4/vpn-parser-1.16.4-windows-x64-portable.zip",
-      "hash": "8dee1af0f90487f8fc75efa5ee4b05ac24e9bd254a9e0725b0333163e33f3fe1"
+      "hash": "d8d7d56ab34258825fd787f0d8b9a88f0f7ab118f709a743b951a243a6b0b37b"
     }
   },
   "bin": "vpn-parser.exe",
