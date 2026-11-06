@@ -3172,10 +3172,10 @@ impl VpnApp {
                     }
                     let res = manager.switch_node_for_request(&node, request).await;
                     res.map(|_| format!("已平滑切换至节点: {}", node.name))
-                        .map_err(|e| e.to_string())
+                        .map_err(|e| format!("{e:#}"))
                 }
                 Ok(None) => Err("节点不存在".to_string()),
-                Err(e) => Err(e.to_string()),
+                Err(e) => Err(format!("{e:#}")),
             };
             let _ = tx.send(BgMsg::ProxySwitchDone {
                 seq,
@@ -3737,7 +3737,7 @@ impl VpnApp {
                         let _ = tx.send(BgMsg::SystemProxyHotToggled { request, ok: true, message });
                     }
                     Err(error) => {
-                        let message = format!("切换系统代理失败: {error}");
+                        let message = format!("切换系统代理失败: {error:#}");
                         let _ = tx.send(BgMsg::SystemProxyHotToggled { request, ok: false, message });
                     }
                 }
@@ -3765,7 +3765,7 @@ impl VpnApp {
             let result = manager
                 .try_hot_toggle_tun_for_request(options, request)
                 .await
-                .map_err(|error| format!("TUN 热切换请求失败: {error}"));
+                .map_err(|error| format!("TUN 热切换请求失败: {error:#}"));
             let message = if matches!(result, Ok(true)) {
                 // 用 manager 运行时里的文案：带内核名与耗时（"…TUN 已热开启（X ms，未重启进程）"）
                 manager.status().await.message
@@ -3817,7 +3817,7 @@ impl VpnApp {
                     });
                 }
                 Err(error) => {
-                    let message = format!("模式热切换请求失败: {error}");
+                    let message = format!("模式热切换请求失败: {error:#}");
                     let _ = tx.send(BgMsg::ProxyRoutingModeHotSwitched {
                         request,
                         ok: false,
@@ -4078,7 +4078,9 @@ impl VpnApp {
                 Ok(None) => Err(anyhow::anyhow!("节点不存在")),
                 Err(error) => Err(error),
             }
-            .map_err(|error| error.to_string());
+            // `{error:#}` 保留完整 anyhow 错误链：覆写编译失败这类多层包装的错误，
+            // 只有把根因（如「Rhai 脚本编译失败: …」）透传到状态栏，用户才修得动。
+            .map_err(|error| format!("{error:#}"));
             let _ = tx.send(BgMsg::ProxyOp { operation, result });
         });
     }
@@ -4212,7 +4214,7 @@ impl VpnApp {
                 .stop_for_request(operation.request)
                 .await
                 .map(|_| "代理已停止".into())
-                .map_err(|error| error.to_string());
+                .map_err(|error| format!("{error:#}"));
             let _ = tx.send(BgMsg::ProxyOp { operation, result });
         });
     }

@@ -1357,7 +1357,7 @@ impl BackendCompiler for MihomoCompiler {
         if let Some(ref override_text) = plan.outbounds.override_yaml {
             if !override_text.trim().is_empty() {
                 let mut patch = serde_yaml::from_str::<Value>(override_text)
-                    .context("Mihomo YAML 覆写解析失败")?;
+                    .context("Mihomo YAML 覆写解析失败（请在「代理 → 策略组 → 配置」检查 YAML 覆写）")?;
                 if let Some(groups) = patch.as_array() {
                     if !groups.iter().all(Value::is_object) {
                         return Err(anyhow!("Mihomo YAML 覆写的策略组数组只能包含对象"));
@@ -1385,7 +1385,7 @@ impl BackendCompiler for MihomoCompiler {
         if let Some(ref script_text) = plan.outbounds.override_script {
             if !script_text.trim().is_empty() {
                 crate::proxy::script_override::apply_script_override(&mut config, script_text)
-                    .context("Mihomo Rhai 覆写失败")?;
+                    .context("Mihomo Rhai 覆写失败（请在「代理 → 策略组 → 配置」修复或清空 Rhai 覆写脚本）")?;
                 if !config.is_object() {
                     return Err(anyhow!("Mihomo Rhai 覆写必须返回配置对象"));
                 }
@@ -1661,7 +1661,6 @@ mod tests {
     fn script_invalid_return_shape_returns_error_without_indexing_panic() {
         for script in [
             "fn main(config) { return 42; }",
-            "fn main(config) { return (); }",
             "fn main(config) { return []; }",
             "fn main(config) { return false; }",
             "config = [];",
@@ -1674,6 +1673,20 @@ mod tests {
             assert!(
                 format!("{error:#}").contains("Mihomo Rhai 覆写必须返回配置对象"),
                 "{script}: {error:#}"
+            );
+        }
+        // 显式/隐式的 unit 返回值（忘写 return config;）必须得到"如何修"的精确指引，
+        // 而不是一句 serde 转换天书。
+        for script in ["fn main(config) { return (); }", "config = ();"] {
+            let error = compile_result(MihomoConfigOptions {
+                override_script: Some(script.into()),
+                ..MihomoConfigOptions::default()
+            })
+            .unwrap_err();
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("脚本没有返回配置") && message.contains("return config"),
+                "{script}: {message}"
             );
         }
     }

@@ -81,6 +81,13 @@ pub fn apply_script_override(config: &mut Value, script: &str) -> Result<()> {
     };
 
     // 3. 将执行完毕返回的 Dynamic 反序列化回 serde_json::Value
+    // `fn main(config) {}` 忘写 `return config;` 时 Rhai 返回 unit：直接交给 serde
+    // 会炸出一句天书。这里前置拦住，把修复方法直接告诉用户。
+    if result_dynamic.is_unit() {
+        return Err(anyhow!(
+            "脚本没有返回配置：fn main(config) 必须以 `return config;` 结尾（或改用直接操作 config 变量的扁平语句写法）"
+        ));
+    }
     let new_config: Value = rhai::serde::from_dynamic(&result_dynamic)
         .map_err(|e| anyhow!("脚本返回对象转换回内核配置失败: {e}"))?;
 
@@ -218,5 +225,25 @@ fn main(config) {
             err_str.contains("Too many operations") || err_str.contains("operations"),
             "错误信息中应明确包含超步数看门狗提示: {err_str}"
         );
+    }
+
+    #[test]
+    fn test_script_missing_return_gives_actionable_error() {
+        let mut config = json!({ "mixed-port": 7890 });
+        // fn main 里改了字段但忘写 return config; —— Rhai 返回 unit，
+        // 必须报"如何修"而不是 serde 天书。
+        let err = apply_script_override(&mut config, "fn main(config) { config.mixed_port = 9090; }")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("return config"),
+            "缺少 return 的报错必须指引补上 return config;: {err}"
+        );
+        assert_eq!(config["mixed-port"], 7890, "失败时不得改动原配置");
+
+        // 扁平语句写法没有 return 也合法：config 变量在作用域里直接生效。
+        let mut config = json!({ "mixed-port": 7890 });
+        apply_script_override(&mut config, "config.mixed_port = 9090;").unwrap();
+        assert_eq!(config["mixed_port"], 9090);
     }
 }

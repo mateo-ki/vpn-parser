@@ -1011,7 +1011,7 @@ impl VpnApp {
                             }
                             match result {
                                 Ok(config) => self.set_proxy_config(config),
-                                Err(error) => self.status = format!("读取代理配置失败: {error}"),
+                                Err(error) => self.status = format!("读取代理配置失败: {error:#}"),
                             }
                         }
                         BgMsg::ProxyConfigSaved(result) => {
@@ -1037,7 +1037,7 @@ impl VpnApp {
                                 }
                                 Err(error) => {
                                     self.pending_mode_apply = None;
-                                    self.status = format!("保存代理配置失败: {error}");
+                                    self.status = format!("保存代理配置失败: {error:#}");
                                 }
                             }
                         }
@@ -1047,7 +1047,7 @@ impl VpnApp {
                                     self.proxy_status.state,
                                     ProxyState::Running | ProxyState::Degraded
                                 )).into(),
-                                Err(error) => format!("保存代理配置失败: {error}"),
+                                Err(error) => format!("保存代理配置失败: {error:#}"),
                             };
                         }
                         BgMsg::ProxyLog(Ok(log)) => self.proxy_log = log,
@@ -1084,7 +1084,10 @@ impl VpnApp {
                                     }
                                 }
                                 Err(error) => {
-                                    self.status = format!("代理操作失败: {error}");
+                                    // `{error:#}` 展开完整 anyhow 错误链：覆写编译/运行失败时
+                                    // 用户必须能看到根因（如「Rhai 脚本编译失败: …」），只显示
+                                    // 顶层 context 会把真正的病因藏起来。
+                                    self.status = format!("代理操作失败: {error:#}");
                                     self.failed_proxy_start_notice = (operation.kind == ProxyOperationKind::Start)
                                         .then(|| FailedProxyStartNotice { operation, footer: self.status.clone() });
                                     self.note_proxy_state_transition(ProxyState::Failed);
@@ -1113,7 +1116,7 @@ impl VpnApp {
                                 match result {
                                     Ok(message) => self.status = message,
                                     Err(error) => {
-                                        self.status = format!("切换节点失败: {error}");
+                                        self.status = format!("切换节点失败: {error:#}");
                                         let db = self.db.clone();
                                         let nid = node_id.clone();
                                         let kernel = self.proxy_status.kernel.map(|k| match k {
