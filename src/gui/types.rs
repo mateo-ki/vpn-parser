@@ -8,6 +8,24 @@ use crate::proxy::{
 };
 use crate::speedtest::SpeedTestProgress;
 
+/// Saving and applying are different outcomes for kernels without live reload.
+pub struct ProxyConfigSaveResult {
+    pub config: MihomoConfigOptions,
+    pub applied: bool,
+}
+
+impl ProxyConfigSaveResult {
+    pub fn status_message(&self, running: bool) -> &'static str {
+        if !self.applied {
+            "代理配置已保存，重新连接后生效"
+        } else if running {
+            "代理配置已保存并生效"
+        } else {
+            "代理配置已保存，下次连接时应用"
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Sources,
@@ -502,8 +520,8 @@ pub enum BgMsg {
         message: String,
     },
     ProxyConfig(Result<MihomoConfigOptions, String>),
-    ProxyConfigSaved(Result<MihomoConfigOptions, String>),
-    ProxyConfigQuietSaved(Result<MihomoConfigOptions, String>),
+    ProxyConfigSaved(Result<ProxyConfigSaveResult, String>),
+    ProxyConfigQuietSaved(Result<ProxyConfigSaveResult, String>),
     ProxyLog(Result<String, String>),
     ProxyOp(Result<String, String>),
     ApiServerStatus(Result<String, String>),
@@ -825,3 +843,21 @@ pub struct QuickRuleModalState {
     pub action: crate::proxy::RuleAction,
 }
 
+
+#[cfg(test)]
+mod config_save_result_tests {
+    use super::*;
+
+    #[test]
+    fn saved_and_applied_are_reported_separately() {
+        let mut saved = ProxyConfigSaveResult {
+            config: MihomoConfigOptions::default(),
+            applied: false,
+        };
+        assert_eq!(saved.status_message(true), "代理配置已保存，重新连接后生效");
+        assert_eq!(saved.status_message(false), "代理配置已保存，重新连接后生效");
+        saved.applied = true;
+        assert_eq!(saved.status_message(true), "代理配置已保存并生效");
+        assert_eq!(saved.status_message(false), "代理配置已保存，下次连接时应用");
+    }
+}

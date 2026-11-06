@@ -3,14 +3,77 @@ use crate::export::nodes_to_clash_proxies;
 use crate::kernel::KernelKind;
 use crate::proxy::ir::{IRAction, IRMatcher, RoutingPlan};
 use crate::proxy::types::{AutoRoutingStrategy, RoutingMode};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use std::net::Ipv4Addr;
 
 pub use crate::constants::proxy::{FINAL_GROUP, URL_TEST_GROUP};
 pub const URL_TEST_INTERVAL_SECS: u64 = 60;
 pub const URL_TEST_TOLERANCE_MS: u64 = 30;
 pub const URL_TEST_TIMEOUT_MS: u64 = 3000;
+
+fn ipv4_cidr_interval(cidr: &str) -> Option<(u64, u64)> {
+    let (address, prefix) = cidr.split_once('/')?;
+    let address = u32::from(address.parse::<Ipv4Addr>().ok()?);
+    let prefix = prefix.parse::<u32>().ok().filter(|prefix| *prefix <= 32)?;
+    let size = 1_u64 << (32 - prefix);
+    let start = u64::from(address) & !(size - 1);
+    Some((start, start + size))
+}
+
+/// Only recover IPv4 Fake-IPs whose mapping was lost across a core/client restart.
+/// Real application-selected addresses must survive SNI/HTTP sniffing unchanged.
+/// Mihomo 1.19 has no positive destination-IP filter for sniffing, so express the
+/// complement using skip-dst-address. Keep local destinations excluded even when
+/// a custom Fake-IP pool overlaps a local network.
+fn fake_ip_recovery_skip_destinations(current_pool: &str) -> Vec<String> {
+    const LOCAL_IPV4: &[&str] = &[
+        "127.0.0.0/8",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "169.254.0.0/16",
+        "100.64.0.0/10",
+    ];
+    // Both common-client 198.18/16 and macOS 198.19/16 can remain cached after
+    // switching clients or moving to a custom pool. These are reserved test IPs.
+    let mut pools = vec![ipv4_cidr_interval("198.18.0.0/15").unwrap()];
+    if let Some(pool) = ipv4_cidr_interval(current_pool) {
+        pools.push(pool);
+    }
+    let local: Vec<_> = LOCAL_IPV4
+        .iter()
+        .filter_map(|cidr| ipv4_cidr_interval(cidr))
+        .collect();
+
+    fn append_complement(
+        start: u64,
+        prefix: u32,
+        pools: &[(u64, u64)],
+        local: &[(u64, u64)],
+        skipped: &mut Vec<String>,
+    ) {
+        let end = start + (1_u64 << (32 - prefix));
+        let overlaps = |&(first, last): &(u64, u64)| first < end && start < last;
+        let covers = |&(first, last): &(u64, u64)| first <= start && end <= last;
+        if local.iter().any(covers) || !pools.iter().any(overlaps) {
+            skipped.push(format!("{}/{prefix}", Ipv4Addr::from(start as u32)));
+        } else if !pools.iter().any(covers) || local.iter().any(overlaps) {
+            // A /32 that overlaps a pool is covered by it, so recursion stops.
+            let middle = start + ((end - start) / 2);
+            append_complement(start, prefix + 1, pools, local, skipped);
+            append_complement(middle, prefix + 1, pools, local, skipped);
+        }
+    }
+
+    let mut skipped = Vec::new();
+    append_complement(0, 0, &pools, &local, &mut skipped);
+    // IPv6 Fake-IP recovery was not supported: the generated fc00::/18 pool was
+    // already excluded by fc00::/7. Protect real IPv6 destinations as well.
+    skipped.push("::/0".into());
+    skipped
+}
 
 /// 智能分流策略组内置的预置规则集
 pub const SMART_ROUTING_PREPEND_RULES: &[&str] = &[
@@ -1214,6 +1277,8 @@ impl BackendCompiler for MihomoCompiler {
             _ => "rule",
         };
 
+        let default_sniffer_skip =
+            json!(fake_ip_recovery_skip_destinations(&plan.dns.fake_ip_range));
         let mut config = json!({
             "mixed-port": plan.inbounds.mixed_port,
             "external-controller": format!("127.0.0.1:{}", plan.inbounds.controller_port),
@@ -1230,12 +1295,7 @@ impl BackendCompiler for MihomoCompiler {
                 "force-dns-mapping": true,
                 "parse-pure-ip": true,
                 "override-destination": true,
-                // Keep local destinations and their IP-based routing intact.
-                // The benchmarking ranges remain sniffable for Fake-IP recovery.
-                "skip-dst-address": [
-                    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-                    "169.254.0.0/16", "100.64.0.0/10", "::1/128", "fc00::/7", "fe80::/10"
-                ],
+                "skip-dst-address": default_sniffer_skip,
                 "sniff": {
                     "HTTP": { "ports": [80, 8080] },
                     "TLS": { "ports": [443, 8443] }
@@ -1296,33 +1356,48 @@ impl BackendCompiler for MihomoCompiler {
         // Clash Party 规范 YAML 深度覆写（支持简单值覆盖、对象递归、! 强制覆盖、+key 前插、key+ 后追加与 <> 转义）
         if let Some(ref override_text) = plan.outbounds.override_yaml {
             if !override_text.trim().is_empty() {
-                if let Ok(mut patch) = serde_yaml::from_str::<Value>(override_text) {
-                    if patch.is_array() {
-                        patch = json!({ "+proxy-groups": patch });
+                let mut patch = serde_yaml::from_str::<Value>(override_text)
+                    .context("Mihomo YAML 覆写解析失败")?;
+                if let Some(groups) = patch.as_array() {
+                    if !groups.iter().all(Value::is_object) {
+                        return Err(anyhow!("Mihomo YAML 覆写的策略组数组只能包含对象"));
                     }
-                    if let Some(patch_obj) = patch.as_object_mut() {
-                        for (k, v) in patch_obj.iter_mut() {
-                            let parsed = crate::proxy::yaml_override::parse_override_key(k);
-                            if parsed.name == "proxy-groups" {
-                                if let Some(groups_arr) = v.as_array_mut() {
-                                    for g in groups_arr.iter_mut() {
-                                        expand_proxy_group_filters(g, &candidate_names);
-                                    }
-                                }
+                    patch = json!({ "+proxy-groups": patch });
+                }
+                let patch_obj = patch
+                    .as_object_mut()
+                    .ok_or_else(|| anyhow!("Mihomo YAML 覆写必须是配置对象或策略组数组"))?;
+                for (k, v) in patch_obj.iter_mut() {
+                    let parsed = crate::proxy::yaml_override::parse_override_key(k);
+                    if parsed.name == "proxy-groups" {
+                        if let Some(groups_arr) = v.as_array_mut() {
+                            for g in groups_arr.iter_mut() {
+                                expand_proxy_group_filters(g, &candidate_names);
                             }
                         }
                     }
-                    crate::proxy::yaml_override::deep_merge_value(&mut config, patch);
                 }
+                crate::proxy::yaml_override::deep_merge_value(&mut config, patch);
             }
         }
 
         // Rhai 脚本动态覆写（编程式最终裁决：传入已完成 YAML 覆写的完整 config，执行 main(config) 或扁平语句）
         if let Some(ref script_text) = plan.outbounds.override_script {
             if !script_text.trim().is_empty() {
-                if let Err(e) = crate::proxy::script_override::apply_script_override(&mut config, script_text) {
-                    tracing::warn!(error = %e, "应用 Rhai 脚本覆写失败，已安全降级至基础配置");
+                crate::proxy::script_override::apply_script_override(&mut config, script_text)
+                    .context("Mihomo Rhai 覆写失败")?;
+                if !config.is_object() {
+                    return Err(anyhow!("Mihomo Rhai 覆写必须返回配置对象"));
                 }
+            }
+        }
+
+        // A YAML/Rhai override may change the current Fake-IP pool. Recompute
+        // only our untouched default filter; a user-supplied filter stays final.
+        if config["sniffer"]["skip-dst-address"] == default_sniffer_skip {
+            if let Some(pool) = config["dns"]["fake-ip-range"].as_str() {
+                config["sniffer"]["skip-dst-address"] =
+                    json!(fake_ip_recovery_skip_destinations(pool));
             }
         }
 
@@ -1337,7 +1412,30 @@ mod tests {
     use crate::proxy::ir::lower_options_to_ir;
     use crate::proxy::{MihomoConfigOptions, ProxyMode};
 
-    fn compile(options: MihomoConfigOptions) -> Value {
+    fn skips_destination(config: &Value, address: &str) -> bool {
+        let address = address.parse::<std::net::IpAddr>().unwrap();
+        config["sniffer"]["skip-dst-address"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| {
+                let (base, prefix) = value.as_str().unwrap().split_once('/').unwrap();
+                let prefix = prefix.parse::<u32>().unwrap();
+                match (base.parse::<std::net::IpAddr>().unwrap(), address) {
+                    (std::net::IpAddr::V4(base), std::net::IpAddr::V4(address)) => {
+                        let mask = u32::MAX.checked_shl(32 - prefix).unwrap_or(0);
+                        u32::from(base) & mask == u32::from(address) & mask
+                    }
+                    (std::net::IpAddr::V6(base), std::net::IpAddr::V6(address)) => {
+                        let mask = u128::MAX.checked_shl(128 - prefix).unwrap_or(0);
+                        u128::from(base) & mask == u128::from(address) & mask
+                    }
+                    _ => false,
+                }
+            })
+    }
+
+    fn compile_result(options: MihomoConfigOptions) -> Result<Value> {
         let now = chrono::Utc::now();
         let node = Node {
             id: "fake-ip-recovery-fixture".into(),
@@ -1364,11 +1462,127 @@ mod tests {
             updated_at: now,
         };
         let plan = lower_options_to_ir(&options, Some(&node));
-        MihomoCompiler::new()
-            .compile(&plan)
-            .unwrap()
-            .as_json_value()
-            .unwrap()
+        MihomoCompiler::new().compile(&plan)?.as_json_value()
+    }
+
+    fn compile(options: MihomoConfigOptions) -> Value {
+        compile_result(options).unwrap()
+    }
+
+    #[test]
+    fn invalid_yaml_override_returns_parse_error_instead_of_base_artifact() {
+        let error = compile_result(MihomoConfigOptions {
+            override_yaml: Some("sniffer: [\n".into()),
+            ..MihomoConfigOptions::default()
+        })
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("Mihomo YAML 覆写解析失败"));
+        assert!(
+            message.contains("line"),
+            "must preserve YAML error location: {message}"
+        );
+    }
+
+    #[test]
+    fn unsupported_yaml_override_structure_does_not_produce_artifact() {
+        for yaml in ["42", "true", "null", "a scalar", "- 42\n", "- null\n"] {
+            let error = compile_result(MihomoConfigOptions {
+                override_yaml: Some(yaml.into()),
+                ..MihomoConfigOptions::default()
+            })
+            .unwrap_err();
+            assert!(format!("{error:#}").contains("Mihomo YAML 覆写"), "{yaml}");
+        }
+    }
+
+    #[test]
+    fn yaml_override_keeps_supported_group_arrays_and_blank_overrides() {
+        let base = compile(MihomoConfigOptions::default());
+        let blank = compile(MihomoConfigOptions {
+            override_yaml: Some(" \n\t".into()),
+            override_script: Some(" \n\t".into()),
+            ..MihomoConfigOptions::default()
+        });
+        assert_eq!(blank, base);
+        let empty_groups = compile(MihomoConfigOptions {
+            override_yaml: Some("[]".into()),
+            ..MihomoConfigOptions::default()
+        });
+        assert_eq!(empty_groups, base);
+        let groups = compile(MihomoConfigOptions {
+            override_yaml: Some(
+                "- name: custom-fixture\n  type: select\n  proxies: [DIRECT]\n".into(),
+            ),
+            ..MihomoConfigOptions::default()
+        });
+        assert_eq!(groups["proxy-groups"][0]["name"], "custom-fixture");
+        assert_eq!(
+            groups["proxy-groups"].as_array().unwrap().len(),
+            base["proxy-groups"].as_array().unwrap().len() + 1
+        );
+    }
+
+    #[test]
+    fn invalid_script_syntax_returns_error_after_yaml_without_base_artifact() {
+        let error = compile_result(MihomoConfigOptions {
+            override_yaml: Some("sniffer:\n  enable: false\n".into()),
+            override_script: Some("fn main(config) { let broken = ; }".into()),
+            ..MihomoConfigOptions::default()
+        })
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("Mihomo Rhai 覆写失败"));
+        assert!(message.contains("Rhai 脚本编译失败"));
+    }
+
+    #[test]
+    fn script_throw_after_mutation_aborts_compilation_and_preserves_input() {
+        for script in [
+            r#"fn main(config) {
+                config.sniffer.enable = false;
+                config.rules = [];
+                throw "fixture failure after mutation";
+                return config;
+            }"#,
+            r#"config.sniffer.enable = false;
+                config.rules = [];
+                throw "fixture failure after mutation";"#,
+        ] {
+            let mut options = MihomoConfigOptions {
+                override_yaml: Some("dns:\n  fake-ip-range: 203.0.113.0/24\n".into()),
+                ..MihomoConfigOptions::default()
+            };
+            let before = compile(options.clone());
+            options.override_script = Some(script.into());
+            let error = compile_result(options.clone()).unwrap_err();
+            let message = format!("{error:#}");
+            assert!(message.contains("Mihomo Rhai 覆写失败"));
+            assert!(message.contains("fixture failure after mutation"));
+            options.override_script = None;
+            assert_eq!(compile(options), before);
+        }
+    }
+
+    #[test]
+    fn script_invalid_return_shape_returns_error_without_indexing_panic() {
+        for script in [
+            "fn main(config) { return 42; }",
+            "fn main(config) { return (); }",
+            "fn main(config) { return []; }",
+            "fn main(config) { return false; }",
+            "config = [];",
+        ] {
+            let error = compile_result(MihomoConfigOptions {
+                override_script: Some(script.into()),
+                ..MihomoConfigOptions::default()
+            })
+            .unwrap_err();
+            assert!(
+                format!("{error:#}").contains("Mihomo Rhai 覆写必须返回配置对象"),
+                "{script}: {error:#}"
+            );
+        }
     }
 
     #[test]
@@ -1385,13 +1599,40 @@ mod tests {
             assert_eq!(sniffer["force-dns-mapping"], true);
             assert_eq!(sniffer["parse-pure-ip"], true);
             assert_eq!(sniffer["override-destination"], true);
-            assert_eq!(
-                sniffer["skip-dst-address"],
-                json!([
-                    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-                    "169.254.0.0/16", "100.64.0.0/10", "::1/128", "fc00::/7", "fe80::/10"
-                ])
-            );
+            // HTTP Host or TLS SNI must not redirect an application's chosen
+            // public/private endpoint. Only stale Fake-IPs need replacement.
+            for address in [
+                "1.1.1.1",
+                "8.8.8.8",
+                "203.0.113.25",
+                "127.0.0.1",
+                "10.1.2.3",
+                "172.16.1.2",
+                "192.168.1.2",
+                "169.254.1.2",
+                "100.64.1.2",
+                "::1",
+                "fc00::1",
+                "fe80::1",
+                "2001:db8::1",
+                "2606:4700:4700::1111",
+            ] {
+                assert!(
+                    skips_destination(&config, address),
+                    "must preserve {address}"
+                );
+            }
+            for address in [
+                "198.18.0.1",
+                "198.18.255.255",
+                "198.19.0.1",
+                "198.19.255.255",
+            ] {
+                assert!(
+                    !skips_destination(&config, address),
+                    "must recover {address}"
+                );
+            }
             // Explicit protocol/port lists must not expand to QUIC or all ports.
             assert_eq!(
                 sniffer["sniff"],
@@ -1400,6 +1641,156 @@ mod tests {
                     "TLS": { "ports": [443, 8443] }
                 })
             );
+        }
+    }
+
+    #[test]
+    fn fake_ip_recovery_filter_covers_every_ipv4_outside_cached_pools() {
+        let config = compile(MihomoConfigOptions::default());
+        let mut intervals: Vec<_> = config["sniffer"]["skip-dst-address"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|cidr| ipv4_cidr_interval(cidr.as_str().unwrap()))
+            .collect();
+        intervals.sort_unstable();
+        let skipped_addresses: u64 = intervals.iter().map(|(start, end)| end - start).sum();
+        assert_eq!(skipped_addresses, (1_u64 << 32) - (1 << 17));
+        for pair in intervals.windows(2) {
+            assert!(pair[0].1 <= pair[1].0, "skip ranges must not overlap");
+        }
+        // Check both sides of the only hole in the address space.
+        for address in ["0.0.0.0", "198.17.255.255", "198.20.0.0", "255.255.255.255"] {
+            assert!(skips_destination(&config, address));
+        }
+    }
+
+    #[test]
+    fn fake_ip_recovery_filter_follows_yaml_custom_pool_and_preserves_old_pools() {
+        let config = compile(MihomoConfigOptions {
+            override_yaml: Some("dns:\n  fake-ip-range: 203.0.113.17/24\n".into()),
+            ..MihomoConfigOptions::default()
+        });
+        for address in [
+            "198.18.0.1",
+            "198.19.255.255",
+            "203.0.113.0",
+            "203.0.113.255",
+        ] {
+            assert!(
+                !skips_destination(&config, address),
+                "must recover {address}"
+            );
+        }
+        for address in ["203.0.112.255", "203.0.114.0", "8.8.8.8", "192.168.1.2"] {
+            assert!(
+                skips_destination(&config, address),
+                "must preserve {address}"
+            );
+        }
+    }
+
+    #[test]
+    fn fake_ip_recovery_filter_follows_script_custom_pool_after_yaml() {
+        let config = compile(MihomoConfigOptions {
+            override_yaml: Some("dns:\n  fake-ip-range: 203.0.113.17/24\n".into()),
+            override_script: Some(
+                r#"fn main(config) {
+                    config.dns["fake-ip-range"] = "192.0.2.9/25";
+                    return config;
+                }"#
+                .into(),
+            ),
+            ..MihomoConfigOptions::default()
+        });
+        for address in ["198.18.0.1", "198.19.0.1", "192.0.2.0", "192.0.2.127"] {
+            assert!(
+                !skips_destination(&config, address),
+                "must recover {address}"
+            );
+        }
+        for address in ["192.0.1.255", "192.0.2.128", "203.0.113.17"] {
+            assert!(
+                skips_destination(&config, address),
+                "must preserve {address}"
+            );
+        }
+    }
+
+    #[test]
+    fn fake_ip_recovery_filter_preserves_explicit_yaml_and_script_filters() {
+        let config = compile(MihomoConfigOptions {
+            override_yaml: Some(
+                "dns:\n  fake-ip-range: 203.0.113.17/24\nsniffer:\n  skip-dst-address: [0.0.0.0/0, '::/0']\n".into(),
+            ),
+            ..MihomoConfigOptions::default()
+        });
+        assert_eq!(
+            config["sniffer"]["skip-dst-address"],
+            json!(["0.0.0.0/0", "::/0"])
+        );
+        assert!(skips_destination(&config, "203.0.113.17"));
+        assert!(skips_destination(&config, "198.18.0.1"));
+
+        let config = compile(MihomoConfigOptions {
+            override_yaml: Some("sniffer:\n  skip-dst-address: [0.0.0.0/0]\n".into()),
+            override_script: Some(
+                r#"fn main(config) {
+                    config.dns["fake-ip-range"] = "203.0.113.17/24";
+                    config.sniffer["skip-dst-address"] = ["10.0.0.0/8"];
+                    return config;
+                }"#
+                .into(),
+            ),
+            ..MihomoConfigOptions::default()
+        });
+        assert_eq!(config["sniffer"]["skip-dst-address"], json!(["10.0.0.0/8"]));
+    }
+
+    #[test]
+    fn fake_ip_recovery_filter_handles_custom_pool_boundaries_and_local_overlap() {
+        for (pool, allowed, skipped) in [
+            (
+                "203.0.113.9/32",
+                vec!["203.0.113.9"],
+                vec!["203.0.113.8", "203.0.113.10"],
+            ),
+            (
+                "198.18.64.1/18",
+                vec!["198.18.0.1", "198.19.255.255"],
+                vec!["198.20.0.0"],
+            ),
+            (
+                "0.0.0.0/0",
+                vec!["0.0.0.0", "255.255.255.255"],
+                vec!["10.1.2.3", "192.168.1.2"],
+            ),
+            (
+                "10.0.0.1/8",
+                vec!["198.18.0.1"],
+                vec!["10.0.0.1", "10.255.255.255"],
+            ),
+            (
+                "invalid",
+                vec!["198.18.0.1", "198.19.0.1"],
+                vec!["203.0.113.9"],
+            ),
+            ("203.0.113.9/33", vec!["198.18.0.1"], vec!["203.0.113.9"]),
+        ] {
+            let config =
+                json!({"sniffer": {"skip-dst-address": fake_ip_recovery_skip_destinations(pool)}});
+            for address in allowed {
+                assert!(
+                    !skips_destination(&config, address),
+                    "pool={pool} must recover {address}"
+                );
+            }
+            for address in skipped {
+                assert!(
+                    skips_destination(&config, address),
+                    "pool={pool} must preserve {address}"
+                );
+            }
         }
     }
 

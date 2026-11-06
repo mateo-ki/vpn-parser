@@ -141,6 +141,7 @@ impl ProxyChild {
 pub(crate) struct ProxyRuntime {
     pub(crate) status: ProxyRuntimeStatus,
     pub(crate) options: MihomoConfigOptions,
+    pending_options: Option<MihomoConfigOptions>,
     pub(crate) child: Option<ProxyChild>,
     pub(crate) work_dir: Option<ProxyWorkDir>,
     pub(crate) system_proxy_snapshot: Option<SystemProxySnapshot>,
@@ -236,7 +237,7 @@ impl ProxyRuntime {
     }
     /// 界面传进来的配置里，一次性控制器密钥和 url-test 候选都是空的（两者都不持久
     /// 化）。直接覆盖会让鉴权失效、自动选路丢候选，所以空值一律沿用运行时当前的。
-    pub(crate) fn apply_options(&mut self, mut options: MihomoConfigOptions) {
+    fn merged_options(&self, mut options: MihomoConfigOptions) -> MihomoConfigOptions {
         if options.controller_secret.is_empty() {
             options.controller_secret = self.options.controller_secret.clone();
         }
@@ -249,7 +250,16 @@ impl ProxyRuntime {
         if options.chain_nodes.is_none() {
             options.chain_nodes = self.options.chain_nodes.clone();
         }
-        self.options = options;
+        options
+    }
+
+    fn defer_options(&mut self, options: MihomoConfigOptions) {
+        self.pending_options = Some(self.merged_options(options));
+    }
+
+    pub(crate) fn apply_options(&mut self, options: MihomoConfigOptions) {
+        self.options = self.merged_options(options);
+        self.pending_options = None;
     }
 }
 
@@ -275,10 +285,85 @@ fn controller_reload_payload(path: &Path, content: &str) -> Value {
     }
 }
 
+/// Keep the active file intact until the controller accepts the staged config.
+/// A rejected request therefore cannot silently change either the next reload or
+/// the manager's effective options. The temporary file has the same privacy as
+/// other kernel configuration files and is removed on every normal error path.
+async fn reload_controller_config(
+    controller_port: u16,
+    secret: &str,
+    config_path: &Path,
+    config_text: &str,
+) -> Result<()> {
+    let previous = tokio::fs::read_to_string(config_path).await
+        .context("读取当前内核配置失败")?;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(10))
+        .build().context("创建热重载 HTTP 客户端失败")?;
+    let staged = config_path.with_file_name(format!(".reload-{}.yaml", Uuid::new_v4()));
+    let mut file_options = tokio::fs::OpenOptions::new();
+    file_options.write(true).create_new(true);
+    #[cfg(unix)]
+    file_options.mode(0o600);
+    let result = async {
+        use tokio::io::AsyncWriteExt;
+        let mut file = file_options.open(&staged).await.context("创建待应用内核配置失败")?;
+        file.write_all(config_text.as_bytes()).await.context("写入待应用内核配置失败")?;
+        file.flush().await.context("刷新待应用内核配置失败")?;
+        drop(file);
+        let url = format!("http://127.0.0.1:{controller_port}/configs?force=true");
+        let payload = controller_reload_payload(&staged, config_text);
+        let response = match with_controller_auth(client.put(&url).json(&payload), secret)
+            .send().await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                // A lost/late reply does not prove that the core rejected the
+                // config. Reapply the previous payload before reporting failure.
+                let payload = controller_reload_payload(config_path, &previous);
+                let restored = with_controller_auth(client.put(&url).json(&payload), secret)
+                    .timeout(Duration::from_secs(5))
+                    .send().await.is_ok_and(|response| response.status().is_success());
+                return Err(anyhow!(error).context(if restored {
+                    "请求内核热重载 API 失败，已恢复原配置"
+                } else {
+                    "请求内核热重载 API 失败，未确认恢复原配置，请检查当前连接"
+                }));
+            }
+        };
+        if !response.status().is_success() {
+            return Err(anyhow!("内核热重载 API 返回 {}，当前生效配置未更新", response.status()));
+        }
+        if let Err(error) = tokio::fs::rename(&staged, config_path).await {
+            // The controller accepted the new config, but storage could not commit.
+            // Restore the previous core config while its original file is intact.
+            let payload = controller_reload_payload(config_path, &previous);
+            let restored = with_controller_auth(client.put(&url).json(&payload), secret)
+                .timeout(Duration::from_secs(5))
+                .send().await.is_ok_and(|response| response.status().is_success());
+            if restored {
+                return Err(anyhow!(error).context("提交内核配置文件失败，已恢复原配置"));
+            }
+            return Err(anyhow!(error).context("提交内核配置文件失败，恢复原配置亦失败，请检查当前连接"));
+        }
+        Ok(())
+    }.await;
+    let _ = tokio::fs::remove_file(staged).await;
+    result
+}
+
+#[derive(Clone)]
+pub(crate) struct ProxyConfigSnapshot {
+    active: MihomoConfigOptions,
+    pending: Option<MihomoConfigOptions>,
+}
+
 #[derive(Clone)]
 pub struct ProxyManager {
     pub(crate) runtime: Arc<Mutex<ProxyRuntime>>,
     operation: Arc<Mutex<()>>,
+    configuration_save: Arc<Mutex<()>>,
     system_proxy: Arc<dyn SystemProxyControl>,
 }
 
@@ -300,6 +385,7 @@ impl ProxyManager {
             runtime: Arc::new(Mutex::new(ProxyRuntime {
                 status: ProxyRuntimeStatus::stopped(options.clone()),
                 options,
+                pending_options: None,
                 child: None,
                 work_dir: None,
                 system_proxy_snapshot: None,
@@ -314,6 +400,7 @@ impl ProxyManager {
                 recovery_waiting_for_route: false,
             })),
             operation: Arc::new(Mutex::new(())),
+            configuration_save: Arc::new(Mutex::new(())),
             system_proxy,
         }
     }
@@ -355,6 +442,10 @@ impl ProxyManager {
             let tun_on = runtime.options.mode.has_tun();
             runtime.options.mode = if tun_on { ProxyMode::Both } else { ProxyMode::System };
             runtime.status.mode = runtime.options.mode;
+            let mode = runtime.options.mode;
+            if let Some(pending) = runtime.pending_options.as_mut() {
+                pending.mode = mode;
+            }
             tracing::info!(port, "系统代理免停热开启成功");
             Ok(format!("系统代理已即时开启 (指向 {server})，未重启内核"))
         } else {
@@ -367,6 +458,10 @@ impl ProxyManager {
             let tun_on = runtime.options.mode.has_tun();
             runtime.options.mode = if tun_on { ProxyMode::Tun } else { ProxyMode::None };
             runtime.status.mode = runtime.options.mode;
+            let mode = runtime.options.mode;
+            if let Some(pending) = runtime.pending_options.as_mut() {
+                pending.mode = mode;
+            }
             tracing::info!("系统代理免停热关闭成功");
             Ok("系统代理已即时关闭，未重启内核".to_string())
         }
@@ -432,7 +527,31 @@ impl ProxyManager {
     }
 
     pub async fn config(&self) -> MihomoConfigOptions {
-        self.runtime.lock().await.options.clone()
+        let runtime = self.runtime.lock().await;
+        runtime.pending_options.as_ref().unwrap_or(&runtime.options).clone()
+    }
+
+    pub(crate) async fn config_snapshot(&self) -> ProxyConfigSnapshot {
+        let runtime = self.runtime.lock().await;
+        ProxyConfigSnapshot {
+            active: runtime.options.clone(),
+            pending: runtime.pending_options.clone(),
+        }
+    }
+
+    /// Roll back the config that was actually running, then restore the saved
+    /// reconnect request independently. Reloading only the desired pending config
+    /// could otherwise leave a newer active config behind after a DB failure.
+    pub(crate) async fn restore_config_snapshot(&self, previous: ProxyConfigSnapshot) -> Result<bool> {
+        let result = self.reload_config(previous.active).await;
+        self.runtime.lock().await.pending_options = previous.pending;
+        result
+    }
+
+    /// Serialize the whole GUI save transaction, including DB commit/rollback.
+    /// This is separate from `operation`, which reload/start already acquire.
+    pub(crate) async fn lock_configuration_save(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.configuration_save.clone().lock_owned().await
     }
 
     /// Local process supervision is independent of node failover. A disconnected
@@ -516,6 +635,9 @@ impl ProxyManager {
         let proxies = crate::export::nodes_to_clash_proxies(&nodes);
         let count = proxies.len();
         let mut runtime = self.runtime.lock().await;
+        if let Some(pending) = runtime.pending_options.as_mut() {
+            pending.url_test_nodes = proxies.clone();
+        }
         runtime.options.url_test_nodes = proxies;
         count
     }
@@ -530,13 +652,32 @@ impl ProxyManager {
             }
         }
         let mut runtime = self.runtime.lock().await;
+        if let Some(pending) = runtime.pending_options.as_mut() {
+            pending.port_mapping_nodes = mapping_nodes.clone();
+        }
         runtime.options.port_mapping_nodes = mapping_nodes;
     }
 
     /// 启动前或热重载前注入链式代理中继与落地节点实体（不持久化，只影响本次生成的配置）。
     pub async fn set_chain_nodes(&self, nodes: Option<(Node, Node)>) {
         let mut runtime = self.runtime.lock().await;
-        runtime.options.chain_nodes = nodes.map(Box::new);
+        let nodes = nodes.map(Box::new);
+        if let Some(pending) = runtime.pending_options.as_mut() {
+            pending.chain_nodes = nodes.clone();
+        }
+        runtime.options.chain_nodes = nodes;
+    }
+
+    /// Candidate priming is local preparation, not an applied config change.
+    /// Restore only those transient fields when compilation/storage rejects a save.
+    pub(crate) async fn restore_config_candidates(&self, previous: &ProxyConfigSnapshot) {
+        let mut runtime = self.runtime.lock().await;
+        runtime.options.port_mapping_nodes = previous.active.port_mapping_nodes.clone();
+        runtime.options.chain_nodes = previous.active.chain_nodes.clone();
+        if let (Some(pending), Some(saved)) = (runtime.pending_options.as_mut(), previous.pending.as_ref()) {
+            pending.port_mapping_nodes = saved.port_mapping_nodes.clone();
+            pending.chain_nodes = saved.chain_nodes.clone();
+        }
     }
 
     pub async fn update_config(&self, options: MihomoConfigOptions) -> Result<()> {
@@ -555,129 +696,91 @@ impl ProxyManager {
         Ok(())
     }
 
+    /// Ok(true): applied now (or stored while stopped); Ok(false): reconnect required.
+    /// Compilation, storage and controller failures are errors, never deferred success.
     pub async fn reload_config(&self, options: MihomoConfigOptions) -> Result<bool> {
         options.validate()?;
         let _operation = self.operation.lock().await;
 
-        let (kernel, config_path, controller_port, node, effective_options) = {
+        let (kernel, config_path, controller_port, controller_secret, node, effective_options) = {
             let mut runtime = self.runtime.lock().await;
-            if !matches!(
-                runtime.status.state,
-                ProxyState::Running | ProxyState::Degraded
-            ) {
-                runtime.apply_options(options.clone());
+            if !matches!(runtime.status.state, ProxyState::Running | ProxyState::Degraded) {
+                runtime.apply_options(options);
+                let options = runtime.options.clone();
                 runtime.status.mode = options.mode;
                 runtime.status.routing_mode = options.routing_mode;
                 runtime.status.mixed_port = options.mixed_port;
                 runtime.status.controller_port = options.controller_port;
-                runtime.status.controller_secret = options.controller_secret.clone();
+                runtime.status.controller_secret = options.controller_secret;
                 return Ok(true);
             }
             // A user-owned process cannot acquire utun permissions by reloading YAML.
-            // Keep the requested options for the following restart through the helper.
             #[cfg(target_os = "macos")]
             if options.mode.has_tun()
                 && !crate::platform::is_elevated()
                 && !matches!(runtime.child.as_ref(), Some(ProxyChild::Elevated(_)))
             {
-                runtime.apply_options(options);
+                runtime.defer_options(options);
                 return Ok(false);
             }
             let kernel = match runtime.status.kernel {
                 Some(k @ (KernelKind::Mihomo | KernelKind::VpCore)) => k,
                 _ => {
-                    runtime.apply_options(options.clone());
+                    runtime.defer_options(options);
                     return Ok(false);
                 }
             };
             let alive = match runtime.child.as_mut() {
-                Some(child) => child.try_wait().is_ok_and(|status| status.is_none()),
+                Some(child) => child.try_wait().context("读取运行内核状态失败")?.is_none(),
                 None => false,
             };
             if !alive {
-                runtime.apply_options(options.clone());
+                return Err(anyhow!("当前内核已退出，请重新连接后保存配置"));
+            }
+            let config_path = runtime.work_dir.as_ref()
+                .ok_or_else(|| anyhow!("运行内核缺少配置目录"))?.config_path();
+            let node = runtime.current_node.clone()
+                .ok_or_else(|| anyhow!("运行内核缺少当前节点"))?;
+            let effective = runtime.merged_options(options.clone());
+            // Listener/authentication changes need a reconnect; issue reload requests
+            // only to the controller belonging to the currently running process.
+            if effective.controller_port != runtime.options.controller_port
+                || effective.controller_secret != runtime.options.controller_secret
+                || effective.mixed_port != runtime.options.mixed_port
+            {
+                runtime.defer_options(options);
                 return Ok(false);
             }
-            let Some(work_dir) = &runtime.work_dir else {
-                runtime.apply_options(options.clone());
-                return Ok(false);
-            };
-            let config_path = work_dir.config_path();
-            let Some(node) = runtime.current_node.clone() else {
-                runtime.apply_options(options.clone());
-                return Ok(false);
-            };
-            runtime.apply_options(options.clone());
-            let effective = runtime.options.clone();
             (
                 kernel,
                 config_path,
-                effective.controller_port,
+                runtime.options.controller_port,
+                runtime.options.controller_secret.clone(),
                 node,
                 effective,
             )
         };
 
         let started = tokio::time::Instant::now();
-        let config = match build_kernel_config(kernel, &node, effective_options) {
-            Ok(config) => config,
-            Err(error) => {
-                tracing::warn!("构建热重载分流规则配置失败: {error}");
-                return Ok(false);
-            }
-        };
-        let config_text = match serialize_kernel_config(kernel, &config) {
-            Ok(text) => text,
-            Err(error) => {
-                tracing::warn!("序列化热重载分流规则配置失败: {error}");
-                return Ok(false);
-            }
-        };
+        let config = build_kernel_config(kernel, &node, effective_options)
+            .context("构建热重载配置失败")?;
+        let config_text = serialize_kernel_config(kernel, &config)
+            .context("序列化热重载配置失败")?;
+        reload_controller_config(controller_port, &controller_secret, &config_path, &config_text).await?;
 
-        if let Err(error) = tokio::fs::write(&config_path, &config_text).await {
-            tracing::warn!("写入热重载分流规则配置文件失败: {error}");
-            return Ok(false);
-        }
-
-        let client = match reqwest::Client::builder()
-            .timeout(Duration::from_millis(1500))
-            .build()
-        {
-            Ok(client) => client,
-            Err(error) => {
-                tracing::warn!("创建热重载 HTTP 客户端失败: {error}");
-                return Ok(false);
-            }
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        let mut runtime = self.runtime.lock().await;
+        runtime.apply_options(options);
+        let routing_mode = runtime.options.routing_mode;
+        runtime.status.routing_mode = routing_mode;
+        let kernel_name = match kernel {
+            KernelKind::Mihomo => "Mihomo",
+            KernelKind::VpCore => "VP-Core",
+            _ => "内核",
         };
-
-        let controller_secret = options.controller_secret.clone();
-        let url = format!("http://127.0.0.1:{controller_port}/configs?force=true");
-        let payload = controller_reload_payload(&config_path, &config_text);
-        let request = with_controller_auth(client.put(&url).json(&payload), &controller_secret);
-        match request.send().await {
-            Ok(response) if response.status().is_success() => {
-                let elapsed_ms = started.elapsed().as_millis() as u64;
-                let mut runtime = self.runtime.lock().await;
-                runtime.apply_options(options);
-                let kernel_name = match kernel {
-                    KernelKind::Mihomo => "Mihomo",
-                    KernelKind::VpCore => "VP-Core",
-                    _ => "内核",
-                };
-                runtime.status.message =
-                    format!("{kernel_name} 运行中（配置已热重载生效，耗时 {elapsed_ms} ms）");
-                tracing::info!(elapsed_ms, "{kernel_name} 配置热重载生效成功");
-                Ok(true)
-            }
-            Ok(response) => {
-                tracing::warn!(status = %response.status(), "内核热重载 API 返回失败");
-                Ok(false)
-            }
-            Err(error) => {
-                tracing::warn!("请求内核热重载 API 失败: {error}");
-                Ok(false)
-            }
-        }
+        runtime.status.message = format!("{kernel_name} 运行中（配置已热重载生效，耗时 {elapsed_ms} ms）");
+        tracing::info!(elapsed_ms, "{kernel_name} 配置热重载生效成功");
+        Ok(true)
     }
 
     /// TUN 开关热切换：代理运行中改 TUN 启停不重启内核进程、不断已建立连接。
@@ -704,7 +807,15 @@ impl ProxyManager {
                 && !crate::platform::is_elevated()
                 && !matches!(runtime.child.as_ref(), Some(ProxyChild::Elevated(_)))
             {
-                runtime.apply_options(options);
+                runtime.defer_options(options);
+                return Ok(false);
+            }
+            options = runtime.merged_options(options);
+            if options.controller_port != runtime.options.controller_port
+                || options.controller_secret != runtime.options.controller_secret
+                || options.mixed_port != runtime.options.mixed_port
+            {
+                runtime.defer_options(options);
                 return Ok(false);
             }
             let Some(kernel) = runtime.status.kernel else {
@@ -979,6 +1090,9 @@ impl ProxyManager {
         let elapsed_ms = started.elapsed().as_millis() as u64;
         let mut runtime = self.runtime.lock().await;
         runtime.options.routing_mode = routing_mode;
+        if let Some(pending) = runtime.pending_options.as_mut() {
+            pending.routing_mode = routing_mode;
+        }
         runtime.status.routing_mode = routing_mode;
         runtime.status.last_error = None;
         runtime.status.message = format!(
@@ -1065,7 +1179,13 @@ impl ProxyManager {
     ) -> Result<()> {
         #[cfg(not(target_os = "macos"))]
         let _ = allow_install;
-        let options = self.runtime.lock().await.options.clone();
+        let options = {
+            let mut runtime = self.runtime.lock().await;
+            if let Some(pending) = runtime.pending_options.take() {
+                runtime.apply_options(pending);
+            }
+            runtime.options.clone()
+        };
         let preference = kernel_override.unwrap_or(options.kernel_preference);
         let (kernel, fallback_notice) = match select_proxy_kernel_preference_for_node(
             node,
@@ -2568,5 +2688,285 @@ pub fn format_kernel_diagnostic(raw: &str) -> String {
         msg.to_string()
     } else {
         last_nonempty_line(&cleaned).to_string()
+    }
+}
+
+#[cfg(all(test, unix))]
+mod config_reload_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn running_manager(response_status: u16) -> (
+        ProxyManager, PathBuf, tokio::task::JoinHandle<(String, Value)>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let controller_port = listener.local_addr().unwrap().port();
+        let manager = ProxyManager::new(MihomoConfigOptions {
+            mode: ProxyMode::None,
+            routing_mode: RoutingMode::Direct,
+            controller_port,
+            ..Default::default()
+        });
+        let secret = manager.config().await.controller_secret;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut received = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let header_end = loop {
+                let count = stream.read(&mut chunk).await.unwrap();
+                assert_ne!(count, 0, "controller request ended early");
+                received.extend_from_slice(&chunk[..count]);
+                if let Some(end) = received.windows(4).position(|s| s == b"\r\n\r\n") {
+                    break end;
+                }
+            };
+            let headers = String::from_utf8(received[..header_end].to_vec()).unwrap();
+            let length = headers.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            }).unwrap();
+            while received.len() < header_end + 4 + length {
+                let count = stream.read(&mut chunk).await.unwrap();
+                assert_ne!(count, 0);
+                received.extend_from_slice(&chunk[..count]);
+            }
+            assert!(headers.lines().any(|line|
+                line.eq_ignore_ascii_case(&format!("authorization: Bearer {secret}"))),
+                "the saved config has no secret; reload must inherit the active one");
+            let payload: Value = serde_json::from_slice(&received[header_end + 4..]).unwrap();
+            let response = format!("HTTP/1.1 {response_status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            stream.write_all(response.as_bytes()).await.unwrap();
+            (headers, payload)
+        });
+        let root = std::env::temp_dir().join(format!("vproxy-reload-test-{}", Uuid::new_v4()));
+        tokio::fs::create_dir(&root).await.unwrap();
+        let config_path = root.join("config.yaml");
+        tokio::fs::write(&config_path, "old-effective-config").await.unwrap();
+        let now = chrono::Utc::now();
+        let node = Node {
+            id: "isolated-reload-test".into(), source_id: None,
+            protocol: "ss".into(), name: "local-only".into(),
+            server: "127.0.0.1".into(), port: 8388, raw: String::new(),
+            config: serde_json::json!({"server":"127.0.0.1", "port":8388,
+                "cipher":"aes-128-gcm", "password":"test-only"}),
+            country: None, latency_ms: None, latency_ok: None, download_kbps: None,
+            latency_kernel: None, latency_test_kind: None, latency_tested_at: None,
+            created_at: now, updated_at: now,
+        };
+        let child = Command::new("/bin/sleep").arg("30").kill_on_drop(true).spawn().unwrap();
+        {
+            let mut runtime = manager.runtime.lock().await;
+            runtime.status.state = ProxyState::Running;
+            runtime.status.kernel = Some(KernelKind::Mihomo);
+            runtime.status.local_proxy_ready = true;
+            runtime.child = Some(ProxyChild::Standard(child));
+            runtime.current_node = Some(node);
+            runtime.work_dir = Some(ProxyWorkDir { root: root.clone(), data_root: root, kernel: KernelKind::Mihomo });
+        }
+        (manager, config_path, server)
+    }
+
+    #[tokio::test]
+    async fn rejected_reload_keeps_the_active_options_and_file() {
+        let (manager, path, server) = running_manager(400).await;
+        let previous = manager.config().await;
+        let mut requested = previous.clone();
+        requested.controller_secret.clear(); // Persisted/GUI config deliberately omits it.
+        requested.block_trackers = !previous.block_trackers;
+        let error = manager.reload_config(requested).await.unwrap_err();
+        assert!(error.to_string().contains("400"));
+        assert_eq!(manager.config().await, previous);
+        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), "old-effective-config");
+        let (_, payload) = server.await.unwrap();
+        assert!(payload["payload"].as_str().unwrap().contains("mixed-port"));
+        assert_eq!(std::fs::read_dir(path.parent().unwrap()).unwrap().count(), 1,
+            "rejected temporary config must be removed");
+        manager.stop_inner_for_restart().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn accepted_reload_commits_options_and_file_with_the_active_secret() {
+        let (manager, path, server) = running_manager(204).await;
+        let previous = manager.config().await;
+        let mut requested = previous.clone();
+        requested.controller_secret.clear();
+        requested.block_trackers = !previous.block_trackers;
+        assert!(manager.reload_config(requested.clone()).await.unwrap());
+        requested.controller_secret = previous.controller_secret;
+        assert_eq!(manager.config().await, requested);
+        let (_, payload) = server.await.unwrap();
+        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), payload["payload"].as_str().unwrap());
+        assert_eq!(std::fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+        manager.stop_inner_for_restart().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn compiler_failure_does_not_commit_options_or_touch_the_controller() {
+        let (manager, path, server) = running_manager(204).await;
+        {
+            let mut runtime = manager.runtime.lock().await;
+            runtime.current_node.as_mut().unwrap().protocol = "unsupported-test-only".into();
+        }
+        let previous = manager.config().await;
+        let mut requested = previous.clone();
+        requested.block_trackers = !previous.block_trackers;
+        let error = manager.reload_config(requested).await.unwrap_err();
+        assert!(format!("{error:#}").contains("构建热重载配置失败"));
+        assert_eq!(manager.config().await, previous);
+        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), "old-effective-config");
+        assert!(!server.is_finished(), "compilation must finish before contacting the controller");
+        server.abort();
+        manager.stop_inner_for_restart().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn deferred_listener_settings_never_replace_the_active_endpoint() {
+        let (manager, path, server) = running_manager(204).await;
+        let active = manager.config().await;
+        let mut pending = active.clone();
+        pending.controller_port = if active.controller_port == u16::MAX {
+            active.controller_port - 1
+        } else {
+            active.controller_port + 1
+        };
+        if pending.controller_port == active.mixed_port {
+            pending.controller_port = active.controller_port - 1;
+        }
+        pending.controller_secret = "next-controller-secret".into();
+        pending.mixed_port = active.mixed_port + 1;
+        if pending.mixed_port == pending.controller_port {
+            pending.mixed_port += 1;
+        }
+        assert!(!manager.reload_config(pending.clone()).await.unwrap());
+        pending.block_trackers = !pending.block_trackers;
+        assert!(!manager.reload_config(pending.clone()).await.unwrap());
+        {
+            let runtime = manager.runtime.lock().await;
+            assert_eq!(runtime.options, active, "pending listeners/auth must stay inactive");
+            assert_eq!(runtime.pending_options.as_ref(), Some(&pending));
+        }
+        assert_eq!(manager.config().await, pending, "the UI retains the saved settings");
+        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), "old-effective-config");
+        assert!(!server.is_finished(), "a deferred save must not contact any controller");
+        server.abort();
+        manager.stop_inner_for_restart().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rollback_restores_the_active_config_and_the_previous_pending_request() {
+        let (manager, _path, server) = running_manager(204).await;
+        let active = manager.config().await;
+        let mut pending = active.clone();
+        pending.controller_secret = "saved-for-next-connection".into();
+        assert!(!manager.reload_config(pending.clone()).await.unwrap());
+        let snapshot = manager.config_snapshot().await;
+        {
+            // Simulate a later successful live change whose DB commit failed.
+            let mut runtime = manager.runtime.lock().await;
+            let mut newer = active.clone();
+            newer.block_trackers = !newer.block_trackers;
+            runtime.apply_options(newer);
+        }
+        assert!(manager.restore_config_snapshot(snapshot).await.unwrap());
+        server.await.unwrap();
+        {
+            let runtime = manager.runtime.lock().await;
+            assert_eq!(runtime.options, active, "rollback must restore the active config");
+            assert_eq!(runtime.pending_options.as_ref(), Some(&pending));
+        }
+        assert_eq!(manager.config().await, pending);
+        manager.stop_inner_for_restart().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unsupported_reload_is_saved_for_reconnect_without_claiming_to_apply() {
+        let manager = ProxyManager::new(MihomoConfigOptions::default());
+        {
+            let mut runtime = manager.runtime.lock().await;
+            runtime.status.state = ProxyState::Running;
+            runtime.status.kernel = Some(KernelKind::Xray);
+        }
+        let previous_status = manager.runtime.lock().await.status.routing_mode;
+        let mut requested = manager.config().await;
+        requested.routing_mode = RoutingMode::Direct;
+        assert!(!manager.reload_config(requested).await.unwrap());
+        let runtime = manager.runtime.lock().await;
+        assert_eq!(runtime.options.routing_mode, previous_status);
+        assert_eq!(runtime.pending_options.as_ref().unwrap().routing_mode, RoutingMode::Direct);
+        assert_eq!(runtime.status.routing_mode, previous_status,
+            "a deferred save must not report the new routing mode as active");
+    }
+
+    #[tokio::test]
+    async fn invalid_reload_is_an_error_without_changing_effective_options() {
+        let manager = ProxyManager::new(MihomoConfigOptions::default());
+        let previous = manager.config().await;
+        let mut invalid = previous.clone();
+        invalid.mixed_port = invalid.controller_port;
+        assert!(manager.reload_config(invalid).await.is_err());
+        assert_eq!(manager.config().await, previous);
+    }
+
+    #[tokio::test]
+    async fn timed_out_reload_restores_previous_payload_before_reporting_failure() {
+        async fn read_request(stream: &mut tokio::net::TcpStream) -> (String, Value) {
+            let mut received = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let header_end = loop {
+                let count = stream.read(&mut chunk).await.unwrap();
+                assert_ne!(count, 0);
+                received.extend_from_slice(&chunk[..count]);
+                if let Some(end) = received.windows(4).position(|s| s == b"\r\n\r\n") {
+                    break end;
+                }
+            };
+            let headers = String::from_utf8(received[..header_end].to_vec()).unwrap();
+            let length = headers.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            }).unwrap();
+            while received.len() < header_end + 4 + length {
+                let count = stream.read(&mut chunk).await.unwrap();
+                assert_ne!(count, 0);
+                received.extend_from_slice(&chunk[..count]);
+            }
+            let payload = serde_json::from_slice(&received[header_end + 4..header_end + 4 + length]).unwrap();
+            (headers, payload)
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let controller_port = listener.local_addr().unwrap().port();
+        let root = std::env::temp_dir().join(format!("vproxy-reload-timeout-test-{}", Uuid::new_v4()));
+        tokio::fs::create_dir(&root).await.unwrap();
+        let config_path = root.join("config.yaml");
+        tokio::fs::write(&config_path, "old-effective-config").await.unwrap();
+        let server = tokio::spawn(async move {
+            let (mut first, _) = listener.accept().await.unwrap();
+            let (first_headers, first_payload) = read_request(&mut first).await;
+            assert!(first_headers.to_ascii_lowercase().contains("authorization: bearer isolated-timeout-secret"));
+            assert_eq!(first_payload["payload"], "new-isolated-config");
+            // The core has applied the request, but its acknowledgement is lost.
+            // Keep the first connection open and accept the corrective reload.
+            let (mut rollback, _) = listener.accept().await.unwrap();
+            let (rollback_headers, rollback_payload) = read_request(&mut rollback).await;
+            assert!(rollback_headers.to_ascii_lowercase().contains("authorization: bearer isolated-timeout-secret"));
+            assert_eq!(rollback_payload["payload"], "old-effective-config");
+            rollback.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+            drop(first);
+        });
+        let error = reload_controller_config(
+            controller_port,
+            "isolated-timeout-secret",
+            &config_path,
+            "new-isolated-config",
+        ).await.unwrap_err();
+        assert!(format!("{error:#}").contains("已恢复"));
+        tokio::time::timeout(Duration::from_secs(8), server).await.unwrap().unwrap();
+        assert_eq!(tokio::fs::read_to_string(&config_path).await.unwrap(), "old-effective-config");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1,
+            "ambiguous reload must remove its staged config after recovery");
+        tokio::fs::remove_dir_all(root).await.unwrap();
     }
 }

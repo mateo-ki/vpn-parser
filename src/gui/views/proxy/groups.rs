@@ -357,7 +357,7 @@ impl VpnApp {
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                         if ui
                                             .add_enabled(!self.proxy_busy, primary_btn("保存配置"))
-                                            .on_hover_text("立即保存 YAML 覆写配置并热重载生效")
+                                            .on_hover_text("保存 YAML 覆写配置；支持热重载时立即应用")
                                             .clicked()
                                         {
                                             save_clicked = true;
@@ -377,7 +377,7 @@ impl VpnApp {
                                 ui.add_space(4.0);
                                 ui.label(
                                     RichText::new(
-                                        "遵循 Clash Party 规范对内核配置进行深度覆写。支持 +key 前插、key+ 追加、key 全量替换、! 强制覆盖与 <> 转义（如 +rules / +proxy-groups / dns / tun），保存后热重载生效："
+                                        "遵循 Clash Party 规范对内核配置进行深度覆写。支持 +key 前插、key+ 追加、key 全量替换、! 强制覆盖与 <> 转义（如 +rules / +proxy-groups / dns / tun），保存后由内核应用结果确认是否生效："
                                     )
                                     .small()
                                     .color(theme::muted()),
@@ -427,7 +427,6 @@ impl VpnApp {
                                         Some(text)
                                     };
                                     self.save_proxy_config();
-                                    self.status = "已保存自定义分流覆写配置并热重载".into();
                                 }
                             });
                     }
@@ -455,7 +454,7 @@ impl VpnApp {
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                         if ui
                                             .add_enabled(!self.proxy_busy, primary_btn("保存脚本"))
-                                            .on_hover_text("立即保存 Rhai 脚本覆写并热重载生效")
+                                            .on_hover_text("校验并保存 Rhai 脚本；支持热重载时立即应用")
                                             .clicked()
                                         {
                                             save_clicked = true;
@@ -584,17 +583,16 @@ impl VpnApp {
                                     };
                                     if let Err(e) = crate::proxy::script_override::validate_script_syntax(&script_text) {
                                         self.rhai_syntax_status = Some((
-                                            format!("保存成功，但脚本存在语法错误: {e}"),
+                                            format!("未保存，脚本存在语法错误: {e}"),
                                             true,
                                         ));
                                     } else {
                                         self.rhai_syntax_status = Some((
-                                            "✅ 已保存 Rhai 脚本并成功热重载生效".to_string(),
+                                            "语法校验通过（保存结果见状态栏）".to_string(),
                                             false,
                                         ));
+                                        self.save_proxy_config();
                                     }
-                                    self.save_proxy_config();
-                                    self.status = "已保存 Rhai 动态脚本覆写配置并热重载".into();
                                 }
                             });
                     }

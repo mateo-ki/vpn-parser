@@ -2994,7 +2994,9 @@ impl VpnApp {
         self.proxy_config.selected_node_id = Some(id.clone());
         self.proxy_config.selected_node_name = Some(name.clone());
         let db = self.db.clone();
+        let manager = self.proxy_manager.clone();
         self.rt.spawn(async move {
+            let _save = manager.lock_configuration_save().await;
             if let Ok(mut cfg) = db.get_proxy_config().await {
                 cfg.selected_node_id = Some(id);
                 cfg.selected_node_name = Some(name);
@@ -3392,39 +3394,47 @@ impl VpnApp {
         self.proxy_busy = true;
         self.status = "正在保存分流配置并应用...".into();
         self.rt.spawn(async move {
-            let previous = manager.config().await;
-            Self::prime_port_mapping_candidates(&db, &manager, &options.port_mappings).await;
-            Self::prime_chain_proxy_candidates(&db, &manager, &options).await;
-            let result = match manager.reload_config(options.clone()).await {
-                Ok(_) => match db.update_proxy_config(&options).await {
-                    Ok(()) => Ok(options),
-                    Err(error) => {
-                        let _ = manager.reload_config(previous).await;
-                        Err(error.to_string())
-                    }
-                },
-                Err(error) => Err(error.to_string()),
-            };
+            let result = Self::apply_and_save_proxy_config(&db, &manager, options).await;
             let _ = tx.send(BgMsg::ProxyConfigSaved(result));
         });
     }
 
-    /// 静默更新并持久化代理配置（不设置全局 proxy_busy 阻断 UI，也不强行全量重查日志），适用于分流模式切换、内核偏好更改等高频操作
+    async fn apply_and_save_proxy_config(
+        db: &Database,
+        manager: &ProxyManager,
+        options: MihomoConfigOptions,
+    ) -> Result<ProxyConfigSaveResult, String> {
+        let _save = manager.lock_configuration_save().await;
+        let previous = manager.config_snapshot().await;
+        Self::prime_port_mapping_candidates(db, manager, &options.port_mappings).await;
+        Self::prime_chain_proxy_candidates(db, manager, &options).await;
+        let applied = match manager.reload_config(options.clone()).await {
+            Ok(applied) => applied,
+            Err(error) => {
+                manager.restore_config_candidates(&previous).await;
+                return Err(format!("{error:#}"));
+            }
+        };
+        if let Err(error) = db.update_proxy_config(&options).await {
+            manager.restore_config_candidates(&previous).await;
+            let rollback = manager.restore_config_snapshot(previous).await;
+            return Err(match rollback {
+                Ok(true) => format!("{error}（未保存，已恢复原配置）"),
+                Ok(false) => format!("{error}（未保存，已恢复原设置，重新连接后生效）"),
+                Err(rollback_error) => format!("{error}；恢复原生效配置失败: {rollback_error:#}"),
+            });
+        }
+        Ok(ProxyConfigSaveResult { config: options, applied })
+    }
+
+    /// 静默保存不阻塞界面；结果仍明确区分已生效、等待重新连接和失败。
     pub(crate) fn save_proxy_config_quiet(&mut self) {
         let manager = self.proxy_manager.clone();
         let db = self.db.clone();
         let options = self.prepare_proxy_config_options();
         let tx = self.tx.clone();
         self.rt.spawn(async move {
-            Self::prime_port_mapping_candidates(&db, &manager, &options.port_mappings).await;
-            Self::prime_chain_proxy_candidates(&db, &manager, &options).await;
-            let result = match manager.reload_config(options.clone()).await {
-                Ok(_) => match db.update_proxy_config(&options).await {
-                    Ok(()) => Ok(options),
-                    Err(error) => Err(error.to_string()),
-                },
-                Err(error) => Err(error.to_string()),
-            };
+            let result = Self::apply_and_save_proxy_config(&db, &manager, options).await;
             let _ = tx.send(BgMsg::ProxyConfigQuietSaved(result));
         });
     }
@@ -3862,6 +3872,7 @@ impl VpnApp {
         self.proxy_status.message = starting_msg.clone();
         self.status = starting_msg;
         self.rt.spawn(async move {
+            let _save = manager.lock_configuration_save().await;
             let result = match db.get_node(&node_id).await {
                 Ok(Some(node)) => {
                     let has_override_groups = options
@@ -3882,11 +3893,9 @@ impl VpnApp {
                     Self::prime_port_mapping_candidates(&db, &manager, &options.port_mappings)
                         .await;
                     Self::prime_chain_proxy_candidates(&db, &manager, &options).await;
-                    let db_clone = db.clone();
-                    let opt_clone = options.clone();
-                    tokio::spawn(async move {
-                        let _ = db_clone.update_proxy_config(&opt_clone).await;
-                    });
+                    // Keep this write inside the same config transaction as start;
+                    // a detached task could overwrite a newer quiet save afterwards.
+                    let _ = db.update_proxy_config(&options).await;
                     let operation = manager.start_with_options(&node, options).await;
                     match operation {
                         Ok(()) => {
@@ -4695,7 +4704,9 @@ impl VpnApp {
             self.proxy_config.selected_node_id = None;
             self.proxy_config.selected_node_name = None;
             let db_cfg = self.db.clone();
+            let manager = self.proxy_manager.clone();
             self.rt.spawn(async move {
+                let _save = manager.lock_configuration_save().await;
                 if let Ok(mut cfg) = db_cfg.get_proxy_config().await {
                     cfg.selected_node_id = None;
                     cfg.selected_node_name = None;

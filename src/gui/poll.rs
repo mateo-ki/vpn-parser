@@ -463,7 +463,7 @@ impl VpnApp {
                                     let tx = self.tx.clone();
                                     self.rt.spawn(async move {
                                         if let Ok(cfg) = db.get_proxy_config().await {
-                                            let _ = tx.send(BgMsg::ProxyConfigSaved(Ok(cfg)));
+                                            let _ = tx.send(BgMsg::ProxyConfig(Ok(cfg)));
                                         }
                                     });
                                 }
@@ -974,9 +974,12 @@ impl VpnApp {
                         BgMsg::ProxyConfigSaved(result) => {
                             self.proxy_busy = false;
                             match result {
-                                Ok(config) => {
-                                    self.set_proxy_config(config);
-                                    self.status = "代理配置已保存".into();
+                                Ok(saved) => {
+                                    self.status = saved.status_message(matches!(
+                                        self.proxy_status.state,
+                                        ProxyState::Running | ProxyState::Degraded
+                                    )).into();
+                                    self.set_proxy_config(saved.config);
                                     // 模式开关（系统代理/TUN）在保存期间登记的待应用变更：
                                     // busy 已清、配置已落库，此时才能真正走热切换/重启。
                                     // 关键：有模式变更待执行时，绝不能在此处提前调用 reload_proxy，
@@ -994,9 +997,13 @@ impl VpnApp {
                             }
                         }
                         BgMsg::ProxyConfigQuietSaved(result) => {
-                            if let Err(error) = result {
-                                self.status = format!("保存代理配置失败: {error}");
-                            }
+                            self.status = match result {
+                                Ok(saved) => saved.status_message(matches!(
+                                    self.proxy_status.state,
+                                    ProxyState::Running | ProxyState::Degraded
+                                )).into(),
+                                Err(error) => format!("保存代理配置失败: {error}"),
+                            };
                         }
                         BgMsg::ProxyLog(Ok(log)) => self.proxy_log = log,
                         BgMsg::ProxyLog(Err(error)) => {

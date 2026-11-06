@@ -553,7 +553,7 @@ impl VpnApp {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if ui
                                     .add_enabled(editable, primary_btn("保存规则"))
-                                    .on_hover_text("解析文本并保存自定义规则至配置，触发代理内核热重载")
+                                    .on_hover_text("解析并保存规则，支持热重载时立即应用")
                                     .clicked()
                                 {
                                     save_rules_clicked = true;
@@ -576,7 +576,7 @@ impl VpnApp {
                         });
                         ui.add_space(4.0);
                         let hint = if is_sub {
-                            "当前选用订阅模板的分流规则（支持在此直接调整或添加自定义例外，保存后即刻热重载生效）："
+                            "当前选用订阅模板的分流规则（支持在此直接调整或添加自定义例外，保存后由内核应用结果确认是否生效）："
                         } else {
                             "内置全自动分流引擎已接管国内直连与海外代理，开箱即用。在此处添加高优先级自定义例外规则（每行一条，支持 - 前缀与 # 注释）："
                         };
@@ -720,13 +720,13 @@ impl VpnApp {
                             self.save_proxy_config();
                             if !import.unparsed.is_empty() {
                                 self.status = format!(
-                                    "已保存 {} 条分流规则并热重载（{} 行无法识别跳过）",
+                                    "正在保存 {} 条分流规则（{} 行无法识别，已跳过）",
                                     self.proxy_config.rules.len(),
                                     import.unparsed.len()
                                 );
                             } else {
                                 self.status = format!(
-                                    "已保存 {} 条分流规则并热重载",
+                                    "正在保存 {} 条分流规则并应用…",
                                     self.proxy_config.rules.len()
                                 );
                             }
