@@ -672,6 +672,7 @@ async fn reload_controller_config(
 }
 
 #[derive(Clone)]
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
 pub(crate) struct ProxyConfigSnapshot {
     active: MihomoConfigOptions,
     pending: Option<MihomoConfigOptions>,
@@ -682,6 +683,7 @@ pub struct ProxyManager {
     pub(crate) runtime: Arc<Mutex<ProxyRuntime>>,
     operation: Arc<Mutex<()>>,
     request_epoch: Arc<AtomicU64>,
+    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
     configuration_save: Arc<Mutex<()>>,
     system_proxy: Arc<dyn SystemProxyControl>,
 }
@@ -857,6 +859,7 @@ impl ProxyManager {
         runtime.pending_options.as_ref().unwrap_or(&runtime.options).clone()
     }
 
+    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
     pub(crate) async fn config_snapshot(&self) -> ProxyConfigSnapshot {
         let runtime = self.runtime.lock().await;
         ProxyConfigSnapshot {
@@ -868,6 +871,7 @@ impl ProxyManager {
     /// Roll back the config that was actually running, then restore the saved
     /// reconnect request independently. Reloading only the desired pending config
     /// could otherwise leave a newer active config behind after a DB failure.
+    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
     pub(crate) async fn restore_config_snapshot(&self, previous: ProxyConfigSnapshot) -> Result<bool> {
         let result = self.reload_config(previous.active).await;
         self.runtime.lock().await.pending_options = previous.pending;
@@ -876,6 +880,7 @@ impl ProxyManager {
 
     /// Serialize the whole GUI save transaction, including DB commit/rollback.
     /// This is separate from `operation`, which reload/start already acquire.
+    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
     pub(crate) async fn lock_configuration_save(&self) -> tokio::sync::OwnedMutexGuard<()> {
         self.configuration_save.clone().lock_owned().await
     }
@@ -996,6 +1001,7 @@ impl ProxyManager {
 
     /// Candidate priming is local preparation, not an applied config change.
     /// Restore only those transient fields when compilation/storage rejects a save.
+    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
     pub(crate) async fn restore_config_candidates(&self, previous: &ProxyConfigSnapshot) {
         let mut runtime = self.runtime.lock().await;
         runtime.options.port_mapping_nodes = previous.active.port_mapping_nodes.clone();
