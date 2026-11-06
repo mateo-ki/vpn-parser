@@ -96,6 +96,8 @@ pub struct VpnApp {
     pub(crate) status_bar_top_y: f32,
     pub(crate) busy: bool,
     pub(crate) proxy_busy: bool,
+    pub(crate) proxy_operation_id: u64,
+    pub(crate) failed_proxy_start_notice: Option<FailedProxyStartNotice>,
     /// 模式开关（系统代理/TUN）拨动后待应用的工作模式：Some(改动前的 TUN 状态)。
     /// `save_proxy_config` 检测到运行模式变化时置位，保存完成（ProxyConfigSaved 回清
     /// proxy_busy）后再真正应用 —— 不能在 save 之前同步调 apply：save 同步置 busy，
@@ -587,6 +589,8 @@ impl VpnApp {
             status_bar_top_y: 0.0,
             busy: false,
             proxy_busy: false,
+            proxy_operation_id: 0,
+            failed_proxy_start_notice: None,
             pending_mode_apply: None,
             last_proxy_state_log: None,
             proxy_started_at: None,
@@ -3860,6 +3864,7 @@ impl VpnApp {
             self.handoff_proxy_to_elevated_instance(&node_id);
             return;
         }
+        let operation = self.begin_proxy_operation(ProxyOperationKind::Start);
         let db = self.db.clone();
         let manager = self.proxy_manager.clone();
         let mode = self.proxy_config.mode;
@@ -3997,7 +4002,7 @@ impl VpnApp {
                 Err(error) => Err(error),
             }
             .map_err(|error| error.to_string());
-            let _ = tx.send(BgMsg::ProxyOp(result));
+            let _ = tx.send(BgMsg::ProxyOp { operation, result });
         });
     }
 
@@ -4076,7 +4081,34 @@ impl VpnApp {
         self.last_proxy_state_log = Some((state, now, false));
     }
 
+    fn begin_proxy_operation(&mut self, kind: ProxyOperationKind) -> ProxyOperation {
+        self.proxy_operation_id = self.proxy_operation_id.wrapping_add(1);
+        self.failed_proxy_start_notice = None;
+        ProxyOperation {
+            id: self.proxy_operation_id,
+            kind,
+            previous_kernel_pid: self.proxy_status.kernel_pid,
+        }
+    }
+
+    fn receive_proxy_runtime_status(&mut self, status: ProxyRuntimeStatus) {
+        if let Some(notice) = self.failed_proxy_start_notice.take() {
+            // A newer footer belongs to its own operation, even if it also
+            // describes a proxy/config error. Never clear it by text pattern.
+            if notice.operation.id == self.proxy_operation_id && self.status == notice.footer {
+                if !self.proxy_busy && notice.recovered_by(self.proxy_operation_id, &self.status, &status) {
+                    self.status = format!("代理已自动恢复，{}", status.message);
+                } else {
+                    self.failed_proxy_start_notice = Some(notice);
+                }
+            }
+        }
+        self.note_proxy_state_transition(status.state);
+        self.proxy_status = status;
+    }
+
     pub(crate) fn stop_proxy(&mut self) {
+        let operation = self.begin_proxy_operation(ProxyOperationKind::Stop);
         let manager = self.proxy_manager.clone();
         let tx = self.tx.clone();
         self.proxy_busy = true;
@@ -4089,7 +4121,7 @@ impl VpnApp {
                 .await
                 .map(|_| "代理已停止".into())
                 .map_err(|error| error.to_string());
-            let _ = tx.send(BgMsg::ProxyOp(result));
+            let _ = tx.send(BgMsg::ProxyOp { operation, result });
         });
     }
 
@@ -5933,6 +5965,41 @@ mod tests {
     use crate::speedtest::{SpeedTestPhase, SpeedTestProgress};
     use eframe::egui::{Sense, Vec2};
     use std::time::Duration;
+
+    #[test]
+    fn runtime_recovery_updates_only_its_failed_start_footer() {
+        let mut app = crate::gui::views::nodes::empty_pool_modal_tests::app_with_an_empty_library();
+        app.proxy_status.kernel_pid = Some(100);
+        let operation = app.begin_proxy_operation(ProxyOperationKind::Start);
+        let failure = "代理操作失败: 代理端口 9980 已被占用".to_string();
+        let mut recovered = app.proxy_status.clone();
+        recovered.state = ProxyState::Running;
+        recovered.local_proxy_ready = true;
+        recovered.kernel_pid = Some(101);
+        recovered.message = "Mihomo 运行中".into();
+        app.status = failure.clone();
+        app.failed_proxy_start_notice = Some(FailedProxyStartNotice { operation, footer: failure.clone() });
+        app.receive_proxy_runtime_status(recovered.clone());
+        assert_eq!(app.status, "代理已自动恢复，Mihomo 运行中");
+        assert!(app.failed_proxy_start_notice.is_none());
+        assert_eq!(app.proxy_status.state, ProxyState::Running);
+
+        // A later config failure must not be replaced by unrelated maintenance.
+        app.failed_proxy_start_notice = Some(FailedProxyStartNotice { operation, footer: failure.clone() });
+        app.status = "保存代理配置失败: 无效规则".into();
+        app.receive_proxy_runtime_status(recovered.clone());
+        assert_eq!(app.status, "保存代理配置失败: 无效规则");
+        assert!(app.failed_proxy_start_notice.is_none());
+
+        // A new user request revokes the old recovery notice immediately.
+        app.status = failure.clone();
+        app.failed_proxy_start_notice = Some(FailedProxyStartNotice { operation, footer: failure.clone() });
+        let stop = app.begin_proxy_operation(ProxyOperationKind::Stop);
+        assert_ne!(operation.id, stop.id);
+        app.status = "正在关闭内核...".into();
+        app.receive_proxy_runtime_status(recovered);
+        assert_eq!(app.status, "正在关闭内核...");
+    }
 
     #[test]
     fn formats_real_proxy_progress_for_status_bar() {

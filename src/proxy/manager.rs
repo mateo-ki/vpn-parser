@@ -1311,8 +1311,13 @@ impl ProxyManager {
         runtime.status.local_proxy_ready = false;
         runtime.status.last_error = None;
 
+        let port_preflight = startup_port_preflight(
+            cfg!(target_os = "macos"),
+            crate::platform::is_elevated(),
+            runtime.options.mode,
+        );
         for port in required_startup_ports(kernel, &runtime.options) {
-            if let Err(error) = ensure_port_available(port).await {
+            if let Err(error) = ensure_startup_port_available(port, port_preflight).await {
                 mark_failed(&mut runtime, error.to_string());
                 return Err(error);
             }
@@ -1569,6 +1574,25 @@ impl ProxyManager {
             let log_detail = tokio::fs::read_to_string(work_dir.log_path())
                 .await
                 .unwrap_or_default();
+            if port_preflight == StartupPortPreflight::ListenerOnly {
+                if let Some(detail) = startup_tcp_listener_bind_error(
+                    &log_detail,
+                    &required_startup_ports(kernel, &runtime.options),
+                ) {
+                    // A different process can win the port after preflight. A
+                    // reachable port plus a live core does not prove ownership:
+                    // Mihomo logs listener bind errors while continuing to run.
+                    let message = format!("{} 监听端口绑定失败: {detail}", kernel.display_name());
+                    runtime.child = Some(child);
+                    runtime.work_dir = Some(work_dir);
+                    drop(runtime);
+                    if let Err(error) = self.stop_inner_for_restart().await {
+                        return Err(anyhow!("{message}；停止失败，已保留会话供重试: {error:#}"));
+                    }
+                    self.set_failed(message.clone()).await;
+                    return Err(anyhow!(message));
+                }
+            }
             let lower_log = log_detail.to_lowercase();
             if lower_log.contains("tunsetiff")
                 || lower_log.contains("start tun error")
@@ -2179,6 +2203,117 @@ mod port_readiness_tests {
         assert!(!wait_for_port_with_status(|| Ok(None), port, Duration::from_millis(30))
             .await.unwrap());
     }
+
+    #[test]
+    fn listener_only_preflight_is_limited_to_unprivileged_macos_tun() {
+        for macos in [false, true] {
+            for elevated in [false, true] {
+                for mode in [ProxyMode::None, ProxyMode::System, ProxyMode::Tun, ProxyMode::Both] {
+                    let expected = if macos && !elevated && mode.has_tun() {
+                        StartupPortPreflight::ListenerOnly
+                    } else {
+                        StartupPortPreflight::Bind
+                    };
+                    assert_eq!(startup_port_preflight(macos, elevated, mode), expected);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn elevated_macos_preflight_rejects_a_real_listener_and_accepts_refusal() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let preflight = startup_port_preflight(true, false, ProxyMode::Tun);
+        let error = ensure_startup_port_available(port, preflight).await.unwrap_err();
+        assert!(error.to_string().contains("已有 TCP 服务正在监听"));
+        drop(listener);
+        ensure_startup_port_available(port, preflight).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cross_uid_bind_conflict_does_not_block_a_root_core_without_a_listener() {
+        let bind_called = std::cell::Cell::new(false);
+        let result = ensure_startup_port_available_with_probes(
+            9980,
+            startup_port_preflight(true, false, ProxyMode::Both),
+            async {
+                bind_called.set(true);
+                Err(anyhow!(std::io::Error::from(std::io::ErrorKind::AddrInUse)))
+            },
+            async { Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused)) },
+            Duration::from_secs(1),
+        ).await;
+        assert!(result.is_ok());
+        assert!(!bind_called.get(), "the GUI must not bind or run orphan cleanup on this path");
+    }
+
+    #[tokio::test]
+    async fn other_startup_paths_still_use_the_bind_result() {
+        let listener_called = std::cell::Cell::new(false);
+        let error = ensure_startup_port_available_with_probes(
+            9980,
+            startup_port_preflight(true, false, ProxyMode::System),
+            async { Err(anyhow!("isolated bind conflict")) },
+            async {
+                listener_called.set(true);
+                Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused))
+            },
+            Duration::from_secs(1),
+        ).await.unwrap_err();
+        assert_eq!(error.to_string(), "isolated bind conflict");
+        assert!(!listener_called.get());
+    }
+
+    #[tokio::test]
+    async fn uncertain_listener_probes_never_report_the_port_as_available() {
+        let preflight = startup_port_preflight(true, false, ProxyMode::Tun);
+        let denied = ensure_startup_port_available_with_probes(
+            9980,
+            preflight,
+            async { panic!("bind probe must not run") },
+            async { Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)) },
+            Duration::from_secs(1),
+        ).await.unwrap_err();
+        assert!(denied.to_string().contains("无法确认代理端口 9980 是否空闲"));
+        let timed_out = ensure_startup_port_available_with_probes(
+            9980,
+            preflight,
+            async { panic!("bind probe must not run") },
+            std::future::pending::<std::io::Result<()>>(),
+            Duration::from_millis(5),
+        ).await.unwrap_err();
+        assert!(timed_out.to_string().contains("探测超时"));
+    }
+
+    #[test]
+    fn startup_bind_diagnostics_match_real_mihomo_listener_errors_only() {
+        // Captured from the installed Mihomo 1.19.33 using isolated, occupied
+        // random loopback ports, with TUN/DNS disabled. The core remained alive.
+        let mixed = "time=\"fixture\" level=error msg=\"Start Mixed(http+socks) server error: listen tcp 127.0.0.1:62300: bind: address already in use\"";
+        let controller = "time=\"fixture\" level=error msg=\"External controller listen error: listen tcp 127.0.0.1:62302: bind: address already in use\"";
+        assert_eq!(startup_tcp_listener_bind_error(mixed, &[62300]), Some(mixed.into()));
+        assert_eq!(startup_tcp_listener_bind_error(controller, &[62302]), Some(controller.into()));
+        assert!(startup_tcp_listener_bind_error(mixed, &[62301]).is_none());
+        assert!(startup_tcp_listener_bind_error(&mixed.replace("level=error", "level=warning"), &[62300]).is_none());
+        for line in [
+            "time=\"fixture\" level=error msg=\"[TCP] dial node.example:62300 error: bind: address already in use\"",
+            "time=\"fixture\" level=error msg=\"node example:62300 failed health check\"",
+            "time=\"fixture\" level=info msg=\"Mixed(http+socks) proxy listening at: 127.0.0.1:62300\"",
+        ] {
+            assert!(startup_tcp_listener_bind_error(line, &[62300]).is_none(), "{line}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_foreign_open_port_does_not_hide_the_new_cores_bind_failure() {
+        let foreign = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = foreign.local_addr().unwrap().port();
+        // This reproduces why socket readiness alone cannot establish ownership.
+        assert!(wait_for_port_with_status(|| Ok(None), port, Duration::from_secs(1)).await.unwrap());
+        let log = format!("time=\"fixture\" level=error msg=\"Start Mixed(http+socks) server error: listen tcp 127.0.0.1:{port}: bind: address already in use\"");
+        assert!(startup_tcp_listener_bind_error(&log, &[port]).is_some());
+    }
 }
 
 pub async fn verify_local_proxy(port: u16, timeout: Duration) -> Result<()> {
@@ -2248,6 +2383,68 @@ pub async fn verify_local_proxy(port: u16, timeout: Duration) -> Result<()> {
         "本地代理无法访问测试地址: {}",
         last_errors.join("；")
     ))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StartupPortPreflight {
+    Bind,
+    ListenerOnly,
+}
+
+fn startup_port_preflight(macos: bool, elevated: bool, mode: ProxyMode) -> StartupPortPreflight {
+    if macos && !elevated && mode.has_tun() {
+        StartupPortPreflight::ListenerOnly
+    } else {
+        StartupPortPreflight::Bind
+    }
+}
+
+async fn ensure_startup_port_available(port: u16, preflight: StartupPortPreflight) -> Result<()> {
+    ensure_startup_port_available_with_probes(
+        port,
+        preflight,
+        ensure_port_available(port),
+        async {
+            TcpStream::connect(("127.0.0.1", port)).await.map(drop)
+        },
+        Duration::from_millis(250),
+    ).await
+}
+
+async fn ensure_startup_port_available_with_probes(
+    port: u16,
+    preflight: StartupPortPreflight,
+    bind_probe: impl std::future::Future<Output = Result<()>>,
+    listener_probe: impl std::future::Future<Output = std::io::Result<()>>,
+    timeout: Duration,
+) -> Result<()> {
+    if preflight == StartupPortPreflight::Bind {
+        return bind_probe.await;
+    }
+    // Darwin rejects a non-root bind against another UID's surviving TCP PCB
+    // even with SO_REUSEADDR. The root TUN core can still bind that port, so the
+    // GUI checks for a real listener and leaves binding to the privileged core.
+    match tokio::time::timeout(timeout, listener_probe).await {
+        Ok(Ok(())) => Err(anyhow!("代理端口 {port} 已被占用：已有 TCP 服务正在监听")),
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => Ok(()),
+        Ok(Err(error)) => Err(anyhow!(error).context(format!("无法确认代理端口 {port} 是否空闲"))),
+        Err(_) => Err(anyhow!("无法确认代理端口 {port} 是否空闲：TCP 监听探测超时")),
+    }
+}
+
+fn startup_tcp_listener_bind_error(log: &str, ports: &[u16]) -> Option<String> {
+    log.lines().find_map(|line| {
+        if !line.contains(" level=error ")
+            || !(line.contains("msg=\"Start Mixed(http+socks) server error: listen tcp ")
+                || line.contains("msg=\"External controller listen error: listen tcp "))
+        {
+            return None;
+        }
+        let (_, listen) = line.split_once("listen tcp ")?;
+        let (address, _) = listen.split_once(": bind:")?;
+        ports.iter().any(|port| address.ends_with(&format!(":{port}")))
+            .then(|| line.to_owned())
+    })
 }
 
 pub async fn ensure_port_available(port: u16) -> Result<()> {

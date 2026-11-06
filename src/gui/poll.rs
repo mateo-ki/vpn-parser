@@ -1,5 +1,5 @@
 use crate::gui::prepare;
-use crate::gui::types::{BgMsg, DnsRecord};
+use crate::gui::types::{BgMsg, DnsRecord, FailedProxyStartNotice, ProxyOperationKind};
 use crate::gui::widgets::{format_speedtest_progress, node_group_key, normalize_api_base};
 use crate::gui::VpnApp;
 use crate::kernel::KernelKind;
@@ -908,16 +908,14 @@ impl VpnApp {
                             }
                         }
                         BgMsg::ProxyStatus(status) => {
-                            self.note_proxy_state_transition(status.state);
-                            self.proxy_status = status;
+                            self.receive_proxy_runtime_status(status);
                         }
                         BgMsg::ProxyMaintenanceDone(status) => {
                             // A user operation started while the poll was pending;
                             // its completion will publish the authoritative state.
                             if !self.proxy_busy {
                                 if let Some(status) = status {
-                                    self.note_proxy_state_transition(status.state);
-                                    self.proxy_status = status;
+                                    self.receive_proxy_runtime_status(status);
                                 }
                             }
                         }
@@ -1009,7 +1007,10 @@ impl VpnApp {
                         BgMsg::ProxyLog(Err(error)) => {
                             self.status = format!("读取代理日志失败: {error}");
                         }
-                        BgMsg::ProxyOp(result) => {
+                        BgMsg::ProxyOp { operation, result } => {
+                            if operation.id != self.proxy_operation_id {
+                                continue; // Completion from an older Start/Stop request.
+                            }
                             self.proxy_busy = false;
                             self.switching_node_id = None;
                             match result {
@@ -1031,6 +1032,8 @@ impl VpnApp {
                                 }
                                 Err(error) => {
                                     self.status = format!("代理操作失败: {error}");
+                                    self.failed_proxy_start_notice = (operation.kind == ProxyOperationKind::Start)
+                                        .then(|| FailedProxyStartNotice { operation, footer: self.status.clone() });
                                     self.note_proxy_state_transition(ProxyState::Failed);
                                     self.proxy_status.state = ProxyState::Failed;
                                 }
