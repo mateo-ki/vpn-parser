@@ -139,6 +139,323 @@ impl ProxyChild {
     }
 }
 
+trait ChildStopControl {
+    fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>>;
+    fn kill(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send + '_>>;
+    fn wait(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<std::process::ExitStatus>> + Send + '_>>;
+}
+
+impl ChildStopControl for ProxyChild {
+    fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        ProxyChild::try_wait(self)
+    }
+    fn kill(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send + '_>> {
+        Box::pin(ProxyChild::kill(self))
+    }
+    fn wait(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<std::process::ExitStatus>> + Send + '_>> {
+        Box::pin(ProxyChild::wait(self))
+    }
+}
+
+#[derive(Debug)]
+struct ChildStopConfirmation {
+    // Preserve the distinction between an earlier crash and our own Stop.
+    previous_exit: Option<std::process::ExitStatus>,
+}
+
+async fn stop_failed_start_child<C: ChildStopControl>(
+    mut child: C,
+    timeout: Duration,
+) -> std::result::Result<ChildStopConfirmation, (C, anyhow::Error)> {
+    if let Ok(Some(status)) = child.try_wait() {
+        return Ok(ChildStopConfirmation { previous_exit: Some(status) });
+    }
+    let stop_error = match tokio::time::timeout(timeout, child.kill()).await {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(format!("停止请求失败: {error}")),
+        Err(_) => Some("停止请求超时".to_string()),
+    };
+    // Stop may have succeeded even if its reply was lost. Only a confirmed exit
+    // allows dropping the handle and deleting the configuration directory.
+    let waited = tokio::time::timeout(timeout, child.wait()).await;
+    let error = match waited {
+        Ok(Ok(_)) => return Ok(ChildStopConfirmation { previous_exit: None }),
+        Ok(Err(error)) => format!("等待退出失败: {error}"),
+        Err(_) => "等待退出超时".to_string(),
+    };
+    let error = match stop_error {
+        Some(stop) => anyhow!("{stop}；{error}"),
+        None => anyhow!(error),
+    };
+    Err((child, error))
+}
+
+async fn finish_failed_start_cleanup(
+    runtime: &mut ProxyRuntime,
+    work_dir: ProxyWorkDir,
+    message: String,
+    stopped: std::result::Result<ChildStopConfirmation, (ProxyChild, anyhow::Error)>,
+) -> Result<()> {
+    match stopped {
+        Ok(_) => {
+            let _ = work_dir.cleanup().await;
+            runtime.status.kernel_pid = None;
+            mark_failed(runtime, message.clone());
+            if runtime.system_proxy_snapshot.is_some() {
+                // Activation may have partially changed the OS proxy and its
+                // rollback failed. A subsequent Start must first retry Stop.
+                runtime.status.state = ProxyState::Degraded;
+                runtime.status.system_proxy_enabled = true;
+                runtime.recovery_pending = false;
+                runtime.recovery_due = None;
+                runtime.recovery_waiting_for_route = false;
+            }
+            Err(anyhow!(message))
+        }
+        Err((child, error)) => {
+            let message = format!("{message}；停止尚未确认，已保留会话与配置供重试: {error:#}");
+            runtime.status.kernel_pid = child.id();
+            runtime.child = Some(child);
+            runtime.work_dir = Some(work_dir);
+            runtime.recovery_pending = false;
+            runtime.recovery_due = None;
+            runtime.recovery_waiting_for_route = false;
+            runtime.stable_since = None;
+            runtime.status.state = ProxyState::Degraded;
+            runtime.status.local_proxy_ready = false;
+            runtime.status.system_proxy_enabled = runtime.system_proxy_snapshot.is_some();
+            runtime.status.last_error = Some(message.clone());
+            runtime.status.message = message.clone();
+            Err(anyhow!(message))
+        }
+    }
+}
+
+async fn cleanup_failed_start(
+    runtime: &mut ProxyRuntime,
+    child: ProxyChild,
+    work_dir: ProxyWorkDir,
+    message: String,
+) -> Result<()> {
+    let stopped = stop_failed_start_child(child, Duration::from_secs(3)).await;
+    finish_failed_start_cleanup(runtime, work_dir, message, stopped).await
+}
+
+async fn restore_failed_restart_snapshot(
+    controller: Arc<dyn SystemProxyControl>,
+    snapshot: SystemProxySnapshot,
+    child_may_be_running: bool,
+    clear_terminal_proxy: bool,
+) -> Result<Option<SystemProxySnapshot>> {
+    if child_may_be_running {
+        // Stop still owns an unconfirmed session. Keep its snapshot for retry.
+        return Ok(Some(snapshot));
+    }
+    restore_system_proxy(controller, snapshot, clear_terminal_proxy).await?;
+    Ok(None)
+}
+
+#[cfg(test)]
+mod failed_start_cleanup_tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    #[derive(Clone, Copy)]
+    enum Reply { Success, Error, Pending }
+
+    struct MockChild {
+        token: u64,
+        exited: bool,
+        status_error: bool,
+        stop: Reply,
+        wait: Reply,
+        calls: Arc<std::sync::Mutex<Vec<&'static str>>>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    fn exit_status() -> std::process::ExitStatus {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(0)
+    }
+
+    impl MockChild {
+        fn new(stop: Reply, wait: Reply) -> Self {
+            Self { token: 42, exited: false, status_error: false, stop, wait,
+                calls: Arc::new(std::sync::Mutex::new(Vec::new())),
+                dropped: Arc::new(AtomicBool::new(false)) }
+        }
+    }
+
+    impl Drop for MockChild {
+        fn drop(&mut self) { self.dropped.store(true, Ordering::SeqCst); }
+    }
+
+    impl ChildStopControl for MockChild {
+        fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+            self.calls.lock().unwrap().push("status");
+            if self.status_error {
+                Err(std::io::Error::other("mock status unavailable"))
+            } else {
+                Ok(self.exited.then(exit_status))
+            }
+        }
+        fn kill(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send + '_>> {
+            Box::pin(async move {
+                self.calls.lock().unwrap().push("stop");
+                match self.stop {
+                    Reply::Success => Ok(()),
+                    Reply::Error => Err(std::io::Error::other("mock Stop reply lost")),
+                    Reply::Pending => std::future::pending().await,
+                }
+            })
+        }
+        fn wait(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<std::process::ExitStatus>> + Send + '_>> {
+            Box::pin(async move {
+                self.calls.lock().unwrap().push("wait");
+                match self.wait {
+                    Reply::Success => Ok(exit_status()),
+                    Reply::Error => Err(std::io::Error::other("mock status still unavailable")),
+                    Reply::Pending => std::future::pending().await,
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn confirmed_previous_exit_needs_no_stop_request() {
+        let mut child = MockChild::new(Reply::Pending, Reply::Pending);
+        child.exited = true;
+        let calls = child.calls.clone();
+        let result = stop_failed_start_child(child, Duration::from_millis(5)).await;
+        assert!(matches!(result, Ok(ChildStopConfirmation { previous_exit: Some(_) })));
+        assert_eq!(*calls.lock().unwrap(), ["status"]);
+    }
+
+    #[tokio::test]
+    async fn lost_stop_reply_is_safe_only_after_confirmed_exit() {
+        let child = MockChild::new(Reply::Error, Reply::Success);
+        let calls = child.calls.clone();
+        let dropped = child.dropped.clone();
+        let result = stop_failed_start_child(child, Duration::from_millis(5)).await;
+        assert!(matches!(result, Ok(ChildStopConfirmation { previous_exit: None })));
+        assert!(dropped.load(Ordering::SeqCst));
+        assert_eq!(*calls.lock().unwrap(), ["status", "stop", "wait"]);
+    }
+
+    #[tokio::test]
+    async fn a_stuck_wait_returns_the_owned_child_instead_of_dropping_it() {
+        let child = MockChild::new(Reply::Error, Reply::Pending);
+        let dropped = child.dropped.clone();
+        let (retained, error) = stop_failed_start_child(child, Duration::from_millis(5))
+            .await.err().expect("unconfirmed child must be returned");
+        assert_eq!(retained.token, 42);
+        assert!(!dropped.load(Ordering::SeqCst));
+        assert!(error.to_string().contains("等待退出超时"));
+    }
+
+    #[tokio::test]
+    async fn status_errors_never_count_as_an_exit_or_discard_the_child() {
+        let mut child = MockChild::new(Reply::Success, Reply::Error);
+        child.status_error = true;
+        let calls = child.calls.clone();
+        let dropped = child.dropped.clone();
+        let (retained, error) = stop_failed_start_child(child, Duration::from_millis(5))
+            .await.err().expect("status error must retain the child");
+        assert_eq!(retained.token, 42);
+        assert!(!dropped.load(Ordering::SeqCst));
+        assert!(error.to_string().contains("等待退出失败"));
+        assert_eq!(*calls.lock().unwrap(), ["status", "stop", "wait"]);
+    }
+
+    #[tokio::test]
+    async fn a_stuck_stop_still_checks_for_a_confirmed_exit() {
+        let child = MockChild::new(Reply::Pending, Reply::Success);
+        let calls = child.calls.clone();
+        let result = stop_failed_start_child(child, Duration::from_millis(5)).await;
+        assert!(result.is_ok());
+        assert_eq!(*calls.lock().unwrap(), ["status", "stop", "wait"]);
+    }
+
+    #[derive(Default)]
+    struct MockSystemProxy {
+        restored: std::sync::Mutex<Vec<SystemProxySnapshot>>,
+        fail_restore: bool,
+    }
+
+    fn original_proxy() -> SystemProxySnapshot {
+        SystemProxySnapshot {
+            enabled: false,
+            server: Some("127.0.0.1:18080".into()),
+            override_list: Some("<local>".into()),
+        }
+    }
+
+    impl SystemProxyControl for MockSystemProxy {
+        fn capture(&self) -> Result<SystemProxySnapshot> { Ok(original_proxy()) }
+        fn enable(&self, _server: &str) -> Result<()> {
+            panic!("a failed restart must not enable a new system proxy")
+        }
+        fn restore(&self, snapshot: &SystemProxySnapshot) -> Result<()> {
+            self.restored.lock().unwrap().push(snapshot.clone());
+            if self.fail_restore { Err(anyhow!("mock restore failed")) } else { Ok(()) }
+        }
+    }
+
+    #[tokio::test]
+    async fn no_child_restores_original_proxy_after_failed_restart() {
+        let controller = Arc::new(MockSystemProxy::default());
+        let manager = ProxyManager::with_system_proxy(MihomoConfigOptions::default(), controller.clone());
+        let _operation = manager.operation.lock().await;
+        {
+            let mut runtime = manager.runtime.lock().await;
+            runtime.status.kernel_pid = Some(42);
+            runtime.status.system_proxy_enabled = true;
+        }
+        let snapshot = original_proxy();
+        manager.finish_failed_restart(Some(snapshot.clone()), anyhow!("mock startup failed"))
+            .await.expect_err("startup failure must remain an error");
+        let runtime = manager.runtime.lock().await;
+        assert_eq!(*controller.restored.lock().unwrap(), [snapshot]);
+        assert!(runtime.system_proxy_snapshot.is_none());
+        assert!(!runtime.status.system_proxy_enabled);
+        assert_eq!(runtime.status.kernel_pid, None);
+        assert_eq!(runtime.status.state, ProxyState::Failed);
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_child_retains_proxy_snapshot_without_restoring_it() {
+        let controller = Arc::new(MockSystemProxy::default());
+        let snapshot = original_proxy();
+        let retained = restore_failed_restart_snapshot(controller.clone(), snapshot.clone(), true, false)
+            .await.unwrap();
+        assert_eq!(retained, Some(snapshot));
+        assert!(controller.restored.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_proxy_restore_keeps_snapshot_for_a_later_stop_retry() {
+        let controller = Arc::new(MockSystemProxy {
+            fail_restore: true,
+            ..MockSystemProxy::default()
+        });
+        let manager = ProxyManager::with_system_proxy(MihomoConfigOptions::default(), controller.clone());
+        let _operation = manager.operation.lock().await;
+        let snapshot = original_proxy();
+        let error = manager.finish_failed_restart(Some(snapshot.clone()), anyhow!("mock startup failed"))
+            .await.expect_err("restore failure must be reported");
+        let runtime = manager.runtime.lock().await;
+        assert_eq!(*controller.restored.lock().unwrap(), [snapshot.clone()]);
+        assert_eq!(runtime.system_proxy_snapshot, Some(snapshot));
+        assert!(runtime.status.system_proxy_enabled);
+        assert_eq!(runtime.status.state, ProxyState::Degraded);
+        assert!(error.to_string().contains("mock startup failed"));
+        assert!(error.to_string().contains("mock restore failed"));
+    }
+}
+
 pub(crate) struct ProxyRuntime {
     pub(crate) status: ProxyRuntimeStatus,
     pub(crate) options: MihomoConfigOptions,
@@ -431,13 +748,7 @@ impl ProxyManager {
             return Err(anyhow::anyhow!("当前未启用系统代理，不写注册表"));
         }
         let server = format!("127.0.0.1:{}", runtime.options.mixed_port);
-        let terminal_port = runtime
-            .options
-            .terminal_proxy
-            .then_some(runtime.options.mixed_port);
-        let snapshot =
-            activate_system_proxy(self.system_proxy.clone(), server.clone(), terminal_port).await?;
-        runtime.system_proxy_snapshot = Some(snapshot);
+        enable_runtime_system_proxy(&mut runtime, self.system_proxy.clone()).await?;
         Ok(format!("已把系统代理写回 {server}"))
     }
 
@@ -458,14 +769,7 @@ impl ProxyManager {
         let port = runtime.options.mixed_port;
         if enable {
             let server = format!("127.0.0.1:{port}");
-            let terminal_port = runtime
-                .options
-                .terminal_proxy
-                .then_some(port);
-            let snapshot =
-                activate_system_proxy(self.system_proxy.clone(), server.clone(), terminal_port).await?;
-            runtime.system_proxy_snapshot = Some(snapshot);
-            runtime.status.system_proxy_enabled = true;
+            enable_runtime_system_proxy(&mut runtime, self.system_proxy.clone()).await?;
             let tun_on = runtime.options.mode.has_tun();
             runtime.options.mode = if tun_on { ProxyMode::Both } else { ProxyMode::System };
             runtime.status.mode = runtime.options.mode;
@@ -476,12 +780,7 @@ impl ProxyManager {
             tracing::info!(port, "系统代理免停热开启成功");
             Ok(format!("系统代理已即时开启 (指向 {server})，未重启内核"))
         } else {
-            if let Some(snapshot) = runtime.system_proxy_snapshot.take() {
-                let _ = restore_system_proxy(self.system_proxy.clone(), snapshot, false).await;
-            } else {
-                let _ = crate::system_proxy::direct_disable_wininet_proxy_atomic();
-            }
-            runtime.status.system_proxy_enabled = false;
+            disable_runtime_system_proxy(&mut runtime, self.system_proxy.clone()).await?;
             let tun_on = runtime.options.mode.has_tun();
             runtime.options.mode = if tun_on { ProxyMode::Tun } else { ProxyMode::None };
             runtime.status.mode = runtime.options.mode;
@@ -984,22 +1283,7 @@ impl ProxyManager {
         let elapsed_ms = started.elapsed().as_millis() as u64;
         let mut runtime = self.runtime.lock().await;
 
-        // 同步系统代理状态：避免开关 TUN 时丢失原先并行的系统代理状态
-        if options.mode.has_system() && runtime.system_proxy_snapshot.is_none() {
-            let server = format!("127.0.0.1:{}", runtime.options.mixed_port);
-            let terminal_port = runtime.options.terminal_proxy.then_some(runtime.options.mixed_port);
-            if let Ok(snapshot) = activate_system_proxy(self.system_proxy.clone(), server, terminal_port).await {
-                runtime.system_proxy_snapshot = Some(snapshot);
-                runtime.status.system_proxy_enabled = true;
-            }
-        } else if !options.mode.has_system() && runtime.system_proxy_snapshot.is_some() {
-            if let Some(snapshot) = runtime.system_proxy_snapshot.take() {
-                let _ = restore_system_proxy(self.system_proxy.clone(), snapshot, false).await;
-            } else {
-                let _ = crate::system_proxy::direct_disable_wininet_proxy_atomic();
-            }
-            runtime.status.system_proxy_enabled = false;
-        }
+        synchronize_system_proxy_after_hot_tun(&mut runtime, self.system_proxy.clone(), &options).await?;
 
         runtime.apply_options(options.clone());
         runtime.status.mode = options.mode;
@@ -1303,11 +1587,14 @@ impl ProxyManager {
         allow_install: bool,
     ) -> Result<()> {
         let mut runtime = self.runtime.lock().await;
-        if matches!(
+        if runtime.child.is_some() || matches!(
             runtime.status.state,
             ProxyState::Starting | ProxyState::Running | ProxyState::Stopping
         ) {
             return Err(anyhow!("代理正在运行或切换状态"));
+        }
+        if preserved_system_proxy_snapshot.is_none() && runtime.system_proxy_snapshot.is_some() {
+            return Err(anyhow!("系统代理恢复尚未确认，请先重试停止再启动；已保留原设置"));
         }
         #[cfg(windows)]
         if runtime.options.mode.has_tun() && !crate::platform::is_elevated() {
@@ -1531,19 +1818,14 @@ impl ProxyManager {
             let readiness = wait_for_port(&mut child, port, startup_timeout).await;
             if !matches!(readiness, Ok(true)) {
                 let readiness_error = readiness.err();
-                // 先探测内核进程在超时前是否已自行退出
-                let exit_status = child.try_wait().ok().flatten();
-                if exit_status.is_none() {
-                    let _ = child.kill().await;
-                }
-                let _ = child.wait().await;
+                let stopped = stop_failed_start_child(child, Duration::from_secs(3)).await;
+                let exit_status = stopped.as_ref().ok().and_then(|stopped| stopped.previous_exit);
                 // 留 50ms 缓冲让操作系统完成文件写入缓冲区刷盘
                 tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
                 let detail = tokio::fs::read_to_string(work_dir.log_path())
                     .await
                     .unwrap_or_default();
-                let _ = work_dir.cleanup().await;
                 let detail_trimmed = detail.trim();
 
                 let fatal_line = detail_trimmed
@@ -1617,8 +1899,7 @@ impl ProxyManager {
                         STARTUP_PROXY_TOTAL_TIMEOUT.as_secs()
                     )
                 };
-                mark_failed(&mut runtime, message.clone());
-                return Err(anyhow!(message));
+                return finish_failed_start_cleanup(&mut runtime, work_dir, message, stopped).await;
             }
         }
 
@@ -1646,14 +1927,7 @@ impl ProxyManager {
                     // reachable port plus a live core does not prove ownership:
                     // Mihomo logs listener bind errors while continuing to run.
                     let message = format!("{} 监听端口绑定失败: {detail}", kernel.display_name());
-                    runtime.child = Some(child);
-                    runtime.work_dir = Some(work_dir);
-                    drop(runtime);
-                    if let Err(error) = self.stop_inner_for_restart().await {
-                        return Err(anyhow!("{message}；停止失败，已保留会话供重试: {error:#}"));
-                    }
-                    self.set_failed(message.clone()).await;
-                    return Err(anyhow!(message));
+                    return cleanup_failed_start(&mut runtime, child, work_dir, message).await;
                 }
             }
             let lower_log = log_detail.to_lowercase();
@@ -1666,9 +1940,6 @@ impl ProxyManager {
                 || lower_log.contains("failed to start tun")
                 || lower_log.contains("create tun adapter failed")
             {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-                let _ = work_dir.cleanup().await;
                 #[cfg(target_os = "macos")]
                 let message = format!(
                     "TUN 虚拟网卡创建失败，请检查 macOS 后台服务与内核日志：{}",
@@ -1683,8 +1954,7 @@ impl ProxyManager {
                      {cmd}\n\
                      （若在 Windows 上，请以管理员身份运行本程序）"
                 );
-                mark_failed(&mut runtime, message.clone());
-                return Err(anyhow!(message));
+                return cleanup_failed_start(&mut runtime, child, work_dir, message).await;
             }
 
             // 2. Linux 平台：真实网络接口存在性校验
@@ -1697,17 +1967,13 @@ impl ProxyManager {
                         .await
                         .unwrap_or_default();
                     if fresh_log.contains("level=error") || fresh_log.contains("level=fatal") {
-                        let _ = child.kill().await;
-                        let _ = child.wait().await;
-                        let _ = work_dir.cleanup().await;
                         let cmd = crate::platform::tun_capability_command(executable_path);
                         let message = format!(
                             "TUN 模式启动失败：系统虚拟网卡未成功创建。\n\
                              请确认已通过终端命令为内核授权：\n\
                              {cmd}"
                         );
-                        mark_failed(&mut runtime, message.clone());
-                        return Err(anyhow!(message));
+                        return cleanup_failed_start(&mut runtime, child, work_dir, message).await;
                     }
                 }
             }
@@ -1715,37 +1981,18 @@ impl ProxyManager {
 
         if runtime.options.mode.has_system() && self.system_proxy.supported() {
             if tokio::time::Instant::now() >= startup_deadline {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-                let _ = work_dir.cleanup().await;
                 let message = format!(
                     "{} 启动超过 {} 秒，系统代理未启用",
                     kernel.display_name(),
                     STARTUP_PROXY_TOTAL_TIMEOUT.as_secs()
                 );
-                mark_failed(&mut runtime, message.clone());
-                return Err(anyhow!(message));
+                return cleanup_failed_start(&mut runtime, child, work_dir, message).await;
             }
-            if let Some(snapshot) = preserved_system_proxy_snapshot.take() {
-                runtime.system_proxy_snapshot = Some(snapshot);
-            } else {
-                let server = format!("127.0.0.1:{}", runtime.options.mixed_port);
-                let terminal_port = runtime
-                    .options
-                    .terminal_proxy
-                    .then_some(runtime.options.mixed_port);
-                match activate_system_proxy(self.system_proxy.clone(), server, terminal_port).await
-                {
-                    Ok(snapshot) => runtime.system_proxy_snapshot = Some(snapshot),
-                    Err(error) => {
-                        let _ = child.kill().await;
-                        let _ = child.wait().await;
-                        let _ = work_dir.cleanup().await;
-                        let message = format!("启用系统代理失败: {error}");
-                        mark_failed(&mut runtime, message.clone());
-                        return Err(anyhow!(message));
-                    }
-                }
+            if let Err(error) = enable_startup_system_proxy(
+                &mut runtime, self.system_proxy.clone(), preserved_system_proxy_snapshot.take(),
+            ).await {
+                let message = format!("启用系统代理失败: {error}");
+                return cleanup_failed_start(&mut runtime, child, work_dir, message).await;
             }
             tracing::info!(
                 kernel = kernel.display_name(),
@@ -1766,6 +2013,7 @@ impl ProxyManager {
         }
 
         let elapsed_ms = startup_started.elapsed().as_millis() as u64;
+        runtime.status.kernel_pid = child.id();
         runtime.status.state = ProxyState::Running;
         runtime.status.routing_mode = runtime.options.routing_mode;
         // 这个字段的意思是"本地 mixed 端口已经就绪"，必须等端口检查通过后才置真，
@@ -1898,7 +2146,7 @@ impl ProxyManager {
         &self,
         restore_proxy: bool,
     ) -> Result<Option<SystemProxySnapshot>> {
-        let (mut child, work_dir, snapshot, options, kernel) = {
+        let (mut child, work_dir, snapshot, options, kernel, system_proxy_was_enabled) = {
             let mut runtime = self.runtime.lock().await;
             runtime.generation = runtime.generation.wrapping_add(1);
             let kernel = runtime.status.kernel;
@@ -1913,6 +2161,7 @@ impl ProxyManager {
                 runtime.system_proxy_snapshot.take(),
                 runtime.options.clone(),
                 kernel,
+                runtime.status.system_proxy_enabled,
             )
         };
         let kernel_name = kernel.map(KernelKind::display_name).unwrap_or("代理内核");
@@ -1938,6 +2187,7 @@ impl ProxyManager {
                 // Never discard an unconfirmed session: the root helper may still
                 // own a live TUN. Keep all handles/configs so the next Stop retries.
                 let mut runtime = self.runtime.lock().await;
+                runtime.status.kernel_pid = child.as_ref().and_then(ProxyChild::id);
                 runtime.child = child;
                 runtime.work_dir = work_dir;
                 runtime.system_proxy_snapshot = snapshot;
@@ -1952,17 +2202,20 @@ impl ProxyManager {
                 errors.push(format!("清理 {kernel_name} 工作目录失败: {error}"));
             }
         }
-        let preserved_snapshot = if restore_proxy {
-            let had_snapshot = snapshot.is_some();
-            if let Some(snapshot) = snapshot {
+        let mut preserved_snapshot = snapshot;
+        if restore_proxy {
+            let had_snapshot = preserved_snapshot.is_some();
+            if let Some(snapshot) = preserved_snapshot.as_ref() {
                 if let Err(error) = restore_system_proxy(
                     self.system_proxy.clone(),
-                    snapshot,
+                    snapshot.clone(),
                     options.terminal_proxy,
                 )
                 .await
                 {
                     errors.push(format!("恢复系统代理失败: {error}"));
+                } else {
+                    preserved_snapshot = None;
                 }
             }
             #[cfg(windows)]
@@ -1972,26 +2225,42 @@ impl ProxyManager {
             if !had_snapshot && options.terminal_proxy {
                 tokio::task::spawn_blocking(crate::system_proxy::terminal::disable);
             }
-            None
-        } else {
-            snapshot
-        };
+        }
 
         if !errors.is_empty() {
-            if let Some(snapshot) = preserved_snapshot.as_ref() {
-                if let Err(error) = restore_system_proxy(
-                    self.system_proxy.clone(),
-                    snapshot.clone(),
-                    options.terminal_proxy,
-                )
-                .await
-                {
-                    errors.push(format!("停止失败后恢复系统代理失败: {error}"));
+            // A restart cleanup failure must restore the old OS settings too.
+            // Keep the original snapshot when that fallback fails, so Stop can retry.
+            if !restore_proxy {
+                if let Some(snapshot) = preserved_snapshot.as_ref() {
+                    if let Err(error) = restore_system_proxy(
+                        self.system_proxy.clone(),
+                        snapshot.clone(),
+                        options.terminal_proxy,
+                    )
+                    .await
+                    {
+                        errors.push(format!("停止失败后恢复系统代理失败: {error}"));
+                    } else {
+                        preserved_snapshot = None;
+                    }
                 }
             }
             let message = errors.join("；");
             let mut runtime = self.runtime.lock().await;
+            // The child has confirmed its exit above. A failed OS restoration
+            // must not leave a stale PID or advertise a live local listener.
+            runtime.status = ProxyRuntimeStatus::stopped(options);
+            runtime.current_node = None;
+            runtime.system_proxy_snapshot = preserved_snapshot;
             mark_failed(&mut runtime, message.clone());
+            if runtime.system_proxy_snapshot.is_some() {
+                runtime.status.state = ProxyState::Degraded;
+                runtime.status.system_proxy_enabled = system_proxy_was_enabled;
+                runtime.recovery_pending = false;
+                runtime.recovery_due = None;
+                runtime.recovery_waiting_for_route = false;
+                runtime.status.message = format!("内核已停止，系统代理恢复尚未完成；已保留原设置供重试: {message}");
+            }
             return Err(anyhow!(message));
         }
 
@@ -2156,19 +2425,57 @@ impl ProxyManager {
                 Ok(())
             }
             Err(error) => {
-                if let Some(snapshot) = snapshot {
-                    let mut runtime = self.runtime.lock().await;
-                    runtime.system_proxy_snapshot = Some(snapshot);
-                    runtime.status.state = ProxyState::Degraded;
-                    runtime.status.local_proxy_ready = false;
-                    runtime.status.system_proxy_enabled = true;
-                    runtime.status.last_error = Some(error.to_string());
-                    runtime.status.message = format!("切换失败，系统代理保持开启: {error}");
-                }
-                Err(error)
+                self.finish_failed_restart(snapshot, error).await
             }
         }
         })
+    }
+
+    async fn finish_failed_restart(
+        &self,
+        snapshot: Option<SystemProxySnapshot>,
+        error: anyhow::Error,
+    ) -> Result<()> {
+        let Some(snapshot) = snapshot else { return Err(error); };
+        // The caller still holds operation, so a new Start cannot take ownership
+        // while the previous system proxy is restored.
+        let mut runtime = self.runtime.lock().await;
+        let child_may_be_running = runtime.child.is_some();
+        if !child_may_be_running {
+            runtime.status.kernel_pid = None;
+        }
+        match restore_failed_restart_snapshot(
+            self.system_proxy.clone(), snapshot.clone(), child_may_be_running,
+            runtime.options.terminal_proxy,
+        ).await {
+            Ok(retained) => {
+                runtime.system_proxy_snapshot = retained;
+                runtime.status.local_proxy_ready = false;
+                runtime.status.system_proxy_enabled = runtime.system_proxy_snapshot.is_some();
+                runtime.status.state = if child_may_be_running {
+                    ProxyState::Degraded
+                } else {
+                    ProxyState::Failed
+                };
+                runtime.status.last_error = Some(error.to_string());
+                runtime.status.message = if child_may_be_running {
+                    format!("切换失败，停止尚未确认，已保留系统代理恢复信息: {error}")
+                } else {
+                    format!("切换失败，已恢复原系统代理设置: {error}")
+                };
+                Err(error)
+            }
+            Err(restore_error) => {
+                let message = format!("{error}；恢复原系统代理设置失败: {restore_error:#}");
+                runtime.system_proxy_snapshot = Some(snapshot);
+                runtime.status.state = ProxyState::Degraded;
+                runtime.status.local_proxy_ready = false;
+                runtime.status.system_proxy_enabled = true;
+                runtime.status.last_error = Some(message.clone());
+                runtime.status.message = message.clone();
+                Err(anyhow!(message))
+            }
+        }
     }
 
     pub async fn recent_log(&self, max_chars: usize) -> Result<String> {
@@ -2200,6 +2507,110 @@ impl ProxyManager {
     async fn set_failed(&self, message: String) {
         let mut runtime = self.runtime.lock().await;
         mark_failed(&mut runtime, message);
+    }
+}
+
+#[cfg(test)]
+mod stop_restore_retry_tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    struct RestoreFailsOnce {
+        fail_next: AtomicBool,
+        restored: std::sync::Mutex<Vec<SystemProxySnapshot>>,
+    }
+
+    impl SystemProxyControl for RestoreFailsOnce {
+        fn capture(&self) -> Result<SystemProxySnapshot> { panic!("Stop must use the original snapshot") }
+        fn enable(&self, _: &str) -> Result<()> { panic!("Stop must not enable a system proxy") }
+        fn restore(&self, snapshot: &SystemProxySnapshot) -> Result<()> {
+            self.restored.lock().unwrap().push(snapshot.clone());
+            if self.fail_next.swap(false, Ordering::SeqCst) {
+                return Err(anyhow!("mock system proxy restore denied"));
+            }
+            Ok(())
+        }
+    }
+
+    fn original_proxy() -> SystemProxySnapshot {
+        SystemProxySnapshot {
+            enabled: false,
+            server: Some("127.0.0.1:18080".into()),
+            override_list: Some("<local>".into()),
+        }
+    }
+
+    async fn stopped_child_fixture() -> (ProxyManager, Arc<RestoreFailsOnce>) {
+        let controller = Arc::new(RestoreFailsOnce {
+            fail_next: AtomicBool::new(true),
+            restored: std::sync::Mutex::new(Vec::new()),
+        });
+        let manager = ProxyManager::with_system_proxy(
+            MihomoConfigOptions { mode: ProxyMode::System, terminal_proxy: false, ..Default::default() },
+            controller.clone(),
+        );
+        {
+            let mut runtime = manager.runtime.lock().await;
+            // No OS child is created. These are the prior runtime flags that
+            // must be cleared once Stop has no live session left to retain.
+            runtime.status.state = ProxyState::Running;
+            runtime.status.local_proxy_ready = true;
+            runtime.status.kernel = Some(KernelKind::Mihomo);
+            runtime.status.kernel_pid = Some(42);
+            runtime.status.system_proxy_enabled = true;
+            runtime.system_proxy_snapshot = Some(original_proxy());
+        }
+        (manager, controller)
+    }
+
+    async fn assert_restore_pending(manager: &ProxyManager) {
+        let runtime = manager.runtime.lock().await;
+        assert_eq!(runtime.system_proxy_snapshot, Some(original_proxy()));
+        assert_eq!(runtime.status.state, ProxyState::Degraded);
+        assert!(runtime.status.system_proxy_enabled);
+        assert!(!runtime.status.local_proxy_ready);
+        assert_eq!(runtime.status.kernel_pid, None);
+        assert!(runtime.child.is_none());
+        assert!(!runtime.recovery_pending);
+    }
+
+    async fn assert_second_stop_restored(manager: &ProxyManager, controller: &RestoreFailsOnce) {
+        manager.stop().await.unwrap();
+        let runtime = manager.runtime.lock().await;
+        assert!(runtime.system_proxy_snapshot.is_none());
+        assert_eq!(runtime.status.state, ProxyState::Stopped);
+        assert!(!runtime.status.system_proxy_enabled);
+        assert!(!runtime.status.local_proxy_ready);
+        assert_eq!(runtime.status.kernel_pid, None);
+        assert!(runtime.child.is_none());
+        assert_eq!(*controller.restored.lock().unwrap(), [original_proxy(), original_proxy()]);
+    }
+
+    #[tokio::test]
+    async fn failed_stop_restore_retains_original_snapshot_for_a_second_stop() {
+        let (manager, controller) = stopped_child_fixture().await;
+        let error = manager.stop().await.unwrap_err();
+        assert!(error.to_string().contains("mock system proxy restore denied"));
+        assert_restore_pending(&manager).await;
+        assert_second_stop_restored(&manager, &controller).await;
+    }
+
+    #[tokio::test]
+    async fn failed_restart_cleanup_and_restore_retain_snapshot_for_stop_retry() {
+        let (manager, controller) = stopped_child_fixture().await;
+        let root = std::env::temp_dir().join(format!("vproxy-cleanup-error-{}", Uuid::new_v4()));
+        std::fs::write(&root, "fixture file where a work directory was expected").unwrap();
+        manager.runtime.lock().await.work_dir = Some(ProxyWorkDir {
+            root: root.clone(), data_root: root.clone(), kernel: KernelKind::Mihomo,
+        });
+        let operation = manager.operation.lock().await;
+        let error = manager.stop_inner_for_restart().await.unwrap_err();
+        drop(operation);
+        assert!(error.to_string().contains("工作目录"));
+        assert!(error.to_string().contains("mock system proxy restore denied"));
+        assert_restore_pending(&manager).await;
+        assert_second_stop_restored(&manager, &controller).await;
+        std::fs::remove_file(root).unwrap();
     }
 }
 
@@ -3135,6 +3546,138 @@ pub fn start_success_message(
     head
 }
 
+#[derive(Debug)]
+struct UnrestoredSystemProxy {
+    snapshot: SystemProxySnapshot,
+    message: String,
+}
+
+impl std::fmt::Display for UnrestoredSystemProxy {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for UnrestoredSystemProxy {}
+
+const SYSTEM_PROXY_ERROR_PREFIX: &str = "系统代理设置失败:";
+
+fn record_system_proxy_error(runtime: &mut ProxyRuntime, error: &anyhow::Error) {
+    if let Some(pending) = error.downcast_ref::<UnrestoredSystemProxy>() {
+        // Keep the first snapshot: rearming must never replace the settings from
+        // before this manager took ownership with a snapshot of our own proxy.
+        if runtime.system_proxy_snapshot.is_none() {
+            runtime.system_proxy_snapshot = Some(pending.snapshot.clone());
+        }
+    }
+    let message = format!("{SYSTEM_PROXY_ERROR_PREFIX} {error:#}");
+    runtime.status.state = ProxyState::Degraded;
+    runtime.status.system_proxy_enabled = runtime.system_proxy_snapshot.is_some();
+    runtime.status.last_error = Some(message.clone());
+    runtime.status.message = message;
+}
+
+fn clear_system_proxy_error(runtime: &mut ProxyRuntime) {
+    if runtime.status.last_error.as_deref().is_some_and(|message| message.starts_with(SYSTEM_PROXY_ERROR_PREFIX)) {
+        runtime.status.last_error = None;
+        runtime.status.message = "系统代理设置已恢复".into();
+        if runtime.status.state == ProxyState::Degraded && runtime.status.local_proxy_ready {
+            runtime.status.state = ProxyState::Running;
+        }
+    }
+}
+
+async fn enable_runtime_system_proxy(
+    runtime: &mut ProxyRuntime,
+    controller: Arc<dyn SystemProxyControl>,
+) -> Result<()> {
+    let server = format!("127.0.0.1:{}", runtime.options.mixed_port);
+    if let Some(snapshot) = runtime.system_proxy_snapshot.clone() {
+        let result = tokio::task::spawn_blocking(move || controller.enable_for_snapshot(&server, &snapshot))
+            .await.context("系统代理写回任务执行失败")
+            .and_then(|result| result);
+        if let Err(error) = result {
+            record_system_proxy_error(runtime, &error);
+            return Err(error);
+        }
+    } else {
+        let terminal_port = runtime.options.terminal_proxy.then_some(runtime.options.mixed_port);
+        match activate_system_proxy(controller, server, terminal_port).await {
+            Ok(snapshot) => runtime.system_proxy_snapshot = Some(snapshot),
+            Err(error) => {
+                record_system_proxy_error(runtime, &error);
+                return Err(error);
+            }
+        }
+    }
+    runtime.status.system_proxy_enabled = true;
+    clear_system_proxy_error(runtime);
+    Ok(())
+}
+
+async fn enable_startup_system_proxy(
+    runtime: &mut ProxyRuntime,
+    controller: Arc<dyn SystemProxyControl>,
+    preserved_snapshot: Option<SystemProxySnapshot>,
+) -> Result<()> {
+    if let Some(snapshot) = preserved_snapshot {
+        runtime.system_proxy_snapshot = Some(snapshot);
+    }
+    // Restart can change mixed_port. Preserve the original restoration target,
+    // but still point its service at the newly started listener.
+    enable_runtime_system_proxy(runtime, controller).await
+}
+
+async fn disable_runtime_system_proxy(
+    runtime: &mut ProxyRuntime,
+    controller: Arc<dyn SystemProxyControl>,
+) -> Result<()> {
+    if let Some(snapshot) = runtime.system_proxy_snapshot.clone() {
+        if let Err(error) = restore_system_proxy(controller, snapshot, false).await {
+            record_system_proxy_error(runtime, &error);
+            return Err(error);
+        }
+    }
+    // Without an owned snapshot there is nothing for this manager to restore;
+    // disabling an unrelated system proxy would discard another app's settings.
+    runtime.system_proxy_snapshot = None;
+    runtime.status.system_proxy_enabled = false;
+    clear_system_proxy_error(runtime);
+    Ok(())
+}
+
+async fn synchronize_system_proxy_after_hot_tun(
+    runtime: &mut ProxyRuntime,
+    controller: Arc<dyn SystemProxyControl>,
+    options: &MihomoConfigOptions,
+) -> Result<()> {
+    let old_system_mode = runtime.options.mode.has_system();
+    let result = if options.mode.has_system() && runtime.system_proxy_snapshot.is_none() {
+        enable_runtime_system_proxy(runtime, controller).await
+    } else if !options.mode.has_system() && runtime.system_proxy_snapshot.is_some() {
+        disable_runtime_system_proxy(runtime, controller).await
+    } else { Ok(()) };
+    if let Err(error) = result {
+        // The core already confirmed the TUN change. Keep that part of the mode
+        // while retaining the previous system-proxy choice; Err prevents a restart.
+        let mut applied = options.clone();
+        applied.mode = match (old_system_mode, options.mode.has_tun()) {
+            (true, true) => ProxyMode::Both,
+            (true, false) => ProxyMode::System,
+            (false, true) => ProxyMode::Tun,
+            (false, false) => ProxyMode::None,
+        };
+        runtime.apply_options(applied.clone());
+        runtime.status.mode = applied.mode;
+        runtime.status.routing_mode = applied.routing_mode;
+        let action = if options.mode.has_tun() { "开启" } else { "关闭" };
+        let error = error.context(format!("TUN 已热{action}，但系统代理切换失败"));
+        record_system_proxy_error(runtime, &error);
+        return Err(error);
+    }
+    Ok(())
+}
+
 pub async fn activate_system_proxy(
     controller: Arc<dyn SystemProxyControl>,
     server: String,
@@ -3142,9 +3685,14 @@ pub async fn activate_system_proxy(
 ) -> Result<SystemProxySnapshot> {
     let snapshot = tokio::task::spawn_blocking(move || {
         let snapshot = sanitize_self_referential(controller.capture()?, &server);
-        if let Err(error) = controller.enable(&server) {
-            let _ = controller.restore(&snapshot);
-            return Err(error);
+        if let Err(error) = controller.enable_for_snapshot(&server, &snapshot) {
+            if let Err(restore_error) = controller.restore(&snapshot) {
+                return Err(anyhow::Error::new(UnrestoredSystemProxy {
+                    snapshot,
+                    message: format!("启用系统代理失败: {error:#}；恢复原设置也失败，已保留恢复信息: {restore_error:#}"),
+                }));
+            }
+            return Err(error.context("启用系统代理失败，已恢复原设置"));
         }
         Ok(snapshot)
     })
@@ -3162,6 +3710,9 @@ pub async fn activate_system_proxy(
 }
 
 pub fn sanitize_self_referential(snapshot: SystemProxySnapshot, server: &str) -> SystemProxySnapshot {
+    if let Some(cleaned) = crate::system_proxy::sanitize_platform_snapshot(&snapshot, server) {
+        return cleaned;
+    }
     let points_at_us = snapshot.enabled
         && snapshot
             .server
@@ -3199,6 +3750,214 @@ pub async fn restore_system_proxy(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod system_proxy_transaction_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+    #[derive(Default)]
+    struct MockSystemProxy {
+        captures: AtomicUsize,
+        fail_enable: AtomicBool,
+        fail_restore: AtomicBool,
+        enabled_servers: std::sync::Mutex<Vec<String>>,
+        enabled_snapshots: std::sync::Mutex<Vec<SystemProxySnapshot>>,
+        restored: std::sync::Mutex<Vec<SystemProxySnapshot>>,
+    }
+
+    fn original() -> SystemProxySnapshot {
+        SystemProxySnapshot { enabled: true, server: Some("127.0.0.1:7890".into()),
+            override_list: Some("<local>".into()) }
+    }
+
+    impl SystemProxyControl for MockSystemProxy {
+        fn capture(&self) -> Result<SystemProxySnapshot> {
+            self.captures.fetch_add(1, Ordering::SeqCst);
+            Ok(original())
+        }
+        fn enable(&self, _server: &str) -> Result<()> {
+            if self.fail_enable.load(Ordering::SeqCst) { Err(anyhow!("mock enable failed")) }
+            else { Ok(()) }
+        }
+        fn enable_for_snapshot(&self, server: &str, snapshot: &SystemProxySnapshot) -> Result<()> {
+            self.enabled_servers.lock().unwrap().push(server.into());
+            self.enabled_snapshots.lock().unwrap().push(snapshot.clone());
+            self.enable(server)
+        }
+        fn restore(&self, snapshot: &SystemProxySnapshot) -> Result<()> {
+            self.restored.lock().unwrap().push(snapshot.clone());
+            if self.fail_restore.load(Ordering::SeqCst) { Err(anyhow!("mock restore failed")) }
+            else { Ok(()) }
+        }
+    }
+
+    async fn manager(mode: ProxyMode, controller: Arc<MockSystemProxy>) -> ProxyManager {
+        let options = MihomoConfigOptions { mode, terminal_proxy: false, ..MihomoConfigOptions::default() };
+        let manager = ProxyManager::with_system_proxy(options, controller);
+        {
+            let mut runtime = manager.runtime.lock().await;
+            runtime.status.state = ProxyState::Running;
+            runtime.status.local_proxy_ready = true;
+        }
+        manager
+    }
+
+    #[tokio::test]
+    async fn failed_activation_and_rollback_keep_the_recovery_snapshot() {
+        let controller = Arc::new(MockSystemProxy::default());
+        controller.fail_enable.store(true, Ordering::SeqCst);
+        controller.fail_restore.store(true, Ordering::SeqCst);
+        let manager = manager(ProxyMode::None, controller.clone()).await;
+        let error = manager.hot_toggle_system_proxy(true).await.unwrap_err();
+        assert_eq!(error.downcast_ref::<UnrestoredSystemProxy>().unwrap().snapshot, original());
+        let runtime = manager.runtime.lock().await;
+        assert_eq!(runtime.system_proxy_snapshot, Some(original()));
+        assert!(runtime.status.system_proxy_enabled);
+        assert_eq!(runtime.status.state, ProxyState::Degraded);
+        assert_eq!(runtime.options.mode, ProxyMode::None);
+        assert_eq!(*controller.restored.lock().unwrap(), [original()]);
+    }
+
+    #[tokio::test]
+    async fn repeated_enable_and_rearm_preserve_the_first_snapshot() {
+        let controller = Arc::new(MockSystemProxy::default());
+        let manager = manager(ProxyMode::None, controller.clone()).await;
+        manager.hot_toggle_system_proxy(true).await.unwrap();
+        manager.hot_toggle_system_proxy(true).await.unwrap();
+        manager.rearm_system_proxy().await.unwrap();
+        let runtime = manager.runtime.lock().await;
+        assert_eq!(runtime.system_proxy_snapshot, Some(original()));
+        assert_eq!(controller.captures.load(Ordering::SeqCst), 1);
+        assert_eq!(*controller.enabled_snapshots.lock().unwrap(), [original(), original(), original()]);
+    }
+
+    #[tokio::test]
+    async fn restart_keeps_the_original_snapshot_but_activates_the_new_mixed_port() {
+        let controller = Arc::new(MockSystemProxy::default());
+        let manager = manager(ProxyMode::System, controller.clone()).await;
+        let mut runtime = manager.runtime.lock().await;
+        runtime.options.mixed_port = 19980;
+        enable_startup_system_proxy(&mut runtime, controller.clone(), Some(original())).await.unwrap();
+        assert_eq!(runtime.system_proxy_snapshot, Some(original()));
+        assert_eq!(*controller.enabled_snapshots.lock().unwrap(), [original()]);
+        assert_eq!(*controller.enabled_servers.lock().unwrap(), ["127.0.0.1:19980"]);
+        assert_eq!(controller.captures.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn failed_rearm_does_not_replace_the_owned_snapshot() {
+        let controller = Arc::new(MockSystemProxy::default());
+        let manager = manager(ProxyMode::System, controller.clone()).await;
+        manager.hot_toggle_system_proxy(true).await.unwrap();
+        controller.fail_enable.store(true, Ordering::SeqCst);
+        manager.rearm_system_proxy().await.unwrap_err();
+        let runtime = manager.runtime.lock().await;
+        assert_eq!(runtime.system_proxy_snapshot, Some(original()));
+        assert_eq!(controller.captures.load(Ordering::SeqCst), 1);
+        assert!(runtime.status.system_proxy_enabled);
+        assert_eq!(runtime.options.mode, ProxyMode::System);
+    }
+
+    #[tokio::test]
+    async fn disable_failure_keeps_flags_options_and_snapshot_until_retry_succeeds() {
+        let controller = Arc::new(MockSystemProxy::default());
+        let manager = manager(ProxyMode::None, controller.clone()).await;
+        manager.hot_toggle_system_proxy(true).await.unwrap();
+        controller.fail_restore.store(true, Ordering::SeqCst);
+        manager.hot_toggle_system_proxy(false).await.unwrap_err();
+        {
+            let runtime = manager.runtime.lock().await;
+            assert_eq!(runtime.system_proxy_snapshot, Some(original()));
+            assert!(runtime.status.system_proxy_enabled);
+            assert_eq!(runtime.options.mode, ProxyMode::System);
+            assert_eq!(runtime.status.mode, ProxyMode::System);
+            assert_eq!(runtime.status.state, ProxyState::Degraded);
+        }
+        controller.fail_restore.store(false, Ordering::SeqCst);
+        manager.hot_toggle_system_proxy(false).await.unwrap();
+        let runtime = manager.runtime.lock().await;
+        assert!(runtime.system_proxy_snapshot.is_none());
+        assert!(!runtime.status.system_proxy_enabled);
+        assert_eq!(runtime.options.mode, ProxyMode::None);
+        assert_eq!(runtime.status.state, ProxyState::Running);
+        assert!(runtime.status.last_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn hot_tun_partial_failure_keeps_confirmed_tun_and_owned_proxy() {
+        let controller = Arc::new(MockSystemProxy::default());
+        controller.fail_restore.store(true, Ordering::SeqCst);
+        let manager = manager(ProxyMode::System, controller.clone()).await;
+        let mut runtime = manager.runtime.lock().await;
+        runtime.system_proxy_snapshot = Some(original());
+        runtime.status.system_proxy_enabled = true;
+        let mut requested = runtime.options.clone();
+        requested.mode = ProxyMode::Tun;
+        let error = synchronize_system_proxy_after_hot_tun(&mut runtime, controller, &requested)
+            .await.expect_err("a confirmed TUN change plus proxy failure must be Err, never Ok(false)");
+        assert!(error.to_string().contains("TUN 已热开启"));
+        assert_eq!(runtime.options.mode, ProxyMode::Both);
+        assert_eq!(runtime.status.mode, ProxyMode::Both);
+        assert!(runtime.status.system_proxy_enabled);
+        assert_eq!(runtime.system_proxy_snapshot, Some(original()));
+        assert!(runtime.status.local_proxy_ready);
+    }
+
+    #[tokio::test]
+    async fn hot_tun_with_failed_proxy_enable_retains_the_confirmed_tun_mode() {
+        let controller = Arc::new(MockSystemProxy::default());
+        controller.fail_enable.store(true, Ordering::SeqCst);
+        let manager = manager(ProxyMode::None, controller.clone()).await;
+        let mut runtime = manager.runtime.lock().await;
+        let mut requested = runtime.options.clone();
+        requested.mode = ProxyMode::Both;
+        synchronize_system_proxy_after_hot_tun(&mut runtime, controller, &requested).await.unwrap_err();
+        assert_eq!(runtime.options.mode, ProxyMode::Tun);
+        assert_eq!(runtime.status.mode, ProxyMode::Tun);
+        assert!(!runtime.status.system_proxy_enabled);
+        assert!(runtime.system_proxy_snapshot.is_none());
+    }
+
+    #[tokio::test]
+    async fn successful_proxy_retry_does_not_erase_an_unrelated_error() {
+        let controller = Arc::new(MockSystemProxy::default());
+        let manager = manager(ProxyMode::System, controller.clone()).await;
+        let mut runtime = manager.runtime.lock().await;
+        runtime.system_proxy_snapshot = Some(original());
+        runtime.status.state = ProxyState::Degraded;
+        runtime.status.last_error = Some("节点连通性验证失败: mock offline".into());
+        enable_runtime_system_proxy(&mut runtime, controller).await.unwrap();
+        assert_eq!(runtime.status.state, ProxyState::Degraded);
+        assert_eq!(runtime.status.last_error.as_deref(), Some("节点连通性验证失败: mock offline"));
+    }
+
+    #[tokio::test]
+    async fn pending_proxy_restore_blocks_a_new_start_before_any_external_work() {
+        let controller = Arc::new(MockSystemProxy::default());
+        let manager = manager(ProxyMode::None, controller.clone()).await;
+        {
+            let mut runtime = manager.runtime.lock().await;
+            runtime.system_proxy_snapshot = Some(original());
+            runtime.status.state = ProxyState::Degraded;
+        }
+        let now = chrono::Utc::now();
+        let node = Node {
+            id: "fixture".into(), source_id: None, protocol: "ss".into(), name: "fixture".into(),
+            server: "192.0.2.1".into(), port: 443, raw: String::new(), config: Value::Null,
+            country: None, latency_ms: None, latency_ok: None, download_kbps: None,
+            latency_kernel: None, latency_test_kind: None, latency_tested_at: None,
+            created_at: now, updated_at: now,
+        };
+        let error = manager.start_with_path_inner(
+            &node, KernelKind::Mihomo, Path::new("/fixture/no-kernel-must-not-run"), None, false,
+        ).await.unwrap_err();
+        assert!(error.to_string().contains("系统代理恢复尚未确认"));
+        assert_eq!(manager.runtime.lock().await.system_proxy_snapshot, Some(original()));
+        assert_eq!(controller.captures.load(Ordering::SeqCst), 0);
+        assert!(controller.restored.lock().unwrap().is_empty());
+    }
 }
 
 pub fn last_nonempty_line(text: &str) -> &str {

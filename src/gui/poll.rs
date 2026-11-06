@@ -981,7 +981,10 @@ impl VpnApp {
                                 self.refresh_egress_silently();
                             } else {
                                 self.status = message;
-                                self.start_proxy_for_request(request);
+                                // The manager retains the original snapshot and
+                                // reports partial/failed changes. Restarting the
+                                // core would hide that error and interrupt TUN.
+                                self.reload_proxy();
                             }
                         }
                         BgMsg::ProxyRoutingModeHotSwitched { request, ok, mode, message } => {
@@ -1521,4 +1524,43 @@ impl VpnApp {
         }
     }
 
+}
+
+#[cfg(test)]
+mod system_proxy_callback_tests {
+    use super::*;
+
+    #[test]
+    fn failed_system_proxy_hot_toggle_keeps_the_error_and_never_starts_a_proxy() {
+        let mut app = crate::gui::views::nodes::empty_pool_modal_tests::app_with_an_empty_library();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.tx = tx;
+        app.rx = rx;
+        // Keep this real callback test on the empty, stopped fixture. No service,
+        // egress or failover probe is due, and there is no node to start.
+        app.last_service_check = std::time::Instant::now();
+        app.last_lan_ip_check = std::time::Instant::now();
+        app.proxy_config.url_test = false;
+        let manager = app.proxy_manager.clone();
+        let request = manager.reserve_request();
+        app.proxy_operation_id = 77;
+        app.proxy_busy = true;
+        app.proxy_busy_request = Some(request);
+        let runtime = app.rt.block_on(manager.runtime.lock());
+        assert!(runtime.child.is_none());
+        let message = "切换系统代理失败: mock restore failed; original snapshot retained";
+        app.tx.send(BgMsg::SystemProxyHotToggled {
+            request, ok: false, message: message.into(),
+        }).unwrap();
+        app.poll_bg(&egui::Context::default());
+        assert_eq!(app.status, message, "fallback Start would replace this error with a node-selection prompt");
+        assert_eq!(app.proxy_operation_id, 77);
+        assert_eq!(manager.current_request(), request);
+        assert_eq!(app.proxy_status.state, ProxyState::Stopped);
+        assert!(!app.proxy_busy);
+        assert_eq!(app.proxy_busy_request, None);
+        assert!(app.selected_proxy_node_id.is_none());
+        assert!(runtime.child.is_none());
+        drop(runtime);
+    }
 }
