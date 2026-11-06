@@ -541,6 +541,81 @@ mod macos_window_close_tests {
     use super::*;
 
     #[test]
+    fn logic_only_native_close_preserves_background_runtime() {
+        let mut outcomes = Vec::new();
+        for (minimized, occluded) in [(true, false), (false, true)] {
+            let mut app = crate::gui::views::nodes::empty_pool_modal_tests::app_with_an_empty_library();
+            app.settings.close_to_tray = true;
+            app.force_quit = false;
+            app.frame_count = 6;
+            let manager = app.proxy_manager.clone();
+            let status_before = app.rt.block_on(manager.status());
+            let ctx = egui::Context::default();
+            let mut input = egui::RawInput::default();
+            let viewport = input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap();
+            viewport.minimized = Some(minimized);
+            viewport.occluded = Some(occluded);
+            viewport.events.push(egui::ViewportEvent::Close);
+            assert_eq!(viewport.visible(), Some(false));
+            assert!(viewport.close_requested());
+            let mut frame = eframe::Frame::_new_kittest();
+            let output = ctx.run_logic(&input, |ctx| {
+                eframe::App::logic(&mut app, ctx, &mut frame);
+            });
+            let commands = output.viewport_commands.get(&egui::ViewportId::ROOT);
+            let canceled = commands
+                .is_some_and(|commands| commands.contains(&egui::ViewportCommand::CancelClose));
+            assert_eq!(app.rt.block_on(manager.status()), status_before);
+            outcomes.push((minimized, occluded, canceled));
+        }
+        assert!(
+            outcomes.iter().all(|(_, _, canceled)| *canceled),
+            "native close must preserve background mode even when eframe skips ui: {outcomes:?}"
+        );
+    }
+
+    #[test]
+    fn logic_only_native_close_respects_exit_and_startup_settings() {
+        for (minimized, occluded) in [(true, false), (false, true)] {
+            for (background_enabled, explicit_quit, frame_count, expected_cancel) in [
+                (false, false, 6, false),
+                (true, true, 6, false),
+                (true, false, 0, true),
+                (true, true, 0, false),
+            ] {
+                let mut app =
+                    crate::gui::views::nodes::empty_pool_modal_tests::app_with_an_empty_library();
+                app.settings.close_to_tray = background_enabled;
+                app.force_quit = explicit_quit;
+                app.frame_count = frame_count;
+                let manager = app.proxy_manager.clone();
+                let status_before = app.rt.block_on(manager.status());
+                let ctx = egui::Context::default();
+                let mut input = egui::RawInput::default();
+                let viewport = input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap();
+                viewport.minimized = Some(minimized);
+                viewport.occluded = Some(occluded);
+                viewport.events.push(egui::ViewportEvent::Close);
+                let mut frame = eframe::Frame::_new_kittest();
+                let output = ctx.run_logic(&input, |ctx| {
+                    eframe::App::logic(&mut app, ctx, &mut frame);
+                });
+                let commands = output.viewport_commands.get(&egui::ViewportId::ROOT).unwrap();
+                assert_eq!(
+                    commands.contains(&egui::ViewportCommand::CancelClose),
+                    expected_cancel,
+                    "background={background_enabled}, explicit_quit={explicit_quit}, frame_count={frame_count}"
+                );
+                assert_eq!(
+                    commands.contains(&egui::ViewportCommand::Close),
+                    !expected_cancel
+                );
+                assert_eq!(app.rt.block_on(manager.status()), status_before);
+            }
+        }
+    }
+
+    #[test]
     fn window_close_preserves_background_runtime_and_respects_explicit_quit() {
         let mut app = crate::gui::views::nodes::empty_pool_modal_tests::app_with_an_empty_library();
         for (background_enabled, explicit_quit, hide_succeeds, expect_background) in [

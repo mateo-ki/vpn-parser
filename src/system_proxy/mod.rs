@@ -30,6 +30,9 @@ pub trait SystemProxyControl: Send + Sync {
 
     fn capture(&self) -> Result<SystemProxySnapshot>;
     fn enable(&self, server: &str) -> Result<()>;
+    fn enable_for_snapshot(&self, server: &str, _snapshot: &SystemProxySnapshot) -> Result<()> {
+        self.enable(server)
+    }
     fn restore(&self, snapshot: &SystemProxySnapshot) -> Result<()>;
 }
 
@@ -97,83 +100,30 @@ impl SystemProxyControl for PlatformSystemProxy {
 #[cfg(target_os = "macos")]
 impl SystemProxyControl for PlatformSystemProxy {
     fn capture(&self) -> Result<SystemProxySnapshot> {
-        let service = macos_primary_network_service().unwrap_or_else(|| "Wi-Fi".to_string());
-        let output = Command::new("networksetup")
-            .args(["-getwebproxy", &service])
-            .output()?;
-        let text = String::from_utf8_lossy(&output.stdout);
-        let enabled = text.lines().any(|l| l.contains("Enabled: Yes"));
-        let server = text.lines().find_map(|l| {
-            if l.starts_with("Server: ") {
-                let s = l.trim_start_matches("Server: ").trim();
-                if !s.is_empty() {
-                    Some(s.to_string())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        });
-        Ok(SystemProxySnapshot {
-            enabled,
-            server,
-            override_list: None,
-        })
+        macos_proxy::capture(&mut macos_proxy::SystemCommands)
     }
 
     fn enable(&self, server: &str) -> Result<()> {
         if crate::diag::enabled() {
             return Err(anyhow!(crate::diag::BLOCKED));
         }
-        let (host, port) = parse_host_port(server)?;
-        let service = macos_primary_network_service().unwrap_or_else(|| "Wi-Fi".to_string());
-        let _ = Command::new("networksetup")
-            .args(["-setwebproxy", &service, &host, &port.to_string()])
-            .output();
-        let _ = Command::new("networksetup")
-            .args(["-setsecurewebproxy", &service, &host, &port.to_string()])
-            .output();
-        let _ = Command::new("networksetup")
-            .args(["-setwebproxystate", &service, "on"])
-            .output();
-        let _ = Command::new("networksetup")
-            .args(["-setsecurewebproxystate", &service, "on"])
-            .output();
-        Ok(())
+        let mut commands = macos_proxy::SystemCommands;
+        let service = macos_proxy::primary_service(&mut commands)?;
+        macos_proxy::enable(&mut commands, &service, server)
+    }
+
+    fn enable_for_snapshot(&self, server: &str, snapshot: &SystemProxySnapshot) -> Result<()> {
+        if crate::diag::enabled() {
+            return Err(anyhow!(crate::diag::BLOCKED));
+        }
+        macos_proxy::enable_for_snapshot(&mut macos_proxy::SystemCommands, server, snapshot)
     }
 
     fn restore(&self, snapshot: &SystemProxySnapshot) -> Result<()> {
         if crate::diag::enabled() {
             return Err(anyhow!(crate::diag::BLOCKED));
         }
-        let service = macos_primary_network_service().unwrap_or_else(|| "Wi-Fi".to_string());
-        if snapshot.enabled {
-            if let Some(server) = &snapshot.server {
-                if let Ok((host, port)) = parse_host_port(server) {
-                    let _ = Command::new("networksetup")
-                        .args(["-setwebproxy", &service, &host, &port.to_string()])
-                        .output();
-                    let _ = Command::new("networksetup")
-                        .args(["-setsecurewebproxy", &service, &host, &port.to_string()])
-                        .output();
-                    let _ = Command::new("networksetup")
-                        .args(["-setwebproxystate", &service, "on"])
-                        .output();
-                    let _ = Command::new("networksetup")
-                        .args(["-setsecurewebproxystate", &service, "on"])
-                        .output();
-                    return Ok(());
-                }
-            }
-        }
-        let _ = Command::new("networksetup")
-            .args(["-setwebproxystate", &service, "off"])
-            .output();
-        let _ = Command::new("networksetup")
-            .args(["-setsecurewebproxystate", &service, "off"])
-            .output();
-        Ok(())
+        macos_proxy::restore(&mut macos_proxy::SystemCommands, snapshot)
     }
 }
 
@@ -308,41 +258,430 @@ fn parse_host_port(server: &str) -> Result<(String, u16)> {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn macos_primary_network_service() -> Option<String> {
-    let output = Command::new("route")
-        .args(["-n", "get", "default"])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    let interface = text.lines().find_map(|line| {
-        let trimmed = line.trim();
-        if trimmed.starts_with("interface:") {
-            Some(trimmed.trim_start_matches("interface:").trim().to_string())
-        } else {
-            None
-        }
-    })?;
+/// Platform metadata is handled before the manager's legacy flat-address check.
+/// A self-reference in HTTP must not discard a different HTTPS proxy or service.
+pub(crate) fn sanitize_platform_snapshot(
+    snapshot: &SystemProxySnapshot,
+    server: &str,
+) -> Option<SystemProxySnapshot> {
+    #[cfg(any(target_os = "macos", test))]
+    {
+        macos_proxy::sanitize(snapshot, server)
+    }
+    #[cfg(not(any(target_os = "macos", test)))]
+    {
+        let _ = (snapshot, server);
+        None
+    }
+}
 
-    let order_out = Command::new("networksetup")
-        .args(["-listnetworkserviceorder"])
-        .output()
-        .ok()?;
-    let order_text = String::from_utf8_lossy(&order_out.stdout);
-    let mut current_service = None;
-    for line in order_text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('(') && trimmed.contains("Hardware Port:") {
-            if trimmed.contains(&format!("Device: {interface}")) {
-                return current_service;
-            }
-        } else if trimmed.starts_with('(') {
-            if let Some(pos) = trimmed.find(')') {
-                current_service = Some(trimmed[pos + 1..].trim().to_string());
-            }
+#[cfg(any(target_os = "macos", test))]
+mod macos_proxy {
+    use super::*;
+
+    const METADATA_PREFIX: &str = "vproxy:macos-system-proxy:";
+    const METADATA_V1: &str = "vproxy:macos-system-proxy:v1:";
+    const NETWORKSETUP: &str = "/usr/sbin/networksetup";
+    const ROUTE: &str = "/sbin/route";
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    struct Endpoint {
+        enabled: bool,
+        host: String,
+        port: u16,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    struct SavedProxy {
+        service: String,
+        http: Endpoint,
+        https: Endpoint,
+    }
+
+    pub(super) trait Commands {
+        fn output(&mut self, program: &str, args: &[&str]) -> std::io::Result<std::process::Output>;
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) struct SystemCommands;
+
+    #[cfg(target_os = "macos")]
+    impl Commands for SystemCommands {
+        fn output(&mut self, program: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
+            Command::new(program).args(args).output()
         }
     }
-    current_service.or_else(|| Some("Wi-Fi".to_string()))
+
+    fn checked(commands: &mut impl Commands, program: &str, args: &[&str]) -> Result<String> {
+        let action = args.first().copied().unwrap_or("");
+        let output = commands.output(program, args)
+            .map_err(|error| anyhow!("执行 {program} {action} 失败: {error}"))?;
+        let text = String::from_utf8(output.stdout)
+            .map_err(|_| anyhow!("{program} {action} 返回了无效文本"))?;
+        let error_text = text.trim_start();
+        if !output.status.success()
+            || error_text.starts_with("** Error:")
+            || error_text.starts_with("Error:")
+            || error_text.starts_with("An error occurred")
+        {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            let detail = if detail.trim().is_empty() { text.trim() } else { detail.trim() };
+            return Err(anyhow!("{program} {action} 失败 ({}): {}", output.status,
+                detail.chars().take(300).collect::<String>()));
+        }
+        Ok(text)
+    }
+
+    pub(super) fn primary_service(commands: &mut impl Commands) -> Result<String> {
+        let route = checked(commands, ROUTE, &["-n", "get", "default"])?;
+        let interface = route.lines().find_map(|line| line.trim().strip_prefix("interface:"))
+            .map(str::trim).filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("无法识别默认网络接口，未修改系统代理"))?;
+        let order = checked(commands, NETWORKSETUP, &["-listnetworkserviceorder"])?;
+        let mut service = None;
+        for line in order.lines().map(str::trim) {
+            if let Some((_, device)) = line.split_once("Device:") {
+                if device.trim().trim_end_matches(')').trim() == interface {
+                    return service.ok_or_else(|| anyhow!("默认接口缺少网络服务名称"));
+                }
+            } else if let Some(rest) = line.strip_prefix('(') {
+                if let Some((index, name)) = rest.split_once(')') {
+                    service = index.parse::<usize>().ok()
+                        .map(|_| name.trim().to_string()).filter(|value| !value.is_empty());
+                }
+            }
+        }
+        Err(anyhow!("无法将默认接口 {interface} 对应到网络服务，未修改系统代理"))
+    }
+
+    fn endpoint(text: &str) -> Result<Endpoint> {
+        let field = |name: &str| text.lines().find_map(|line| line.strip_prefix(name)).map(str::trim);
+        let enabled = match field("Enabled:") {
+            Some("Yes") => true,
+            Some("No") => false,
+            _ => return Err(anyhow!("系统代理输出缺少有效的 Enabled 字段")),
+        };
+        let host = field("Server:").ok_or_else(|| anyhow!("系统代理输出缺少 Server 字段"))?.to_string();
+        let port = field("Port:").ok_or_else(|| anyhow!("系统代理输出缺少 Port 字段"))?
+            .parse::<u16>().map_err(|_| anyhow!("系统代理输出端口无效"))?;
+        let endpoint = Endpoint { enabled, host, port };
+        validate_endpoint(&endpoint)?;
+        Ok(endpoint)
+    }
+
+    fn validate_endpoint(endpoint: &Endpoint) -> Result<()> {
+        if endpoint.enabled && (endpoint.host.is_empty() || endpoint.port == 0) {
+            return Err(anyhow!("已启用的系统代理缺少有效地址或端口"));
+        }
+        Ok(())
+    }
+
+    fn address(endpoint: &Endpoint) -> String {
+        let host = if endpoint.host.contains(':') && !endpoint.host.starts_with('[') {
+            format!("[{}]", endpoint.host)
+        } else { endpoint.host.clone() };
+        format!("{host}:{}", endpoint.port)
+    }
+
+    fn encode(saved: &SavedProxy) -> Result<SystemProxySnapshot> {
+        let server = [(&saved.http, "http"), (&saved.https, "https")].into_iter()
+            .filter(|(endpoint, _)| endpoint.enabled)
+            .map(|(endpoint, scheme)| format!("{scheme}={}", address(endpoint)))
+            .collect::<Vec<_>>().join(";");
+        Ok(SystemProxySnapshot {
+            enabled: saved.http.enabled || saved.https.enabled,
+            server: (!server.is_empty()).then_some(server),
+            override_list: Some(format!("{METADATA_V1}{}", serde_json::to_string(saved)?)),
+        })
+    }
+
+    fn decode(snapshot: &SystemProxySnapshot) -> Result<Option<SavedProxy>> {
+        let Some(metadata) = snapshot.override_list.as_deref() else { return Ok(None); };
+        let Some(json) = metadata.strip_prefix(METADATA_V1) else {
+            if metadata.starts_with(METADATA_PREFIX) {
+                return Err(anyhow!("不支持的 macOS 系统代理快照版本"));
+            }
+            return Ok(None);
+        };
+        let saved: SavedProxy = serde_json::from_str(json)
+            .map_err(|error| anyhow!("macOS 系统代理快照损坏: {error}"))?;
+        if saved.service.is_empty() { return Err(anyhow!("macOS 系统代理快照缺少原网络服务")); }
+        validate_endpoint(&saved.http)?;
+        validate_endpoint(&saved.https)?;
+        Ok(Some(saved))
+    }
+
+    pub(super) fn capture(commands: &mut impl Commands) -> Result<SystemProxySnapshot> {
+        let service = primary_service(commands)?;
+        let http = endpoint(&checked(commands, NETWORKSETUP, &["-getwebproxy", &service])?)?;
+        let https = endpoint(&checked(commands, NETWORKSETUP, &["-getsecurewebproxy", &service])?)?;
+        encode(&SavedProxy { service, http, https })
+    }
+
+    pub(super) fn enable(commands: &mut impl Commands, service: &str, server: &str) -> Result<()> {
+        let (host, port) = parse_host_port(server)?;
+        if host.is_empty() || port == 0 { return Err(anyhow!("系统代理地址或端口无效")); }
+        let port = port.to_string();
+        for option in ["-setwebproxy", "-setsecurewebproxy"] {
+            checked(commands, NETWORKSETUP, &[option, service, &host, &port])?;
+        }
+        for option in ["-setwebproxystate", "-setsecurewebproxystate"] {
+            checked(commands, NETWORKSETUP, &[option, service, "on"])?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn enable_for_snapshot(commands: &mut impl Commands, server: &str,
+        snapshot: &SystemProxySnapshot) -> Result<()> {
+        let saved = decode(snapshot)?.ok_or_else(|| anyhow!("系统代理快照缺少原网络服务，未修改设置"))?;
+        enable(commands, &saved.service, server)
+    }
+
+    fn restore_endpoint(commands: &mut impl Commands, service: &str, endpoint: &Endpoint,
+        set_option: &str, state_option: &str, restore_address: bool) -> Result<()> {
+        let mut errors = Vec::new();
+        if restore_address && !endpoint.host.is_empty() && endpoint.port > 0 {
+            if let Err(error) = checked(commands, NETWORKSETUP,
+                &[set_option, service, &endpoint.host, &endpoint.port.to_string()]) {
+                errors.push(error.to_string());
+            }
+        }
+        // The address setters enable the proxy themselves. Restore its own switch
+        // even when it was previously disabled, and attempt both protocols on error.
+        if let Err(error) = checked(commands, NETWORKSETUP,
+            &[state_option, service, if endpoint.enabled { "on" } else { "off" }]) {
+            errors.push(error.to_string());
+        }
+        if errors.is_empty() { Ok(()) } else { Err(anyhow!(errors.join("；"))) }
+    }
+
+    pub(super) fn restore(commands: &mut impl Commands, snapshot: &SystemProxySnapshot) -> Result<()> {
+        let decoded = decode(snapshot)?;
+        let (saved, restore_address) = if let Some(saved) = decoded {
+            (saved, true)
+        } else {
+            // Older in-memory snapshots have no service or separate HTTPS state.
+            // Never turn them into a successful "off" when their address is lost.
+            let endpoint = if snapshot.enabled {
+                let server = snapshot.server.as_deref()
+                    .ok_or_else(|| anyhow!("旧系统代理快照缺少地址，无法安全恢复"))?;
+                let (host, port) = parse_host_port(server)?;
+                let endpoint = Endpoint { enabled: true, host, port };
+                validate_endpoint(&endpoint)?;
+                endpoint
+            } else { Endpoint { enabled: false, host: String::new(), port: 0 } };
+            (SavedProxy { service: primary_service(commands)?, http: endpoint.clone(), https: endpoint },
+                snapshot.enabled)
+        };
+        let mut errors = Vec::new();
+        for (endpoint, set, state) in [
+            (&saved.http, "-setwebproxy", "-setwebproxystate"),
+            (&saved.https, "-setsecurewebproxy", "-setsecurewebproxystate"),
+        ] {
+            if let Err(error) = restore_endpoint(commands, &saved.service, endpoint, set, state, restore_address) {
+                errors.push(error.to_string());
+            }
+        }
+        if errors.is_empty() { Ok(()) } else { Err(anyhow!(errors.join("；"))) }
+    }
+
+    pub(super) fn sanitize(snapshot: &SystemProxySnapshot, server: &str) -> Option<SystemProxySnapshot> {
+        let mut saved = decode(snapshot).ok()??;
+        let (host, port) = parse_host_port(server).ok()?;
+        for endpoint in [&mut saved.http, &mut saved.https] {
+            if endpoint.enabled && endpoint.host == host && endpoint.port == port {
+                endpoint.enabled = false;
+            }
+        }
+        encode(&saved).ok()
+    }
+
+    pub(super) fn drift(snapshot: &SystemProxySnapshot, server: &str) -> Option<Drift> {
+        let saved = decode(snapshot).ok()??;
+        if !saved.http.enabled && !saved.https.enabled { return Some(Drift::Disabled); }
+        let matches = |endpoint: &Endpoint| endpoint.enabled && address(endpoint) == server;
+        Some(if matches(&saved.http) && matches(&saved.https) {
+            Drift::InSync
+        } else {
+            Drift::OtherServer { expected: server.to_string(), found: snapshot.server.clone() }
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::VecDeque;
+
+        #[derive(Default)]
+        struct MockCommands {
+            calls: Vec<(String, Vec<String>)>,
+            replies: VecDeque<std::io::Result<std::process::Output>>,
+        }
+
+        fn output(code: i32, text: &str) -> std::io::Result<std::process::Output> {
+            #[cfg(unix)]
+            use std::os::unix::process::ExitStatusExt;
+            #[cfg(windows)]
+            use std::os::windows::process::ExitStatusExt;
+            #[cfg(unix)]
+            let status = std::process::ExitStatus::from_raw(code << 8);
+            #[cfg(windows)]
+            let status = std::process::ExitStatus::from_raw(code as u32);
+            Ok(std::process::Output { status, stdout: text.as_bytes().to_vec(), stderr: vec![] })
+        }
+
+        impl Commands for MockCommands {
+            fn output(&mut self, program: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
+                self.calls.push((program.into(), args.iter().map(|arg| (*arg).into()).collect()));
+                self.replies.pop_front().expect("unexpected command (no real commands are allowed)")
+            }
+        }
+
+        fn saved() -> SavedProxy {
+            SavedProxy {
+                service: "Original Wi-Fi".into(),
+                http: Endpoint { enabled: true, host: "127.0.0.1".into(), port: 7890 },
+                https: Endpoint { enabled: false, host: "proxy.example".into(), port: 8443 },
+            }
+        }
+
+        fn successful_commands(count: usize) -> MockCommands {
+            MockCommands { replies: (0..count).map(|_| output(0, "")).collect(), ..MockCommands::default() }
+        }
+
+        #[test]
+        fn captures_and_restores_each_protocol_port_and_original_service() {
+            let mut commands = MockCommands { replies: [
+                output(0, "  interface: en0\n"),
+                output(0, "(1) Original Wi-Fi\n(Hardware Port: Wi-Fi, Device: en0)\n(2) Ethernet\n(Hardware Port: Ethernet, Device: en1)\n"),
+                output(0, "Enabled: Yes\nServer: 127.0.0.1\nPort: 7890\nAuthenticated Proxy Enabled: 0\n"),
+                output(0, "Enabled: No\nServer: proxy.example\nPort: 8443\nAuthenticated Proxy Enabled: 0\n"),
+            ].into(), ..MockCommands::default() };
+            let snapshot = capture(&mut commands).unwrap();
+            assert_eq!(snapshot.server.as_deref(), Some("http=127.0.0.1:7890"));
+            let decoded = decode(&snapshot).unwrap().unwrap();
+            assert_eq!(decoded.service, "Original Wi-Fi");
+            assert_eq!(decoded.http.port, 7890);
+            assert_eq!(decoded.https.port, 8443);
+            assert!(!decoded.https.enabled);
+
+            // There are no route replies: changing the primary interface after
+            // capture must not cause restore to choose the new service.
+            let mut commands = successful_commands(4);
+            restore(&mut commands, &snapshot).unwrap();
+            assert_eq!(commands.calls.iter().map(|(_, args)| args.clone()).collect::<Vec<_>>(), vec![
+                vec!["-setwebproxy", "Original Wi-Fi", "127.0.0.1", "7890"],
+                vec!["-setwebproxystate", "Original Wi-Fi", "on"],
+                vec!["-setsecurewebproxy", "Original Wi-Fi", "proxy.example", "8443"],
+                vec!["-setsecurewebproxystate", "Original Wi-Fi", "off"],
+            ]);
+        }
+
+        #[test]
+        fn enable_uses_the_captured_service_without_reselecting_it() {
+            let snapshot = encode(&saved()).unwrap();
+            let mut commands = successful_commands(4);
+            enable_for_snapshot(&mut commands, "127.0.0.1:9980", &snapshot).unwrap();
+            assert!(commands.calls.iter().all(|(program, args)| program == NETWORKSETUP && args[1] == "Original Wi-Fi"));
+            assert_eq!(commands.calls[0].1, ["-setwebproxy", "Original Wi-Fi", "127.0.0.1", "9980"]);
+        }
+
+        #[test]
+        fn unknown_primary_interface_is_an_error_without_wifi_fallback() {
+            let mut commands = MockCommands { replies: [
+                output(0, "interface: utun99\n"),
+                output(0, "(1) Wi-Fi\n(Hardware Port: Wi-Fi, Device: en0)\n"),
+            ].into(), ..MockCommands::default() };
+            assert!(capture(&mut commands).unwrap_err().to_string().contains("无法将默认接口"));
+            assert_eq!(commands.calls.len(), 2);
+        }
+
+        #[test]
+        fn failed_capture_or_missing_port_never_becomes_a_valid_snapshot() {
+            let mut commands = MockCommands { replies: [output(5, "permission denied")].into(), ..MockCommands::default() };
+            assert!(capture(&mut commands).is_err());
+            assert_eq!(commands.calls.len(), 1);
+            assert!(endpoint("Enabled: Yes\nServer: 127.0.0.1\n").is_err());
+            assert!(endpoint("Enabled: Yes\nServer: 127.0.0.1\nPort: invalid\n").is_err());
+        }
+
+        #[test]
+        fn enable_propagates_nonzero_status_and_spawn_failure() {
+            let mut commands = MockCommands { replies: [output(10, "not authorized")].into(), ..MockCommands::default() };
+            assert!(enable(&mut commands, "Wi-Fi", "127.0.0.1:9980").unwrap_err().to_string().contains("not authorized"));
+            assert_eq!(commands.calls.len(), 1);
+            let mut commands = MockCommands { replies: [Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "mock permission"))].into(), ..MockCommands::default() };
+            assert!(enable(&mut commands, "Wi-Fi", "127.0.0.1:9980").unwrap_err().to_string().contains("mock permission"));
+        }
+
+        #[test]
+        fn restore_reports_errors_and_still_attempts_both_original_protocols() {
+            let snapshot = encode(&saved()).unwrap();
+            let mut commands = successful_commands(4);
+            commands.replies[0] = output(10, "mock restore rejected");
+            assert!(restore(&mut commands, &snapshot).unwrap_err().to_string().contains("mock restore rejected"));
+            assert_eq!(commands.calls.len(), 4);
+            assert_eq!(commands.calls[3].1, ["-setsecurewebproxystate", "Original Wi-Fi", "off"]);
+        }
+
+        #[test]
+        fn empty_disabled_endpoint_only_restores_its_off_switch() {
+            let mut original = saved();
+            original.http = Endpoint { enabled: false, host: String::new(), port: 0 };
+            original.https.enabled = true;
+            let snapshot = encode(&original).unwrap();
+            let mut commands = successful_commands(3);
+            restore(&mut commands, &snapshot).unwrap();
+            assert_eq!(commands.calls.iter().map(|(_, args)| args.clone()).collect::<Vec<_>>(), vec![
+                vec!["-setwebproxystate", "Original Wi-Fi", "off"],
+                vec!["-setsecurewebproxy", "Original Wi-Fi", "proxy.example", "8443"],
+                vec!["-setsecurewebproxystate", "Original Wi-Fi", "on"],
+            ]);
+        }
+
+        #[test]
+        fn legacy_snapshot_without_port_is_an_error_without_disabling_anything() {
+            let snapshot = SystemProxySnapshot { enabled: true, server: Some("127.0.0.1".into()), override_list: None };
+            let mut commands = MockCommands::default();
+            assert!(restore(&mut commands, &snapshot).unwrap_err().to_string().contains("缺少端口"));
+            assert!(commands.calls.is_empty());
+        }
+
+        #[test]
+        fn sanitizing_only_our_http_proxy_keeps_https_and_original_service() {
+            let mut original = saved();
+            original.http.port = 9980;
+            original.https.enabled = true;
+            let snapshot = encode(&original).unwrap();
+            let sanitized = sanitize_platform_snapshot(&snapshot, "127.0.0.1:9980").unwrap();
+            let decoded = decode(&sanitized).unwrap().unwrap();
+            assert!(!decoded.http.enabled);
+            assert!(decoded.https.enabled);
+            assert_eq!(decoded.https.host, "proxy.example");
+            assert_eq!(decoded.https.port, 8443);
+            assert_eq!(decoded.service, original.service);
+            assert_eq!(sanitized.server.as_deref(), Some("https=proxy.example:8443"));
+        }
+
+        #[test]
+        fn partial_protocol_takeover_never_counts_as_in_sync() {
+            let mut original = saved();
+            original.https = Endpoint { enabled: true, host: "127.0.0.1".into(), port: 9980 };
+            let snapshot = encode(&original).unwrap();
+            assert!(matches!(classify_drift(&snapshot, "127.0.0.1:9980"), Drift::OtherServer { .. }));
+            original.http = original.https.clone();
+            assert_eq!(classify_drift(&encode(&original).unwrap(), "127.0.0.1:9980"), Drift::InSync);
+        }
+
+        #[test]
+        fn unknown_metadata_version_does_not_fall_back_to_mutating_current_service() {
+            let snapshot = SystemProxySnapshot { enabled: false, server: None,
+                override_list: Some(format!("{METADATA_PREFIX}v99:{{}}")) };
+            let mut commands = MockCommands::default();
+            assert!(restore(&mut commands, &snapshot).unwrap_err().to_string().contains("不支持"));
+            assert!(commands.calls.is_empty());
+        }
+    }
 }
 
 /// 读取 Windows 系统代理（v2rayN/Clash 等工具会写这里），返回 `http://host:port`。
@@ -375,6 +714,10 @@ pub enum Drift {
 
 /// 纯判据。`expected_server` 是 `host:port` 形式（本程序写进去的就是 mixed 端口）。
 pub fn classify_drift(snapshot: &SystemProxySnapshot, expected_server: &str) -> Drift {
+    #[cfg(any(target_os = "macos", test))]
+    if let Some(drift) = macos_proxy::drift(snapshot, expected_server) {
+        return drift;
+    }
     if !snapshot.enabled {
         return Drift::Disabled;
     }

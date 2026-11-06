@@ -1,5 +1,5 @@
 use crate::gui::prepare;
-use crate::gui::types::{BgMsg, DnsRecord};
+use crate::gui::types::{BgMsg, DnsRecord, FailedProxyStartNotice, ProxyOperationKind};
 use crate::gui::widgets::{format_speedtest_progress, node_group_key, normalize_api_base};
 use crate::gui::VpnApp;
 use crate::kernel::KernelKind;
@@ -112,6 +112,21 @@ impl VpnApp {
 
     pub(crate) fn poll_bg(&mut self, ctx: &egui::Context) {
         let mut need_repaint = false;
+        // API actions also revoke GUI work. They have no GUI completion message,
+        // so reconcile the request owner even when old preparation returns early.
+        if let Some(request) = self.proxy_busy_request {
+            if !self.proxy_manager.request_is_current(request) && self.finish_proxy_request(request) {
+                self.pending_mode_apply = None;
+                self.status = "代理请求已被后续操作取消".into();
+                self.reload_proxy();
+                need_repaint = true;
+            }
+        }
+        if self.proxy_switch_request.is_some_and(|request| !self.proxy_manager.request_is_current(request)) {
+            self.proxy_switch_request = None;
+            self.switching_node_id = None;
+            need_repaint = true;
+        }
         // 服务连通性检测的自动刷新（每 60s 一轮；代理运行走代理、未运行走直连）
         self.maybe_check_services();
         // 本软件 CPU/内存/磁盘 占用采样（500ms 一次差分）
@@ -211,12 +226,17 @@ impl VpnApp {
                             self.proxy_nodes_rev = self.proxy_nodes_rev.wrapping_add(1);
                         }
                         BgMsg::ProxyNodes(Err(e)) => self.status = format!("加载可用节点失败: {e}"),
-                        BgMsg::AutoAnchorStart(Ok((id, name))) => {
-                            self.set_and_persist_selected_node(id, name);
-                            self.start_proxy();
-                        }
-                        BgMsg::AutoAnchorStart(Err(e)) => {
-                            self.status = format!("自动选路锚点挑选失败: {e}")
+                        BgMsg::AutoAnchorStart { request, result } => {
+                            if !self.proxy_manager.request_is_current(request) {
+                                continue;
+                            }
+                            match result {
+                                Ok((id, name)) => {
+                                    self.set_and_persist_selected_node(id, name);
+                                    self.start_proxy_for_request(request);
+                                }
+                                Err(e) => self.status = format!("自动选路锚点挑选失败: {e}"),
+                            }
                         }
                         BgMsg::ProxyDrift(drift) => {
                             self.drift_busy = false;
@@ -463,7 +483,10 @@ impl VpnApp {
                                     let tx = self.tx.clone();
                                     self.rt.spawn(async move {
                                         if let Ok(cfg) = db.get_proxy_config().await {
-                                            let _ = tx.send(BgMsg::ProxyConfigSaved(Ok(cfg)));
+                                            let _ = tx.send(BgMsg::ProxyConfig {
+                                                baseline: None,
+                                                result: Ok(cfg),
+                                            });
                                         }
                                     });
                                 }
@@ -907,23 +930,26 @@ impl VpnApp {
                                 }
                             }
                         }
-                        BgMsg::ProxyStatus(status) => {
-                            self.note_proxy_state_transition(status.state);
-                            self.proxy_status = status;
+                        BgMsg::ProxyStatus { request, status } => {
+                            if self.proxy_manager.request_is_current(request) {
+                                self.receive_proxy_runtime_status(status);
+                            }
                         }
-                        BgMsg::ProxyMaintenanceDone(status) => {
+                        BgMsg::ProxyMaintenanceDone { request, status } => {
                             // A user operation started while the poll was pending;
                             // its completion will publish the authoritative state.
-                            if !self.proxy_busy {
+                            if !self.proxy_busy && self.proxy_manager.request_is_current(request) {
                                 if let Some(status) = status {
-                                    self.note_proxy_state_transition(status.state);
-                                    self.proxy_status = status;
+                                    self.receive_proxy_runtime_status(status);
                                 }
                             }
                         }
-                        BgMsg::ProxyModeHotToggled { ok, message } => {
-                            self.proxy_busy = false;
-                            if ok {
+                        BgMsg::ProxyModeHotToggled { request, result, message } => {
+                            if !self.proxy_manager.request_is_current(request) {
+                                continue;
+                            }
+                            self.finish_proxy_request(request);
+                            if matches!(result, Ok(true)) {
                                 // 热切换已生效：就地更新运行状态，进程未重启、连接未中断
                                 self.note_proxy_state_transition(ProxyState::Running);
                                 self.proxy_status.state = ProxyState::Running;
@@ -933,15 +959,21 @@ impl VpnApp {
                                 self.status = message;
                                 // TUN 状态变了，出口归属立刻静默复核一遍
                                 self.refresh_egress_silently();
-                            } else {
+                            } else if matches!(result, Ok(false)) {
                                 // 内核不支持热切换：回退整进程重启（start_proxy 内部
                                 // 会处理提权交接与非 TUN 内核拦截）
                                 self.status = message;
-                                self.start_proxy();
+                                self.start_proxy_for_request(request);
+                            } else if let Err(error) = result {
+                                self.status = error;
+                                self.reload_proxy();
                             }
                         }
-                        BgMsg::SystemProxyHotToggled { ok, message } => {
-                            self.proxy_busy = false;
+                        BgMsg::SystemProxyHotToggled { request, ok, message } => {
+                            if !self.proxy_manager.request_is_current(request) {
+                                continue;
+                            }
+                            self.finish_proxy_request(request);
                             if ok {
                                 self.proxy_status.system_proxy_enabled = self.proxy_config.mode.has_system();
                                 self.proxy_status.mode = self.proxy_config.mode;
@@ -949,11 +981,17 @@ impl VpnApp {
                                 self.refresh_egress_silently();
                             } else {
                                 self.status = message;
-                                self.start_proxy();
+                                // The manager retains the original snapshot and
+                                // reports partial/failed changes. Restarting the
+                                // core would hide that error and interrupt TUN.
+                                self.reload_proxy();
                             }
                         }
-                        BgMsg::ProxyRoutingModeHotSwitched { ok, mode, message } => {
-                            self.proxy_busy = false;
+                        BgMsg::ProxyRoutingModeHotSwitched { request, ok, mode, message } => {
+                            if !self.proxy_manager.request_is_current(request) {
+                                continue;
+                            }
+                            self.finish_proxy_request(request);
                             if ok {
                                 self.proxy_config.routing_mode = mode;
                                 self.proxy_status.routing_mode = mode;
@@ -967,16 +1005,26 @@ impl VpnApp {
                             self.service_checks = Some(results);
                             self.service_checks_running = false;
                         }
-                        BgMsg::ProxyConfig(Ok(config)) => self.set_proxy_config(config),
-                        BgMsg::ProxyConfig(Err(error)) => {
-                            self.status = format!("读取代理配置失败: {error}");
+                        BgMsg::ProxyConfig { baseline, result } => {
+                            if baseline.as_ref().is_some_and(|expected| expected != &self.proxy_config) {
+                                continue; // A newer UI edit owns the draft now.
+                            }
+                            match result {
+                                Ok(config) => self.set_proxy_config(config),
+                                Err(error) => self.status = format!("读取代理配置失败: {error}"),
+                            }
                         }
                         BgMsg::ProxyConfigSaved(result) => {
-                            self.proxy_busy = false;
+                            if self.proxy_busy_request.is_none() {
+                                self.proxy_busy = false;
+                            }
                             match result {
-                                Ok(config) => {
-                                    self.set_proxy_config(config);
-                                    self.status = "代理配置已保存".into();
+                                Ok(saved) => {
+                                    self.status = saved.status_message(matches!(
+                                        self.proxy_status.state,
+                                        ProxyState::Running | ProxyState::Degraded
+                                    )).into();
+                                    self.set_proxy_config(saved.config);
                                     // 模式开关（系统代理/TUN）在保存期间登记的待应用变更：
                                     // busy 已清、配置已落库，此时才能真正走热切换/重启。
                                     // 关键：有模式变更待执行时，绝不能在此处提前调用 reload_proxy，
@@ -994,16 +1042,29 @@ impl VpnApp {
                             }
                         }
                         BgMsg::ProxyConfigQuietSaved(result) => {
-                            if let Err(error) = result {
-                                self.status = format!("保存代理配置失败: {error}");
-                            }
+                            self.status = match result {
+                                Ok(saved) => saved.status_message(matches!(
+                                    self.proxy_status.state,
+                                    ProxyState::Running | ProxyState::Degraded
+                                )).into(),
+                                Err(error) => format!("保存代理配置失败: {error}"),
+                            };
                         }
                         BgMsg::ProxyLog(Ok(log)) => self.proxy_log = log,
                         BgMsg::ProxyLog(Err(error)) => {
                             self.status = format!("读取代理日志失败: {error}");
                         }
-                        BgMsg::ProxyOp(result) => {
-                            self.proxy_busy = false;
+                        BgMsg::ProxyOp { operation, result } => {
+                            if operation.id != self.proxy_operation_id {
+                                continue; // Completion from an older Start/Stop request.
+                            }
+                            if !self.proxy_manager.request_is_current(operation.request) {
+                                if self.finish_proxy_request(operation.request) {
+                                    self.reload_proxy();
+                                }
+                                continue;
+                            }
+                            self.finish_proxy_request(operation.request);
                             self.switching_node_id = None;
                             match result {
                                 Ok(message) => {
@@ -1024,6 +1085,8 @@ impl VpnApp {
                                 }
                                 Err(error) => {
                                     self.status = format!("代理操作失败: {error}");
+                                    self.failed_proxy_start_notice = (operation.kind == ProxyOperationKind::Start)
+                                        .then(|| FailedProxyStartNotice { operation, footer: self.status.clone() });
                                     self.note_proxy_state_transition(ProxyState::Failed);
                                     self.proxy_status.state = ProxyState::Failed;
                                 }
@@ -1040,10 +1103,12 @@ impl VpnApp {
                         },
                         BgMsg::ProxySwitchDone {
                             seq,
+                            request,
                             node_id,
                             result,
                         } => {
-                            if seq == self.proxy_switch_seq {
+                            if seq == self.proxy_switch_seq && self.proxy_manager.request_is_current(request) {
+                                self.proxy_switch_request = None;
                                 self.switching_node_id = None;
                                 match result {
                                     Ok(message) => self.status = message,
@@ -1459,4 +1524,43 @@ impl VpnApp {
         }
     }
 
+}
+
+#[cfg(test)]
+mod system_proxy_callback_tests {
+    use super::*;
+
+    #[test]
+    fn failed_system_proxy_hot_toggle_keeps_the_error_and_never_starts_a_proxy() {
+        let mut app = crate::gui::views::nodes::empty_pool_modal_tests::app_with_an_empty_library();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.tx = tx;
+        app.rx = rx;
+        // Keep this real callback test on the empty, stopped fixture. No service,
+        // egress or failover probe is due, and there is no node to start.
+        app.last_service_check = std::time::Instant::now();
+        app.last_lan_ip_check = std::time::Instant::now();
+        app.proxy_config.url_test = false;
+        let manager = app.proxy_manager.clone();
+        let request = manager.reserve_request();
+        app.proxy_operation_id = 77;
+        app.proxy_busy = true;
+        app.proxy_busy_request = Some(request);
+        let runtime = app.rt.block_on(manager.runtime.lock());
+        assert!(runtime.child.is_none());
+        let message = "切换系统代理失败: mock restore failed; original snapshot retained";
+        app.tx.send(BgMsg::SystemProxyHotToggled {
+            request, ok: false, message: message.into(),
+        }).unwrap();
+        app.poll_bg(&egui::Context::default());
+        assert_eq!(app.status, message, "fallback Start would replace this error with a node-selection prompt");
+        assert_eq!(app.proxy_operation_id, 77);
+        assert_eq!(manager.current_request(), request);
+        assert_eq!(app.proxy_status.state, ProxyState::Stopped);
+        assert!(!app.proxy_busy);
+        assert_eq!(app.proxy_busy_request, None);
+        assert!(app.selected_proxy_node_id.is_none());
+        assert!(runtime.child.is_none());
+        drop(runtime);
+    }
 }

@@ -901,7 +901,7 @@ pub(crate) mod empty_pool_modal_tests {
     #[cfg(test)]
     pub(crate) fn app_with_an_empty_library() -> VpnApp {
         let rt = Arc::new(tokio::runtime::Runtime::new().unwrap());
-        let dir = std::env::temp_dir().join(format!("vp-nodes-modal-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vp-nodes-modal-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let db = rt
             .block_on(Database::connect(&dir.join("vpn-parser.db").to_string_lossy()))

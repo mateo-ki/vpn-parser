@@ -14,11 +14,11 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const PROTOCOL: u32 = 1;
+const PROTOCOL: u32 = 2;
 const MAX_FRAME: usize = 64 * 1024;
 const MAX_CONFIG: u64 = 16 * 1024 * 1024;
 const GEO_FILES: &[&str] = &["geoip.dat", "geosite.dat", "Country.mmdb"];
@@ -30,6 +30,8 @@ const CS_OPS_CDHASH: u32 = 5;
 const CS_VALID: u32 = 1;
 const CS_RUNTIME: u32 = 0x10000;
 static STOP_HELPER: AtomicBool = AtomicBool::new(false);
+static SESSION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const MAX_GUI_IDENTITIES: usize = 64;
 
 unsafe extern "C" {
     fn csops(
@@ -54,27 +56,67 @@ struct Manifest {
 enum Request {
     Hello {},
     Start {
-        manifest: Manifest,
-        config: PathBuf,
-        log: PathBuf,
+        session: SessionId,
+        payload: StartPayload,
     },
     Status {
-        session: String,
+        session: SessionId,
     },
     Stop {
-        session: String,
+        session: SessionId,
     },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "state", deny_unknown_fields)]
 enum Response {
-    Ready { manifest: Manifest },
-    Running { session: String, pid: u32 },
-    Exited { status: i32 },
+    Ready { manifest: Manifest, instance: String },
+    Running { session: SessionId, process: ProcessIdentity },
+    Exited { session: SessionId, status: i32 },
+    SessionLost { instance: String },
     Error { message: String },
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct SessionId {
+    instance: String,
+    id: String,
+    sequence: u64,
+    owner: PeerIdentity,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct StartPayload {
+    manifest: Manifest,
+    config: PathBuf,
+    log: PathBuf,
+    config_sha256: String,
+}
+
+fn verify_config_digest(bytes: &[u8], expected: &str) -> Result<()> {
+    if format!("{:x}", Sha256::digest(bytes)) != expected {
+        bail!("TUN configuration changed after the Start request was prepared");
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ProcessIdentity {
+    pid: u32,
+    instance: Option<(u64, u64)>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields)]
+struct PeerIdentity {
+    pid: libc::pid_t,
+    instance: (u64, u64),
+}
+
+#[derive(Clone)]
 struct Paths {
     label: String,
     install: PathBuf,
@@ -299,6 +341,33 @@ fn process_instance(pid: libc::pid_t) -> Result<(u64, u64)> {
     Ok((info.pbi_start_tvsec, info.pbi_start_tvusec))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OwnerLiveness { Alive, Dead, Unknown }
+
+fn owner_liveness(owner: PeerIdentity) -> OwnerLiveness {
+    match process_instance(owner.pid) {
+        Ok(instance) if instance == owner.instance => OwnerLiveness::Alive,
+        Ok(_) => OwnerLiveness::Dead,
+        Err(_) => {
+            // Signal zero only queries existence. Permission/errors do not
+            // establish death; only ESRCH permits retiring this old identity.
+            if unsafe { libc::kill(owner.pid, 0) } == -1
+                && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            { OwnerLiveness::Dead } else { OwnerLiveness::Unknown }
+        }
+    }
+}
+
+fn with_live_owner<T>(owner: PeerIdentity,
+    inspect: impl FnOnce(PeerIdentity) -> OwnerLiveness,
+    dispatch: impl FnOnce() -> Result<T>) -> Result<T>
+{
+    if inspect(owner) != OwnerLiveness::Alive {
+        bail!("GUI process identity changed or could not be confirmed after reading the request");
+    }
+    dispatch()
+}
+
 fn authenticated_peer(
     stream: &UnixStream,
     expected_uid: u32,
@@ -362,6 +431,28 @@ fn prepare_accepted_stream(stream: &UnixStream) -> io::Result<()> {
     stream.set_write_timeout(Some(IO_TIMEOUT))
 }
 
+#[derive(Debug)]
+struct UnconfirmedReply;
+
+impl std::fmt::Display for UnconfirmedReply {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("TUN helper request was sent but its reply could not be confirmed")
+    }
+}
+
+impl std::error::Error for UnconfirmedReply {}
+
+fn rpc_on_stream(stream: &mut UnixStream, request: &Request) -> Result<Response> {
+    write_frame(stream, request)?;
+    // A malformed frame is just as uncertain as a lost reply: the helper may
+    // already have applied Start. Keep the decoding/I/O source for diagnostics.
+    let response: Response = read_frame(stream).map_err(|error| error.context(UnconfirmedReply))?;
+    match response {
+        Response::Error { message } => Err(anyhow!(message)),
+        response => Ok(response),
+    }
+}
+
 fn rpc(paths: &Paths, request: &Request, timeout: Duration) -> Result<Response> {
     // A normal user cannot replace the root-owned parent directory or its socket.
     let parent = fs::symlink_metadata(&paths.socket_dir)?;
@@ -373,12 +464,7 @@ fn rpc(paths: &Paths, request: &Request, timeout: Duration) -> Result<Response> 
     stream.set_write_timeout(Some(timeout))?;
     let hash = process_hash(unsafe { libc::getpid() })?;
     authenticated_peer(&stream, 0, &hash)?;
-    write_frame(&mut stream, request)?;
-    let response: Response = read_frame(&mut stream)?;
-    match response {
-        Response::Error { message } => Err(anyhow!(message)),
-        response => Ok(response),
-    }
+    rpc_on_stream(&mut stream, request)
 }
 
 fn shell_quote(text: &str) -> String {
@@ -433,9 +519,80 @@ fn daemon_plist(paths: &Paths, uid: u32, gid: u32) -> String {
     format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>{}</string><key>ProgramArguments</key><array><string>/usr/bin/arch</string><string>-{}</string><string>{}</string><string>--macos-tun-helper</string><string>{uid}</string><string>{gid}</string></array><key>ProcessType</key><string>Interactive</string><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>AbandonProcessGroup</key><false/><key>ThrottleInterval</key><integer>5</integer><key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string></dict></plist>\n", xml_escape(&paths.label), helper_architecture(), xml_escape(&exe.to_string_lossy()))
 }
 
+fn read_version_pipe(reader: &mut impl Read, output: &mut Vec<u8>) -> Result<()> {
+    const MAX_VERSION_OUTPUT: usize = 64 * 1024;
+    let mut buffer = [0u8; 4096];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => return Ok(()),
+            Ok(count) => {
+                if output.len() + count > MAX_VERSION_OUTPUT {
+                    bail!("Mihomo 版本预检输出超过 64 KiB");
+                }
+                output.extend_from_slice(&buffer[..count]);
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+/// Execute only the immutable installed core's version command. This runs as
+/// the ordinary GUI account and never loads a proxy configuration or creates TUN.
+fn check_core_version(executable: &Path, timeout: Duration) -> Result<String> {
+    let mut child = Command::new(executable)
+        .args(KernelKind::Mihomo.version_args())
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Mihomo 版本预检无法执行，保留原 TUN 安装")?;
+    let result = (|| -> Result<String> {
+        let mut stdout = child.stdout.take().context("Missing version stdout")?;
+        let mut stderr = child.stderr.take().context("Missing version stderr")?;
+        for fd in [stdout.as_raw_fd(), stderr.as_raw_fd()] {
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } != 0 {
+                return Err(io::Error::last_os_error()).context("Bound version output reads");
+            }
+        }
+        let deadline = Instant::now() + timeout;
+        let mut output = Vec::new();
+        let status = loop {
+            read_version_pipe(&mut stdout, &mut output)?;
+            read_version_pipe(&mut stderr, &mut output)?;
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                bail!("Mihomo 版本预检超时，保留原 TUN 安装");
+            }
+            std::thread::sleep(Duration::from_millis(20).min(deadline.saturating_duration_since(Instant::now())));
+        };
+        read_version_pipe(&mut stdout, &mut output)?;
+        read_version_pipe(&mut stderr, &mut output)?;
+        crate::kernel::classify_version_probe(
+            status.success(),
+            status.code(),
+            &String::from_utf8_lossy(&output),
+        )
+        .map_err(anyhow::Error::msg)?
+        .context("Mihomo 版本预检没有返回版本")
+    })();
+    if child.try_wait().ok().flatten().is_none() {
+        child.kill().context("终止未完成的 Mihomo 版本预检失败")?;
+        poll_child_until(Duration::from_secs(1), Duration::from_millis(10), || child.try_wait())?
+            .context("Mihomo 版本预检终止后未在期限内回收")?;
+    }
+    result
+}
+
 /// Read-only installation check, invoked as the GUI user by the authorized
-/// installer. The protected manifest and authenticated Hello must both match
-/// before the installer can discard the preceding installation.
+/// installer. The protected manifest, authenticated Hello and executable core
+/// version must pass before the installer can discard the preceding installation.
 pub fn check_installation(uid: u32) -> Result<()> {
     if unsafe { libc::getuid() } != uid || unsafe { libc::geteuid() } != uid {
         bail!("TUN installation check must run as the GUI user");
@@ -458,7 +615,15 @@ pub fn check_installation(uid: u32) -> Result<()> {
         bail!("Installed helper manifest mismatch");
     }
     match rpc(&paths, &Request::Hello {}, IO_TIMEOUT)? {
-        Response::Ready { manifest: active } if active == manifest => Ok(()),
+        Response::Ready { manifest: active, .. } if active == manifest => {
+            let core = paths.install.join("mihomo");
+            let _ = root_file(&core)?;
+            if file_sha256(&core)? != manifest.core_sha256 {
+                bail!("Installed core manifest mismatch");
+            }
+            check_core_version(&core, Duration::from_secs(3))?;
+            Ok(())
+        }
         _ => bail!("TUN helper is not ready with the installed manifest"),
     }
 }
@@ -583,6 +748,24 @@ struct InstallScriptInputs<'a> {
     plist_backup: &'a Path,
 }
 
+fn installation_readiness_script(checker_command: &str) -> String {
+    format!(r#"vproxy_ready=0
+vproxy_attempt=0
+vproxy_check_error=''
+vproxy_ready_deadline=$(( $(/bin/date +%s) + 8 ))
+while test "$vproxy_attempt" -lt 40 && test "$(/bin/date +%s)" -lt "$vproxy_ready_deadline"; do
+  if vproxy_check_error=$({checker_command} 2>&1); then vproxy_ready=1; break; fi
+  vproxy_attempt=$((vproxy_attempt + 1))
+  /bin/sleep 0.1
+done
+if test "$vproxy_ready" -ne 1; then
+  /bin/echo 'TUN helper did not pass the authenticated installation/core version check' >&2
+  if test -n "$vproxy_check_error"; then /usr/bin/printf '%s\n' "$vproxy_check_error" >&2; fi
+  exit 1
+fi
+"#)
+}
+
 // Pure command construction: no file access, authorization or system mutation.
 fn installation_script(input: InstallScriptInputs<'_>) -> Result<String> {
     let InstallScriptInputs {
@@ -660,12 +843,11 @@ fn installation_script(input: InstallScriptInputs<'_>) -> Result<String> {
     // Keep both the app/core snapshot and plist until the new authenticated
     // service is ready. Any failure in the transaction restores the old pair.
     script.push_str(install_service_swap_script());
-    script.push_str("vproxy_ready=0\nvproxy_attempt=0\n");
     let checker = paths.install.join("VProxyHelper.app/Contents/MacOS/vproxy");
-    script.push_str(&format!("while test \"$vproxy_attempt\" -lt 40; do\n  if /usr/bin/sudo -u {} -- /usr/bin/arch -{} {} --macos-tun-helper-check {} >/dev/null 2>&1; then vproxy_ready=1; break; fi\n  vproxy_attempt=$((vproxy_attempt + 1))\n  /bin/sleep 0.1\ndone\n", shell_quote(&format!("#{}", user.uid)), helper_architecture(), q(&checker)?, user.uid));
-    script.push_str(r#"if test "$vproxy_ready" -ne 1; then /bin/echo 'TUN helper did not pass the authenticated installation check' >&2; exit 1; fi
-    vproxy_committed=1
-    # Only this transaction's preceding snapshot is removed after successful Hello.
+    let checker_command = format!("/usr/bin/sudo -u {} -- /usr/bin/arch -{} {} --macos-tun-helper-check {}", shell_quote(&format!("#{}", user.uid)), helper_architecture(), q(&checker)?, user.uid);
+    script.push_str(&installation_readiness_script(&checker_command));
+    script.push_str(r#"vproxy_committed=1
+    # Remove the preceding snapshot only after authenticated Hello and core -v.
     /bin/rm -rf "$vproxy_backup" || /bin/echo "Could not remove the previous TUN installation at $vproxy_backup" >&2
     /bin/rm -f "$vproxy_plist_backup" || /bin/echo "Could not remove the previous TUN plist at $vproxy_plist_backup" >&2
     "#);
@@ -811,7 +993,15 @@ fn wait_for_helper_ready(
 }
 
 fn start_rpc_error(error: anyhow::Error) -> anyhow::Error {
-    let transient = error.chain().any(|cause| {
+    if transport_error(&error) {
+        error.context("TUN 后台服务暂未就绪：服务连接中断，请稍后重试")
+    } else {
+        error
+    }
+}
+
+fn transport_error(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<UnconfirmedReply>().is_some() || error.chain().any(|cause| {
         cause.downcast_ref::<io::Error>().is_some_and(|error| {
             matches!(
                 error.kind(),
@@ -826,12 +1016,7 @@ fn start_rpc_error(error: anyhow::Error) -> anyhow::Error {
                     | io::ErrorKind::Interrupted
             )
         })
-    });
-    if transient {
-        error.context("TUN 后台服务暂未就绪：服务连接中断，请稍后重试")
-    } else {
-        error
-    }
+    })
 }
 
 fn start_impl(
@@ -860,11 +1045,19 @@ fn start_impl(
             .mode(0o600)
             .open(log)?;
     }
-    let _ = open_user_file(&user, config, false)?;
+    let mut config_file = open_user_file(&user, config, false)?;
+    if config_file.metadata()?.len() > MAX_CONFIG { bail!("TUN configuration is too large"); }
+    let mut config_bytes = Vec::new();
+    Read::by_ref(&mut config_file).take(MAX_CONFIG + 1).read_to_end(&mut config_bytes)?;
+    if config_bytes.len() as u64 > MAX_CONFIG { bail!("TUN configuration is too large"); }
+    let config_sha256 = format!("{:x}", Sha256::digest(&config_bytes));
     let _ = open_user_file(&user, log, true)?;
     let manifest = current_manifest(executable, data_root)?;
-    let ready = matches!(rpc(&paths, &Request::Hello {}, IO_TIMEOUT), Ok(Response::Ready { manifest: installed }) if installed == manifest);
-    if !ready {
+    let mut helper_instance = match rpc(&paths, &Request::Hello {}, IO_TIMEOUT) {
+        Ok(Response::Ready { manifest: installed, instance }) if installed == manifest => Some(instance),
+        _ => None,
+    };
+    if helper_instance.is_none() {
         if helper_preparation(installed_manifest_matches(&paths, &manifest), allow_install)?
             == HelperPreparation::Install
         {
@@ -873,86 +1066,150 @@ fn start_impl(
         wait_for_helper_ready(
             Duration::from_secs(8),
             Duration::from_millis(100),
-            || matches!(rpc(&paths, &Request::Hello {}, IO_TIMEOUT), Ok(Response::Ready { manifest: installed }) if installed == manifest),
+            || match rpc(&paths, &Request::Hello {}, IO_TIMEOUT) {
+                Ok(Response::Ready { manifest: installed, instance }) if installed == manifest => {
+                    helper_instance = Some(instance);
+                    true
+                }
+                _ => false,
+            },
         )?;
     }
-    match rpc(
-        &paths,
-        &Request::Start {
-            manifest,
-            config: config.into(),
-            log: log.into(),
-        },
-        Duration::from_secs(3),
-    )
-    .map_err(start_rpc_error)?
-    {
-        Response::Running { session, pid } => Ok(MacChild {
-            paths,
-            session,
-            pid,
-            exited: None,
-        }),
-        response => bail!("Unexpected TUN helper response: {response:?}"),
-    }
+    let sequence = SESSION_SEQUENCE.fetch_update(Ordering::SeqCst, Ordering::SeqCst,
+        |previous| previous.checked_add(1)).map_err(|_| anyhow!("TUN session sequence exhausted"))? + 1;
+    let session = SessionId {
+        instance: helper_instance.context("TUN helper did not provide its instance identity")?,
+        id: Uuid::new_v4().to_string(), sequence,
+        owner: PeerIdentity { pid: unsafe { libc::getpid() },
+            instance: process_instance(unsafe { libc::getpid() })? },
+    };
+    let payload = StartPayload { manifest, config: config.into(), log: log.into(), config_sha256 };
+    let state = start_session_with_rpc(session, payload, |request|
+        rpc(&paths, request, Duration::from_secs(3)))?;
+    Ok(MacChild { paths, state })
 }
 
 pub struct MacChild {
     paths: Paths,
-    session: String,
-    pid: u32,
+    state: ClientSession,
+}
+
+struct ClientSession {
+    session: SessionId,
+    process: Option<ProcessIdentity>,
     exited: Option<ExitStatus>,
+}
+
+impl ClientSession {
+    fn pending(session: SessionId) -> Self { Self { session, process: None, exited: None } }
+
+    fn accept(&mut self, response: Response,
+        gone: impl FnOnce(ProcessIdentity) -> io::Result<bool>) -> io::Result<Option<ExitStatus>>
+    {
+        match response {
+            Response::Running { session, process }
+                if session == self.session && process.pid > 0 && process.pid <= i32::MAX as u32 => {
+                if self.process.is_some_and(|known| known != process) {
+                    return Err(io::Error::other("TUN helper changed the process for an existing session"));
+                }
+                self.process = Some(process);
+                Ok(None)
+            }
+            Response::Exited { session, status } if session == self.session => {
+                let status = ExitStatus::from_raw(status);
+                self.exited = Some(status);
+                Ok(Some(status))
+            }
+            Response::SessionLost { instance } if instance != self.session.instance => {
+                if let Some(process) = self.process {
+                    if gone(process)? {
+                        let status = ExitStatus::from_raw(1 << 8);
+                        self.exited = Some(status);
+                        return Ok(Some(status));
+                    }
+                }
+                Err(io::Error::other("TUN 后台服务已重启，旧内核会话退出尚未确认；已保留会话，请勿重复启动"))
+            }
+            Response::Error { message } => Err(io::Error::other(message)),
+            _ => Err(io::Error::other("Unexpected TUN helper session response")),
+        }
+    }
+}
+
+fn process_confirmed_gone(process: ProcessIdentity) -> io::Result<bool> {
+    match process_instance(process.pid as libc::pid_t) {
+        Ok(current) => Ok(process.instance.is_some_and(|expected| expected != current)),
+        Err(_) => {
+            if unsafe { libc::kill(process.pid as libc::pid_t, 0) } == -1
+                && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            { Ok(true) } else { Ok(false) }
+        }
+    }
+}
+
+fn start_session_with_rpc(session: SessionId, payload: StartPayload,
+    mut exchange: impl FnMut(&Request) -> Result<Response>) -> Result<ClientSession>
+{
+    let mut state = ClientSession::pending(session.clone());
+    let request = Request::Start { session, payload };
+    let mut uncertain = false;
+    for _ in 0..2 {
+        match exchange(&request) {
+            Ok(Response::Error { message }) if !uncertain => return Err(anyhow!(message)),
+            Ok(response) => {
+                // A lost/restarted service or an invalid response must not throw
+                // away the only handle that can cancel an uncertain Start.
+                let _ = state.accept(response, |_| Ok(false));
+                return Ok(state);
+            }
+            Err(error) if transport_error(&error) => uncertain = true,
+            Err(error) if !uncertain => return Err(start_rpc_error(error)),
+            Err(_) => return Ok(state),
+        }
+    }
+    Ok(state)
 }
 
 impl MacChild {
     pub fn id(&self) -> Option<u32> {
-        self.exited.is_none().then_some(self.pid)
+        self.state.exited.is_none().then(|| self.state.process.map(|process| process.pid)).flatten()
     }
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        if let Some(status) = self.exited {
+        if let Some(status) = self.state.exited {
             return Ok(Some(status));
         }
         let response = rpc(
             &self.paths,
             &Request::Status {
-                session: self.session.clone(),
+                session: self.state.session.clone(),
             },
             IO_TIMEOUT,
         )
         .map_err(io::Error::other)?;
-        match response {
-            Response::Running { pid, .. } if pid == self.pid => Ok(None),
-            Response::Exited { status } => {
-                let status = ExitStatus::from_raw(status);
-                self.exited = Some(status);
-                Ok(Some(status))
-            }
-            _ => Err(io::Error::other("Unexpected helper child status")),
-        }
+        self.state.accept(response, process_confirmed_gone)
     }
     pub async fn kill(&mut self) -> io::Result<()> {
-        if self.exited.is_some() {
+        if self.state.exited.is_some() {
             return Ok(());
         }
-        match rpc(
-            &self.paths,
-            &Request::Stop {
-                session: self.session.clone(),
-            },
-            Duration::from_secs(3),
-        )
-        .map_err(io::Error::other)?
-        {
-            Response::Exited { status } => {
-                self.exited = Some(ExitStatus::from_raw(status));
-                Ok(())
-            }
-            _ => Err(io::Error::other("Helper did not reap the stopped kernel")),
-        }
+        let paths = self.paths.clone();
+        let session = self.state.session.clone();
+        let response = tokio::task::spawn_blocking(move ||
+            rpc(&paths, &Request::Stop { session }, Duration::from_secs(3)))
+            .await.map_err(io::Error::other)?.map_err(io::Error::other)?;
+        self.state.accept(response, process_confirmed_gone)?
+            .ok_or_else(|| io::Error::other("Helper did not reap the stopped kernel"))?;
+        Ok(())
     }
     pub async fn wait(&mut self) -> io::Result<ExitStatus> {
         loop {
-            if let Some(status) = self.try_wait()? {
+            if let Some(status) = self.state.exited { return Ok(status); }
+            let paths = self.paths.clone();
+            let session = self.state.session.clone();
+            let response = tokio::task::spawn_blocking(move ||
+                rpc(&paths, &Request::Status { session }, IO_TIMEOUT))
+                .await.map_err(io::Error::other)?.map_err(io::Error::other)?;
+            if let Some(status) = self.state.accept(response, process_confirmed_gone)? {
                 return Ok(status);
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -962,11 +1219,11 @@ impl MacChild {
 
 impl Drop for MacChild {
     fn drop(&mut self) {
-        if self.exited.is_none() {
+        if self.state.exited.is_none() {
             let _ = rpc(
                 &self.paths,
                 &Request::Stop {
-                    session: self.session.clone(),
+                    session: self.state.session.clone(),
                 },
                 Duration::from_secs(3),
             );
@@ -975,10 +1232,8 @@ impl Drop for MacChild {
 }
 
 struct Running {
-    session: String,
-    parent: libc::pid_t,
-    parent_instance: (u64, u64),
     child: Child,
+    identity: ProcessIdentity,
     status: Option<ExitStatus>,
 }
 
@@ -1042,6 +1297,174 @@ impl Running {
 impl Drop for Running {
     fn drop(&mut self) {
         let _ = self.stop();
+    }
+}
+
+trait SessionProcess {
+    fn identity(&self) -> ProcessIdentity;
+    fn poll(&mut self) -> io::Result<Option<ExitStatus>>;
+    fn stop(&mut self) -> io::Result<ExitStatus>;
+}
+
+impl SessionProcess for Running {
+    fn identity(&self) -> ProcessIdentity { self.identity }
+    fn poll(&mut self) -> io::Result<Option<ExitStatus>> { Running::poll(self) }
+    fn stop(&mut self) -> io::Result<ExitStatus> { Running::stop(self) }
+}
+
+struct ActiveSession<P> {
+    owner: PeerIdentity,
+    session: SessionId,
+    payload: StartPayload,
+    process: P,
+}
+
+struct PeerReplay {
+    highest: u64,
+    session: String,
+    payload: Option<StartPayload>,
+    status: Option<i32>,
+}
+
+/// Live/unknown GUI high-water marks are never evicted. A dead process instance
+/// cannot authenticate again; all accepted connections are rechecked after read.
+struct SessionRegistry<P> {
+    instance: String,
+    peers: BTreeMap<PeerIdentity, PeerReplay>,
+    active: Option<ActiveSession<P>>,
+}
+
+impl<P: SessionProcess> SessionRegistry<P> {
+    fn new(instance: String) -> Self {
+        Self { instance, peers: BTreeMap::new(), active: None }
+    }
+
+    fn retire_dead_owners(&mut self, mut inspect: impl FnMut(PeerIdentity) -> OwnerLiveness) {
+        let active_owner = self.active.as_ref().map(|active| active.owner);
+        self.peers.retain(|owner, _| Some(*owner) == active_owner
+            || inspect(*owner) != OwnerLiveness::Dead);
+    }
+
+    fn check_session(&self, owner: PeerIdentity, session: &SessionId) -> Result<Option<Response>> {
+        if session.owner != owner {
+            bail!("TUN session does not belong to this authenticated GUI process instance");
+        }
+        if session.instance != self.instance {
+            return Ok(Some(Response::SessionLost { instance: self.instance.clone() }));
+        }
+        if session.sequence == 0 || Uuid::parse_str(&session.id).is_err() {
+            bail!("Invalid TUN session identity");
+        }
+        Ok(None)
+    }
+
+    fn record_terminal(&mut self, owner: PeerIdentity, session: &SessionId, status: i32) {
+        if let Some(record) = self.peers.get_mut(&owner) {
+            if record.highest == session.sequence && record.session == session.id {
+                record.status = Some(status);
+            }
+        }
+    }
+
+    fn poll_active(&mut self, owner_alive: impl FnOnce(PeerIdentity) -> bool) -> Result<()> {
+        let terminal = if let Some(active) = self.active.as_mut() {
+            let status = match active.process.poll()? {
+                Some(status) => Some(status),
+                None if !owner_alive(active.owner) => Some(active.process.stop()?),
+                None => None,
+            };
+            status.map(|status| (active.owner, active.session.clone(), status.into_raw()))
+        } else { None };
+        if let Some((owner, session, status)) = terminal {
+            self.record_terminal(owner, &session, status);
+        }
+        Ok(())
+    }
+
+    /// Reserve before spawning, or before answering an unknown Status/Stop.
+    /// Unknown sessions become canceled: a delayed Start can never arrive later
+    /// and resurrect a session that the GUI already confirmed as stopped.
+    fn reserve(&mut self, owner: PeerIdentity, session: &SessionId, payload: Option<&StartPayload>) -> Result<bool> {
+        if !self.peers.contains_key(&owner) {
+            if self.peers.len() >= MAX_GUI_IDENTITIES {
+                bail!("TUN helper session history is full; restart the helper before another GUI session");
+            }
+            self.peers.insert(owner, PeerReplay {
+                highest: 0, session: String::new(), payload: None, status: Some(1 << 8),
+            });
+        }
+        let record = self.peers.get_mut(&owner).expect("inserted peer");
+        if session.sequence < record.highest {
+            return Ok(false);
+        }
+        if session.sequence == record.highest {
+            if session.id != record.session {
+                bail!("TUN session sequence was reused with a different identity");
+            }
+            if let (Some(previous), Some(requested)) = (&record.payload, payload) {
+                if previous != requested {
+                    bail!("TUN Start retry changed its request content");
+                }
+            }
+            return Ok(false);
+        }
+        *record = PeerReplay {
+            highest: session.sequence, session: session.id.clone(),
+            payload: payload.cloned(), status: Some(1 << 8),
+        };
+        Ok(true)
+    }
+
+    fn terminal_response(&self, owner: PeerIdentity, session: &SessionId) -> Response {
+        let status = self.peers.get(&owner).filter(|record|
+            record.highest == session.sequence && record.session == session.id)
+            .and_then(|record| record.status).unwrap_or(1 << 8);
+        Response::Exited { session: session.clone(), status }
+    }
+
+    fn start(&mut self, owner: PeerIdentity, session: SessionId, payload: StartPayload,
+        spawn: impl FnOnce(&StartPayload) -> Result<P>) -> Result<Response>
+    {
+        if let Some(response) = self.check_session(owner, &session)? { return Ok(response); }
+        if let Some(active) = self.active.as_mut() {
+            if active.session == session {
+                if active.owner != owner { bail!("TUN session does not belong to this GUI process"); }
+                if active.payload != payload { bail!("TUN Start retry changed its request content"); }
+                return Ok(match active.process.poll()? {
+                    Some(status) => Response::Exited { session, status: status.into_raw() },
+                    None => Response::Running { session, process: active.process.identity() },
+                });
+            }
+        }
+        if !self.reserve(owner, &session, Some(&payload))? {
+            return Ok(self.terminal_response(owner, &session));
+        }
+        if self.active.as_mut().is_some_and(|active| active.process.poll().map_or(true, |status| status.is_none())) {
+            bail!("TUN kernel already belongs to an active GUI session");
+        }
+        let process = spawn(&payload)?;
+        let identity = process.identity();
+        self.peers.get_mut(&owner).expect("reserved peer").status = None;
+        self.active = Some(ActiveSession { owner, session: session.clone(), payload, process });
+        Ok(Response::Running { session, process: identity })
+    }
+
+    fn status_or_stop(&mut self, owner: PeerIdentity, session: SessionId, stopping: bool) -> Result<Response> {
+        if let Some(response) = self.check_session(owner, &session)? { return Ok(response); }
+        if let Some(active) = self.active.as_mut() {
+            if active.session == session {
+                if active.owner != owner { bail!("TUN session does not belong to this GUI process"); }
+                let status = if stopping { Some(active.process.stop()?) } else { active.process.poll()? };
+                let response = match status {
+                    Some(status) => Response::Exited { session: session.clone(), status: status.into_raw() },
+                    None => Response::Running { session: session.clone(), process: active.process.identity() },
+                };
+                if let Some(status) = status { self.record_terminal(owner, &session, status.into_raw()); }
+                return Ok(response);
+            }
+        }
+        self.reserve(owner, &session, None)?;
+        Ok(self.terminal_response(owner, &session))
     }
 }
 
@@ -1139,43 +1562,39 @@ pub fn run_helper(uid: u32, gid: u32) -> Result<()> {
         libc::signal(libc::SIGINT, stop_signal as *const () as libc::sighandler_t);
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
-    let mut running: Option<Running> = None;
+    let mut sessions = SessionRegistry::<Running>::new(Uuid::new_v4().to_string());
     while !STOP_HELPER.load(Ordering::Relaxed) {
-        if let Some(child) = running.as_mut() {
-            let _ = child.poll();
-            if child.status.is_none()
-                && (process_instance(child.parent).ok() != Some(child.parent_instance)
-                    || process_hash(child.parent).ok().as_ref() != Some(&own_hash))
-            {
-                let _ = child.stop();
-            }
-        }
+        let _ = sessions.poll_active(|owner|
+            process_instance(owner.pid).ok() == Some(owner.instance)
+                && process_hash(owner.pid).ok().as_ref() == Some(&own_hash));
         match listener.accept() {
             Ok((mut stream, _)) => {
                 prepare_accepted_stream(&stream)?;
                 let response = (|| -> Result<Response> {
                     let pid = authenticated_peer(&stream, uid, &own_hash)?;
+                    let owner = PeerIdentity { pid, instance: process_instance(pid)? };
                     let request: Request = read_frame(&mut stream)?;
+                    // A peer can exit while the frame is being received. Never
+                    // dispatch its buffered request under a recycled PID.
+                    if authenticated_peer(&stream, uid, &own_hash)? != owner.pid {
+                        bail!("GUI peer PID changed while reading request");
+                    }
+                    with_live_owner(owner, owner_liveness, || {
+                    if sessions.peers.len() >= MAX_GUI_IDENTITIES {
+                        sessions.retire_dead_owners(owner_liveness);
+                    }
                     let stopping = matches!(&request, Request::Stop { .. });
                     match request {
                         Request::Hello {} => Ok(Response::Ready {
                             manifest: manifest.clone(),
+                            instance: sessions.instance.clone(),
                         }),
-                        Request::Start {
-                            manifest: requested,
-                            config,
-                            log,
-                        } => {
-                            if requested != manifest {
+                        Request::Start { session, payload } => {
+                            if payload.manifest != manifest {
                                 bail!("内核或程序已更新，请重新授权安装 TUN 后台服务");
                             }
-                            if running
-                                .as_mut()
-                                .is_some_and(|child| child.poll().ok().flatten().is_none())
-                            {
-                                bail!("TUN kernel already belongs to an active GUI session");
-                            }
-                            let mut input = open_user_file(&user, &config, false)?;
+                            sessions.start(owner, session, payload, |payload| {
+                            let mut input = open_user_file(&user, &payload.config, false)?;
                             if input.metadata()?.len() > MAX_CONFIG {
                                 bail!("TUN configuration is too large");
                             }
@@ -1186,13 +1605,12 @@ pub fn run_helper(uid: u32, gid: u32) -> Result<()> {
                             if config_bytes.len() as u64 > MAX_CONFIG {
                                 bail!("TUN configuration is too large");
                             }
-                            let stdout = open_user_file(&user, &log, true)?;
+                            verify_config_digest(&config_bytes, &payload.config_sha256)?;
+                            let stdout = open_user_file(&user, &payload.log, true)?;
                             let stderr = stdout.try_clone()?;
                             let target = paths.runtime.join("config.yaml");
                             fs::write(&target, config_bytes)?;
                             fs::set_permissions(&target, fs::Permissions::from_mode(0o600))?;
-                            let parent_instance = process_instance(pid)?;
-                            let session = Uuid::new_v4().to_string();
                             let child = Command::new(paths.install.join("mihomo"))
                                 .args(["-d"])
                                 .arg(&paths.runtime)
@@ -1205,46 +1623,22 @@ pub fn run_helper(uid: u32, gid: u32) -> Result<()> {
                                 .stdout(Stdio::from(stdout))
                                 .stderr(Stdio::from(stderr))
                                 .spawn()?;
-                            let child_pid = child.id();
-                            running = Some(Running {
-                                session: session.clone(),
-                                parent: pid,
-                                parent_instance,
+                            let identity = ProcessIdentity {
+                                pid: child.id(),
+                                instance: process_instance(child.id() as libc::pid_t).ok(),
+                            };
+                            Ok(Running {
                                 child,
+                                identity,
                                 status: None,
-                            });
-                            Ok(Response::Running {
-                                session,
-                                pid: child_pid,
+                            })
                             })
                         }
                         Request::Status { session } | Request::Stop { session } => {
-                            // launchd may have restarted the helper after a crash.
-                            // A missing old session is stopped, never an immortal
-                            // "running" child because a caller ignored an RPC error.
-                            let Some(child) = running.as_mut() else {
-                                return Ok(Response::Exited { status: 1 << 8 });
-                            };
-                            if child.parent != pid || child.session != session {
-                                bail!("TUN session does not belong to this GUI");
-                            }
-                            if stopping {
-                                let status = child.stop()?;
-                                return Ok(Response::Exited {
-                                    status: status.into_raw(),
-                                });
-                            }
-                            match child.poll()? {
-                                Some(status) => Ok(Response::Exited {
-                                    status: status.into_raw(),
-                                }),
-                                None => Ok(Response::Running {
-                                    session: child.session.clone(),
-                                    pid: child.child.id(),
-                                }),
-                            }
+                            sessions.status_or_stop(owner, session, stopping)
                         }
                     }
+                    })
                 })()
                 .unwrap_or_else(|error| Response::Error {
                     message: format!("{error:#}"),
@@ -1258,7 +1652,7 @@ pub fn run_helper(uid: u32, gid: u32) -> Result<()> {
             Err(error) => return Err(error.into()),
         }
     }
-    drop(running);
+    drop(sessions);
     let _ = fs::remove_file(&paths.socket);
     Ok(())
 }
@@ -1341,9 +1735,7 @@ mod tests {
             .unwrap();
         assert_eq!(ready, "ready\n");
         let mut running = Running {
-            session: "test-session".into(),
-            parent: unsafe { libc::getpid() },
-            parent_instance: (0, 0),
+            identity: ProcessIdentity { pid: child.id(), instance: None },
             child,
             status: None,
         };
@@ -1615,6 +2007,13 @@ esac
             fs::read_to_string(self.root.join("events")).unwrap()
         }
 
+        fn fake_version_program(&self, body: &str) -> PathBuf {
+            let executable = self.root.join("fake-mihomo");
+            fs::write(&executable, format!("#!/bin/sh\ntest \"$1\" = -v || exit 97\n{body}\n")).unwrap();
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+            executable
+        }
+
         fn assert_old_restored(&self) {
             assert_eq!(
                 fs::read_to_string(self.paths.install.join("marker")).unwrap(),
@@ -1710,6 +2109,79 @@ esac
         assert!(!fixture.backup.exists());
         assert!(!fixture.plist_backup.exists());
     }
+
+    #[test]
+    fn installed_core_version_check_accepts_version_and_rejects_bad_output_or_execution() {
+        let fixture = InstallTransactionFixture::new();
+        let core = fixture.fake_version_program("printf 'Mihomo Meta fixture-v1\\n'");
+        assert_eq!(check_core_version(&core, Duration::from_secs(1)).unwrap(), "Mihomo Meta fixture-v1");
+        for body in ["exit 0", "printf 'mock unsupported architecture\\n' >&2; exit 7"] {
+            let core = fixture.fake_version_program(body);
+            assert!(check_core_version(&core, Duration::from_secs(1)).is_err());
+        }
+        fs::write(&core, "not an executable format").unwrap();
+        assert!(check_core_version(&core, Duration::from_secs(1)).unwrap_err().to_string().contains("无法执行"));
+        fs::set_permissions(&core, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(check_core_version(&core, Duration::from_secs(1)).is_err());
+    }
+
+    #[test]
+    fn stalled_core_version_check_is_bounded_and_reaps_its_fixture_child() {
+        let fixture = InstallTransactionFixture::new();
+        let pid_file = fixture.root.join("version.pid");
+        let core = fixture.fake_version_program(&format!(
+            "printf '%s\\n' \"$$\" > {}\nexec /bin/sleep 30", path_quote(&pid_file).unwrap(),
+        ));
+        let started = Instant::now();
+        let error = check_core_version(&core, Duration::from_millis(200)).unwrap_err();
+        assert!(error.to_string().contains("超时"), "{error:#}");
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let pid = fs::read_to_string(pid_file).unwrap().trim().parse::<libc::pid_t>().unwrap();
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ECHILD));
+    }
+
+    #[test]
+    fn core_version_check_limits_output_without_a_pipe_deadlock() {
+        let fixture = InstallTransactionFixture::new();
+        let core = fixture.fake_version_program("while :; do printf '0123456789abcdef0123456789abcdef'; done");
+        let error = check_core_version(&core, Duration::from_secs(1)).unwrap_err();
+        assert!(error.to_string().contains("64 KiB"), "{error:#}");
+    }
+
+    #[test]
+    fn failed_core_check_before_commit_restores_the_previous_installation() {
+        let fixture = InstallTransactionFixture::new();
+        let checker = fixture.root.join("fake-checker");
+        fs::write(&checker, "#!/bin/sh\nprintf 'mock Hello passed but core version failed\\n' >&2\nexit 7\n").unwrap();
+        fs::set_permissions(&checker, fs::Permissions::from_mode(0o700)).unwrap();
+        let tail = format!("{}vproxy_committed=1\n", installation_readiness_script(&path_quote(&checker).unwrap()));
+        let output = fixture.run(&tail);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("core version failed"));
+        fixture.assert_old_restored();
+        assert!(!fixture.backup.exists());
+        assert!(!fixture.plist_backup.exists());
+    }
+
+    #[test]
+    fn installation_readiness_deadline_stops_retrying_before_commit() {
+        let fixture = InstallTransactionFixture::new();
+        let clock = fixture.root.join("fake-date");
+        let clock_called = fixture.root.join("date-called");
+        fs::write(&clock, format!(
+            "#!/bin/sh\nif test -e {}; then /bin/echo 109; else /usr/bin/touch {}; /bin/echo 100; fi\n",
+            path_quote(&clock_called).unwrap(), path_quote(&clock_called).unwrap(),
+        )).unwrap();
+        fs::set_permissions(&clock, fs::Permissions::from_mode(0o700)).unwrap();
+        let script = installation_readiness_script("/usr/bin/true")
+            .replace("/bin/date", &path_quote(&clock).unwrap());
+        let output = fixture.run(&format!("{script}vproxy_committed=1\n"));
+        assert_eq!(output.status.code(), Some(1));
+        fixture.assert_old_restored();
+    }
+
     #[test]
     fn complete_installation_script_has_valid_shell_syntax() {
         let user = account(unsafe { libc::getuid() }).unwrap();
@@ -1786,5 +2258,376 @@ esac
         )));
         assert!(!plist.contains("/Users/"));
         assert!(!plist.contains("/bin/sh"));
+    }
+}
+
+#[cfg(test)]
+mod response_loss_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[derive(Default)]
+    struct Counts { spawned: usize, stopped: usize }
+
+    struct FakeProcess {
+        identity: ProcessIdentity,
+        exited: Option<ExitStatus>,
+        counts: Rc<RefCell<Counts>>,
+    }
+
+    impl SessionProcess for FakeProcess {
+        fn identity(&self) -> ProcessIdentity { self.identity }
+        fn poll(&mut self) -> io::Result<Option<ExitStatus>> { Ok(self.exited) }
+        fn stop(&mut self) -> io::Result<ExitStatus> {
+            if let Some(status) = self.exited { return Ok(status); }
+            self.counts.borrow_mut().stopped += 1;
+            let status = ExitStatus::from_raw(9);
+            self.exited = Some(status);
+            Ok(status)
+        }
+    }
+
+    fn owner() -> PeerIdentity { PeerIdentity { pid: 1234, instance: (10, 20) } }
+    fn session(instance: &str, sequence: u64) -> SessionId {
+        SessionId { instance: instance.into(), id: Uuid::new_v4().to_string(), sequence, owner: owner() }
+    }
+    fn payload() -> StartPayload {
+        StartPayload {
+            manifest: Manifest { protocol: PROTOCOL, gui_sha256: "test-gui".into(),
+                core_sha256: "test-core".into(), geodata: BTreeMap::new() },
+            config: "/test-only/config.yaml".into(), log: "/test-only/core.log".into(),
+            config_sha256: "test-config-sha256".into(),
+        }
+    }
+
+    #[test]
+    fn start_digest_checks_the_opened_config_content_without_exposing_it() {
+        let bytes = b"test-only: original config";
+        let digest = format!("{:x}", Sha256::digest(bytes));
+        verify_config_digest(bytes, &digest).unwrap();
+        let error = verify_config_digest(b"test-only: replaced config", &digest).unwrap_err();
+        assert!(error.to_string().contains("configuration changed"));
+        assert!(!error.to_string().contains("replaced config"));
+    }
+    fn spawn(counts: &Rc<RefCell<Counts>>) -> FakeProcess {
+        counts.borrow_mut().spawned += 1;
+        FakeProcess {
+            identity: ProcessIdentity { pid: 4000 + counts.borrow().spawned as u32,
+                instance: Some((100, counts.borrow().spawned as u64)) },
+            exited: None, counts: counts.clone(),
+        }
+    }
+    fn exchange(registry: &mut SessionRegistry<FakeProcess>, request: &Request,
+        counts: &Rc<RefCell<Counts>>) -> Result<Response>
+    {
+        match request {
+            Request::Start { session, payload } => registry.start(owner(), session.clone(),
+                payload.clone(), |_| Ok(spawn(counts))),
+            Request::Status { session } => registry.status_or_stop(owner(), session.clone(), false),
+            Request::Stop { session } => registry.status_or_stop(owner(), session.clone(), true),
+            Request::Hello {} => unreachable!("fault tests never contact a real helper"),
+        }
+    }
+
+    #[test]
+    fn start_reply_loss_retries_the_same_request_without_a_second_process() {
+        let mut registry = SessionRegistry::new("helper-a".into());
+        let counts = Rc::new(RefCell::new(Counts::default()));
+        let requested = session("helper-a", 1);
+        let mut attempts = 0;
+        let state = start_session_with_rpc(requested.clone(), payload(), |request| {
+            attempts += 1;
+            let (mut client, mut server) = UnixStream::pair()?;
+            write_frame(&mut client, request)?;
+            let request = read_frame::<Request>(&mut server)?;
+            let response = exchange(&mut registry, &request, &counts)?;
+            if attempts == 1 {
+                drop(server); // The Start was handled, but no response frame arrived.
+            } else {
+                write_frame(&mut server, &response)?;
+            }
+            read_frame::<Response>(&mut client)
+        }).unwrap();
+        assert_eq!(attempts, 2);
+        assert_eq!(counts.borrow().spawned, 1);
+        assert_eq!(state.session, requested);
+        assert_eq!(state.process.unwrap().pid, 4001);
+    }
+
+    #[test]
+    fn all_start_replies_lost_still_leave_a_handle_for_status_and_stop() {
+        let mut registry = SessionRegistry::new("helper-a".into());
+        let counts = Rc::new(RefCell::new(Counts::default()));
+        let requested = session("helper-a", 1);
+        let mut state = start_session_with_rpc(requested.clone(), payload(), |request| {
+            exchange(&mut registry, request, &counts)?;
+            Err(io::Error::from(io::ErrorKind::TimedOut).into())
+        }).unwrap();
+        assert!(state.process.is_none());
+        assert_eq!(counts.borrow().spawned, 1);
+        let response = registry.status_or_stop(owner(), requested.clone(), false).unwrap();
+        assert!(state.accept(response, |_| panic!("same helper must not probe OS processes")).unwrap().is_none());
+        assert_eq!(state.process.unwrap().pid, 4001);
+        let response = registry.status_or_stop(owner(), requested, true).unwrap();
+        assert!(state.accept(response, |_| panic!("same helper must not probe OS processes")).unwrap().is_some());
+        assert_eq!(counts.borrow().stopped, 1);
+    }
+
+    #[test]
+    fn a_lost_start_request_is_canceled_before_any_delayed_delivery_can_spawn() {
+        for stopping in [false, true] {
+            let mut registry = SessionRegistry::new("helper-a".into());
+            let counts = Rc::new(RefCell::new(Counts::default()));
+            let requested = session("helper-a", 1);
+            let mut state = start_session_with_rpc(requested.clone(), payload(), |_request|
+                Err(io::Error::from(io::ErrorKind::BrokenPipe).into())).unwrap();
+            let response = registry.status_or_stop(owner(), requested.clone(), stopping).unwrap();
+            assert!(state.accept(response, |_| panic!("no OS process was started")).unwrap().is_some());
+            let delayed = registry.start(owner(), requested.clone(), payload(), |_| Ok(spawn(&counts))).unwrap();
+            assert!(matches!(delayed, Response::Exited { session, .. } if session == requested));
+            assert_eq!(counts.borrow().spawned, 0);
+        }
+    }
+
+    #[test]
+    fn stop_reply_loss_and_old_replays_cannot_stop_or_restart_a_new_session() {
+        let mut registry = SessionRegistry::new("helper-a".into());
+        let counts = Rc::new(RefCell::new(Counts::default()));
+        let old = session("helper-a", 1);
+        let started = registry.start(owner(), old.clone(), payload(), |_| Ok(spawn(&counts))).unwrap();
+        let mut state = ClientSession::pending(old.clone());
+        state.accept(started, |_| panic!("same helper must not probe OS processes")).unwrap();
+        let lost = registry.status_or_stop(owner(), old.clone(), true).unwrap();
+        let lost_status = match lost { Response::Exited { status, .. } => status, _ => panic!() };
+        let repeated = registry.status_or_stop(owner(), old.clone(), true).unwrap();
+        assert!(matches!(repeated, Response::Exited { status, .. } if status == lost_status));
+        assert!(state.accept(repeated, |_| panic!("same helper must not probe OS processes")).unwrap().is_some());
+        assert_eq!(counts.borrow().stopped, 1);
+        let new = session("helper-a", 2);
+        registry.start(owner(), new.clone(), payload(), |_| Ok(spawn(&counts))).unwrap();
+        assert!(matches!(registry.status_or_stop(owner(), old.clone(), true).unwrap(), Response::Exited { .. }));
+        assert!(matches!(registry.start(owner(), old, payload(), |_| Ok(spawn(&counts))).unwrap(), Response::Exited { .. }));
+        assert!(matches!(registry.status_or_stop(owner(), new, false).unwrap(), Response::Running { .. }));
+        assert_eq!(counts.borrow().spawned, 2);
+        assert_eq!(counts.borrow().stopped, 1);
+    }
+
+    #[test]
+    fn retries_cannot_change_payload_or_cross_gui_process_instances() {
+        let mut registry = SessionRegistry::new("helper-a".into());
+        let counts = Rc::new(RefCell::new(Counts::default()));
+        let requested = session("helper-a", 1);
+        registry.start(owner(), requested.clone(), payload(), |_| Ok(spawn(&counts))).unwrap();
+        let mut changed = payload();
+        changed.config_sha256 = "another-node-content".into();
+        assert!(registry.start(owner(), requested.clone(), changed, |_| Ok(spawn(&counts))).is_err());
+        let recycled_pid = PeerIdentity { pid: owner().pid, instance: (99, 0) };
+        assert!(registry.start(recycled_pid, requested.clone(), payload(), |_| Ok(spawn(&counts))).is_err());
+        assert!(registry.status_or_stop(recycled_pid, requested, true).is_err());
+        assert_eq!(counts.borrow().spawned, 1);
+        assert_eq!(counts.borrow().stopped, 0);
+    }
+
+    #[test]
+    fn helper_restart_never_adopts_an_old_session_or_falsely_confirms_unknown_exit() {
+        let counts = Rc::new(RefCell::new(Counts::default()));
+        let old = session("helper-a", 1);
+        let mut restarted = SessionRegistry::new("helper-b".into());
+        let response = restarted.start(owner(), old.clone(), payload(), |_| Ok(spawn(&counts))).unwrap();
+        assert!(matches!(response, Response::SessionLost { .. }));
+        let mut pending = ClientSession::pending(old.clone());
+        assert!(pending.accept(response, |_| panic!("unknown PID must not be probed")).is_err());
+        assert!(pending.exited.is_none());
+        pending.process = Some(ProcessIdentity { pid: 4001, instance: Some((100, 1)) });
+        assert!(pending.accept(Response::SessionLost { instance: "helper-b".into() }, |_| Ok(false)).is_err());
+        assert!(pending.exited.is_none());
+        assert!(pending.accept(Response::SessionLost { instance: "helper-b".into() }, |_| Ok(true)).unwrap().is_some());
+        let new = session("helper-b", 2);
+        restarted.start(owner(), new.clone(), payload(), |_| Ok(spawn(&counts))).unwrap();
+        assert!(matches!(restarted.status_or_stop(owner(), old, true).unwrap(), Response::SessionLost { .. }));
+        assert!(matches!(restarted.status_or_stop(owner(), new, false).unwrap(), Response::Running { .. }));
+        assert_eq!(counts.borrow().spawned, 1);
+        assert_eq!(counts.borrow().stopped, 0);
+    }
+
+    #[test]
+    fn replay_history_is_bounded_and_never_evicts_cancellation_watermarks() {
+        let mut registry = SessionRegistry::<FakeProcess>::new("helper-a".into());
+        let counts = Rc::new(RefCell::new(Counts::default()));
+        let first = session("helper-a", 1);
+        for index in 0..MAX_GUI_IDENTITIES {
+            let peer = PeerIdentity { pid: owner().pid + index as i32, ..owner() };
+            let mut cancellation = first.clone();
+            cancellation.owner = peer;
+            registry.status_or_stop(peer, cancellation, true).unwrap();
+        }
+        let extra = PeerIdentity { pid: 9999, instance: (1, 0) };
+        let mut extra_session = session("helper-a", 1);
+        extra_session.owner = extra;
+        assert!(registry.start(extra, extra_session, payload(), |_| Ok(spawn(&counts))).is_err());
+        assert!(matches!(registry.start(owner(), first, payload(), |_| Ok(spawn(&counts))).unwrap(), Response::Exited { .. }));
+        assert_eq!(registry.peers.len(), MAX_GUI_IDENTITIES);
+        assert_eq!(counts.borrow().spawned, 0);
+    }
+
+    #[test]
+    fn dead_gui_identities_can_be_retired_across_more_than_sixty_four_reopens() {
+        let mut registry = SessionRegistry::<FakeProcess>::new("helper-a".into());
+        let counts = Rc::new(RefCell::new(Counts::default()));
+        for index in 0..MAX_GUI_IDENTITIES * 3 {
+            // The previous GUI exited. The helper reaps its fake child, then a
+            // newly authenticated GUI has a distinct process-instance identity.
+            registry.poll_active(|_| false).unwrap();
+            if registry.peers.len() >= MAX_GUI_IDENTITIES {
+                registry.retire_dead_owners(|_| OwnerLiveness::Dead);
+            }
+            let peer = PeerIdentity { pid: 3000 + index as i32, instance: (index as u64, 1) };
+            let mut requested = session("helper-a", 1);
+            requested.owner = peer;
+            registry.start(peer, requested, payload(), |_| Ok(spawn(&counts))).unwrap();
+            assert!(registry.peers.len() <= MAX_GUI_IDENTITIES);
+        }
+        assert_eq!(counts.borrow().spawned, MAX_GUI_IDENTITIES * 3);
+    }
+
+    #[test]
+    fn living_or_unverifiable_owners_are_never_evicted_to_make_room() {
+        for liveness in [OwnerLiveness::Alive, OwnerLiveness::Unknown] {
+            let mut registry = SessionRegistry::<FakeProcess>::new("helper-a".into());
+            let counts = Rc::new(RefCell::new(Counts::default()));
+            for index in 0..MAX_GUI_IDENTITIES {
+                let peer = PeerIdentity { pid: 3000 + index as i32, instance: (1, 0) };
+                let mut requested = session("helper-a", 1);
+                requested.owner = peer;
+                registry.status_or_stop(peer, requested, true).unwrap();
+            }
+            registry.retire_dead_owners(|_| liveness);
+            let extra = PeerIdentity { pid: 9999, instance: (1, 0) };
+            let mut requested = session("helper-a", 1);
+            requested.owner = extra;
+            assert!(registry.start(extra, requested, payload(), |_| Ok(spawn(&counts))).is_err());
+            assert_eq!(registry.peers.len(), MAX_GUI_IDENTITIES);
+            assert_eq!(counts.borrow().spawned, 0);
+        }
+    }
+
+    #[test]
+    fn an_authenticated_gui_that_exits_during_frame_read_cannot_dispatch_late_start() {
+        let mut registry = SessionRegistry::<FakeProcess>::new("helper-a".into());
+        let counts = Rc::new(RefCell::new(Counts::default()));
+        let requested = session("helper-a", 1);
+        registry.status_or_stop(owner(), requested.clone(), true).unwrap();
+        registry.retire_dead_owners(|_| OwnerLiveness::Dead);
+        assert!(registry.peers.is_empty());
+        let mut dispatched = false;
+        let response = with_live_owner(owner(), |_| OwnerLiveness::Dead, || {
+            dispatched = true;
+            registry.start(owner(), requested, payload(), |_| Ok(spawn(&counts)))
+        });
+        assert!(response.is_err());
+        assert!(!dispatched);
+        assert_eq!(counts.borrow().spawned, 0);
+        assert!(registry.peers.is_empty());
+    }
+
+    #[test]
+    fn an_explicit_first_start_rejection_preserves_its_reason_without_a_pending_handle() {
+        let mut attempts = 0;
+        let message = "TUN configuration changed after the Start request was prepared";
+        let result = start_session_with_rpc(session("helper-a", 1), payload(), |_| {
+            attempts += 1;
+            Ok(Response::Error { message: message.into() })
+        });
+        assert_eq!(attempts, 1);
+        let error = match result { Err(error) => error, Ok(_) => panic!("explicit rejection must not create a handle") };
+        assert_eq!(error.to_string(), message);
+    }
+
+    #[test]
+    fn malformed_rpc_reply_retries_or_retains_the_same_session_and_decoder_source() {
+        for invalid_length in [false, true] {
+            for all_replies_lost in [false, true] {
+                let (deliver, incoming) = std::sync::mpsc::channel::<UnixStream>();
+                let worker = std::thread::spawn(move || {
+                    let mut registry = SessionRegistry::new("helper-a".into());
+                    let counts = Rc::new(RefCell::new(Counts::default()));
+                    for attempt in 0..2 {
+                        let mut stream = incoming.recv().unwrap();
+                        let request = read_frame::<Request>(&mut stream).unwrap();
+                        let response = exchange(&mut registry, &request, &counts).unwrap();
+                        if attempt == 0 || all_replies_lost {
+                            if invalid_length {
+                                stream.write_all(&0u32.to_be_bytes()).unwrap();
+                            } else {
+                                let invalid_json = b"{this is not a response}";
+                                stream.write_all(&(invalid_json.len() as u32).to_be_bytes()).unwrap();
+                                stream.write_all(invalid_json).unwrap();
+                            }
+                        } else {
+                            write_frame(&mut stream, &response).unwrap();
+                        }
+                    }
+                    let spawned = counts.borrow().spawned;
+                    spawned
+                });
+                let requested = session("helper-a", 1);
+                let mut attempts = 0;
+                let state = start_session_with_rpc(requested.clone(), payload(), |request| {
+                    attempts += 1;
+                    let (mut client, server) = UnixStream::pair()?;
+                    deliver.send(server).unwrap();
+                    let response = rpc_on_stream(&mut client, request);
+                    if attempts == 1 || all_replies_lost {
+                        let error = response.as_ref().unwrap_err();
+                        assert!(error.downcast_ref::<UnconfirmedReply>().is_some());
+                        assert!(transport_error(error));
+                        if !invalid_length {
+                            assert!(error.downcast_ref::<serde_json::Error>().is_some());
+                        }
+                    }
+                    response
+                }).unwrap();
+                assert_eq!(attempts, 2);
+                assert_eq!(state.session, requested);
+                assert_eq!(state.process.is_none(), all_replies_lost);
+                assert_eq!(worker.join().unwrap(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn a_real_rpc_error_frame_is_a_clear_rejection_with_its_original_message() {
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        let message = "mock config digest mismatch";
+        let worker = std::thread::spawn(move || {
+            assert!(matches!(read_frame::<Request>(&mut server).unwrap(), Request::Start { .. }));
+            write_frame(&mut server, &Response::Error { message: message.into() }).unwrap();
+        });
+        let mut attempts = 0;
+        let result = start_session_with_rpc(session("helper-a", 1), payload(), |request| {
+            attempts += 1;
+            rpc_on_stream(&mut client, request)
+        });
+        let error = match result { Err(error) => error, Ok(_) => panic!("clear Error frame must reject Start") };
+        assert_eq!(error.to_string(), message);
+        assert!(!transport_error(&error));
+        assert_eq!(attempts, 1);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn failed_spawn_is_terminal_and_wrong_session_responses_are_not_adopted() {
+        let mut registry = SessionRegistry::<FakeProcess>::new("helper-a".into());
+        let counts = Rc::new(RefCell::new(Counts::default()));
+        let requested = session("helper-a", 1);
+        assert!(registry.start(owner(), requested.clone(), payload(), |_| bail!("mock spawn failure")).is_err());
+        assert!(matches!(registry.start(owner(), requested.clone(), payload(), |_| Ok(spawn(&counts))).unwrap(), Response::Exited { .. }));
+        let mut state = ClientSession::pending(requested);
+        let wrong = Response::Running { session: session("helper-a", 2),
+            process: ProcessIdentity { pid: 9999, instance: Some((100, 1)) } };
+        assert!(state.accept(wrong, |_| panic!("wrong session must not be probed")).is_err());
+        assert!(state.process.is_none());
+        assert_eq!(counts.borrow().spawned, 0);
     }
 }

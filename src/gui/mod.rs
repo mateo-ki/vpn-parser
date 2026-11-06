@@ -53,6 +53,35 @@ pub(crate) const SIDEBAR_EXPANDED_WIDTH: f32 = 110.0;
 
 struct ProxyMaintenanceTask(Option<tokio::sync::oneshot::Sender<()>>);
 
+fn release_proxy_busy_request(owner: &mut Option<u64>, busy: &mut bool, request: u64) -> bool {
+    if *owner != Some(request) {
+        return false;
+    }
+    *owner = None;
+    *busy = false;
+    true
+}
+
+#[cfg(test)]
+mod request_owner_tests {
+    #[test]
+    fn canceled_request_releases_only_its_own_busy_state() {
+        let mut owner = Some(10);
+        let mut busy = true;
+        assert!(super::release_proxy_busy_request(&mut owner, &mut busy, 10));
+        assert!(!busy);
+        owner = Some(11); // A newer GUI Stop owns the spinner now.
+        busy = true;
+        assert!(!super::release_proxy_busy_request(&mut owner, &mut busy, 10));
+        assert_eq!(owner, Some(11));
+        assert!(busy);
+        assert!(super::release_proxy_busy_request(&mut owner, &mut busy, 11));
+        busy = true; // A config save has no proxy-request owner.
+        assert!(!super::release_proxy_busy_request(&mut owner, &mut busy, 11));
+        assert!(busy);
+    }
+}
+
 impl Drop for ProxyMaintenanceTask {
     fn drop(&mut self) {
         if let Some(stop) = self.0.take() {
@@ -96,6 +125,9 @@ pub struct VpnApp {
     pub(crate) status_bar_top_y: f32,
     pub(crate) busy: bool,
     pub(crate) proxy_busy: bool,
+    pub(crate) proxy_busy_request: Option<u64>,
+    pub(crate) proxy_operation_id: u64,
+    pub(crate) failed_proxy_start_notice: Option<FailedProxyStartNotice>,
     /// 模式开关（系统代理/TUN）拨动后待应用的工作模式：Some(改动前的 TUN 状态)。
     /// `save_proxy_config` 检测到运行模式变化时置位，保存完成（ProxyConfigSaved 回清
     /// proxy_busy）后再真正应用 —— 不能在 save 之前同步调 apply：save 同步置 busy，
@@ -173,6 +205,7 @@ pub struct VpnApp {
     pub(crate) focused_node_id: Option<String>,
     pub(crate) switching_node_id: Option<String>,
     pub(crate) proxy_switch_seq: u64,
+    pub(crate) proxy_switch_request: Option<u64>,
     pub(crate) proxy_node_groups: Vec<NodeGroupSummary>,
     pub(crate) proxy_nodes: Vec<NodeSummary>,
     pub(crate) selected_proxy_source_id: Option<String>,
@@ -528,6 +561,23 @@ pub struct VpnApp {
     pub(crate) rx: Receiver<BgMsg>,
 }
 
+/// The normal rules list and a subscription template are separate saved inputs.
+/// Reopening the editor must preserve the template that will be compiled on start.
+fn rules_editor_text_from_config(config: &MihomoConfigOptions) -> String {
+    if config.routing_mode == RoutingMode::Subscription {
+        return config.subscription_rules_yaml.clone().unwrap_or_default();
+    }
+    crate::proxy::rule_io::export_lines(&config.rules)
+        .map(|lines| {
+            lines
+                .into_iter()
+                .map(|line| format!("- {line}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
 impl VpnApp {
     pub fn new(
         rt: Arc<Runtime>,
@@ -544,19 +594,7 @@ impl VpnApp {
         let (tx, rx) = mpsc::channel();
         let api_addr = api_controller.listen_addr().to_string();
         let initial_proxy_config = rt.block_on(proxy_manager.config());
-        let initial_custom_rules = if !initial_proxy_config.rules.is_empty() {
-            crate::proxy::rule_io::export_lines(&initial_proxy_config.rules)
-                .map(|lines| {
-                    lines
-                        .into_iter()
-                        .map(|l| format!("- {l}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
+        let initial_custom_rules = rules_editor_text_from_config(&initial_proxy_config);
         let mut app = Self {
             rt,
             db,
@@ -587,6 +625,9 @@ impl VpnApp {
             status_bar_top_y: 0.0,
             busy: false,
             proxy_busy: false,
+            proxy_busy_request: None,
+            proxy_operation_id: 0,
+            failed_proxy_start_notice: None,
             pending_mode_apply: None,
             last_proxy_state_log: None,
             proxy_started_at: None,
@@ -680,6 +721,7 @@ impl VpnApp {
             focused_node_id: None,
             switching_node_id: None,
             proxy_switch_seq: 0,
+            proxy_switch_request: None,
             proxy_node_groups: vec![],
             proxy_nodes: vec![],
             selected_proxy_source_id: Some("all".to_string()),
@@ -956,12 +998,15 @@ impl VpnApp {
                 }
                 // Finish an in-flight restart before stopping. Aborting here
                 // could discard a system-proxy snapshot held by that restart.
+                let request = manager.current_request();
                 if let Some(status) = manager.maintain().await {
                     // Keep a minimized window from accumulating identical
                     // status messages for hours in the background queue.
-                    if previous.as_ref() != Some(&status) {
-                        previous = Some(status.clone());
-                        if tx.send(BgMsg::ProxyMaintenanceDone(Some(status))).is_err() {
+                    if previous.as_ref().map(|(old_request, old_status)|
+                        *old_request != request || old_status != &status).unwrap_or(true)
+                    {
+                        previous = Some((request, status.clone()));
+                        if tx.send(BgMsg::ProxyMaintenanceDone { request, status: Some(status) }).is_err() {
                             break;
                         }
                     }
@@ -1153,7 +1198,9 @@ impl VpnApp {
 
     pub(crate) fn reload_proxy(&mut self) {
         let manager = self.proxy_manager.clone();
+        let request = manager.current_request();
         let tx = self.tx.clone();
+        let baseline = self.proxy_config.clone();
         self.rt.spawn(async move {
             let status = manager.status().await;
             let config = manager.config().await;
@@ -1161,8 +1208,11 @@ impl VpnApp {
                 .recent_log(12_000)
                 .await
                 .map_err(|error| error.to_string());
-            let _ = tx.send(BgMsg::ProxyStatus(status));
-            let _ = tx.send(BgMsg::ProxyConfig(Ok(config)));
+            let _ = tx.send(BgMsg::ProxyStatus { request, status });
+            let _ = tx.send(BgMsg::ProxyConfig {
+                baseline: Some(baseline),
+                result: Ok(config),
+            });
             let _ = tx.send(BgMsg::ProxyLog(log));
         });
     }
@@ -2994,7 +3044,9 @@ impl VpnApp {
         self.proxy_config.selected_node_id = Some(id.clone());
         self.proxy_config.selected_node_name = Some(name.clone());
         let db = self.db.clone();
+        let manager = self.proxy_manager.clone();
         self.rt.spawn(async move {
+            let _save = manager.lock_configuration_save().await;
             if let Ok(mut cfg) = db.get_proxy_config().await {
                 cfg.selected_node_id = Some(id);
                 cfg.selected_node_name = Some(name);
@@ -3056,9 +3108,10 @@ impl VpnApp {
         self.switching_node_id = Some(id.clone());
         self.proxy_switch_seq = self.proxy_switch_seq.wrapping_add(1);
         let seq = self.proxy_switch_seq;
+        let request = self.proxy_manager.reserve_request();
 
         if requires_tun_elevation(self.proxy_config.mode, platform::is_elevated()) {
-            self.start_proxy();
+            self.start_proxy_for_request(request);
             return;
         }
 
@@ -3092,9 +3145,16 @@ impl VpnApp {
         let candidate_blacklist = self.router.blacklisted(std::time::Instant::now());
         let node_id = id.clone();
         self.status = format!("⚡ 正在极速异步切换至「{name}」...");
+        self.proxy_switch_request = Some(request);
         self.rt.spawn(async move {
+            if !manager.request_is_current(request) {
+                return;
+            }
             let result = match db.get_node(&node_id).await {
                 Ok(Some(node)) => {
+                    if !manager.request_is_current(request) {
+                        return;
+                    }
                     Self::prime_url_test_candidates(
                         &db,
                         &manager,
@@ -3107,7 +3167,10 @@ impl VpnApp {
                     .await;
                     Self::prime_port_mapping_candidates(&db, &manager, &port_mappings).await;
                     Self::prime_chain_proxy_candidates(&db, &manager, &chain_options).await;
-                    let res = manager.switch_node(&node).await;
+                    if !manager.request_is_current(request) {
+                        return;
+                    }
+                    let res = manager.switch_node_for_request(&node, request).await;
                     res.map(|_| format!("已平滑切换至节点: {}", node.name))
                         .map_err(|e| e.to_string())
                 }
@@ -3116,6 +3179,7 @@ impl VpnApp {
             };
             let _ = tx.send(BgMsg::ProxySwitchDone {
                 seq,
+                request,
                 node_id,
                 result,
             });
@@ -3303,16 +3367,8 @@ impl VpnApp {
 
     /// 代理配置进 UI 状态的唯一入口。
     fn set_proxy_config(&mut self, mut config: MihomoConfigOptions) {
-        if self.custom_rules_text.trim().is_empty() && !config.rules.is_empty() {
-            self.custom_rules_text = crate::proxy::rule_io::export_lines(&config.rules)
-                .map(|lines| {
-                    lines
-                        .into_iter()
-                        .map(|l| format!("- {l}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-                .unwrap_or_default();
+        if self.custom_rules_text.trim().is_empty() {
+            self.custom_rules_text = rules_editor_text_from_config(&config);
         }
         if self.selected_proxy_node_id.is_none() {
             if let Some(ref id) = config.selected_node_id {
@@ -3392,39 +3448,47 @@ impl VpnApp {
         self.proxy_busy = true;
         self.status = "正在保存分流配置并应用...".into();
         self.rt.spawn(async move {
-            let previous = manager.config().await;
-            Self::prime_port_mapping_candidates(&db, &manager, &options.port_mappings).await;
-            Self::prime_chain_proxy_candidates(&db, &manager, &options).await;
-            let result = match manager.reload_config(options.clone()).await {
-                Ok(_) => match db.update_proxy_config(&options).await {
-                    Ok(()) => Ok(options),
-                    Err(error) => {
-                        let _ = manager.reload_config(previous).await;
-                        Err(error.to_string())
-                    }
-                },
-                Err(error) => Err(error.to_string()),
-            };
+            let result = Self::apply_and_save_proxy_config(&db, &manager, options).await;
             let _ = tx.send(BgMsg::ProxyConfigSaved(result));
         });
     }
 
-    /// 静默更新并持久化代理配置（不设置全局 proxy_busy 阻断 UI，也不强行全量重查日志），适用于分流模式切换、内核偏好更改等高频操作
+    async fn apply_and_save_proxy_config(
+        db: &Database,
+        manager: &ProxyManager,
+        options: MihomoConfigOptions,
+    ) -> Result<ProxyConfigSaveResult, String> {
+        let _save = manager.lock_configuration_save().await;
+        let previous = manager.config_snapshot().await;
+        Self::prime_port_mapping_candidates(db, manager, &options.port_mappings).await;
+        Self::prime_chain_proxy_candidates(db, manager, &options).await;
+        let applied = match manager.reload_config(options.clone()).await {
+            Ok(applied) => applied,
+            Err(error) => {
+                manager.restore_config_candidates(&previous).await;
+                return Err(format!("{error:#}"));
+            }
+        };
+        if let Err(error) = db.update_proxy_config(&options).await {
+            manager.restore_config_candidates(&previous).await;
+            let rollback = manager.restore_config_snapshot(previous).await;
+            return Err(match rollback {
+                Ok(true) => format!("{error}（未保存，已恢复原配置）"),
+                Ok(false) => format!("{error}（未保存，已恢复原设置，重新连接后生效）"),
+                Err(rollback_error) => format!("{error}；恢复原生效配置失败: {rollback_error:#}"),
+            });
+        }
+        Ok(ProxyConfigSaveResult { config: options, applied })
+    }
+
+    /// 静默保存不阻塞界面；结果仍明确区分已生效、等待重新连接和失败。
     pub(crate) fn save_proxy_config_quiet(&mut self) {
         let manager = self.proxy_manager.clone();
         let db = self.db.clone();
         let options = self.prepare_proxy_config_options();
         let tx = self.tx.clone();
         self.rt.spawn(async move {
-            Self::prime_port_mapping_candidates(&db, &manager, &options.port_mappings).await;
-            Self::prime_chain_proxy_candidates(&db, &manager, &options).await;
-            let result = match manager.reload_config(options.clone()).await {
-                Ok(_) => match db.update_proxy_config(&options).await {
-                    Ok(()) => Ok(options),
-                    Err(error) => Err(error.to_string()),
-                },
-                Err(error) => Err(error.to_string()),
-            };
+            let result = Self::apply_and_save_proxy_config(&db, &manager, options).await;
             let _ = tx.send(BgMsg::ProxyConfigQuietSaved(result));
         });
     }
@@ -3643,7 +3707,7 @@ impl VpnApp {
     }
 
     /// TUN 开关变更后的应用入口：代理运行中优先走内核热切换（不重启进程、不断已建立
-    /// 连接），内核不支持或热切换失败再回退 `start_proxy()` 整进程重启。
+    /// 连接），仅内核不支持热切换时回退整进程重启；请求失败保留明确错误。
     /// `was_tun` 是开关拨动前界面上渲染的 TUN 状态，用来判断本次是否产生了 TUN 差量。
     pub(crate) fn apply_proxy_mode_change(&mut self, was_tun: bool) {
         if !matches!(
@@ -3659,6 +3723,8 @@ impl VpnApp {
             // TUN 没变（纯系统代理开关）：免停热切 Windows 注册表与 WinINET，无需重启内核
             let manager = self.proxy_manager.clone();
             let tx = self.tx.clone();
+            let request = manager.reserve_request();
+            self.proxy_busy_request = Some(request);
             self.proxy_busy = true;
             self.status = if sys_on {
                 "正在免停即时开启系统代理...".to_string()
@@ -3666,13 +3732,13 @@ impl VpnApp {
                 "正在免停即时关闭系统代理...".to_string()
             };
             self.rt.spawn(async move {
-                match manager.hot_toggle_system_proxy(sys_on).await {
+                match manager.hot_toggle_system_proxy_for_request(sys_on, request).await {
                     Ok(message) => {
-                        let _ = tx.send(BgMsg::SystemProxyHotToggled { ok: true, message });
+                        let _ = tx.send(BgMsg::SystemProxyHotToggled { request, ok: true, message });
                     }
                     Err(error) => {
                         let message = format!("切换系统代理失败: {error}");
-                        let _ = tx.send(BgMsg::SystemProxyHotToggled { ok: false, message });
+                        let _ = tx.send(BgMsg::SystemProxyHotToggled { request, ok: false, message });
                     }
                 }
             });
@@ -3687,6 +3753,8 @@ impl VpnApp {
         let manager = self.proxy_manager.clone();
         let options = self.prepare_proxy_config_options();
         let tx = self.tx.clone();
+        let request = manager.reserve_request();
+        self.proxy_busy_request = Some(request);
         self.proxy_busy = true;
         self.status = if tun_on {
             "正在热开启 TUN 模式（无需重启）...".to_string()
@@ -3694,20 +3762,17 @@ impl VpnApp {
             "正在热关闭 TUN 模式（无需重启）...".to_string()
         };
         self.rt.spawn(async move {
-            let hot = manager
-                .try_hot_toggle_tun(options)
+            let result = manager
+                .try_hot_toggle_tun_for_request(options, request)
                 .await
-                .unwrap_or_else(|error| {
-                    tracing::warn!("TUN 热切换请求失败: {error}");
-                    false
-                });
-            let message = if hot {
+                .map_err(|error| format!("TUN 热切换请求失败: {error}"));
+            let message = if matches!(result, Ok(true)) {
                 // 用 manager 运行时里的文案：带内核名与耗时（"…TUN 已热开启（X ms，未重启进程）"）
                 manager.status().await.message
             } else {
                 "当前内核不支持 TUN 热切换，正在重启代理...".to_string()
             };
-            let _ = tx.send(BgMsg::ProxyModeHotToggled { ok: hot, message });
+            let _ = tx.send(BgMsg::ProxyModeHotToggled { request, result, message });
         });
     }
 
@@ -3726,14 +3791,17 @@ impl VpnApp {
 
         let manager = self.proxy_manager.clone();
         let tx = self.tx.clone();
+        let request = manager.reserve_request();
         self.proxy_busy = true;
         self.status = format!("正在免停热切至「{}」模式...", mode.short_label());
+        self.proxy_busy_request = Some(request);
 
         self.rt.spawn(async move {
-            match manager.try_hot_switch_routing_mode(mode).await {
+            match manager.try_hot_switch_routing_mode_for_request(mode, request).await {
                 Ok(true) => {
                     let message = manager.status().await.message;
                     let _ = tx.send(BgMsg::ProxyRoutingModeHotSwitched {
+                        request,
                         ok: true,
                         mode,
                         message,
@@ -3742,6 +3810,7 @@ impl VpnApp {
                 Ok(false) => {
                     let message = "当前运行内核不支持模式免停热切，如需更改请重启代理".to_string();
                     let _ = tx.send(BgMsg::ProxyRoutingModeHotSwitched {
+                        request,
                         ok: false,
                         mode,
                         message,
@@ -3750,6 +3819,7 @@ impl VpnApp {
                 Err(error) => {
                     let message = format!("模式热切换请求失败: {error}");
                     let _ = tx.send(BgMsg::ProxyRoutingModeHotSwitched {
+                        request,
                         ok: false,
                         mode,
                         message,
@@ -3760,6 +3830,14 @@ impl VpnApp {
     }
 
     pub(crate) fn start_proxy(&mut self) {
+        let request = self.proxy_manager.reserve_request();
+        self.start_proxy_for_request(request);
+    }
+
+    fn start_proxy_for_request(&mut self, request: u64) {
+        if !self.proxy_manager.request_is_current(request) {
+            return;
+        }
         if self.selected_proxy_node_id.is_none() {
             if let Some(ref focused) = self.focused_node_id {
                 let name = self
@@ -3801,7 +3879,7 @@ impl VpnApp {
                     },
                     Err(error) => Err(error.to_string()),
                 };
-                let _ = tx.send(BgMsg::AutoAnchorStart(outcome));
+                let _ = tx.send(BgMsg::AutoAnchorStart { request, result: outcome });
             });
             return;
         }
@@ -3850,6 +3928,8 @@ impl VpnApp {
             self.handoff_proxy_to_elevated_instance(&node_id);
             return;
         }
+        let operation = self.begin_proxy_operation_for_request(ProxyOperationKind::Start, request);
+        self.proxy_busy_request = Some(operation.request);
         let db = self.db.clone();
         let manager = self.proxy_manager.clone();
         let mode = self.proxy_config.mode;
@@ -3862,8 +3942,15 @@ impl VpnApp {
         self.proxy_status.message = starting_msg.clone();
         self.status = starting_msg;
         self.rt.spawn(async move {
+            let _save = manager.lock_configuration_save().await;
+            if !manager.request_is_current(operation.request) {
+                return;
+            }
             let result = match db.get_node(&node_id).await {
                 Ok(Some(node)) => {
+                    if !manager.request_is_current(operation.request) {
+                        return;
+                    }
                     let has_override_groups = options
                         .override_yaml
                         .as_deref()
@@ -3882,13 +3969,17 @@ impl VpnApp {
                     Self::prime_port_mapping_candidates(&db, &manager, &options.port_mappings)
                         .await;
                     Self::prime_chain_proxy_candidates(&db, &manager, &options).await;
-                    let db_clone = db.clone();
-                    let opt_clone = options.clone();
-                    tokio::spawn(async move {
-                        let _ = db_clone.update_proxy_config(&opt_clone).await;
-                    });
-                    let operation = manager.start_with_options(&node, options).await;
-                    match operation {
+                    if !manager.request_is_current(operation.request) {
+                        return;
+                    }
+                    // Keep this write inside the same config transaction as start;
+                    // a detached task could overwrite a newer quiet save afterwards.
+                    let _ = db.update_proxy_config(&options).await;
+                    let started = manager.start_with_options_for_request(&node, options, operation.request).await;
+                    if !manager.request_is_current(operation.request) {
+                        return;
+                    }
+                    match started {
                         Ok(()) => {
                             let status = manager.status().await;
                             if status.state == ProxyState::Degraded {
@@ -3988,7 +4079,7 @@ impl VpnApp {
                 Err(error) => Err(error),
             }
             .map_err(|error| error.to_string());
-            let _ = tx.send(BgMsg::ProxyOp(result));
+            let _ = tx.send(BgMsg::ProxyOp { operation, result });
         });
     }
 
@@ -4067,7 +4158,49 @@ impl VpnApp {
         self.last_proxy_state_log = Some((state, now, false));
     }
 
+    fn begin_proxy_operation(&mut self, kind: ProxyOperationKind) -> ProxyOperation {
+        let request = self.proxy_manager.reserve_request();
+        self.begin_proxy_operation_for_request(kind, request)
+    }
+
+    fn begin_proxy_operation_for_request(&mut self, kind: ProxyOperationKind, request: u64) -> ProxyOperation {
+        self.proxy_operation_id = self.proxy_operation_id.wrapping_add(1);
+        self.failed_proxy_start_notice = None;
+        ProxyOperation {
+            id: self.proxy_operation_id,
+            request,
+            kind,
+            previous_kernel_pid: self.proxy_status.kernel_pid,
+        }
+    }
+
+    fn finish_proxy_request(&mut self, request: u64) -> bool {
+        release_proxy_busy_request(&mut self.proxy_busy_request, &mut self.proxy_busy, request)
+    }
+
+    fn receive_proxy_runtime_status(&mut self, status: ProxyRuntimeStatus) {
+        if let Some(notice) = self.failed_proxy_start_notice.take() {
+            // A newer footer belongs to its own operation, even if it also
+            // describes a proxy/config error. Never clear it by text pattern.
+            if notice.operation.id == self.proxy_operation_id && self.status == notice.footer {
+                if !self.proxy_busy && notice.recovered_by(self.proxy_operation_id, &self.status, &status) {
+                    self.status = format!("代理已自动恢复，{}", status.message);
+                } else {
+                    self.failed_proxy_start_notice = Some(notice);
+                }
+            }
+        }
+        self.note_proxy_state_transition(status.state);
+        self.proxy_status = status;
+    }
+
     pub(crate) fn stop_proxy(&mut self) {
+        let operation = self.begin_proxy_operation(ProxyOperationKind::Stop);
+        self.proxy_busy_request = Some(operation.request);
+        self.proxy_switch_seq = self.proxy_switch_seq.wrapping_add(1);
+        self.proxy_switch_request = None;
+        self.switching_node_id = None;
+        self.pending_mode_apply = None;
         let manager = self.proxy_manager.clone();
         let tx = self.tx.clone();
         self.proxy_busy = true;
@@ -4076,11 +4209,11 @@ impl VpnApp {
         self.status = "正在关闭内核...".into();
         self.rt.spawn(async move {
             let result = manager
-                .stop()
+                .stop_for_request(operation.request)
                 .await
                 .map(|_| "代理已停止".into())
                 .map_err(|error| error.to_string());
-            let _ = tx.send(BgMsg::ProxyOp(result));
+            let _ = tx.send(BgMsg::ProxyOp { operation, result });
         });
     }
 
@@ -4695,7 +4828,9 @@ impl VpnApp {
             self.proxy_config.selected_node_id = None;
             self.proxy_config.selected_node_name = None;
             let db_cfg = self.db.clone();
+            let manager = self.proxy_manager.clone();
             self.rt.spawn(async move {
+                let _save = manager.lock_configuration_save().await;
                 if let Ok(mut cfg) = db_cfg.get_proxy_config().await {
                     cfg.selected_node_id = None;
                     cfg.selected_node_name = None;
@@ -5311,7 +5446,23 @@ impl VpnApp {
 impl eframe::App for VpnApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        crate::platform::macos_window::repair_minimized_state(ctx);
+        {
+            crate::platform::macos_window::repair_minimized_state(ctx);
+            // eframe skips `ui` while minimized or occluded, but still acts on
+            // native close requests after `logic`. Apply the same background
+            // policy here, or a hidden window can silently quit the proxy.
+            if ctx.input(|input| {
+                input.viewport().visible() == Some(false) && input.viewport().close_requested()
+            }) {
+                if self.frame_count > 5 || self.force_quit {
+                    self.request_window_close(ctx);
+                } else {
+                    // Match the startup close-event guard in `ui`, while
+                    // explicitly canceling the framework's pending close.
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                }
+            }
+        }
         #[cfg(not(target_os = "macos"))]
         let _ = ctx;
     }
@@ -5906,6 +6057,137 @@ mod tests {
     use crate::speedtest::{SpeedTestPhase, SpeedTestProgress};
     use eframe::egui::{Sense, Vec2};
     use std::time::Duration;
+
+    #[test]
+    fn reopened_subscription_editor_keeps_saved_template_through_prepare() {
+        let mut config = MihomoConfigOptions::default();
+        config.rules = crate::proxy::rule_io::parse_rules_text(
+            "- DOMAIN-SUFFIX,normal-rules.test,DIRECT",
+        ).rules;
+        assert!(!config.rules.is_empty());
+        config.routing_mode = RoutingMode::Subscription;
+        let template = "- DOMAIN-SUFFIX,subscription-rules.test,PROXY\n- MATCH,PROXY";
+        config.subscription_rules_yaml = Some(template.into());
+
+        let mut app = crate::gui::views::nodes::empty_pool_modal_tests::app_with_an_empty_library();
+        // This is the same initialization used by VpnApp::new before sources load.
+        app.custom_rules_text = rules_editor_text_from_config(&config);
+        app.set_proxy_config(config.clone());
+        assert_eq!(app.custom_rules_text, template);
+        assert_eq!(
+            app.prepare_proxy_config_options().subscription_rules_yaml.as_deref(),
+            Some(template),
+        );
+
+        // A later config refresh must use the subscription input too.
+        app.custom_rules_text.clear();
+        app.set_proxy_config(config);
+        assert_eq!(app.custom_rules_text, template);
+    }
+
+    #[test]
+    fn subscription_without_saved_template_does_not_inherit_normal_rules() {
+        let mut config = MihomoConfigOptions::default();
+        config.rules = crate::proxy::rule_io::parse_rules_text(
+            "- DOMAIN-SUFFIX,normal-rules.test,DIRECT",
+        ).rules;
+        assert!(!rules_editor_text_from_config(&config).is_empty());
+        config.routing_mode = RoutingMode::Subscription;
+        assert!(rules_editor_text_from_config(&config).is_empty());
+    }
+
+    #[test]
+    fn save_followup_refresh_preserves_new_edits_and_accepts_unchanged_or_forced_config() {
+        for edited_after_save in [false, true] {
+            let mut app = crate::gui::views::nodes::empty_pool_modal_tests::app_with_an_empty_library();
+            // Isolate the callback queue from the constructor's local DB reads,
+            // and keep poll_bg's periodic network checks outside this test.
+            let (tx, rx) = std::sync::mpsc::channel();
+            app.tx = tx;
+            app.rx = rx;
+            app.last_service_check = std::time::Instant::now();
+            app.last_lan_ip_check = std::time::Instant::now();
+            app.proxy_busy = true;
+            let mut saved = app.proxy_config.clone();
+            saved.override_yaml = Some("dns:\n  enable: true".into());
+            let manager = app.proxy_manager.clone();
+            // Hold only this fixture's runtime while the save callback launches
+            // its real reload_proxy task, so the reply deterministically arrives later.
+            let mut runtime = app.rt.block_on(manager.runtime.lock());
+            runtime.options = saved.clone();
+            runtime.options.allow_lan = true;
+            app.tx.send(BgMsg::ProxyConfigSaved(Ok(ProxyConfigSaveResult {
+                config: saved.clone(),
+                applied: true,
+            }))).unwrap();
+            let ctx = egui::Context::default();
+            app.poll_bg(&ctx);
+            assert!(!app.proxy_busy);
+            assert_eq!(app.proxy_config.override_yaml, saved.override_yaml);
+            if edited_after_save {
+                app.proxy_config.override_yaml = Some("dns:\n  enable: false # newer draft".into());
+            }
+            let expected_draft = app.proxy_config.override_yaml.clone();
+            drop(runtime);
+
+            let refresh = loop {
+                let message = app.rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                if let BgMsg::ProxyConfig { baseline, result } = message {
+                    assert_eq!(baseline.as_ref(), Some(&saved));
+                    break BgMsg::ProxyConfig { baseline, result };
+                }
+            };
+            app.tx.send(refresh).unwrap();
+            app.poll_bg(&ctx);
+            assert_eq!(app.proxy_config.override_yaml, expected_draft);
+            assert_eq!(app.proxy_config.allow_lan, !edited_after_save);
+
+            // An explicit profile import is deliberately authoritative.
+            let mut imported = saved;
+            imported.override_yaml = Some("dns:\n  enable: true # imported".into());
+            app.tx.send(BgMsg::ProxyConfig {
+                baseline: None,
+                result: Ok(imported.clone()),
+            }).unwrap();
+            app.poll_bg(&ctx);
+            assert_eq!(app.proxy_config.override_yaml, imported.override_yaml);
+        }
+    }
+
+    #[test]
+    fn runtime_recovery_updates_only_its_failed_start_footer() {
+        let mut app = crate::gui::views::nodes::empty_pool_modal_tests::app_with_an_empty_library();
+        app.proxy_status.kernel_pid = Some(100);
+        let operation = app.begin_proxy_operation(ProxyOperationKind::Start);
+        let failure = "代理操作失败: 代理端口 9980 已被占用".to_string();
+        let mut recovered = app.proxy_status.clone();
+        recovered.state = ProxyState::Running;
+        recovered.local_proxy_ready = true;
+        recovered.kernel_pid = Some(101);
+        recovered.message = "Mihomo 运行中".into();
+        app.status = failure.clone();
+        app.failed_proxy_start_notice = Some(FailedProxyStartNotice { operation, footer: failure.clone() });
+        app.receive_proxy_runtime_status(recovered.clone());
+        assert_eq!(app.status, "代理已自动恢复，Mihomo 运行中");
+        assert!(app.failed_proxy_start_notice.is_none());
+        assert_eq!(app.proxy_status.state, ProxyState::Running);
+
+        // A later config failure must not be replaced by unrelated maintenance.
+        app.failed_proxy_start_notice = Some(FailedProxyStartNotice { operation, footer: failure.clone() });
+        app.status = "保存代理配置失败: 无效规则".into();
+        app.receive_proxy_runtime_status(recovered.clone());
+        assert_eq!(app.status, "保存代理配置失败: 无效规则");
+        assert!(app.failed_proxy_start_notice.is_none());
+
+        // A new user request revokes the old recovery notice immediately.
+        app.status = failure.clone();
+        app.failed_proxy_start_notice = Some(FailedProxyStartNotice { operation, footer: failure.clone() });
+        let stop = app.begin_proxy_operation(ProxyOperationKind::Stop);
+        assert_ne!(operation.id, stop.id);
+        app.status = "正在关闭内核...".into();
+        app.receive_proxy_runtime_status(recovered);
+        assert_eq!(app.status, "正在关闭内核...");
+    }
 
     #[test]
     fn formats_real_proxy_progress_for_status_bar() {
