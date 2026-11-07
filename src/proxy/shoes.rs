@@ -153,7 +153,7 @@ async fn probe_batch(
                     YamlValue::String(group_name.clone()),
                 );
                 grp.insert(
-                    YamlValue::String("strategy".into()),
+                    YamlValue::String("type".into()),
                     YamlValue::String("selector".into()),
                 );
                 grp.insert(
@@ -491,7 +491,7 @@ mod tests {
         assert!(yaml_str.contains("127.0.0.1:9090"));
         assert!(yaml_str.contains("secret: secret123"));
         assert!(yaml_str.contains("client_group: PROXY"));
-        assert!(yaml_str.contains("strategy: selector"));
+        assert!(yaml_str.contains("type: selector"));
         assert!(yaml_str.contains("type: snell"));
         assert!(yaml_str.contains("127.0.0.1:9980"));
     }
