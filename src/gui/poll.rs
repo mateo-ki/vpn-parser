@@ -127,6 +127,18 @@ impl VpnApp {
             self.switching_node_id = None;
             need_repaint = true;
         }
+        // 「登录自启动」注册对账（每 30 分钟一次）：设置在本应用里是开着的，但
+        // HKCU Run 键值会被安全/清理类软件整条删除（Task Manager 的"禁用"只是打
+        // 标记不删值，删值必是外部所为）。本应用只在启动与改设置时写入，被删后
+        // 用户只能等到下次开机才发觉静默失效 —— 这里按节拍对账，缺失即重写留痕。
+        if self.settings.launch_at_startup
+            && self.last_startup_sync_check.elapsed() >= std::time::Duration::from_secs(1800)
+        {
+            self.last_startup_sync_check = std::time::Instant::now();
+            if !crate::platform::sync_launch_at_startup(true) {
+                crate::startup_log("[登录自动启动] 巡检同步失败：写入启动项被系统拒绝，请检查权限");
+            }
+        }
         // 服务连通性检测的自动刷新（每 60s 一轮；代理运行走代理、未运行走直连）
         self.maybe_check_services();
         // 本软件 CPU/内存/磁盘 占用采样（500ms 一次差分）

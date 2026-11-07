@@ -1866,6 +1866,14 @@ pub fn sync_launch_at_startup(enabled: bool) -> bool {
         match startup_sync_action(enabled, current.as_deref(), &desired) {
             StartupSyncAction::Leave => true,
             StartupSyncAction::Write => {
+                // 本应用只在启动与改设置时写这个键；运行期间值被外部整条删掉（安全/
+                // 清理类软件的"启动项优化"是直接删除，Task Manager 的"禁用"只打标记
+                // 不删值）意味着下次开机静默失效。写回动作必须留痕，方便事后对账。
+                if current.is_none() && enabled {
+                    crate::startup_log(&format!(
+                        "[登录自动启动] 启动项已缺失（可能被外部清理），正在重写: {desired}"
+                    ));
+                }
                 let mut hkey = std::ptr::null_mut();
                 if RegCreateKeyExW(
                     HKEY_CURRENT_USER,
