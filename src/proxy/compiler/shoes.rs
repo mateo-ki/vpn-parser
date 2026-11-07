@@ -109,7 +109,7 @@ impl BackendCompiler for ShoesCompiler {
             Value::String("PROXY".into()),
         );
         outbound_group.insert(
-            Value::String("strategy".into()),
+            Value::String("type".into()),
             Value::String("selector".into()),
         );
         outbound_group.insert(
