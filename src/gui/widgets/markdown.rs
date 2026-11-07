@@ -624,18 +624,18 @@ mod tests {
 
     #[test]
     fn test_parse_github_release_suffix() {
-        let text = "修复渲染频闪 by @mateo-ki in https://github.com/mateo-ki/vpn-parser/pull/123";
+        let text = "修复渲染频闪 by @mateo-ki in https://github.com/mateo-ki/vproxy/pull/123";
         let (clean, author, pr_link) = parse_github_release_suffix(text);
         assert_eq!(clean, "修复渲染频闪");
         assert_eq!(author, Some("@mateo-ki".to_string()));
-        assert_eq!(pr_link, Some(("PR #123".to_string(), "https://github.com/mateo-ki/vpn-parser/pull/123".to_string())));
+        assert_eq!(pr_link, Some(("PR #123".to_string(), "https://github.com/mateo-ki/vproxy/pull/123".to_string())));
     }
 
     #[test]
     fn test_render_markdown_smoke() {
         let ctx = egui::Context::default();
         let mut output = ctx.run_ui(Default::default(), |ui| {
-            let md = "# 标题\n\n> 引用块\n\n* feat(gui): 修复超长中文文本换行测试 by @mateo-ki in https://github.com/mateo-ki/vpn-parser/pull/1\n- 普通列表项包含 `代码` 与 **加粗**\n\n```rust\nfn main() {}\n```\n";
+            let md = "# 标题\n\n> 引用块\n\n* feat(gui): 修复超长中文文本换行测试 by @mateo-ki in https://github.com/mateo-ki/vproxy/pull/1\n- 普通列表项包含 `代码` 与 **加粗**\n\n```rust\nfn main() {}\n```\n";
             render_markdown(ui, md);
         });
         output.textures_delta.clear();

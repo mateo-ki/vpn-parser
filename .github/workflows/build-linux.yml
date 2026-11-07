@@ -128,17 +128,6 @@ jobs:
           chmod +x target/appimage/*.AppImage
           ls -lh target/appimage/*.AppImage
 
-          # 双发兼容：为老版本下载器与升级检查生成 vpn-parser 镜像别名包
-          for f in target/debian/vproxy*.deb; do
-            [ -f "$f" ] && cp "$f" "${f//vproxy/vpn-parser}" || true
-          done
-          for f in target/generate-rpm/vproxy*.rpm; do
-            [ -f "$f" ] && cp "$f" "${f//vproxy/vpn-parser}" || true
-          done
-          for f in target/appimage/vproxy*.AppImage; do
-            [ -f "$f" ] && cp "$f" "${f//vproxy/vpn-parser}" || true
-          done
-
       - name: 验包内容（装进去会落哪些路径，先看清单）
         run: |
           set -euo pipefail

@@ -4,31 +4,31 @@
 'require rpc';
 
 var callListNodes = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'list_nodes',
 	params: ['page', 'page_size', 'latency', 'protocol', 'keyword', 'sort']
 });
 
 var callSpeedtestOne = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'speedtest_one',
 	params: ['id']
 });
 
 var callSpeedtest = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'speedtest',
 	params: ['ids']
 });
 
 var callDeleteNode = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'delete_node',
 	params: ['id']
 });
 
 var callCleanNodes = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'clean_nodes',
 	params: ['action']
 });
@@ -101,7 +101,7 @@ return view.extend({
 		var totalPages = data.total_pages || 1;
 
 		var viewRoot = E('div', { 'class': 'cbi-map' }, [
-			E('h2', {}, _('VPN Parser - 节点池管理')),
+			E('h2', {}, _('VProxy - 节点池管理')),
 			E('div', { 'class': 'cbi-map-descr' }, _('浏览与运维数据库中的所有代理节点，支持真握手测速、可用性过滤与一键导出'))
 		]);
 

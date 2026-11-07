@@ -12,7 +12,7 @@ macOS 不支持 Linux 的 `setcap`。VProxy 使用独立的 root LaunchDaemon �
 
 目前仅支持 **Mihomo** 的 macOS TUN，须使用具有 hardened runtime 签名的 `.app`。便携归档中的独立二进制可以用于普通代理，但不能安装 TUN 服务。源码构建应按 `.github/workflows/build-macos.yml` 创建并签名应用包。
 
-数据继续使用 `~/Library/Application Support/vproxy`；只有旧目录的升级用户继续使用 `~/Library/Application Support/vpn-parser`。服务不接受这两个目录之外的配置或日志路径，包括自定义诊断工作目录。另一个客户端使用 TUN 时，应先关闭其 TUN，避免同时接管路由。
+数据使用 `~/Library/Application Support/vproxy`；品牌改名前的旧目录 `vpn-parser` 会在启动时一次性改名迁移过来（特权助手仍放行该旧目录以防迁移失败）。服务不接受这两个目录之外的配置或日志路径，包括自定义诊断工作目录。另一个客户端使用 TUN 时，应先关闭其 TUN，避免同时接管路由。
 
 ## 服务与权限
 

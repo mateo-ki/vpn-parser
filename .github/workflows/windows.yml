@@ -78,16 +78,6 @@ jobs:
           Remove-Item -Recurse -Force $stageDir
           Write-Host "Portable package created at $zipPath"
 
-          # 双发兼容：为老版本 vpn-parser 客户端的自动升级检查生成镜像别名包
-          if (Test-Path "dist/vproxy-$version-windows-x64-setup.exe") {
-            Copy-Item "dist/vproxy-$version-windows-x64-setup.exe" "dist/vpn-parser-$version-windows-x64-setup.exe" -Force
-            Write-Host "Created compatibility setup alias: dist/vpn-parser-$version-windows-x64-setup.exe"
-          }
-          if (Test-Path $zipPath) {
-            Copy-Item $zipPath "dist/vpn-parser-$version-windows-x64-portable.zip" -Force
-            Write-Host "Created compatibility portable alias: dist/vpn-parser-$version-windows-x64-portable.zip"
-          }
-
       - name: 算 SHA-256
         shell: pwsh
         run: |
@@ -195,29 +185,14 @@ jobs:
             Write-Host "已更新 $manifestPath"
           }
 
-          $legacyManifest = "vpn-parser.json"
-          if (Test-Path $legacyManifest) {
-            $json2 = Get-Content $legacyManifest -Raw -Encoding utf8 | ConvertFrom-Json
-            $json2.version = $version
-            $json2.architecture.'64bit'.url = "https://github.com/mateo-ki/vproxy/releases/download/v$version/vpn-parser-$version-windows-x64-portable.zip"
-            if ($null -ne $json2.architecture.'64bit'.PSObject.Properties['hash']) {
-              $json2.architecture.'64bit'.hash = $hash
-            } else {
-              $json2.architecture.'64bit' | Add-Member -NotePropertyName hash -NotePropertyValue $hash -Force
-            }
-            $json2 | ConvertTo-Json -Depth 10 | Set-Content $legacyManifest -Encoding utf8
-            Write-Host "已同步兼容历史 $legacyManifest"
-          }
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main:main
           git checkout main
           if (Test-Path $manifestPath) { git add $manifestPath }
-          if (Test-Path $legacyManifest) { git add $legacyManifest }
           $status = git status --porcelain
           if ($status) {
-            git commit -m "chore(scoop): 自动同步 vproxy.json 及 vpn-parser.json 至 v$version"
+            git commit -m "chore(scoop): 自动同步 vproxy.json 至 v$version"
             git pull --rebase origin main
             git push origin main
             Write-Host "已推送最新 Scoop Manifest 到 main 分支"

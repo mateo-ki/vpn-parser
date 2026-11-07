@@ -146,7 +146,7 @@ async fn verify_nodes_with_mihomo_path(
         return Ok(results.into_iter().flatten().collect());
     }
 
-    let work_dir = std::env::temp_dir().join(format!("vpn-parser-mihomo-{}", Uuid::new_v4()));
+    let work_dir = std::env::temp_dir().join(format!("vproxy-mihomo-{}", Uuid::new_v4()));
     tokio::fs::create_dir_all(&work_dir).await?;
     // 默认先对整批配置做 `mihomo -t` 二分隔离；开启「条件隔离」后先直接测，
     // 只把失败的节点送去二分隔离，省掉一整轮配置验证。
@@ -693,7 +693,7 @@ mod tests {
         let Some(mihomo) = find_mihomo_executable() else {
             return;
         };
-        let work_dir = std::env::temp_dir().join(format!("vpn-parser-isolate-{}", Uuid::new_v4()));
+        let work_dir = std::env::temp_dir().join(format!("vproxy-isolate-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(&work_dir).await.unwrap();
         let proxies = vec![
             PreparedProxy {

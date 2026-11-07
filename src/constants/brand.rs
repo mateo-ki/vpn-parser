@@ -9,12 +9,6 @@ pub const APP_ID: &str = "vproxy";
 /// Windows 可执行文件名
 pub const APP_EXE_NAME: &str = "vproxy.exe";
 
-/// 历史兼容名称
-pub const LEGACY_APP_NAME: &str = "VPN Parser";
-
-/// 历史兼容可执行文件名
-pub const LEGACY_APP_EXE_NAME: &str = "vpn-parser.exe";
-
 /// GitHub 仓库标识 (owner/repo)
 pub const REPOSITORY: &str = "mateo-ki/vproxy";
 
@@ -30,7 +24,7 @@ pub const TAGLINE: &str = "采集订阅 · 解析节点 · 本地跑代理 · �
 /// 默认数据库文件名
 pub const DEFAULT_DB_FILE: &str = "vproxy.db";
 
-/// 历史兼容数据库文件名
+/// 品牌改名前（VPN Parser）的数据库文件名：仅供 `default_db_path` 做一次性迁移
 pub const LEGACY_DB_FILE: &str = "vpn-parser.db";
 
 /// 统一配置文件默认备份描述

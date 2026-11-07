@@ -163,14 +163,6 @@ jobs:
           shasum -a 256 "${dmg_name}" > "${dmg_name}.sha256"
           shasum -a 256 "${tar_name}" > "${tar_name}.sha256"
 
-          # 双发兼容：为老版本升级生成镜像别名包
-          legacy_dmg="vpn-parser-${version}-darwin-${arch}.dmg"
-          legacy_tar="vpn-parser-${version}-darwin-${arch}.tar.gz"
-          cp "${dmg_name}" "${legacy_dmg}"
-          cp "${tar_name}" "${legacy_tar}"
-          shasum -a 256 "${legacy_dmg}" > "${legacy_dmg}.sha256"
-          shasum -a 256 "${legacy_tar}" > "${legacy_tar}.sha256"
-
           cat *.sha256
 
       - name: 上传产物

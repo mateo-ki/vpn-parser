@@ -3,19 +3,13 @@
 /// Windows 单实例命名的互斥体标识
 pub const SINGLE_INSTANCE_MUTEX: &str = "Local\\VProxy-7F61E55C-DB54-49C6-AB9E-986AEBFDD56B";
 
-/// 历史兼容的 Windows 单实例互斥体标识（用于关闭旧版防冲突）
-pub const LEGACY_MUTEX: &str = "Local\\VPNParser-7F61E55C-DB54-49C6-AB9E-986AEBFDD56B";
-
 /// Windows 防火墙放行规则前缀
 pub const FIREWALL_RULE_PREFIX: &str = "VProxy";
-
-/// 历史兼容的 Windows 防火墙规则前缀
-pub const LEGACY_FIREWALL_RULE_PREFIX: &str = "VPN Parser";
 
 /// Windows 开机自启注册表键值名称
 pub const LAUNCH_AT_STARTUP_VALUE_NAME: &str = "VProxy";
 
-/// 历史开机自启注册表键值名称
+/// 品牌改名前（VPN Parser）的开机自启键值名：同步自启动时顺手清掉旧残留
 pub const LEGACY_STARTUP_VALUE_NAME: &str = "VPN Parser";
 
 /// Windows 系统托盘隐藏消息接收窗口类名
@@ -27,14 +21,8 @@ pub const WAKEUP_MSG_NAME: &str = "VPROXY_SHOW_WINDOW_MSG\0";
 /// Unix 域套接字单实例文件名称
 pub const UNIX_SOCKET_NAME: &str = "vproxy.sock";
 
-/// 历史 Unix 域套接字文件名
-pub const LEGACY_UNIX_SOCKET_NAME: &str = "vpn-parser.sock";
-
 /// 诊断模式环境变量名
 pub const DIAG_ENV_VAR: &str = "VPROXY_DIAG";
 
-/// 历史兼容的诊断模式环境变量名
-pub const LEGACY_DIAG_ENV_VAR: &str = "VPN_PARSER_DIAG";
-
 /// 诊断实例屏蔽修改系统代理时的提示文案
-pub const DIAG_BLOCKED_MSG: &str = "诊断实例（VPROXY_DIAG / VPN_PARSER_DIAG）不写系统代理与终端代理设置";
+pub const DIAG_BLOCKED_MSG: &str = "诊断实例（VPROXY_DIAG）不写系统代理与终端代理设置";

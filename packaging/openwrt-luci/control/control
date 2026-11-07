@@ -1,9 +1,9 @@
-Package: luci-app-vpn-parser
+Package: luci-app-vproxy
 Version: __VERSION__
-Depends: luci-base, vpn-parser, rpcd, rpcd-mod-luci, curl
+Depends: luci-base, vproxy, rpcd, rpcd-mod-luci, curl
 Architecture: all
 Maintainer: mateo-ki <https://github.com/mateo-ki/vproxy>
 Section: luci
 Priority: optional
-Title: LuCI Web GUI for VPN Parser
-Description: LuCI support for VPN Parser subscription collector and proxy node manager. Modern client-side rendering with full node inspection, speedtest, and downstream OpenClash/PassWall subscription export.
+Title: LuCI Web GUI for VProxy
+Description: LuCI support for VProxy subscription collector and proxy node manager. Modern client-side rendering with full node inspection, speedtest, and downstream OpenClash/PassWall subscription export.

@@ -227,7 +227,7 @@ async fn probe_batch(
     let ready_port = valid_ports[0];
     drop(reservations);
 
-    let directory = std::env::temp_dir().join(format!("vpn-parser-shoes-probe-{}", Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!("vproxy-shoes-probe-{}", Uuid::new_v4()));
     tokio::fs::create_dir_all(&directory).await?;
     let config_path = directory.join("config.yaml");
     let log_path = directory.join("shoes.log");
@@ -740,7 +740,7 @@ mod meow_real_kernel_tests {
             .expect("json");
         let text = serde_yaml::to_string(&val).unwrap();
 
-        let home = std::env::temp_dir().join("vpn-parser-meow-smoke");
+        let home = std::env::temp_dir().join("vproxy-meow-smoke");
         std::fs::create_dir_all(&home).unwrap();
         let cfg = home.join("config.yaml");
         std::fs::write(&cfg, &text).unwrap();

@@ -934,7 +934,7 @@ impl VpnApp {
                         "ClashforWindows/0.20.39" => "ClashforWindows (CFW)",
                         "sing-box/1.9.0" => "sing-box (Sing-box)",
                         "v2rayN/6.42" => "v2rayN (v2rayN)",
-                        "vproxy/1.0" | "vpn-parser/1.0" => "vproxy/1.0 (原生默认)",
+                        "vproxy/1.0" => "vproxy/1.0 (原生默认)",
                         _ => "自定义 UA",
                     };
                     egui::ComboBox::from_id_salt("source_ua_presets")
@@ -987,7 +987,7 @@ impl VpnApp {
                             }
                             if ui
                                 .selectable_label(
-                                    self.form_user_agent == "vproxy/1.0" || self.form_user_agent == "vpn-parser/1.0",
+                                    self.form_user_agent == "vproxy/1.0",
                                     "vproxy/1.0 (原生默认)",
                                 )
                                 .clicked()

@@ -1,5 +1,5 @@
-config vpn-parser 'main'
+config vproxy 'main'
 	option enabled '1'
 	option listen '0.0.0.0:8080'
-	option db '/etc/vpn-parser/vpn-parser.db'
+	option db '/etc/vproxy/vproxy.db'
 	option api_token ''

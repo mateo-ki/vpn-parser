@@ -1,12 +1,12 @@
 #!/bin/sh
 #
-# rpcd ubus provider for luci-app-vpn-parser
+# rpcd ubus provider for luci-app-vproxy
 #
 
 . /lib/functions.sh
 
 get_backend_info() {
-    config_load "vpn-parser"
+    config_load "vproxy"
     local listen token
     config_get listen "main" "listen" "0.0.0.0:8080"
     config_get token "main" "api_token" ""
@@ -68,7 +68,7 @@ EOF
         get_backend_info
         case "$2" in
             get_status)
-                pid=$(pgrep -f "vpn-parser --headless" | head -n 1)
+                pid=$(pgrep -f "vproxy --headless" | head -n 1)
                 res=$(api_call "GET" "/api/health")
                 if [ -n "$pid" ]; then
                     echo "{\"running\":true,\"pid\":$pid,\"port\":$BACKEND_PORT,\"api\":$res}"

@@ -876,9 +876,6 @@ pub fn kill_duplicate_instances() -> usize {
 }
 
 #[cfg(windows)]
-pub use kill_duplicate_instances as kill_duplicate_vpn_parser_instances;
-
-#[cfg(windows)]
 pub fn is_our_proxy_core_path(path_str: &str) -> bool {
     let path_lower = path_str.to_ascii_lowercase();
     if path_lower.contains("vproxy")
@@ -1058,9 +1055,6 @@ pub fn count_orphan_proxy_cores() -> usize {
 pub fn kill_duplicate_instances() -> usize {
     0
 }
-
-#[cfg(not(windows))]
-pub use kill_duplicate_instances as kill_duplicate_vpn_parser_instances;
 
 /// `/proc` 下的数字目录 = 进程号。
 #[cfg(not(windows))]

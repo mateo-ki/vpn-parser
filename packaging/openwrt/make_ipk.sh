@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# make_ipk.sh - Lightweight OpenWrt .ipk package generator for vpn-parser
+# make_ipk.sh - Lightweight OpenWrt .ipk package generator for vproxy
 # Usage: ./make_ipk.sh <binary_path> <opkg_arch> <output_dir> [version]
-# Example: ./make_ipk.sh target/x86_64-unknown-linux-musl/release/vpn-parser x86_64 dist 1.8.0
+# Example: ./make_ipk.sh target/x86_64-unknown-linux-musl/release/vproxy x86_64 dist 1.8.0
 
 set -euo pipefail
 
@@ -24,11 +24,11 @@ if [ -z "$VERSION" ]; then
     VERSION=$(grep -m1 '^version = ' "$REPO_ROOT/Cargo.toml" | cut -d '"' -f2)
 fi
 
-echo "==> Packaging vpn-parser v${VERSION} for OpenWrt ($OPKG_ARCH)..."
+echo "==> Packaging vproxy v${VERSION} for OpenWrt ($OPKG_ARCH)..."
 
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
-BUILD_DIR="$(mktemp -d -t vpn-parser-ipk-XXXXXX)"
+BUILD_DIR="$(mktemp -d -t vproxy-ipk-XXXXXX)"
 trap 'rm -rf "$BUILD_DIR"' EXIT
 
 # 1. Prepare data directory
@@ -37,19 +37,19 @@ mkdir -p "$DATA_DIR/usr/bin"
 mkdir -p "$DATA_DIR/etc/init.d"
 mkdir -p "$DATA_DIR/etc/config"
 
-cp "$BINARY_PATH" "$DATA_DIR/usr/bin/vpn-parser"
-chmod 755 "$DATA_DIR/usr/bin/vpn-parser"
+cp "$BINARY_PATH" "$DATA_DIR/usr/bin/vproxy"
+chmod 755 "$DATA_DIR/usr/bin/vproxy"
 
 # Strip binary if strip is available
 if command -v strip >/dev/null 2>&1; then
-    strip --strip-unneeded "$DATA_DIR/usr/bin/vpn-parser" 2>/dev/null || true
+    strip --strip-unneeded "$DATA_DIR/usr/bin/vproxy" 2>/dev/null || true
 fi
 
-cp "$SCRIPT_DIR/files/etc/init.d/vpn-parser" "$DATA_DIR/etc/init.d/vpn-parser"
-chmod 755 "$DATA_DIR/etc/init.d/vpn-parser"
+cp "$SCRIPT_DIR/files/etc/init.d/vproxy" "$DATA_DIR/etc/init.d/vproxy"
+chmod 755 "$DATA_DIR/etc/init.d/vproxy"
 
-cp "$SCRIPT_DIR/files/etc/config/vpn-parser" "$DATA_DIR/etc/config/vpn-parser"
-chmod 644 "$DATA_DIR/etc/config/vpn-parser"
+cp "$SCRIPT_DIR/files/etc/config/vproxy" "$DATA_DIR/etc/config/vproxy"
+chmod 644 "$DATA_DIR/etc/config/vproxy"
 
 # Pack data.tar.gz
 (
@@ -82,7 +82,7 @@ chmod 755 "$CONTROL_DIR/prerm"
 echo "2.0" > "$BUILD_DIR/debian-binary"
 
 # 4. Create final .ipk archive
-IPK_NAME="vpn-parser_${VERSION}_${OPKG_ARCH}.ipk"
+IPK_NAME="vproxy_${VERSION}_${OPKG_ARCH}.ipk"
 IPK_PATH="$OUTPUT_DIR/$IPK_NAME"
 
 (

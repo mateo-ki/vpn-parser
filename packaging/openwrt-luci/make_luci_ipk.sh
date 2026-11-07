@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# make_luci_ipk.sh - Lightweight OpenWrt LuCI .ipk package generator for luci-app-vpn-parser
+# make_luci_ipk.sh - Lightweight OpenWrt LuCI .ipk package generator for luci-app-vproxy
 # Usage: ./make_luci_ipk.sh [output_dir] [version]
 # Example: ./make_luci_ipk.sh dist 1.8.0
 #
@@ -17,39 +17,39 @@ if [ -z "$VERSION" ]; then
     VERSION=$(grep -m1 '^version = ' "$REPO_ROOT/Cargo.toml" | cut -d '"' -f2)
 fi
 
-echo "==> Packaging luci-app-vpn-parser v${VERSION} for OpenWrt (Architecture: all)..."
+echo "==> Packaging luci-app-vproxy v${VERSION} for OpenWrt (Architecture: all)..."
 
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
-BUILD_DIR="$(mktemp -d -t luci-app-vpn-parser-ipk-XXXXXX)"
+BUILD_DIR="$(mktemp -d -t luci-app-vproxy-ipk-XXXXXX)"
 trap 'rm -rf "$BUILD_DIR"' EXIT
 
 # 1. Prepare data directory
 DATA_DIR="$BUILD_DIR/data"
-mkdir -p "$DATA_DIR/www/luci-static/resources/view/vpn-parser"
+mkdir -p "$DATA_DIR/www/luci-static/resources/view/vproxy"
 mkdir -p "$DATA_DIR/usr/share/luci/menu.d"
 mkdir -p "$DATA_DIR/usr/share/rpcd/acl.d"
 mkdir -p "$DATA_DIR/usr/libexec/rpcd"
 mkdir -p "$DATA_DIR/etc/uci-defaults"
 
 # Copy web view assets to /www/luci-static/...
-cp "$SCRIPT_DIR"/htdocs/luci-static/resources/view/vpn-parser/*.js "$DATA_DIR/www/luci-static/resources/view/vpn-parser/"
-chmod 644 "$DATA_DIR/www/luci-static/resources/view/vpn-parser/"*.js
+cp "$SCRIPT_DIR"/htdocs/luci-static/resources/view/vproxy/*.js "$DATA_DIR/www/luci-static/resources/view/vproxy/"
+chmod 644 "$DATA_DIR/www/luci-static/resources/view/vproxy/"*.js
 
 # Copy menu and ACL definitions
-cp "$SCRIPT_DIR/root/usr/share/luci/menu.d/luci-app-vpn-parser.json" "$DATA_DIR/usr/share/luci/menu.d/"
-chmod 644 "$DATA_DIR/usr/share/luci/menu.d/luci-app-vpn-parser.json"
+cp "$SCRIPT_DIR/root/usr/share/luci/menu.d/luci-app-vproxy.json" "$DATA_DIR/usr/share/luci/menu.d/"
+chmod 644 "$DATA_DIR/usr/share/luci/menu.d/luci-app-vproxy.json"
 
-cp "$SCRIPT_DIR/root/usr/share/rpcd/acl.d/luci-app-vpn-parser.json" "$DATA_DIR/usr/share/rpcd/acl.d/"
-chmod 644 "$DATA_DIR/usr/share/rpcd/acl.d/luci-app-vpn-parser.json"
+cp "$SCRIPT_DIR/root/usr/share/rpcd/acl.d/luci-app-vproxy.json" "$DATA_DIR/usr/share/rpcd/acl.d/"
+chmod 644 "$DATA_DIR/usr/share/rpcd/acl.d/luci-app-vproxy.json"
 
 # Copy rpcd ubus provider
-cp "$SCRIPT_DIR/root/usr/libexec/rpcd/luci.vpn-parser" "$DATA_DIR/usr/libexec/rpcd/"
-chmod 755 "$DATA_DIR/usr/libexec/rpcd/luci.vpn-parser"
+cp "$SCRIPT_DIR/root/usr/libexec/rpcd/luci.vproxy" "$DATA_DIR/usr/libexec/rpcd/"
+chmod 755 "$DATA_DIR/usr/libexec/rpcd/luci.vproxy"
 
 # Copy uci-defaults script
-cp "$SCRIPT_DIR/root/etc/uci-defaults/80_luci-app-vpn-parser" "$DATA_DIR/etc/uci-defaults/"
-chmod 755 "$DATA_DIR/etc/uci-defaults/80_luci-app-vpn-parser"
+cp "$SCRIPT_DIR/root/etc/uci-defaults/80_luci-app-vproxy" "$DATA_DIR/etc/uci-defaults/"
+chmod 755 "$DATA_DIR/etc/uci-defaults/80_luci-app-vproxy"
 
 # Pack data.tar.gz
 (
@@ -81,7 +81,7 @@ chmod 755 "$CONTROL_DIR/prerm"
 echo "2.0" > "$BUILD_DIR/debian-binary"
 
 # 4. Create final .ipk archive
-IPK_NAME="luci-app-vpn-parser_${VERSION}_all.ipk"
+IPK_NAME="luci-app-vproxy_${VERSION}_all.ipk"
 IPK_PATH="$OUTPUT_DIR/$IPK_NAME"
 
 (

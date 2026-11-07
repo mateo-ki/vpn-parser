@@ -49,7 +49,7 @@ impl ProxyWorkDir {
         let root = if tokio::fs::create_dir_all(&base_dir).await.is_ok() {
             base_dir.join(format!("proxy-{}", Uuid::new_v4()))
         } else {
-            std::env::temp_dir().join(format!("vpn-parser-proxy-{}", Uuid::new_v4()))
+            std::env::temp_dir().join(format!("vproxy-proxy-{}", Uuid::new_v4()))
         };
         tokio::fs::create_dir_all(&root).await?;
         let data_root = match kernel {

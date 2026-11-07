@@ -34,7 +34,7 @@ impl KernelValidator {
             ))
         } else {
             std::env::temp_dir().join(format!(
-                "vpn-parser-val-{}-{}",
+                "vproxy-val-{}-{}",
                 kernel.directory_name(),
                 Uuid::new_v4()
             ))

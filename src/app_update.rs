@@ -1,7 +1,7 @@
 //! 应用自身的更新：查 GitHub Release → 下载安装包 → 校验 SHA-256 → 交给安装向导。
 //!
 //! 内核更新走 [`crate::kernel`]，那条路可以把下好的字节直接换进 `data/kernels/`；
-//! 应用自己不行 —— `vpn-parser.exe` 正在运行，Windows 不允许覆盖它。所以这里只负责
+//! 应用自己不行 —— `vproxy.exe` 正在运行，Windows 不允许覆盖它。所以这里只负责
 //! "把安装包取回来并证明它没被改过"，落地交给 Inno 向导（它会先 taskkill 本进程再装）。
 
 use anyhow::{bail, Context, Result};
@@ -35,8 +35,8 @@ impl PackageKind {
         }
     }
 
-    /// 资产名的尾巴。deb/rpm 的名字由打包工具生成（`vpn-parser_1.6.2-1_amd64.deb`、
-    /// `vpn-parser-1.6.2-1.x86_64.rpm`），**修订号和架构是它们自己填的**，
+    /// 资产名的尾巴。deb/rpm 的名字由打包工具生成（`vproxy_1.6.2-1_amd64.deb`、
+    /// `vproxy-1.6.2-1.x86_64.rpm`），**修订号和架构是它们自己填的**，
     /// 所以只能按"前缀 + 尾巴"认，不能像 Windows 那样比完整名。
     /// 松匹配要不要逼名字里带版本号（见 `pick_one_kind`）。
     fn needs_version_in_name(self) -> bool {
@@ -395,20 +395,22 @@ fn pick_installer_asset(assets: &[AssetJson], tag: &str) -> Option<AppAsset> {
 
 fn pick_one_kind(assets: &[AssetJson], kind: PackageKind, version: &str) -> Option<AppAsset> {
     let expected_vproxy = format!("vproxy-{version}{}", kind.suffix());
-    let expected_legacy = format!("vpn-parser-{version}{}", kind.suffix());
     // 松匹配按包型分两档，理由见 `needs_version_in_name`：Windows 那串是 release.yml
     // 按同一个模板写的，后缀命中就等于版本命中；deb/rpm/AppImage 的名字里还夹着工具自己填的
     // 修订号（`-1`）和架构（`amd64`/`x86_64`），只看后缀就可能挑到别的版本那一份。
+    // 前缀限定 vproxy：旧品牌 vpn-parser-* 资产不再受认（老客户端靠它们自己的
+    // 松匹配/精确匹配跳到新名资产，完成最后一跳升级）。
     let needs_version = kind.needs_version_in_name();
     let suffix_lower = kind.suffix().to_ascii_lowercase();
     let loose = |asset: &AssetJson| {
         let name_lower = asset.name.to_ascii_lowercase();
-        name_lower.ends_with(&suffix_lower) && (!needs_version || asset.name.contains(version))
+        name_lower.starts_with("vproxy")
+            && name_lower.ends_with(&suffix_lower)
+            && (!needs_version || asset.name.contains(version))
     };
     let found = assets
         .iter()
         .position(|asset| asset.name.eq_ignore_ascii_case(&expected_vproxy))
-        .or_else(|| assets.iter().position(|asset| asset.name.eq_ignore_ascii_case(&expected_legacy)))
         .or_else(|| assets.iter().rposition(loose))?;
     let asset = &assets[found];
     Some(AppAsset {
@@ -514,7 +516,7 @@ fn transports(app_proxy: Option<&str>) -> Result<Vec<Transport>> {
     for candidate in crate::kernel::proxy_candidates(app_proxy) {
         let mut builder = Client::builder()
             .user_agent(concat!(
-                "vpn-parser/",
+                "vproxy/",
                 env!("CARGO_PKG_VERSION"),
                 " app-updater"
             ))
@@ -575,7 +577,7 @@ fn download_ladder(asset_url: &str, proxies: &[Option<String>]) -> Vec<Channel> 
 fn client_for(proxy: Option<&str>, connect_secs: u64, total_secs: u64) -> Result<Client> {
     let mut builder = Client::builder()
         .user_agent(concat!(
-            "vpn-parser/",
+            "vproxy/",
             env!("CARGO_PKG_VERSION"),
             " app-updater"
         ))
@@ -900,25 +902,9 @@ fn synthesize_candidate_assets(tag: &str) -> Vec<AssetJson> {
             digest: None,
         },
         AssetJson {
-            name: format!("vpn-parser-{version}-windows-x64-setup.exe"),
-            browser_download_url: format!(
-                "https://github.com/{REPOSITORY}/releases/download/{tag}/vpn-parser-{version}-windows-x64-setup.exe"
-            ),
-            size: 0,
-            digest: None,
-        },
-        AssetJson {
             name: format!("vproxy_{version}_amd64.deb"),
             browser_download_url: format!(
                 "https://github.com/{REPOSITORY}/releases/download/{tag}/vproxy_{version}_amd64.deb"
-            ),
-            size: 0,
-            digest: None,
-        },
-        AssetJson {
-            name: format!("vpn-parser_{version}_amd64.deb"),
-            browser_download_url: format!(
-                "https://github.com/{REPOSITORY}/releases/download/{tag}/vpn-parser_{version}_amd64.deb"
             ),
             size: 0,
             digest: None,
@@ -932,25 +918,9 @@ fn synthesize_candidate_assets(tag: &str) -> Vec<AssetJson> {
             digest: None,
         },
         AssetJson {
-            name: format!("vpn-parser-{version}-x86_64.AppImage"),
-            browser_download_url: format!(
-                "https://github.com/{REPOSITORY}/releases/download/{tag}/vpn-parser-{version}-x86_64.AppImage"
-            ),
-            size: 0,
-            digest: None,
-        },
-        AssetJson {
             name: format!("vproxy-{version}-1.x86_64.rpm"),
             browser_download_url: format!(
                 "https://github.com/{REPOSITORY}/releases/download/{tag}/vproxy-{version}-1.x86_64.rpm"
-            ),
-            size: 0,
-            digest: None,
-        },
-        AssetJson {
-            name: format!("vpn-parser-{version}-1.x86_64.rpm"),
-            browser_download_url: format!(
-                "https://github.com/{REPOSITORY}/releases/download/{tag}/vpn-parser-{version}-1.x86_64.rpm"
             ),
             size: 0,
             digest: None,
@@ -1450,18 +1420,18 @@ ID-LIKE=\"debian\"
     fn deb_and_rpm_names_are_matched_with_their_revision_and_arch() {
         let assets = vec![
             asset("notes.txt", None),
-            asset("vpn-parser_1.5.0-1_amd64.deb", None),
-            asset("vpn-parser_1.6.2-1_amd64.deb", None),
-            asset("vpn-parser-1.6.2-1.x86_64.rpm", None),
-            asset("vpn-parser-1.6.2-x86_64.AppImage", None),
+            asset("vproxy_1.5.0-1_amd64.deb", None),
+            asset("vproxy_1.6.2-1_amd64.deb", None),
+            asset("vproxy-1.6.2-1.x86_64.rpm", None),
+            asset("vproxy-1.6.2-x86_64.AppImage", None),
         ];
         let deb = pick_one_kind(&assets, PackageKind::Deb, "1.6.2").expect("该找到 deb");
-        assert_eq!(deb.name, "vpn-parser_1.6.2-1_amd64.deb");
+        assert_eq!(deb.name, "vproxy_1.6.2-1_amd64.deb");
         let rpm = pick_one_kind(&assets, PackageKind::Rpm, "1.6.2").expect("该找到 rpm");
-        assert_eq!(rpm.name, "vpn-parser-1.6.2-1.x86_64.rpm");
+        assert_eq!(rpm.name, "vproxy-1.6.2-1.x86_64.rpm");
         let appimage =
             pick_one_kind(&assets, PackageKind::AppImage, "1.6.2").expect("该找到 appimage");
-        assert_eq!(appimage.name, "vpn-parser-1.6.2-x86_64.AppImage");
+        assert_eq!(appimage.name, "vproxy-1.6.2-x86_64.AppImage");
         // 反向对照：只到 1.6.1 的 Release 不该把 1.6.2 那份 deb 当成自己的。
         assert!(pick_one_kind(&assets, PackageKind::Deb, "1.6.1").is_none());
         assert!(pick_one_kind(&assets, PackageKind::AppImage, "1.6.1").is_none());
@@ -1470,10 +1440,10 @@ ID-LIKE=\"debian\"
     /// 交给用户的那条命令必须带真实路径 —— 说"请用包管理器安装"等于没说。
     #[test]
     fn each_kind_names_a_command_you_can_actually_run() {
-        let path = std::path::Path::new("/tmp/vpn-parser_1.6.2-1_amd64.deb");
+        let path = std::path::Path::new("/tmp/vproxy_1.6.2-1_amd64.deb");
         assert_eq!(
             PackageKind::Deb.install_command(path),
-            "sudo dpkg -i /tmp/vpn-parser_1.6.2-1_amd64.deb"
+            "sudo dpkg -i /tmp/vproxy_1.6.2-1_amd64.deb"
         );
         assert!(PackageKind::Rpm
             .install_command(path)
@@ -1547,35 +1517,31 @@ ID-LIKE=\"debian\"
     #[test]
     fn installer_asset_is_matched_by_tag_not_by_whichever_is_there() {
         let assets = vec![
-            asset("vpn-parser-1.2.1-windows-x64-setup.exe", None),
+            asset("vproxy-1.2.1-windows-x64-setup.exe", None),
             asset("sha256.txt", None),
-            asset("vpn-parser-1.2.2-windows-x64-setup.exe", None),
+            asset("vproxy-1.2.2-windows-x64-setup.exe", None),
         ];
         let picked = pick_one_kind(&assets, PackageKind::WindowsSetup, "1.2.2").expect("有安装包");
-        assert_eq!(picked.name, "vpn-parser-1.2.2-windows-x64-setup.exe");
+        assert_eq!(picked.name, "vproxy-1.2.2-windows-x64-setup.exe");
         assert_eq!(
             picked.url,
-            format!("https://github.com/{REPOSITORY}/releases/download/v1.2.2/vpn-parser-1.2.2-windows-x64-setup.exe")
+            format!("https://github.com/{REPOSITORY}/releases/download/v1.2.2/vproxy-1.2.2-windows-x64-setup.exe")
         );
         // 名字对不上 tag（比如 tag 打错、资产手工传过）时退到后缀匹配的最后一个。
-        let loose = vec![asset("vpn-parser-0.9.0-windows-x64-setup.exe", None)];
+        let loose = vec![asset("vproxy-0.9.0-windows-x64-setup.exe", None)];
         assert_eq!(
             pick_one_kind(&loose, PackageKind::WindowsSetup, "1.2.2").unwrap().name,
-            "vpn-parser-0.9.0-windows-x64-setup.exe"
+            "vproxy-0.9.0-windows-x64-setup.exe"
         );
         assert!(pick_one_kind(&[asset("sha256.txt", None)], PackageKind::WindowsSetup, "1.2.2").is_none());
 
-        // 双发场景下，新版优先挑 vproxy 包；历史 Release 仅有 vpn-parser 时自动回退
-        let dual_assets = vec![
-            asset("vpn-parser-1.16.0-windows-x64-setup.exe", None),
-            asset("vproxy-1.16.0-windows-x64-setup.exe", None),
-        ];
-        let picked_vproxy = pick_one_kind(&dual_assets, PackageKind::WindowsSetup, "1.16.0").expect("优先命中 vproxy 安装包");
-        assert_eq!(picked_vproxy.name, "vproxy-1.16.0-windows-x64-setup.exe");
-
+        // 旧品牌 vpn-parser-* 资产不再受认：即使 Release 里只有旧名安装包也不更新
+        // （老客户端靠它们自己那版的匹配逻辑跳到新名资产，完成最后一跳升级）。
         let legacy_only = vec![asset("vpn-parser-1.16.0-windows-x64-setup.exe", None)];
-        let picked_legacy = pick_one_kind(&legacy_only, PackageKind::WindowsSetup, "1.16.0").expect("兼容历史 vpn-parser 安装包");
-        assert_eq!(picked_legacy.name, "vpn-parser-1.16.0-windows-x64-setup.exe");
+        assert!(
+            pick_one_kind(&legacy_only, PackageKind::WindowsSetup, "1.16.0").is_none(),
+            "旧品牌资产不应再被应用内更新认领"
+        );
     }
 
     #[test]
@@ -1605,12 +1571,12 @@ ID-LIKE=\"debian\"
     #[test]
     fn hash_index_lines_pair_hex_with_the_named_asset() {
         let hex = "f".repeat(64);
-        let index = format!("{hex}  vpn-parser-1.2.2-windows-x64-setup.exe\n0123  other.txt\n");
+        let index = format!("{hex}  vproxy-1.2.2-windows-x64-setup.exe\n0123  other.txt\n");
         assert_eq!(
-            digest_from_hash_index(&index, "vpn-parser-1.2.2-windows-x64-setup.exe").as_deref(),
+            digest_from_hash_index(&index, "vproxy-1.2.2-windows-x64-setup.exe").as_deref(),
             Some(hex.as_str())
         );
-        assert!(digest_from_hash_index(&index, "vpn-parser-1.2.1-windows-x64-setup.exe").is_none());
+        assert!(digest_from_hash_index(&index, "vproxy-1.2.1-windows-x64-setup.exe").is_none());
         // 单空格分隔也得认（不同工具写的格式）
         assert!(digest_from_hash_index(&format!("{hex} a.exe"), "a.exe").is_some());
     }
@@ -1636,7 +1602,7 @@ ID-LIKE=\"debian\"
             release(
                 "v1.2.2",
                 vec![asset(
-                    "vpn-parser-1.2.2-windows-x64-setup.exe",
+                    "vproxy-1.2.2-windows-x64-setup.exe",
                     Some(&format!("sha256:{hex}")),
                 )],
             ),
@@ -1657,7 +1623,7 @@ ID-LIKE=\"debian\"
         let same = summarize(
             release(
                 "v1.2.1",
-                vec![asset("vpn-parser-1.2.1-windows-x64-setup.exe", None)],
+                vec![asset("vproxy-1.2.1-windows-x64-setup.exe", None)],
             ),
             "1.2.1",
             UpdateChannel::Stable,
@@ -1694,7 +1660,7 @@ ID-LIKE=\"debian\"
     fn prerelease_summary_says_so() {
         let mut beta = release(
             "v1.4.0-beta.1",
-            vec![asset("vpn-parser-1.4.0-beta.1-windows-x64-setup.exe", None)],
+            vec![asset("vproxy-1.4.0-beta.1-windows-x64-setup.exe", None)],
         );
         beta.prerelease = true;
         let info = summarize(beta, "1.3.0", UpdateChannel::Insider);
@@ -1705,7 +1671,7 @@ ID-LIKE=\"debian\"
 
     #[test]
     fn ladder_puts_fast_mirrors_first_and_never_proxies_them() {
-        let url = "https://github.com/mateo-ki/vpn-parser/releases/download/v1.2.2/a.exe";
+        let url = "https://github.com/mateo-ki/vproxy/releases/download/v1.2.2/a.exe";
         let proxies = vec![Some("http://127.0.0.1:9980".to_string()), None];
         let ladder = download_ladder(url, &proxies);
         assert_eq!(ladder.len(), 4, "两个镜像 + 一条代理 + 官方直连");
@@ -1749,12 +1715,12 @@ ID-LIKE=\"debian\"
     fn release_item_converts_to_info_for_upgrade_downgrade_and_reinstall() {
         let upgrade_item = ReleaseItem {
             tag: "v1.9.0".into(),
-            name: "VPN Parser v1.9.0".into(),
+            name: "VProxy v1.9.0".into(),
             published_at: Some("2026-10-20".into()),
             prerelease: false,
-            html_url: "https://github.com/mateo-ki/vpn-parser/releases/tag/v1.9.0".into(),
+            html_url: "https://github.com/mateo-ki/vproxy/releases/tag/v1.9.0".into(),
             body: Some("更新说明".into()),
-            asset_name: Some("vpn-parser-1.9.0-windows-x64-setup.exe".into()),
+            asset_name: Some("vproxy-1.9.0-windows-x64-setup.exe".into()),
             asset_size: 15_000_000,
             asset_url: Some("https://example.com/download".into()),
             asset_sha256: Some("abcd".into()),
@@ -1768,12 +1734,12 @@ ID-LIKE=\"debian\"
 
         let downgrade_item = ReleaseItem {
             tag: "v1.8.6".into(),
-            name: "VPN Parser v1.8.6".into(),
+            name: "VProxy v1.8.6".into(),
             published_at: Some("2026-10-16".into()),
             prerelease: false,
-            html_url: "https://github.com/mateo-ki/vpn-parser/releases/tag/v1.8.6".into(),
+            html_url: "https://github.com/mateo-ki/vproxy/releases/tag/v1.8.6".into(),
             body: None,
-            asset_name: Some("vpn-parser-1.8.6-windows-x64-setup.exe".into()),
+            asset_name: Some("vproxy-1.8.6-windows-x64-setup.exe".into()),
             asset_size: 14_000_000,
             asset_url: Some("https://example.com/download_old".into()),
             asset_sha256: None,
@@ -1787,12 +1753,12 @@ ID-LIKE=\"debian\"
 
         let current_item = ReleaseItem {
             tag: "v1.8.8".into(),
-            name: "VPN Parser v1.8.8".into(),
+            name: "VProxy v1.8.8".into(),
             published_at: Some("2026-10-19".into()),
             prerelease: false,
-            html_url: "https://github.com/mateo-ki/vpn-parser/releases/tag/v1.8.8".into(),
+            html_url: "https://github.com/mateo-ki/vproxy/releases/tag/v1.8.8".into(),
             body: None,
-            asset_name: Some("vpn-parser-1.8.8-windows-x64-setup.exe".into()),
+            asset_name: Some("vproxy-1.8.8-windows-x64-setup.exe".into()),
             asset_size: 15_000_000,
             asset_url: Some("https://example.com/download_curr".into()),
             asset_sha256: None,
@@ -1945,27 +1911,27 @@ ID-LIKE=\"debian\"
     fn atom_releases_are_parsed_correctly() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
-  <id>tag:github.com,2008:https://github.com/mateo-ki/vpn-parser/releases</id>
+  <id>tag:github.com,2008:https://github.com/mateo-ki/vproxy/releases</id>
   <title>Release notes</title>
   <entry>
     <id>tag:github.com,2008:Repository/1416062168/v1.14.0</id>
     <updated>2026-10-26T13:07:59Z</updated>
-    <link rel="alternate" type="text/html" href="https://github.com/mateo-ki/vpn-parser/releases/tag/v1.14.0"/>
-    <title>VPN Parser v1.14.0</title>
+    <link rel="alternate" type="text/html" href="https://github.com/mateo-ki/vproxy/releases/tag/v1.14.0"/>
+    <title>VProxy v1.14.0</title>
     <content type="html">&lt;h1&gt;Notes&lt;/h1&gt;</content>
   </entry>
   <entry>
     <id>tag:github.com,2008:Repository/1416062168/v1.13.0</id>
     <updated>2026-10-20T10:00:00Z</updated>
-    <link rel="alternate" type="text/html" href="https://github.com/mateo-ki/vpn-parser/releases/tag/v1.13.0"/>
-    <title>VPN Parser v1.13.0</title>
+    <link rel="alternate" type="text/html" href="https://github.com/mateo-ki/vproxy/releases/tag/v1.13.0"/>
+    <title>VProxy v1.13.0</title>
     <content type="html">Older notes</content>
   </entry>
 </feed>"#;
         let items = parse_atom_releases(xml, "1.14.0");
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].tag, "v1.14.0");
-        assert_eq!(items[0].name, "VPN Parser v1.14.0");
+        assert_eq!(items[0].name, "VProxy v1.14.0");
         assert_eq!(items[0].published_at.as_deref(), Some("2026-10-26"));
         assert!(items[0].is_current);
         assert!(!items[0].prerelease);

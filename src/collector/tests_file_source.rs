@@ -61,7 +61,7 @@ fn local_file_path_recognizes_windows_and_unix_forms() {
 
 #[tokio::test]
 async fn reads_and_parses_real_local_yaml_file() {
-    let file_path = std::env::temp_dir().join("vpn_parser_test_local_nodes.yaml");
+    let file_path = std::env::temp_dir().join("vproxy_test_local_nodes.yaml");
     let sample_yaml = r#"
 proxies:
   - name: "香港 01 专线"

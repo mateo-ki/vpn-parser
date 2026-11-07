@@ -204,7 +204,7 @@ async fn probe_batch_with_sing_box(
         config["endpoints"] = Value::Array(endpoints);
     }
     let directory =
-        std::env::temp_dir().join(format!("vpn-parser-sing-box-batch-{}", Uuid::new_v4()));
+        std::env::temp_dir().join(format!("vproxy-sing-box-batch-{}", Uuid::new_v4()));
     tokio::fs::create_dir_all(&directory).await?;
     let config_path = directory.join("config.json");
     let log_path = directory.join("sing-box.log");
@@ -530,7 +530,7 @@ mod tests {
         for node in cases {
             let config = build_sing_box_config(&node, MihomoConfigOptions::default()).unwrap();
             let directory = std::env::temp_dir().join(format!(
-                "vpn-parser-sing-box-check-{}-{}",
+                "vproxy-sing-box-check-{}-{}",
                 node.protocol,
                 Uuid::new_v4()
             ));

@@ -416,7 +416,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_all_sources_completes_on_many_nodes() {
         let path = std::env::temp_dir().join(format!(
-            "vpn-parser-scale-{}.db",
+            "vproxy-scale-{}.db",
             uuid::Uuid::new_v4()
         ));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
@@ -489,7 +489,7 @@ mod tests {
     #[tokio::test]
     async fn persists_tcp_prefilter_failure_as_unavailable() {
         let path = std::env::temp_dir().join(format!(
-            "vpn-parser-prefilter-failure-{}.db",
+            "vproxy-prefilter-failure-{}.db",
             uuid::Uuid::new_v4()
         ));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
@@ -538,7 +538,7 @@ mod tests {
     #[tokio::test]
     async fn tcp_ping_only_mode_records_tcp_ping_kind() {
         let path =
-            std::env::temp_dir().join(format!("vpn-parser-tcp-ping-{}.db", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("vproxy-tcp-ping-{}.db", uuid::Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let now = chrono::Utc::now();
         let node = Node {
@@ -582,7 +582,7 @@ mod tests {
 
     #[tokio::test]
     async fn speedtester_cancellation_controls() {
-        let path = std::env::temp_dir().join(format!("vpn-parser-cancel-{}.db", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("vproxy-cancel-{}.db", uuid::Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let tester = SpeedTester::new(db.clone(), TaskTracker::default());
         assert!(!tester.is_cancelled());

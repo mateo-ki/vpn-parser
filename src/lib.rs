@@ -37,7 +37,7 @@ pub use diag::startup_log;
 ///
 /// 三条规则按重要性排：
 /// ① 诊断壳永远跟着当前工作目录 —— 它已经切进自己的临时隔离目录，落到用户数据里
-///    就等于这个开关存在的意义没了（`VPN_PARSER_DIAG` 的第一条承诺就是不动真数据）。
+///    就等于这个开关存在的意义没了（`VPROXY_DIAG` 的第一条承诺就是不动真数据）。
 /// ② Windows 用工作目录下的 `data/`。装机目录就是程序目录（启动时会 chdir 过去），
 ///    从 1.0 到现在都是这个位置，一个字没改。
 /// ③ Linux 用 XDG 数据目录。FHS 布局下可执行文件在 `/usr/bin`，而 `main` 会把工作目录
@@ -53,6 +53,8 @@ pub fn data_root() -> std::path::PathBuf {
         xdg.as_deref(),
         home.as_deref(),
     );
+    #[cfg(not(windows))]
+    let root = migrate_legacy_data_root(&root);
     let _ = std::fs::create_dir_all(&root);
     root
 }
@@ -77,47 +79,90 @@ pub fn data_root_from(
         #[cfg(target_os = "macos")]
         {
             if let Some(base) = home {
-                let new_path = base.join("Library/Application Support/vproxy");
-                let old_path = base.join("Library/Application Support/vpn-parser");
-                if !new_path.exists() && old_path.exists() {
-                    return old_path;
-                }
-                return new_path;
+                return base.join("Library/Application Support/vproxy");
             }
         }
         #[cfg(not(target_os = "macos"))]
         {
             if let Some(base) = xdg_data_home.filter(|p| p.is_absolute()) {
-                let new_path = base.join("vproxy");
-                let old_path = base.join("vpn-parser");
-                if !new_path.exists() && old_path.exists() {
-                    return old_path;
-                }
-                return new_path;
+                return base.join("vproxy");
             }
             if let Some(base) = home {
-                let new_path = base.join(".local/share/vproxy");
-                let old_path = base.join(".local/share/vpn-parser");
-                if !new_path.exists() && old_path.exists() {
-                    return old_path;
-                }
-                return new_path;
+                return base.join(".local/share/vproxy");
             }
         }
         cwd.join("data")
     }
 }
 
+/// 品牌改名（VPN Parser → VProxy）的一次性数据目录迁移：旧目录 `vpn-parser`
+/// 与新目录同父、存在且新目录尚不存在时，整目录改名搬走。搬完旧路径不复存在，
+/// 旧目录兼容自此彻底退场；失败（旧进程占用等）仅落档并沿用旧目录，下次启动重试。
+#[cfg(not(windows))]
+fn migrate_legacy_data_root(new_root: &std::path::Path) -> std::path::PathBuf {
+    let Some(parent) = new_root.parent() else {
+        return new_root.to_path_buf();
+    };
+    let old_root = parent.join("vpn-parser");
+    if new_root.exists() || !old_root.exists() {
+        return new_root.to_path_buf();
+    }
+    match std::fs::rename(&old_root, new_root) {
+        Ok(()) => {
+            crate::diag::startup_log(&format!(
+                "[迁移] 旧品牌数据目录已一次性搬至 {}",
+                new_root.display()
+            ));
+            new_root.to_path_buf()
+        }
+        Err(error) => {
+            crate::diag::startup_log(&format!(
+                "[迁移] 旧品牌数据目录 {} 搬至 {} 失败（本次继续用旧目录，下次启动重试）: {error}",
+                old_root.display(),
+                new_root.display()
+            ));
+            old_root
+        }
+    }
+}
+
 /// `--db` 不写时的默认库路径。
-/// 平滑迁移：优先使用 vproxy.db，若尚不存在且原 vpn-parser.db 存在，则无缝使用原数据库。
+/// 品牌改名（VPN Parser → VProxy）的一次性迁移：旧库存在且新库尚不存在时，
+/// 把旧库（连同 SQLite 的 `-wal`/`-shm` 伴生文件）改名搬移到新名；搬完旧文件名
+/// 彻底退场。失败（旧进程占用等）本次沿用旧库并落档，下次启动重试。
 pub fn default_db_path() -> std::path::PathBuf {
     let root = data_root();
     let new_db = root.join(constants::DEFAULT_DB_FILE);
     let old_db = root.join(constants::LEGACY_DB_FILE);
-    if !new_db.exists() && old_db.exists() {
-        return old_db;
+    if new_db.exists() || !old_db.exists() {
+        return new_db;
     }
-    new_db
+    match std::fs::rename(&old_db, &new_db) {
+        Ok(()) => {
+            for suffix in ["-wal", "-shm"] {
+                let from = root.join(format!("{}{suffix}", constants::LEGACY_DB_FILE));
+                if from.exists() {
+                    let _ = std::fs::rename(
+                        &from,
+                        root.join(format!("{}{suffix}", constants::DEFAULT_DB_FILE)),
+                    );
+                }
+            }
+            crate::diag::startup_log(&format!(
+                "[迁移] 旧品牌数据库已一次性更名为 {}",
+                new_db.display()
+            ));
+            new_db
+        }
+        Err(error) => {
+            crate::diag::startup_log(&format!(
+                "[迁移] 旧品牌数据库 {} 更名为 {} 失败（本次继续用旧库，下次启动重试）: {error}",
+                old_db.display(),
+                new_db.display()
+            ));
+            old_db
+        }
+    }
 }
 
 #[cfg(test)]

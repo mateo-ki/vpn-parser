@@ -1469,7 +1469,7 @@ mod tests {
         let listener = bind_test_listener().await;
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!("vproxy-{}.db", Uuid::new_v4()));
         let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
         let source = db
             .create_source(CreateSource {
@@ -1537,7 +1537,7 @@ mod tests {
         let listener = bind_test_listener().await;
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!("vproxy-{}.db", Uuid::new_v4()));
         let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
         let source = db
             .create_source(CreateSource {
@@ -1585,7 +1585,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         drop(listener);
-        let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!("vproxy-{}.db", Uuid::new_v4()));
         let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
         let source = db
             .create_source(CreateSource {
@@ -1649,7 +1649,7 @@ mod tests {
         let listener = bind_test_listener().await;
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!("vproxy-{}.db", Uuid::new_v4()));
         let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
         let source = db
             .create_source(CreateSource {
@@ -1753,7 +1753,7 @@ mod tests {
         let fast_server =
             tokio::spawn(async move { axum::serve(fast_listener, fast).await.unwrap() });
 
-        let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!("vproxy-{}.db", Uuid::new_v4()));
         let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
         let source = db
             .create_source(CreateSource {
@@ -1895,7 +1895,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-        let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!("vproxy-{}.db", Uuid::new_v4()));
         let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
         // 已存在的源：同 id 的 gist 要被跳过。
         db.create_source(CreateSource {
@@ -1961,7 +1961,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "真实网络手测，需要一个能出境的本地代理在线"]
     async fn real_network_gist_discovery_via_local_proxy() {
-        let db_path = std::env::temp_dir().join(format!("vpn-parser-real-{}.db", Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!("vproxy-real-{}.db", Uuid::new_v4()));
         let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
         let tracker = TaskTracker::default();
         let proxy = std::env::var("VPN_PARSER_PROBE_PROXY")
@@ -2019,7 +2019,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-        let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!("vproxy-{}.db", Uuid::new_v4()));
         let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
         for index in 0..4 {
             db.create_source(CreateSource {
@@ -2096,7 +2096,7 @@ mod tests {
         let listener = bind_test_listener().await;
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!("vproxy-{}.db", Uuid::new_v4()));
         let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
         let source = db
             .create_source(CreateSource {
@@ -2134,7 +2134,7 @@ mod tests {
         let listener = bind_test_listener().await;
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let db_path = std::env::temp_dir().join(format!("vpn-parser-{}.db", Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!("vproxy-{}.db", Uuid::new_v4()));
         let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
         let source = db
             .create_source(CreateSource {
@@ -2188,7 +2188,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-        let db_path = std::env::temp_dir().join(format!("vpn-parser-ua-{}.db", Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!("vproxy-ua-{}.db", Uuid::new_v4()));
         let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
         let tracker = TaskTracker::default();
         let collector = Collector::new(db.clone(), tracker).unwrap();

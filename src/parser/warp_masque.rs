@@ -493,7 +493,7 @@ pub async fn register_warp_masque_native(proxy_url: Option<&str>) -> anyhow::Res
         "key": spki,
         "key_type": "secp256r1",
         "tunnel_type": "masque",
-        "name": "vpn-parser",
+        "name": "vproxy",
     });
 
     let patch_resp = client

@@ -213,8 +213,8 @@ fn scan_exe_dir(exe_dir: &Path, current_exe: &Path, found: &mut Vec<CleanupItem>
                 || name_lower.ends_with(".old.exe")
                 || name_lower.ends_with(".exe.old")
                 || (name_lower.starts_with("is-") && name_lower.ends_with(".tmp"))
-                || ((name_lower.starts_with("vproxy") || name_lower.starts_with("vpn-parser")) && name_lower.contains(".old"))
-                || ((name_lower.starts_with("vproxy") || name_lower.starts_with("vpn-parser")) && name_lower.contains(".bak"));
+                || (name_lower.starts_with("vproxy") && name_lower.contains(".old"))
+                || (name_lower.starts_with("vproxy") && name_lower.contains(".bak"));
 
             if is_legacy_exe {
                 let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
@@ -684,10 +684,10 @@ mod tests {
         let test_dir = std::env::temp_dir().join(format!("vpn_cleanup_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&test_dir);
 
-        let current_exe = test_dir.join("vpn-parser.exe");
+        let current_exe = test_dir.join("vproxy.exe");
         std::fs::write(&current_exe, b"live_executable_bytes").unwrap();
 
-        let old_exe = test_dir.join("vpn-parser.exe.old");
+        let old_exe = test_dir.join("vproxy.exe.old");
         std::fs::write(&old_exe, b"old_backup_bytes").unwrap();
 
         let tmp_installer = test_dir.join("is-12345.tmp");

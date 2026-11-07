@@ -632,7 +632,7 @@ mod tests {
 
     #[test]
     fn dat_category_lookup_is_case_insensitive_and_lenient_on_corruption() {
-        let dir = std::env::temp_dir().join("vpn-parser-dat-category-test");
+        let dir = std::env::temp_dir().join("vproxy-dat-category-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("geosite.dat");
         std::fs::write(&path, build_dat(&["cn", "private", "category-ads-all"])).unwrap();
@@ -688,7 +688,7 @@ mod tests {
 
     #[test]
     fn readiness_uses_the_size_floor() {
-        let dir = std::env::temp_dir().join(format!("vpn-parser-geo-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vproxy-geo-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         assert!(!geo_ready(&dir));
@@ -706,8 +706,8 @@ mod tests {
 
     #[test]
     fn test_populate_vpcore_work_dir() {
-        let home = std::env::temp_dir().join(format!("vpn-parser-vpcore-home-{}", uuid::Uuid::new_v4()));
-        let work = std::env::temp_dir().join(format!("vpn-parser-vpcore-work-{}", uuid::Uuid::new_v4()));
+        let home = std::env::temp_dir().join(format!("vproxy-vpcore-home-{}", uuid::Uuid::new_v4()));
+        let work = std::env::temp_dir().join(format!("vproxy-vpcore-work-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&work).unwrap();
 
@@ -725,7 +725,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_vpcore_geo_when_files_ready() {
-        let home = std::env::temp_dir().join(format!("vpn-parser-vpcore-geo-test-{}", uuid::Uuid::new_v4()));
+        let home = std::env::temp_dir().join(format!("vproxy-vpcore-geo-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&home).unwrap();
 
         // 模拟已存在足额大小的 geosite.dat 和 geoip.dat
@@ -740,7 +740,7 @@ mod tests {
 
     #[test]
     fn test_link_or_copy() {
-        let temp = std::env::temp_dir().join(format!("vpn-parser-link-test-{}", uuid::Uuid::new_v4()));
+        let temp = std::env::temp_dir().join(format!("vproxy-link-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();
         let src = temp.join("src.txt");
         let dst = temp.join("dst.txt");

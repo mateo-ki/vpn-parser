@@ -9,7 +9,7 @@ use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, ProgressBar, Rich
 
 /// 关于页底部的免责声明，一行一条（用户 2026-10-20 要求加）。
 /// 每条都对着代码核过：没有统计上报模块、IP 风险查询要用户点、发布节点要用户填后台地址、
-/// 内置源不再播种、data 目录不被卸载程序删除（installer/vpn-parser.iss 里没有 UninstallDelete）。
+/// 内置源不再播种、data 目录不被卸载程序删除（installer/vproxy.iss 里没有 UninstallDelete）。
 const DISCLAIMER_LINES: [&str; 6] = [
     "本软件是 MIT 开源的技术工具，只负责解析订阅、管理节点，并在本机调用第三方代理内核；它自身不提供任何节点、线路或加速服务，你能用到的节点全部来自你自己添加的订阅源。",
     "请遵守你所在地区的法律法规，不要把本软件用于任何违法违规用途。使用它产生的后果由使用者自行承担，作者与分发者不承担任何责任。",

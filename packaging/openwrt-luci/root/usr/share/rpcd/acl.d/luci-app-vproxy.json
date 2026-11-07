@@ -1,11 +1,11 @@
 {
-  "luci-app-vpn-parser": {
-    "description": "Grant access to VPN Parser service and APIs",
+  "luci-app-vproxy": {
+    "description": "Grant access to VProxy service and APIs",
     "read": {
-      "uci": [ "vpn-parser" ],
+      "uci": [ "vproxy" ],
       "ubus": {
         "service": [ "list" ],
-        "luci.vpn-parser": [
+        "luci.vproxy": [
           "get_status",
           "get_stats",
           "get_tasks",
@@ -17,9 +17,9 @@
       }
     },
     "write": {
-      "uci": [ "vpn-parser" ],
+      "uci": [ "vproxy" ],
       "ubus": {
-        "luci.vpn-parser": [
+        "luci.vproxy": [
           "fetch_all",
           "fetch_source",
           "speedtest",

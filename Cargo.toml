@@ -98,7 +98,7 @@ codegen-units = 16
 strip = true
 incremental = false
 
-# ── Linux 打包元数据（Windows 那条路走 installer/vpn-parser.iss，两边互不影响）──────────
+# ── Linux 打包元数据（Windows 那条路走 installer/vproxy.iss，两边互不影响）──────────
 # 版本号唯一真源仍然是上面的 [package] version：cargo-deb / cargo-generate-rpm 都读它，
 # 所以不会出现 Inno 那边"安装包、关于页、卸载列表各说各话"的老问题。
 [package.metadata.deb]

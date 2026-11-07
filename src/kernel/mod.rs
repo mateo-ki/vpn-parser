@@ -1321,8 +1321,8 @@ Use tags: with_gvisor
     fn kernel_candidates_only_include_managed_paths() {
         // 用当前平台的原生路径写法构造输入：反斜杠在 Linux 上不是分隔符，
         // 拿 Windows 字面量去断言 join 结果，测的其实不是这段代码的性质。
-        let executable = PathBuf::from("some").join("tools").join("vpn-parser");
-        let working_dir = PathBuf::from("somewhere").join("vpn-parser");
+        let executable = PathBuf::from("some").join("tools").join("vproxy");
+        let working_dir = PathBuf::from("somewhere").join("vproxy");
         let candidates = kernel_candidates(
             KernelKind::Mihomo,
             Some(&executable.as_path()),
@@ -1372,7 +1372,7 @@ Use tags: with_gvisor
     #[test]
     fn find_first_existing_candidate_returns_existing_file() {
         let temp_dir =
-            std::env::temp_dir().join(format!("vpn-parser-kernel-test-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("vproxy-kernel-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).unwrap();
         let existing = temp_dir.join("mihomo.exe");
         std::fs::write(&existing, b"test").unwrap();

@@ -5,40 +5,40 @@
 'require poll';
 
 var callGetStatus = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'get_status'
 });
 
 var callGetStats = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'get_stats'
 });
 
 var callGetExportLinks = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'get_export_links',
 	params: ['host']
 });
 
 var callSpeedtest = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'speedtest',
 	params: ['ids']
 });
 
 var callFetchAll = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'fetch_all'
 });
 
 var callCleanNodes = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'clean_nodes',
 	params: ['action']
 });
 
 var callGetTasks = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'get_tasks',
 	params: ['limit']
 });
@@ -63,7 +63,7 @@ return view.extend({
 		var isRunning = status.running === true;
 
 		var viewRoot = E('div', { 'class': 'cbi-map' }, [
-			E('h2', {}, _('VPN Parser - 服务概览')),
+			E('h2', {}, _('VProxy - 服务概览')),
 			E('div', { 'class': 'cbi-map-descr' }, _('高性能订阅采集清洗、真握手并发测速与纯净节点订阅微服务'))
 		]);
 
@@ -210,7 +210,7 @@ return view.extend({
 
 		var exportSection = E('div', { 'class': 'cbi-section' }, [
 			E('h3', {}, _('下游透明代理插件联动 (优质活节点导出)')),
-			E('p', { 'class': 'cbi-section-descr' }, _('在 OpenClash、PassWall、SSR-Plus 中直接填入以下订阅地址，即可享受 VPN Parser 全自动测速清洗后的纯净活节点：')),
+			E('p', { 'class': 'cbi-section-descr' }, _('在 OpenClash、PassWall、SSR-Plus 中直接填入以下订阅地址，即可享受 VProxy 全自动测速清洗后的纯净活节点：')),
 			makeCopyRow('OpenClash 配置订阅地址 (Clash YAML 标准格式)', links.clash || ''),
 			makeCopyRow('PassWall / SSR-Plus 节点订阅地址 (Base64 协议流)', links.uri || ''),
 			makeCopyRow('完整 JSON 格式导出 (适合自建脚本调用)', links.json || '')

@@ -746,7 +746,7 @@ vless://uuid-uuid-uuid@203.0.113.7:443?security=tls#DE-9<br/>
             println!("跳过：这台机器现在没有开启系统代理");
             return;
         };
-        let db_path = std::env::temp_dir().join(format!("vpn-parser-tgsys-{}.db", Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!("vproxy-tgsys-{}.db", Uuid::new_v4()));
         let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
         // 故意用不带代理的那一份 collector。
         let collector =
@@ -793,7 +793,7 @@ vless://uuid-uuid-uuid@203.0.113.7:443?security=tls#DE-9<br/>
 
         let proxy = std::env::var("VPN_PARSER_PROBE_PROXY")
             .unwrap_or_else(|_| "http://127.0.0.1:9980".to_string());
-        let db_path = std::env::temp_dir().join(format!("vpn-parser-tgreal-{}.db", Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!("vproxy-tgreal-{}.db", Uuid::new_v4()));
         let db = Database::connect(db_path.to_str().unwrap()).await.unwrap();
         let collector = crate::collector::Collector::new(db.clone(), TaskTracker::default())
             .unwrap()

@@ -5,19 +5,19 @@
 'require uci';
 
 var callGetSettings = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'get_settings'
 });
 
 var callUpdateSettings = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'update_settings'
 });
 
 return view.extend({
 	load: function() {
 		return Promise.all([
-			uci.load('vpn-parser'),
+			uci.load('vproxy'),
 			callGetSettings().catch(function() { return {}; })
 		]);
 	},
@@ -26,14 +26,14 @@ return view.extend({
 		var backendSettings = (data[1] && data[1].data) ? data[1].data : (data[1] || {});
 
 		// 1. 读取 UCI 配置项
-		var uciEnabled = uci.get('vpn-parser', 'main', 'enabled') !== '0';
-		var uciListen = uci.get('vpn-parser', 'main', 'listen') || '0.0.0.0:8080';
-		var uciDbPath = uci.get('vpn-parser', 'main', 'db_path') || '/etc/vpn-parser/vpn-parser.db';
-		var uciApiToken = uci.get('vpn-parser', 'main', 'api_token') || '';
+		var uciEnabled = uci.get('vproxy', 'main', 'enabled') !== '0';
+		var uciListen = uci.get('vproxy', 'main', 'listen') || '0.0.0.0:8080';
+		var uciDbPath = uci.get('vproxy', 'main', 'db_path') || '/etc/vproxy/vproxy.db';
+		var uciApiToken = uci.get('vproxy', 'main', 'api_token') || '';
 
 		var viewRoot = E('div', { 'class': 'cbi-map' }, [
-			E('h2', {}, _('VPN Parser - 参数配置')),
-			E('div', { 'class': 'cbi-map-descr' }, _('配置 OpenWrt 系统服务守护参数与 VPN Parser 高性能并发测速引擎调优'))
+			E('h2', {}, _('VProxy - 参数配置')),
+			E('div', { 'class': 'cbi-map-descr' }, _('配置 OpenWrt 系统服务守护参数与 VProxy 高性能并发测速引擎调优'))
 		]);
 
 		// === 模块 1: OpenWrt 系统服务配置 ===
@@ -67,7 +67,7 @@ return view.extend({
 		var serviceSection = E('div', { 'class': 'cbi-section' }, [
 			E('h3', {}, _('系统服务守护设置 (UCI)')),
 			E('div', { 'class': 'cbi-value' }, [
-				E('label', { 'class': 'cbi-value-title' }, _('启用 VPN Parser 微服务')),
+				E('label', { 'class': 'cbi-value-title' }, _('启用 VProxy 微服务')),
 				E('div', { 'class': 'cbi-value-field' }, [
 					E('label', {}, [serviceEnabledCheck, ' ' + _('系统开机自启并由 procd 进程守护')])
 				])
@@ -215,10 +215,10 @@ return view.extend({
 				]);
 
 				// 1. 保存 UCI
-				uci.set('vpn-parser', 'main', 'enabled', serviceEnabledCheck.checked ? '1' : '0');
-				uci.set('vpn-parser', 'main', 'listen', listenInput.value.trim());
-				uci.set('vpn-parser', 'main', 'db_path', dbPathInput.value.trim());
-				uci.set('vpn-parser', 'main', 'api_token', tokenInput.value.trim());
+				uci.set('vproxy', 'main', 'enabled', serviceEnabledCheck.checked ? '1' : '0');
+				uci.set('vproxy', 'main', 'listen', listenInput.value.trim());
+				uci.set('vproxy', 'main', 'db_path', dbPathInput.value.trim());
+				uci.set('vproxy', 'main', 'api_token', tokenInput.value.trim());
 
 				var uciPromise = uci.save().then(function() {
 					return uci.apply();

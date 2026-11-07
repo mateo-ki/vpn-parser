@@ -166,7 +166,7 @@ async fn probe_batch(
         "log":{"loglevel":"warning"}, "inbounds":inbounds, "outbounds":outbounds,
         "routing":{"domainStrategy":"AsIs","rules":rules}
     });
-    let directory = std::env::temp_dir().join(format!("vpn-parser-xray-probe-{}", Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!("vproxy-xray-probe-{}", Uuid::new_v4()));
     tokio::fs::create_dir_all(&directory).await?;
     let config_path = directory.join("config.json");
     let log_path = directory.join("xray.log");
@@ -461,7 +461,7 @@ mod tests {
         )
         .unwrap();
         let directory =
-            std::env::temp_dir().join(format!("vpn-parser-xray-check-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("vproxy-xray-check-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(&directory).await.unwrap();
         let path = directory.join("config.json");
         tokio::fs::write(&path, serde_json::to_vec_pretty(&config).unwrap())

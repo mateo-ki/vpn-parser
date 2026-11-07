@@ -362,7 +362,7 @@ pub fn write_elevated_proxy_config_file(options: &MihomoConfigOptions) -> Result
     } else {
         std::env::temp_dir()
     };
-    let target = base.join(format!("vpn-parser-elevated-{}.json", uuid::Uuid::new_v4()));
+    let target = base.join(format!("vproxy-elevated-{}.json", uuid::Uuid::new_v4()));
     let json = serde_json::to_vec_pretty(options)?;
     std::fs::write(&target, json)?;
     Ok(target)

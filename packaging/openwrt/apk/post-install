@@ -1,6 +1,16 @@
 #!/bin/sh
 [ -n "${IPKG_INSTROOT:-$APK_ROOT}" ] || {
-	/etc/init.d/vpn-parser enable
-	/etc/init.d/vpn-parser restart
+	# 品牌改名（vpn-parser → vproxy）的一次性数据迁移，与 ipk 的 postinst 保持一致。
+	if [ ! -f /etc/config/vproxy ] && [ -f /etc/config/vpn-parser ]; then
+		/etc/init.d/vpn-parser stop 2>/dev/null || true
+		cp -a /etc/config/vpn-parser /etc/config/vproxy
+	fi
+	if [ ! -d /etc/vproxy ] && [ -d /etc/vpn-parser ]; then
+		/etc/init.d/vpn-parser stop 2>/dev/null || true
+		mkdir -p /etc/vproxy
+		cp -a /etc/vpn-parser/. /etc/vproxy/
+	fi
+	/etc/init.d/vproxy enable
+	/etc/init.d/vproxy restart
 }
 exit 0

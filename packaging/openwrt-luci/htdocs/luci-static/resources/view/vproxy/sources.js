@@ -4,47 +4,47 @@
 'require rpc';
 
 var callListSources = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'list_sources'
 });
 
 var callCreateSource = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'create_source',
 	params: ['name', 'url_template', 'enabled', 'remark']
 });
 
 var callUpdateSource = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'update_source',
 	params: ['id', 'name', 'url_template', 'enabled', 'remark']
 });
 
 var callDeleteSource = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'delete_source',
 	params: ['id']
 });
 
 var callFetchSource = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'fetch_source',
 	params: ['id']
 });
 
 var callFetchAll = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'fetch_all'
 });
 
 var callDiscoverGists = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'discover_gists',
 	params: ['query', 'max_pages']
 });
 
 var callSpeedtest = rpc.declare({
-	object: 'luci.vpn-parser',
+	object: 'luci.vproxy',
 	method: 'speedtest',
 	params: ['ids']
 });
@@ -152,7 +152,7 @@ return view.extend({
 		var sources = (res && res.data) ? res.data : (Array.isArray(res) ? res : []);
 
 		var viewRoot = E('div', { 'class': 'cbi-map' }, [
-			E('h2', {}, _('VPN Parser - 订阅源管理')),
+			E('h2', {}, _('VProxy - 订阅源管理')),
 			E('div', { 'class': 'cbi-map-descr' }, _('管理所有订阅拉取源，支持动态日期占位符、HTTP 条件缓存 (ETag / Last-Modified) 与并发采集'))
 		]);
 

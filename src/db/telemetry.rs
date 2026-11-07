@@ -447,7 +447,7 @@ mod tests {
     }
 
     async fn temp_db(tag: &str) -> (std::path::PathBuf, Database) {
-        let path = std::env::temp_dir().join(format!("vpn-parser-{tag}-{}.db", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("vproxy-{tag}-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         (path, db)
     }

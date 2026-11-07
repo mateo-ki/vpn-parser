@@ -1,6 +1,6 @@
 # OpenWrt 部署与微服务联动指南
 
-VPN Parser 在 OpenWrt 上以**纯无头（Headless）高性能守护进程**形式运行，作为路由器的**本地节点清洗中枢与上游订阅微服务**。
+VProxy 在 OpenWrt 上以**纯无头（Headless）高性能守护进程**形式运行，作为路由器的**本地节点清洗中枢与上游订阅微服务**。
 
 它在后台全自动定时抓取外部订阅、挖掘 GitHub Gist、并发测速、真握手探活、去重清洗，并将筛选出的最高质量活节点以标准的 Clash YAML 或 Base64 订阅协议吐给 **OpenClash**、**PassWall**、**SSR-Plus** 等插件，彻底解决路由器直接拉取外部订阅时卡顿、死节点多、测速拖垮路由 CPU 的痛点。
 
@@ -9,8 +9,8 @@ VPN Parser 在 OpenWrt 上以**纯无头（Headless）高性能守护进程**形
 ## 🌟 核心特性
 
 - **极低资源占用**：剥离所有 GUI 渲染管线，纯静态 musl 编译，运行私有工作集内存仅约 **20MB ~ 30MB**，闲置 CPU 占用接近 0%；
-- **OpenWrt 原生进程守护 (`procd`)**：集成 `/etc/init.d/vpn-parser` 服务，支持崩溃 5 秒自愈拉起（`respawn`）与优雅关停（`SIGTERM`）；
-- **UCI 配置系统集成**：支持通过 `/etc/config/vpn-parser` 及 `uci` 命令行直接管理监听端口、存储路径与鉴权令牌；
+- **OpenWrt 原生进程守护 (`procd`)**：集成 `/etc/init.d/vproxy` 服务，支持崩溃 5 秒自愈拉起（`respawn`）与优雅关停（`SIGTERM`）；
+- **UCI 配置系统集成**：支持通过 `/etc/config/vproxy` 及 `uci` 命令行直接管理监听端口、存储路径与鉴权令牌；
 - **系统现有内核自动复用**：自动探测路由器已安装的 `mihomo` / `sing-box` / `xray`（`/usr/bin` 等系统路径），无需重复下载内核，保护路由器 Flash 闪存空间；
 - **只读文件系统自适应**：完美适配 SquashFS 只读根目录，临时文件与运行日志自动安全隔离至 `/tmp` 内存盘。
 
@@ -22,10 +22,10 @@ VPN Parser 在 OpenWrt 上以**纯无头（Headless）高性能守护进程**形
 
 | 架构名称 | 适用设备 | OpenWrt 25.x+ (.apk) | OpenWrt 24.x/23.x (.ipk) |
 | :--- | :--- | :--- | :--- |
-| **LuCI 管理面板 (通用)** | **所有 OpenWrt 路由器（全架构通用）** | `luci-app-vpn-parser_<版本>_all.apk` | `luci-app-vpn-parser_<版本>_all.ipk` |
-| **x86_64** | 通用 X86 软路由、工控机、PVE / ESXi 虚拟机等 | `vpn-parser_<版本>_x86_64.apk` | `vpn-parser_<版本>_x86_64.ipk` |
-| **aarch64_generic** | 主流 ARM64 软硬路由（NanoPi R2S/R4S/R5S、友善、GL.iNet 等） | `vpn-parser_<版本>_aarch64_generic.apk` | `vpn-parser_<版本>_aarch64_generic.ipk` |
-| **静态压缩包** | 通用 Linux / OpenWrt（解压即用） | `vpn-parser_<版本>_linux_<架构>_musl.tar.gz` | `vpn-parser_<版本>_linux_<架构>_musl.tar.gz` |
+| **LuCI 管理面板 (通用)** | **所有 OpenWrt 路由器（全架构通用）** | `luci-app-vproxy_<版本>_all.apk` | `luci-app-vproxy_<版本>_all.ipk` |
+| **x86_64** | 通用 X86 软路由、工控机、PVE / ESXi 虚拟机等 | `vproxy_<版本>_x86_64.apk` | `vproxy_<版本>_x86_64.ipk` |
+| **aarch64_generic** | 主流 ARM64 软硬路由（NanoPi R2S/R4S/R5S、友善、GL.iNet 等） | `vproxy_<版本>_aarch64_generic.apk` | `vproxy_<版本>_aarch64_generic.ipk` |
+| **静态压缩包** | 通用 Linux / OpenWrt（解压即用） | `vproxy_<版本>_linux_<架构>_musl.tar.gz` | `vproxy_<版本>_linux_<架构>_musl.tar.gz` |
 
 ---
 
@@ -41,7 +41,7 @@ OpenWrt 25.x (例如 25.12 及新版本快照) 全面采用 **apk-tools v3** 代
 cd /tmp
 # 更新源并安装微服务核心与 LuCI 控制面板
 apk update
-apk add --allow-untrusted ./vpn-parser_*.apk ./luci-app-vpn-parser_*.apk
+apk add --allow-untrusted ./vproxy_*.apk ./luci-app-vproxy_*.apk
 ```
 
 > **提示**：若未导入自定义发布密钥，添加 `--allow-untrusted` 参数允许安装本地离线包。
@@ -53,7 +53,7 @@ apk add --allow-untrusted ./vpn-parser_*.apk ./luci-app-vpn-parser_*.apk
 ```bash
 cd /tmp
 opkg update
-opkg install ./vpn-parser_*.ipk ./luci-app-vpn-parser_*.ipk
+opkg install ./vproxy_*.ipk ./luci-app-vproxy_*.ipk
 ```
 
 安装完成后，微服务会自动注册开机自启并立即启动，刷新浏览器即可在 OpenWrt 管理后台看到图形化菜单。
@@ -63,17 +63,17 @@ opkg install ./vpn-parser_*.ipk ./luci-app-vpn-parser_*.ipk
 若使用精简版固件，可直接使用纯静态归档：
 ```bash
 # 解压到系统目录
-tar -xzf vpn-parser_*_musl.tar.gz -C /
-chmod +x /usr/bin/vpn-parser /etc/init.d/vpn-parser
-/etc/init.d/vpn-parser enable
-/etc/init.d/vpn-parser start
+tar -xzf vproxy_*_musl.tar.gz -C /
+chmod +x /usr/bin/vproxy /etc/init.d/vproxy
+/etc/init.d/vproxy enable
+/etc/init.d/vproxy start
 ```
 
 ---
 
-## 🖥️ LuCI Web 图形管理界面 (`luci-app-vpn-parser`)
+## 🖥️ LuCI Web 图形管理界面 (`luci-app-vproxy`)
 
-安装 `luci-app-vpn-parser_*.ipk` 后，登录 OpenWrt Web 管理界面，导航至 **「服务」 (Services) ➔ 「VPN Parser」**：
+安装 `luci-app-vproxy_*.ipk` 后，登录 OpenWrt Web 管理界面，导航至 **「服务」 (Services) ➔ 「VProxy」**：
 
 ### 1. 服务概览 (`Overview`)
 - **运行状态**：实时查看核心守护进程 PID、监听端口及健康状态；
@@ -106,45 +106,45 @@ chmod +x /usr/bin/vpn-parser /etc/init.d/vpn-parser
 ### 服务控制命令
 
 ```bash
-/etc/init.d/vpn-parser start    # 启动服务
-/etc/init.d/vpn-parser stop     # 停止服务
-/etc/init.d/vpn-parser restart  # 重启服务
-/etc/init.d/vpn-parser reload   # 重载配置
-/etc/init.d/vpn-parser status   # 查看运行状态
-/etc/init.d/vpn-parser enable   # 启用开机自启
-/etc/init.d/vpn-parser disable  # 禁用开机自启
+/etc/init.d/vproxy start    # 启动服务
+/etc/init.d/vproxy stop     # 停止服务
+/etc/init.d/vproxy restart  # 重启服务
+/etc/init.d/vproxy reload   # 重载配置
+/etc/init.d/vproxy status   # 查看运行状态
+/etc/init.d/vproxy enable   # 启用开机自启
+/etc/init.d/vproxy disable  # 禁用开机自启
 ```
 
-### UCI 配置文件：`/etc/config/vpn-parser`
+### UCI 配置文件：`/etc/config/vproxy`
 
 安装后默认配置文件内容如下：
 
 ```uci
-config vpn-parser 'main'
+config vproxy 'main'
 	option enabled '1'
 	option listen '0.0.0.0:8080'
-	option db '/etc/vpn-parser/vpn-parser.db'
+	option db '/etc/vproxy/vproxy.db'
 	option api_token ''
 ```
 
 **修改配置示例**：
 ```bash
 # 将监听端口修改为 8088
-uci set vpn-parser.main.listen='0.0.0.0:8088'
+uci set vproxy.main.listen='0.0.0.0:8088'
 
 # 设置访问密钥（可选，局域网共享时建议配置）
-uci set vpn-parser.main.api_token='your-secret-token'
+uci set vproxy.main.api_token='your-secret-token'
 
 # 保存并生效
-uci commit vpn-parser
-/etc/init.d/vpn-parser restart
+uci commit vproxy
+/etc/init.d/vproxy restart
 ```
 
 ---
 
 ## 🔗 与路由器代理插件协同联动
 
-VPN Parser 运行后，在本地监听 HTTP 端口（默认 `8080`），提供丰富的导出参数：
+VProxy 运行后，在本地监听 HTTP 端口（默认 `8080`），提供丰富的导出参数：
 
 ### 1. 配合 OpenClash 使用
 
@@ -199,7 +199,7 @@ VPN Parser 运行后，在本地监听 HTTP 端口（默认 `8080`），提供�
 
 1. **检查进程是否在运行**：
    ```bash
-   pgrep -l vpn-parser
+   pgrep -l vproxy
    ```
 2. **检查端口监听状态**：
    ```bash
@@ -207,9 +207,9 @@ VPN Parser 运行后，在本地监听 HTTP 端口（默认 `8080`），提供�
    ```
 3. **查看系统日志与启动输出**：
    ```bash
-   logread | grep vpn-parser
+   logread | grep vproxy
    # 或查看临时目录日志
-   cat /tmp/vpn-parser-startup.log
+   cat /tmp/vproxy-startup.log
    ```
 4. **测试本地回路 API 连通性**：
    ```bash

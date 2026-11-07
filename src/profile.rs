@@ -418,7 +418,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_database_profile_export_and_import_roundtrip() {
-        let db_path_1 = std::env::temp_dir().join(format!("vpn-parser-profile-src-{}.db", uuid::Uuid::new_v4()));
+        let db_path_1 = std::env::temp_dir().join(format!("vproxy-profile-src-{}.db", uuid::Uuid::new_v4()));
         let db1 = Database::connect(db_path_1.to_str().unwrap()).await.unwrap();
 
         // 插入测试订阅源
@@ -473,7 +473,7 @@ mod tests {
         assert!(yaml_text.contains("自建-美国落地"));
 
         // 解析并恢复到新的空数据库 db2
-        let db_path_2 = std::env::temp_dir().join(format!("vpn-parser-profile-dst-{}.db", uuid::Uuid::new_v4()));
+        let db_path_2 = std::env::temp_dir().join(format!("vproxy-profile-dst-{}.db", uuid::Uuid::new_v4()));
         let db2 = Database::connect(db_path_2.to_str().unwrap()).await.unwrap();
 
         let parsed_profile = from_str(&yaml_text).expect("解析 YAML 文本");

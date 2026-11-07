@@ -92,8 +92,8 @@ jobs:
           cp "$binary" "target/tar-staging/vproxy"
           chmod 755 "target/tar-staging/vproxy"
           strip --strip-unneeded "target/tar-staging/vproxy" 2>/dev/null || true
-          cp packaging/openwrt/files/etc/init.d/vpn-parser "target/tar-staging/vpn-parser.init"
-          cp packaging/openwrt/files/etc/config/vpn-parser "target/tar-staging/vpn-parser.config"
+          cp packaging/openwrt/files/etc/init.d/vproxy "target/tar-staging/vproxy.init"
+          cp packaging/openwrt/files/etc/config/vproxy "target/tar-staging/vproxy.config"
           tar -czf "dist/${tar_name}" -C "target/tar-staging" .
           rm -rf "target/tar-staging"
 
@@ -157,7 +157,7 @@ jobs:
           chmod +x packaging/openwrt/install_apk_tools.sh
           ./packaging/openwrt/install_apk_tools.sh || true
 
-      - name: 打包 luci-app-vpn-parser 通用 .ipk 与 .apk
+      - name: 打包 luci-app-vproxy 通用 .ipk 与 .apk
         run: |
           set -euo pipefail
           version="${{ steps.get_version.outputs.version }}"

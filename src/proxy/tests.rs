@@ -920,7 +920,7 @@ use std::time::Duration;
             }),
         );
         let missing = std::env::temp_dir().join(format!(
-            "vpn-parser-missing-mihomo-{}.exe",
+            "vproxy-missing-mihomo-{}.exe",
             uuid::Uuid::new_v4()
         ));
 
@@ -1000,7 +1000,7 @@ use std::time::Duration;
             }),
         );
         let missing = std::env::temp_dir().join(format!(
-            "vpn-parser-missing-sing-box-{}.exe",
+            "vproxy-missing-sing-box-{}.exe",
             uuid::Uuid::new_v4()
         ));
 

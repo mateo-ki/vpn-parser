@@ -37,7 +37,7 @@ struct Cli {
     listen: String,
 
     /// SQLite database path。不写就等于 `default_db_path()`：Windows 仍是程序目录下的
-    /// `data/vproxy.db`（或平滑沿用历史 `data/vpn-parser.db`），Linux 走 XDG 数据目录。
+    /// `data/vproxy.db`（品牌改名前的 `data/vpn-parser.db` 启动时一次性更名），Linux 走 XDG 数据目录。
     #[arg(long)]
     db: Option<std::path::PathBuf>,
 
@@ -45,7 +45,7 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     headless: bool,
 
-    /// Bearer token required by the HTTP API; can also be set with VPROXY_API_TOKEN (or legacy VPN_PARSER_API_TOKEN)
+    /// Bearer token required by the HTTP API; can also be set with VPROXY_API_TOKEN
     #[arg(long)]
     api_token: Option<String>,
 
@@ -458,7 +458,6 @@ fn main() -> Result<()> {
         .api_token
         .clone()
         .or_else(|| std::env::var("VPROXY_API_TOKEN").ok())
-        .or_else(|| std::env::var("VPN_PARSER_API_TOKEN").ok())
         .filter(|token| !token.trim().is_empty())
         .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
     let elevated_handoff = cli.elevated_proxy_config.is_some()
@@ -802,7 +801,6 @@ fn main() -> Result<()> {
         // 无界面时没有别的地方能看到自动生成的令牌，只在它确实是随机生成的那次打印一次。
         if cli.api_token.is_none()
             && std::env::var("VPROXY_API_TOKEN").is_err()
-            && std::env::var("VPN_PARSER_API_TOKEN").is_err()
         {
             println!("HTTP API 访问令牌（本次启动随机生成）: {api_token}");
         }
@@ -916,7 +914,6 @@ fn main() -> Result<()> {
         };
         let options = if diag::enabled()
             && std::env::var_os("VPROXY_DIAG_ONSCREEN").is_none()
-            && std::env::var_os("VPN_PARSER_DIAG_ONSCREEN").is_none()
         {
             // 诊断壳摆到屏幕外、也不抢焦点：验收要靠 PrintWindow 抓图和 PostMessage
             // 合成点击，都不需要它出现在用户眼前或抢走键盘。
@@ -978,9 +975,8 @@ fn main() -> Result<()> {
         // 跨平台默认统一首选 Glow（OpenGL），由系统合成器（Windows DWM）稳定呈现，
         // 彻底规避 wgpu 30 在 Windows DirectX 12 下因即时模式突发重绘触发的显示器 VRR / G-SYNC 物理背光频闪。
         // 若环境缺少可用 OpenGL（如未开启 3D 加速的虚拟机），下方自动降级回退至 Wgpu（D3D12 / WARP）。
-        // 仍支持 VPROXY_RENDERER（或历史兼容的 VPN_PARSER_RENDERER）环境变量覆盖（如设置 VPROXY_RENDERER=wgpu 强制使用 Wgpu）。
+        // 仍支持 VPROXY_RENDERER 环境变量覆盖（如设置 VPROXY_RENDERER=wgpu 强制使用 Wgpu）。
         let force_wgpu = std::env::var("VPROXY_RENDERER")
-            .or_else(|_| std::env::var("VPN_PARSER_RENDERER"))
             .map(|v| v.eq_ignore_ascii_case("wgpu"))
             .unwrap_or(false);
         let preferred = if force_wgpu {

@@ -3,11 +3,11 @@
 //! 供人工用真实内核二进制做连通性验证。
 //!
 //! 涉及本地数据目录与具体节点的信息一律通过环境变量注入，不写入源码：
-//! - `VPCORE_REPRO_DATA`：数据目录（含 vpn-parser.db 与 subscriptions/）；
+//! - `VPCORE_REPRO_DATA`：数据目录（含 vproxy.db 与 subscriptions/）；
 //! - `VPCORE_REPRO_NODES`：逗号分隔的待编译节点 id 列表；
 //! - `VPCORE_REPRO_LATENCY_HTTP`：可选，"1" 时额外挑一个延迟最低的 http 节点。
 //!
-//! 运行：`cargo test --bin vpn-parser vpcore_repro -- --ignored --nocapture`
+//! 运行：`cargo test --bin vproxy vpcore_repro -- --ignored --nocapture`
 
 #![cfg(test)]
 
@@ -39,7 +39,7 @@ async fn vpcore_repro_dump_configs() {
         return;
     }
 
-    let mut db = crate::db::Database::connect(&format!("{data_dir}\\vpn-parser.db"))
+    let mut db = crate::db::Database::connect(&format!("{data_dir}\\vproxy.db"))
         .await
         .expect("open db");
     db.node_root = std::path::PathBuf::from(format!("{data_dir}\\subscriptions"));

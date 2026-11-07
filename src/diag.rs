@@ -1,9 +1,9 @@
-//! 仅诊断用的实例壳：`VPN_PARSER_DIAG=1` 时，这个实例**不碰任何共享状态** ——
+//! 仅诊断用的实例壳：`VPROXY_DIAG=1` 时，这个实例**不碰任何共享状态** ——
 //! 不抢单实例互斥量、不杀任何进程、不注册托盘图标、不写系统代理/终端代理、
 //! 数据目录和日志都落在临时目录、窗口摆在屏幕外也不抢焦点。
 //!
 //! 为什么要它：改完界面本来就该有人真的把界面打开点一遍。之前我只能靠用户手点，
-//! 因为我自己起一个实例会把他正在跑的那个杀掉（`kill_duplicate_vpn_parser_instances`）、
+//! 因为我自己起一个实例会把他正在跑的那个杀掉（`kill_duplicate_instances`）、
 //! 还会在他的托盘上多一个图标、把他的系统代理改掉、共用他 D 盘的库。有了这个壳，
 //! "界面可见 + 真点击 + CPU/线程数实测"这一层验收我能自己做，做完就关掉。
 //!
@@ -12,9 +12,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use crate::constants::platform::{
-    DIAG_BLOCKED_MSG as BLOCKED_MSG, DIAG_ENV_VAR as FLAG, LEGACY_DIAG_ENV_VAR as LEGACY_FLAG,
-};
+use crate::constants::platform::{DIAG_BLOCKED_MSG as BLOCKED_MSG, DIAG_ENV_VAR as FLAG};
 
 /// 判定口径单独抽出来，好让"什么算开了"这件事有测试。只认 `1` / `true`（不区分大小写）。
 pub fn enabled_from_value(value: Option<&str>) -> bool {
@@ -29,12 +27,7 @@ pub fn enabled_from_value(value: Option<&str>) -> bool {
 pub fn enabled() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        enabled_from_value(
-            std::env::var(FLAG)
-                .or_else(|_| std::env::var(LEGACY_FLAG))
-                .ok()
-                .as_deref(),
-        )
+        enabled_from_value(std::env::var(FLAG).ok().as_deref())
     })
 }
 
@@ -52,9 +45,7 @@ pub fn prepare_home() -> std::io::Result<PathBuf> {
 }
 
 fn diag_var(name: &str) -> Option<String> {
-    std::env::var(format!("VPROXY_DIAG_{name}"))
-        .or_else(|_| std::env::var(format!("VPN_PARSER_DIAG_{name}")))
-        .ok()
+    std::env::var(format!("VPROXY_DIAG_{name}")).ok()
 }
 
 /// 诊断壳专用：`VPROXY_DIAG_TAB=settings`（或 `proxy` + `VPROXY_DIAG_PANEL=rules`）

@@ -1918,7 +1918,7 @@ mod tests {
         let bytes = archive.finish().unwrap().into_inner();
 
         let root =
-            std::env::temp_dir().join(format!("vpn-parser-prepare-fail-{}", std::process::id()));
+            std::env::temp_dir().join(format!("vproxy-prepare-fail-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let updater = KernelUpdater::new(root.clone(), None).unwrap();
@@ -1962,7 +1962,7 @@ mod tests {
         }
         let bytes = archive.finish().unwrap().into_inner();
         let directory =
-            std::env::temp_dir().join(format!("vpn-parser-xray-assets-{}", std::process::id()));
+            std::env::temp_dir().join(format!("vproxy-xray-assets-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
         let target = directory.join(staging_name(KernelKind::Xray));
@@ -2141,7 +2141,7 @@ mod source_tests {
 
     #[tokio::test]
     async fn transport_order_gates_proxy_versus_direct() {
-        let dir = std::env::temp_dir().join(format!("vpn-parser-source-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vproxy-source-{}", std::process::id()));
         // 只有一个代理时：官方直连方式应该拿不到通道（而不是悄悄退回直连）
         let updater = KernelUpdater::new(dir, Some("http://127.0.0.1:9")).unwrap();
         let labels: Vec<&str> = updater
@@ -2181,7 +2181,7 @@ mod source_tests {
     #[tokio::test]
     #[ignore = "真实网络手测，要能连上 GitHub/镜像"]
     async fn real_network_single_method_reports_speed() {
-        let dir = std::env::temp_dir().join(format!("vpn-parser-asset-one-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vproxy-asset-one-{}", std::process::id()));
         let updater = KernelUpdater::new(dir, None).unwrap();
         let kind = KernelKind::Mihomo;
         let source = KernelSource::GhFast;

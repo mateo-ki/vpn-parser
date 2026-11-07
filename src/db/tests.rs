@@ -5,7 +5,7 @@
     #[tokio::test]
     async fn persists_complete_proxy_config() {
         let path =
-            std::env::temp_dir().join(format!("vpn-parser-proxy-config-{}.db", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("vproxy-proxy-config-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let mut config = crate::proxy::MihomoConfigOptions::default();
         config.mode = ProxyMode::Tun;
@@ -27,7 +27,7 @@
     #[tokio::test]
     async fn persists_selected_node_on_restart() {
         let path =
-            std::env::temp_dir().join(format!("vpn-parser-proxy-node-{}.db", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("vproxy-proxy-node-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let mut config = crate::proxy::MihomoConfigOptions::default();
         config.selected_node_id = Some("test-node-123".to_string());
@@ -48,7 +48,7 @@
     #[tokio::test]
     async fn persists_custom_mixed_port_including_7890() {
         let path =
-            std::env::temp_dir().join(format!("vpn-parser-proxy-port-{}.db", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("vproxy-proxy-port-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let mut config = crate::proxy::MihomoConfigOptions::default();
         config.mixed_port = 7890;
@@ -66,7 +66,7 @@
 
     #[tokio::test]
     async fn reads_settings_while_exclusive_writer_is_active() {
-        let path = std::env::temp_dir().join(format!("vpn-parser-wal-{}.db", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("vproxy-wal-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let mut writer = db.pool.acquire().await.unwrap();
         sqlx::query("BEGIN EXCLUSIVE")
@@ -95,7 +95,7 @@
     #[tokio::test]
     async fn persists_fetch_and_speedtest_concurrency_after_reconnect() {
         let path = std::env::temp_dir().join(format!(
-            "vpn-parser-concurrency-settings-{}.db",
+            "vproxy-concurrency-settings-{}.db",
             Uuid::new_v4()
         ));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
@@ -177,7 +177,7 @@
     #[tokio::test]
     async fn persists_speedtest_kernel_and_kind() {
         let path =
-            std::env::temp_dir().join(format!("vpn-parser-speedtest-meta-{}.db", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("vproxy-speedtest-meta-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let now = Utc::now().to_rfc3339();
         sqlx::query(
@@ -224,7 +224,7 @@
     #[tokio::test]
     async fn migration_preserves_legacy_speedtest_results() {
         let path =
-            std::env::temp_dir().join(format!("vpn-parser-legacy-probe-{}.db", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("vproxy-legacy-probe-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let now = Utc::now().to_rfc3339();
         sqlx::query(
@@ -256,7 +256,7 @@
     #[tokio::test]
     async fn list_nodes_without_source_id_returns_all_nodes() {
         let path =
-            std::env::temp_dir().join(format!("vpn-parser-all-nodes-{}.db", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("vproxy-all-nodes-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let s1 = db
             .create_source(CreateSource {
@@ -346,7 +346,7 @@
 
     #[tokio::test]
     async fn push_disabled_sources_are_excluded_from_push_export() {
-        let path = std::env::temp_dir().join(format!("vpn-parser-push-{}.db", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("vproxy-push-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let now = Utc::now().to_rfc3339();
         for id in ["source-a", "source-b"] {
@@ -456,7 +456,7 @@
 
     #[tokio::test]
     async fn groups_nodes_and_limits_group_speedtest_ids() {
-        let path = std::env::temp_dir().join(format!("vpn-parser-groups-{}.db", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("vproxy-groups-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let now = Utc::now().to_rfc3339();
 
@@ -589,7 +589,7 @@
         const SAME_UUID: &str = "11111111-1111-1111-1111-111111111111";
         const OTHER_UUID: &str = "22222222-2222-2222-2222-222222222222";
         const THIRD_UUID: &str = "33333333-3333-3333-3333-333333333333";
-        let path = std::env::temp_dir().join(format!("vpn-parser-dedup-{}.db", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("vproxy-dedup-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let now = Utc::now().to_rfc3339();
         for id in ["dedup-a", "dedup-b"] {
@@ -671,7 +671,7 @@
     }
     #[tokio::test]
     async fn country_filtering_in_list_nodes() {
-        let path = std::env::temp_dir().join(format!("vpn-parser-country-{}.db", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("vproxy-country-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         db.migrate().await.unwrap();
         let now = Utc::now().to_rfc3339();
@@ -739,7 +739,7 @@
 
     #[tokio::test]
     async fn test_source_homogeneity_analysis_and_pruning() {
-        let path = std::env::temp_dir().join(format!("vpn-parser-homo-{}.db", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("vproxy-homo-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
 
         let s1 = db
@@ -881,7 +881,7 @@
     #[tokio::test]
     async fn top_verified_nodes_honours_exclude_id() {
         let path =
-            std::env::temp_dir().join(format!("vpn-parser-topverified-{}.db", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("vproxy-topverified-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let now = Utc::now().to_rfc3339();
         sqlx::query(
@@ -941,7 +941,7 @@
     /// 调用方以前写 `for id in ids { get_node(id) }`，每个 id 都要扇出全部分库。
     #[tokio::test]
     async fn get_nodes_batches_across_shards() {
-        let path = std::env::temp_dir().join(format!("vpn-parser-getnodes-{}.db", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("vproxy-getnodes-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let now = Utc::now().to_rfc3339();
         for id in ["src-x", "src-y"] {
@@ -1021,7 +1021,7 @@
     #[tokio::test]
     async fn accumulate_keeps_nodes_the_current_page_does_not_show() {
         let path =
-            std::env::temp_dir().join(format!("vpn-parser-accumulate-{}.db", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("vproxy-accumulate-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let now = Utc::now().to_rfc3339();
         sqlx::query(
@@ -1132,7 +1132,7 @@
     #[tokio::test]
     async fn auto_failover_survives_reopen_and_other_settings_saves() {
         let path =
-            std::env::temp_dir().join(format!("vpn-parser-auto-failover-{}.db", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("vproxy-auto-failover-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         assert!(
             !db.get_settings().await.unwrap().auto_failover,
@@ -1172,7 +1172,7 @@
 
     #[tokio::test]
     async fn gist_settings_survive_reopen_and_settings_save() {
-        let path = std::env::temp_dir().join(format!("vpn-parser-gist-settings-{}.db", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("vproxy-gist-settings-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let defaults = db.get_settings().await.unwrap();
         assert_eq!(defaults.gist_pages, 100);
@@ -1207,7 +1207,7 @@
     #[tokio::test]
     async fn auto_refill_switch_persists_and_counts_are_cross_shard() {
         let path =
-            std::env::temp_dir().join(format!("vpn-parser-auto-refill-{}.db", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("vproxy-auto-refill-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         assert!(
             !db.get_settings().await.unwrap().speedtest_auto_refill,
@@ -1302,7 +1302,7 @@
     /// 菜单栏展开态：新库默认收起（和老那根 64 宽的图标条一模一样），打开之后重开还在。
     #[tokio::test]
     async fn sidebar_expanded_defaults_off_and_survives_reopen() {
-        let path = std::env::temp_dir().join(format!("vpn-parser-sidebar-{}.db", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("vproxy-sidebar-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         assert!(
             !db.get_settings().await.unwrap().sidebar_expanded,
@@ -1337,7 +1337,7 @@
 
     #[tokio::test]
     async fn night_mode_defaults_on_and_stays_off_when_turned_off() {
-        let path = std::env::temp_dir().join(format!("vpn-parser-night-{}.db", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("vproxy-night-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         assert!(
             db.get_settings().await.unwrap().ui_dark,
@@ -1378,7 +1378,7 @@
     #[tokio::test]
     async fn the_two_auto_actions_default_on_and_keep_being_off() {
         let path =
-            std::env::temp_dir().join(format!("vpn-parser-auto-actions-{}.db", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("vproxy-auto-actions-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
         let fresh = db.get_settings().await.unwrap();
         assert!(
@@ -1422,7 +1422,7 @@
     #[tokio::test]
     async fn publisher_config_survives_reopen_and_settings_save() {
         let path = std::env::temp_dir().join(format!(
-            "vpn-parser-publisher-settings-{}.db",
+            "vproxy-publisher-settings-{}.db",
             Uuid::new_v4()
         ));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
@@ -1500,7 +1500,7 @@
 
     #[tokio::test]
     async fn source_rules_and_groups_persist_and_survive_reopen() {
-        let path = std::env::temp_dir().join(format!("vpn-parser-source-rules-{}.db", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("vproxy-source-rules-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
 
         let source = db
@@ -1547,7 +1547,7 @@
 
     #[tokio::test]
     async fn source_user_agent_persists_and_updates() {
-        let path = std::env::temp_dir().join(format!("vpn-parser-source-ua-{}.db", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("vproxy-source-ua-{}.db", Uuid::new_v4()));
         let db = Database::connect(path.to_str().unwrap()).await.unwrap();
 
         // 1. Create with custom user_agent
@@ -1620,7 +1620,7 @@
 #[tokio::test]
 async fn persists_launch_at_startup_and_defaults_to_off() {
     let path = std::env::temp_dir().join(format!(
-        "vpn-parser-launch-at-startup-{}.db",
+        "vproxy-launch-at-startup-{}.db",
         Uuid::new_v4()
     ));
     let db = Database::connect(path.to_str().unwrap()).await.unwrap();
@@ -1659,7 +1659,7 @@ async fn persists_launch_at_startup_and_defaults_to_off() {
 #[tokio::test]
 async fn ungrouped_source_is_first_class_editable_and_exempt_from_fetch() {
     let path = std::env::temp_dir().join(format!(
-        "vpn-parser-ungrouped-{}.db",
+        "vproxy-ungrouped-{}.db",
         Uuid::new_v4()
     ));
     let db = Database::connect(path.to_str().unwrap()).await.unwrap();

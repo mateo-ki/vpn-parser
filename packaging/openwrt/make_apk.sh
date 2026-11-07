@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# make_apk.sh - OpenWrt 25.x+ .apk package generator for vpn-parser
+# make_apk.sh - OpenWrt 25.x+ .apk package generator for vproxy
 # Usage: ./make_apk.sh <binary_path> <arch> <output_dir> [version]
-# Example: ./make_apk.sh target/x86_64-unknown-linux-musl/release/vpn-parser x86_64 dist 1.8.0
+# Example: ./make_apk.sh target/x86_64-unknown-linux-musl/release/vproxy x86_64 dist 1.8.0
 #
 
 set -euo pipefail
@@ -25,7 +25,7 @@ if [ -z "$VERSION" ]; then
     VERSION=$(grep -m1 '^version = ' "$REPO_ROOT/Cargo.toml" | cut -d '"' -f2)
 fi
 
-echo "==> Packaging vpn-parser v${VERSION} for OpenWrt 25.x (Architecture: $APK_ARCH)..."
+echo "==> Packaging vproxy v${VERSION} for OpenWrt 25.x (Architecture: $APK_ARCH)..."
 
 # Ensure apk with mkpkg is available
 # 注意：不能用 `apk --help | grep -q mkpkg`——脚本开了 pipefail，grep -q 命中即退出，
@@ -71,7 +71,7 @@ echo "==> Using apk-tools binary: $APK_BIN"
 
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
-BUILD_DIR="$(mktemp -d -t vpn-parser-apk-XXXXXX)"
+BUILD_DIR="$(mktemp -d -t vproxy-apk-XXXXXX)"
 trap 'rm -rf "$BUILD_DIR"' EXIT
 
 # 1. Prepare file system root hierarchy
@@ -80,19 +80,19 @@ mkdir -p "$DATA_DIR/usr/bin"
 mkdir -p "$DATA_DIR/etc/init.d"
 mkdir -p "$DATA_DIR/etc/config"
 
-cp "$BINARY_PATH" "$DATA_DIR/usr/bin/vpn-parser"
-chmod 755 "$DATA_DIR/usr/bin/vpn-parser"
+cp "$BINARY_PATH" "$DATA_DIR/usr/bin/vproxy"
+chmod 755 "$DATA_DIR/usr/bin/vproxy"
 
 # Strip binary if strip is available
 if command -v strip >/dev/null 2>&1; then
-    strip --strip-unneeded "$DATA_DIR/usr/bin/vpn-parser" 2>/dev/null || true
+    strip --strip-unneeded "$DATA_DIR/usr/bin/vproxy" 2>/dev/null || true
 fi
 
-cp "$SCRIPT_DIR/files/etc/init.d/vpn-parser" "$DATA_DIR/etc/init.d/vpn-parser"
-chmod 755 "$DATA_DIR/etc/init.d/vpn-parser"
+cp "$SCRIPT_DIR/files/etc/init.d/vproxy" "$DATA_DIR/etc/init.d/vproxy"
+chmod 755 "$DATA_DIR/etc/init.d/vproxy"
 
-cp "$SCRIPT_DIR/files/etc/config/vpn-parser" "$DATA_DIR/etc/config/vpn-parser"
-chmod 644 "$DATA_DIR/etc/config/vpn-parser"
+cp "$SCRIPT_DIR/files/etc/config/vproxy" "$DATA_DIR/etc/config/vproxy"
+chmod 644 "$DATA_DIR/etc/config/vproxy"
 
 # 2. Prepare maintainer scripts
 POST_INSTALL="$SCRIPT_DIR/apk/post-install"
@@ -102,16 +102,16 @@ PRE_DEINSTALL="$SCRIPT_DIR/apk/pre-deinstall"
 chmod +x "$POST_INSTALL" "$POST_UPGRADE" "$PRE_DEINSTALL"
 
 # 3. Create .apk package via apk mkpkg
-APK_NAME="vpn-parser_${VERSION}_${APK_ARCH}.apk"
+APK_NAME="vproxy_${VERSION}_${APK_ARCH}.apk"
 APK_PATH="$OUTPUT_DIR/$APK_NAME"
 
 "$APK_BIN" mkpkg \
-    --info "name:vpn-parser" \
+    --info "name:vproxy" \
     --info "version:$VERSION" \
-    --info "description:VPN Parser is a lightweight, headless subscription collector, speedtester, and node quality management microservice for OpenWrt 25.x." \
+    --info "description:VProxy is a lightweight, headless subscription collector, speedtester, and node quality management microservice for OpenWrt 25.x." \
     --info "arch:$APK_ARCH" \
     --info "license:MIT" \
-    --info "origin:vpn-parser" \
+    --info "origin:vproxy" \
     --info "url:https://github.com/mateo-ki/vproxy" \
     --info "maintainer:mateo-ki <https://github.com/mateo-ki/vproxy>" \
     --info "depends:libc,ca-certificates" \

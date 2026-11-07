@@ -904,7 +904,7 @@ pub(crate) mod empty_pool_modal_tests {
         let dir = std::env::temp_dir().join(format!("vp-nodes-modal-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let db = rt
-            .block_on(Database::connect(&dir.join("vpn-parser.db").to_string_lossy()))
+            .block_on(Database::connect(&dir.join("vproxy.db").to_string_lossy()))
             .unwrap();
         let tasks = TaskTracker::default();
         let collector = Collector::new(db.clone(), tasks.clone()).unwrap();
