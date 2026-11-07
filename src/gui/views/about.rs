@@ -644,31 +644,31 @@ impl VpnApp {
     }
 
     pub(crate) fn install_app_update(&mut self, path: &std::path::Path) {
-        match app_update::launch_installer(path) {
-            Ok(app_update::Handoff::WizardLaunched) => {
-                self.status = format!("安装向导已启动：{}", path.display());
-                self.app_update_progress = Some(AppUpdateProgress {
-                    stage: AppUpdateStage::Ready,
-                    downloaded: 0,
-                    total: 0,
-                    bytes_per_second: 0.0,
-                    message: "安装向导已接管，本程序马上会被关闭".into(),
-                });
+        // 安装向导一启动就会强杀本进程，内核是被作业对象"连坐"死的：连接被拦腰掐断，
+        // 系统代理来不及还原，新实例起来后还要跟残留状态赛跑（2026-11-07 实测：更新
+        // 重启后代理连败 3 次才起来）。先把内核体面停掉 —— 连接正常收尾、系统代理
+        // 还原、运行目录清干净 —— 再交棒给安装向导，新实例就是从零开始的干净启动。
+        let manager = self.proxy_manager.clone();
+        let path = path.to_path_buf();
+        let tx = self.tx.clone();
+        self.status = "正在停止内核并准备安装更新...".into();
+        self.rt.spawn(async move {
+            if let Err(error) = manager.stop().await {
+                // 停不掉不拦更新：安装器反正会强杀进程，别让用户卡在更新上
+                crate::startup_log(&format!("[更新] 安装前停止内核失败（继续安装）: {error:#}"));
             }
-            // Linux：包已下载并校验过，但程序不会自己去拿 root。把命令原样给出来 ——
-            // 说"安装向导已启动"在这里是假话，而假话比"要你自己动手"更糟。
-            Ok(app_update::Handoff::ManualInstall { command }) => {
-                self.status = format!("包已就位，请执行：{command}");
-                self.app_update_progress = Some(AppUpdateProgress {
-                    stage: AppUpdateStage::Ready,
-                    downloaded: 0,
-                    total: 0,
-                    bytes_per_second: 0.0,
-                    message: format!("已下载到本地并校验通过，执行这条命令完成安装：{command}"),
-                });
-            }
-            Err(error) => self.status = format!("启动安装程序失败: {error}"),
-        }
+            let result = match app_update::launch_installer(&path) {
+                Ok(app_update::Handoff::WizardLaunched) => Ok(format!(
+                    "内核已停止，安装向导已启动：{}（本程序马上会被关闭并由向导带回）",
+                    path.display()
+                )),
+                Ok(app_update::Handoff::ManualInstall { command }) => Ok(format!(
+                    "内核已停止，包已就位，请执行：{command}"
+                )),
+                Err(error) => Err(format!("启动安装程序失败: {error:#}")),
+            };
+            let _ = tx.send(BgMsg::OpDone { result, unlock: false });
+        });
     }
 
     /// 更新走不走代理，只看当下有没有在跑的应用内代理；系统代理候选由

@@ -1088,6 +1088,11 @@ impl VpnApp {
                                     // 用户必须能看到根因（如「Rhai 脚本编译失败: …」），只显示
                                     // 顶层 context 会把真正的病因藏起来。
                                     self.status = format!("代理操作失败: {error:#}");
+                                    // 状态栏文案会随下一次操作被顶掉，启动失败又恰恰是最需要
+                                    // 事后取证的场景（2026-11-07 排查更新重启后连败 3 次时，
+                                    // 正是因为这里不留档导致根因无从查起）。同步落一份到
+                                    // startup.log，与状态栏所见严格一致。
+                                    crate::startup_log(&format!("[代理状态] 启停失败: {error:#}"));
                                     self.failed_proxy_start_notice = (operation.kind == ProxyOperationKind::Start)
                                         .then(|| FailedProxyStartNotice { operation, footer: self.status.clone() });
                                     self.note_proxy_state_transition(ProxyState::Failed);
