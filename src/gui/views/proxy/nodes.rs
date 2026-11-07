@@ -461,6 +461,10 @@ impl VpnApp {
                                         menu_action = Some(NodeCardAction::CheckIpRisk(node_id.clone()));
                                         ui.close();
                                     }
+                                    if ui.button("🧭 路由追踪").clicked() {
+                                        menu_action = Some(NodeCardAction::RouteTrace(node_id.clone()));
+                                        ui.close();
+                                    }
                                     if (is_auto || self.proxy_selected_group != "全部") && !is_active {
                                         ui.separator();
                                         if ui.button("锁定为出口（关闭自动选路）").clicked() {

@@ -18,6 +18,160 @@ impl VpCoreCompiler {
     pub fn new() -> Self {
         Self
     }
+
+    /// 将路由计划编译为 VP_Core 原生声明式配置脚本 (`.vp` DSL)
+    pub fn compile_vp_dsl(&self, plan: &RoutingPlan) -> Result<String> {
+        let artifact = self.compile(plan)?;
+        let val = artifact.as_json_value()?;
+        let mut dsl = String::new();
+
+        dsl.push_str("// ==========================================\n");
+        dsl.push_str("// VP_Core 原生声明式配置 (VP-DSL)\n");
+        dsl.push_str("// 由 VProxy 自动编译生成\n");
+        dsl.push_str("// ==========================================\n\n");
+
+        // 1. Inbounds
+        let mixed_port = val.get("mixed-port").and_then(|v| v.as_u64()).unwrap_or(7890);
+        dsl.push_str("// 入站监听\n");
+        dsl.push_str("inbound mixed {\n");
+        dsl.push_str(&format!("    listen: \"127.0.0.1:{mixed_port}\"\n"));
+        dsl.push_str("}\n\n");
+
+        if let Some(tun) = val.get("tun").and_then(|v| v.as_object()) {
+            if tun.get("enable").and_then(|v| v.as_bool()).unwrap_or(false) {
+                let addr = tun.get("address").and_then(|v| v.as_str()).unwrap_or("198.18.0.1");
+                let mask = tun.get("netmask").and_then(|v| v.as_str()).unwrap_or("255.255.0.0");
+                let auto_route = tun.get("auto-route").and_then(|v| v.as_bool()).unwrap_or(true);
+                dsl.push_str("inbound tun {\n");
+                dsl.push_str(&format!("    address: \"{addr}\"\n"));
+                dsl.push_str(&format!("    netmask: \"{mask}\"\n"));
+                dsl.push_str(&format!("    auto_route: {auto_route}\n"));
+                dsl.push_str("}\n\n");
+            }
+        }
+
+        // 2. DNS
+        if let Some(dns) = val.get("dns").and_then(|v| v.as_object()) {
+            dsl.push_str("// DNS 引擎\n");
+            dsl.push_str("dns {\n");
+            if let Some(ns) = dns.get("nameserver").and_then(|v| v.as_array()) {
+                let ns_strs: Vec<String> = ns
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| format!("\"{s}\"")))
+                    .collect();
+                if !ns_strs.is_empty() {
+                    dsl.push_str(&format!("    nameservers: [{}]\n", ns_strs.join(", ")));
+                }
+            }
+            if let Some(fake_ip) = dns.get("fake-ip-range").and_then(|v| v.as_str()) {
+                dsl.push_str(&format!("    fake_ip: \"{fake_ip}\"\n"));
+            }
+            dsl.push_str("}\n\n");
+        }
+
+        // 3. Outbound Nodes
+        if let Some(proxies) = val.get("proxies").and_then(|v| v.as_array()) {
+            dsl.push_str("// 出站代理节点\n");
+            for p in proxies {
+                if let Some(po) = p.as_object() {
+                    let name = po.get("name").and_then(|v| v.as_str()).unwrap_or("node");
+                    let ty = po.get("type").and_then(|v| v.as_str()).unwrap_or("ss");
+                    let server = po.get("server").and_then(|v| v.as_str()).unwrap_or("");
+                    let port = po.get("port").and_then(|v| v.as_u64()).unwrap_or(443);
+
+                    dsl.push_str(&format!("node \"{name}\" {ty} {{\n"));
+                    dsl.push_str(&format!("    server: \"{server}\"\n"));
+                    dsl.push_str(&format!("    port: {port}\n"));
+
+                    for (k, v) in po {
+                        if matches!(k.as_str(), "name" | "type" | "server" | "port") {
+                            continue;
+                        }
+                        if let Some(s) = v.as_str() {
+                            dsl.push_str(&format!("    {k}: \"{s}\"\n"));
+                        } else if let Some(b) = v.as_bool() {
+                            dsl.push_str(&format!("    {k}: {b}\n"));
+                        } else if let Some(n) = v.as_u64() {
+                            dsl.push_str(&format!("    {k}: {n}\n"));
+                        }
+                    }
+                    dsl.push_str("}\n\n");
+                }
+            }
+        }
+
+        // 4. Proxy Groups
+        if let Some(groups) = val.get("proxy-groups").and_then(|v| v.as_array()) {
+            dsl.push_str("// 策略组与选路仲裁\n");
+            for g in groups {
+                if let Some(go) = g.as_object() {
+                    let name = go.get("name").and_then(|v| v.as_str()).unwrap_or("PROXY");
+                    let ty = go
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("select")
+                        .replace('-', "_");
+                    let fallback = go.get("fallback").and_then(|v| v.as_str()).unwrap_or("DIRECT");
+
+                    dsl.push_str(&format!("group \"{name}\" {ty} {{\n"));
+                    if let Some(members) = go.get("proxies").and_then(|v| v.as_array()) {
+                        let m_strs: Vec<String> = members
+                            .iter()
+                            .filter_map(|m| m.as_str().map(|s| format!("\"{s}\"")))
+                            .collect();
+                        dsl.push_str(&format!("    members: [{}]\n", m_strs.join(", ")));
+                    }
+                    if let Some(filter) = go.get("filter").and_then(|v| v.as_str()) {
+                        dsl.push_str(&format!("    filter: \"{filter}\"\n"));
+                    }
+                    if let Some(exclude) = go.get("exclude-filter").and_then(|v| v.as_str()) {
+                        dsl.push_str(&format!("    exclude_filter: \"{exclude}\"\n"));
+                    }
+                    dsl.push_str(&format!("    fallback: \"{fallback}\"\n"));
+                    dsl.push_str("}\n\n");
+                }
+            }
+        }
+
+        // 5. Route Rules
+        if let Some(rules) = val.get("rules").and_then(|v| v.as_array()) {
+            dsl.push_str("// 分流规则 (支持传统匹配与 CEL 复合表达式)\n");
+            dsl.push_str("route {\n");
+            for r in rules {
+                if let Some(s) = r.as_str() {
+                    let trimmed = s.trim();
+                    if let Some((cond, target)) = trimmed.rsplit_once(',') {
+                        let cond = cond.trim();
+                        let target = target.trim();
+                        if cond.eq_ignore_ascii_case("MATCH") {
+                            dsl.push_str(&format!("    _ => \"{target}\"\n"));
+                        } else {
+                            dsl.push_str(&format!("    {cond} => \"{target}\"\n"));
+                        }
+                    } else if trimmed.eq_ignore_ascii_case("MATCH") {
+                        dsl.push_str("    _ => \"PROXY\"\n");
+                    }
+                } else if let Some(obj) = r.as_object() {
+                    let expr = obj
+                        .get("expr")
+                        .or_else(|| obj.get("expression"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let target = obj
+                        .get("target")
+                        .or_else(|| obj.get("proxy"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("DIRECT");
+                    if !expr.is_empty() {
+                        dsl.push_str(&format!("    {expr} => \"{target}\"\n"));
+                    }
+                }
+            }
+            dsl.push_str("}\n");
+        }
+
+        Ok(dsl)
+    }
 }
 
 impl BackendCompiler for VpCoreCompiler {
@@ -147,6 +301,17 @@ impl BackendCompiler for VpCoreCompiler {
                     count = dropped.len(),
                     "VP-Core 配置已剔除其不支持的节点（保持内核可启动）"
                 );
+            }
+
+            // 策略组安全加固与容灾熔断：为所有 proxy-groups 自动注入 fallback: DIRECT 保底出站，防整组失效断网
+            if let Some(groups) = obj.get_mut("proxy-groups").and_then(|g| g.as_array_mut()) {
+                for g in groups.iter_mut() {
+                    if let Some(g_obj) = g.as_object_mut() {
+                        if !g_obj.contains_key("fallback") {
+                            g_obj.insert("fallback".into(), serde_json::json!("DIRECT"));
+                        }
+                    }
+                }
             }
 
             // 清理特定于 Mihomo 扩展的 Geo 自动更新与进程探测专有字段
@@ -781,5 +946,47 @@ rules:
         let hy2 = proxies.iter().find(|p| p["type"] == "hysteria2").expect("hy2 proxy");
         assert_eq!(hy2["udp"], serde_json::json!(true));
         assert_eq!(hy2["ports"], "20000-30000");
+    }
+
+    #[test]
+    fn test_vpcore_proxy_group_fallback_and_dsl_generation() {
+        let node = test_node(
+            "ss",
+            json!({
+                "cipher": "aes-128-gcm",
+                "password": "pwd"
+            }),
+        );
+        let options = MihomoConfigOptions {
+            mixed_port: 7890,
+            controller_port: 9090,
+            controller_secret: "sec".into(),
+            ..Default::default()
+        };
+        let plan = crate::proxy::ir::lower_options_to_ir(&options, Some(&node));
+        let artifact = VpCoreCompiler.compile(&plan).expect("compile success");
+        let val = artifact.as_json_value().expect("json value");
+
+        // 1. 验证策略组自动注入 fallback: DIRECT 保底
+        let groups = val["proxy-groups"].as_array().expect("proxy-groups");
+        for g in groups {
+            assert_eq!(
+                g["fallback"], "DIRECT",
+                "策略组 {:?} 应带有 fallback: DIRECT 容灾保底",
+                g["name"]
+            );
+        }
+
+        // 2. 验证原生 VP-DSL 脚本生成
+        let dsl = VpCoreCompiler.compile_vp_dsl(&plan).expect("compile vp dsl");
+        println!("--- Generated VP DSL ---\n{dsl}");
+        assert!(dsl.contains("inbound mixed {"));
+        assert!(dsl.contains("listen: \"127.0.0.1:7890\""));
+        assert!(dsl.contains("node \"Test Node\" ss {"));
+        assert!(dsl.contains("group \""));
+        assert!(dsl.contains("fallback: \"DIRECT\""));
+        assert!(dsl.contains("route {"));
+        assert!(dsl.contains("AND,((NETWORK,udp),(DST-PORT,443)) => \"REJECT\""));
+        assert!(dsl.contains("_ => \"PROXY\""));
     }
 }

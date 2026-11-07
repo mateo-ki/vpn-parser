@@ -38,6 +38,7 @@ impl VpnApp {
         let tr_push_nodes = crate::i18n::tr(lang, "📤 推送可用节点到服务端");
         let tr_export_sub = crate::i18n::tr(lang, "导出订阅");
         let tr_export_clash = crate::i18n::tr(lang, "导出 Clash YAML 配置");
+        let tr_export_vp = crate::i18n::tr(lang, "导出 VP-Core 原生 (.vp DSL)");
         let tr_export_uri = crate::i18n::tr(lang, "导出 URI 节点链接");
         let tr_export_json = crate::i18n::tr(lang, "导出 JSON 格式");
         let tr_prune_stale = crate::i18n::tr(lang, "🍂 淘汰 7 天过期失效节点");
@@ -174,6 +175,7 @@ impl VpnApp {
                         &tr_push_nodes,
                         &tr_export_sub,
                         &tr_export_clash,
+                        &tr_export_vp,
                         &tr_export_uri,
                         &tr_export_json,
                         &tr_maintenance,
@@ -477,6 +479,7 @@ impl VpnApp {
         tr_push_nodes: &str,
         tr_export_sub: &str,
         tr_export_clash: &str,
+        tr_export_vp: &str,
         tr_export_uri: &str,
         tr_export_json: &str,
         tr_maintenance: &str,
@@ -588,6 +591,10 @@ impl VpnApp {
             ui.label(RichText::new(tr_export_sub).small().color(theme::muted()));
             if ui.button(tr_export_clash).clicked() {
                 self.open_export("clash");
+                ui.close();
+            }
+            if ui.button(tr_export_vp).clicked() {
+                self.open_export("vp");
                 ui.close();
             }
             if ui.button(tr_export_uri).clicked() {
@@ -815,6 +822,10 @@ where
                                 }
                                 if ui.button("🛡️ IP 检测").clicked() {
                                     card_action = Some(NodeCardAction::CheckIpRisk(node.id.clone()));
+                                    ui.close();
+                                }
+                                if ui.button("🧭 路由追踪").clicked() {
+                                    card_action = Some(NodeCardAction::RouteTrace(node.id.clone()));
                                     ui.close();
                                 }
                                 ui.separator();

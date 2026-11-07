@@ -402,6 +402,11 @@ impl VpnApp {
                             Icon::Lightning,
                             "Rhai 脚本动态覆写 (图灵完备)",
                         ),
+                        (
+                            OverrideEditorTab::VpDsl,
+                            Icon::Rocket,
+                            "VP-Core 原生 DSL (.vp 声明式)",
+                        ),
                     ];
                     macos_segmented_tabs(ui, &mut self.override_editor_tab, &tabs);
                 });
@@ -666,6 +671,87 @@ impl VpnApp {
                                         self.save_proxy_config();
                                     }
                                 }
+                            });
+                    }
+                    OverrideEditorTab::VpDsl => {
+                        // VP-Core 原生 DSL 声明式配置查看与导出
+                        Frame::NONE
+                            .fill(theme::panel())
+                            .stroke(Stroke::new(1.0_f32, theme::border_subtle()))
+                            .corner_radius(CornerRadius::same(10))
+                            .inner_margin(Margin::symmetric(14, 12))
+                            .show(ui, |ui| {
+                                let mut gen_clicked = false;
+                                let mut copy_clicked = false;
+
+                                ui.horizontal(|ui| {
+                                    icon_label(ui, Icon::Rocket, 14.0, theme::accent_strong());
+                                    ui.label(
+                                        RichText::new("VP-Core 原生 DSL (.vp 声明式极简语法与 CEL 规则)")
+                                            .strong()
+                                            .color(theme::text_primary()),
+                                    );
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui
+                                            .button("📋 复制 DSL")
+                                            .on_hover_text("复制当前 .vp DSL 脚本到剪贴板")
+                                            .clicked()
+                                        {
+                                            copy_clicked = true;
+                                        }
+                                        if ui
+                                            .add_enabled(!self.proxy_busy, primary_btn("⚡ 生成当前 DSL 预览"))
+                                            .on_hover_text("基于当前分流策略与选中的代理节点即时编译生成原生 .vp DSL 配置")
+                                            .clicked()
+                                        {
+                                            gen_clicked = true;
+                                        }
+                                    });
+                                });
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new(
+                                        "VP-Core 原生配置文件采用 vp-dsl 声明式语法，无缩进对齐负担，原生支持策略组 fallback: \"DIRECT\" 熔断防断网与 Google CEL 复合条件表达式（AND / OR / NOT 零开销比对）："
+                                    )
+                                    .small()
+                                    .color(theme::muted()),
+                                );
+
+                                if gen_clicked {
+                                    self.generate_vp_dsl_preview();
+                                }
+                                if copy_clicked {
+                                    if let Some(ref text) = self.vp_dsl_preview {
+                                        ui.ctx().copy_text(text.clone());
+                                        self.status = "已复制 VP-Core 原生 DSL 到剪贴板".into();
+                                    } else {
+                                        self.status = "请先点击「生成当前 DSL 预览」".into();
+                                    }
+                                }
+
+                                ui.add_space(6.0);
+                                ui.separator();
+                                ui.add_space(6.0);
+
+                                if self.vp_dsl_preview.is_none() {
+                                    self.generate_vp_dsl_preview();
+                                }
+
+                                let mut dsl_text = self.vp_dsl_preview.clone().unwrap_or_else(|| "// 正在生成 VP-Core DSL 预览...".to_string());
+                                let max_editor_height = (ui.available_height() - 8.0).max(220.0);
+
+                                egui::ScrollArea::vertical()
+                                    .auto_shrink([false, false])
+                                    .max_height(max_editor_height)
+                                    .id_salt("proxy_vp_dsl_viewer_scroll")
+                                    .show(ui, |ui| {
+                                        let _ = override_text_editor(
+                                            ui,
+                                            &mut dsl_text,
+                                            false,
+                                            "// VP-Core 原生 DSL 预览...",
+                                        );
+                                    });
                             });
                     }
                 }

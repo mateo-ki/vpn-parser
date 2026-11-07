@@ -1508,6 +1508,10 @@ impl VpnApp {
                                                 menu_action = Some(NodeCardAction::CheckIpRisk(node_id.clone()));
                                                 ui.close();
                                             }
+                                            if ui.button("🧭 路由追踪").clicked() {
+                                                menu_action = Some(NodeCardAction::RouteTrace(node_id.clone()));
+                                                ui.close();
+                                            }
                                             ui.separator();
                                             if ui.button("📋 复制节点名称").clicked() {
                                                 copied_text = Some((node_name.clone(), format!("已复制节点名称: {node_name}")));

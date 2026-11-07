@@ -200,12 +200,13 @@ pub enum GroupsTab {
     Config,
 }
 
-/// 配置工作台覆写类型：YAML 声明式覆写 (Clash Party 规范) 与 Rhai 脚本动态覆写
+/// 配置工作台覆写类型：YAML 声明式覆写 (Clash Party 规范)、Rhai 脚本动态覆写与 VP-Core 原生 DSL
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OverrideEditorTab {
     #[default]
     Yaml,
     Rhai,
+    VpDsl,
 }
 
 /// 分流规则面板里的两个分区：规则本身（该怎么走）和实际命中记录（真走了哪）。
@@ -592,6 +593,11 @@ pub enum BgMsg {
     GeoUpdated(Result<String, String>),
     SourceHomogeneityAnalyzed(Result<Vec<SourceHomogeneityReport>, String>),
     SourceHomogeneityPruned(Result<PruneHomogeneityResult, String>),
+    RouteTraceProbeDone(
+        Result<(u128, u16, String, f64), String>,
+        Option<crate::proxy::tracer::RouteTraceReport>,
+    ),
+    VpDslPreviewGenerated(String),
 }
 
 /// 命令面板（Ctrl+K）能执行的动作。

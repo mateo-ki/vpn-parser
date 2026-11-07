@@ -7,6 +7,7 @@ pub enum NodeCardAction {
     SpeedtestDownload(String),
     ShowDetail(String),
     CheckIpRisk(String),
+    RouteTrace(String),
     Delete(String),
 }
 

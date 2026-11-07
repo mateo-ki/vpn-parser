@@ -233,10 +233,12 @@ pub struct VpnApp {
     pub(crate) rules_tab: RulesTab,
     /// 分流策略组面板的分区（视图 / 配置）。
     pub(crate) groups_tab: GroupsTab,
-    /// 配置工作台覆写类型（YAML / Rhai 脚本）。
+    /// 配置工作台覆写类型（YAML / Rhai 脚本 / VP-Core DSL）。
     pub(crate) override_editor_tab: OverrideEditorTab,
     /// Rhai 脚本语法校验状态 (提示信息, 是否报错)
     pub(crate) rhai_syntax_status: Option<(String, bool)>,
+    /// VP-Core 原生 DSL 生成预览文本
+    pub(crate) vp_dsl_preview: Option<String>,
     /// 活跃连接监控面板的分区（连接列表 / 连接进程 / DNS 记录）。
     pub(crate) connections_tab: ConnectionsTab,
     /// DNS 实时解析记录
@@ -432,6 +434,18 @@ pub struct VpnApp {
     pub(crate) ip_risk_auto_for: Option<String>,
     /// 归属查询失败时，那次查询是为哪颗节点跑的（徽章要能说「查失败」而不是装没查过）。
     pub(crate) ip_risk_failed_for: Option<String>,
+    pub(crate) show_route_trace_dialog: bool,
+    pub(crate) route_trace_target: String,
+    pub(crate) route_trace_node: Option<NodeSummary>,
+    pub(crate) route_trace_is_active: bool,
+    pub(crate) route_trace_report: Option<crate::proxy::tracer::RouteTraceReport>,
+    pub(crate) route_trace_expand_rules: bool,
+    pub(crate) route_trace_only_hit: bool,
+    pub(crate) route_trace_live_probing: bool,
+    pub(crate) route_trace_live_result: Option<Result<(u128, u16, String, f64), String>>,
+    pub(crate) route_trace_copied_notice: Option<std::time::Instant>,
+    pub(crate) route_trace_selected_step: usize,
+    pub(crate) route_trace_last_diagnosed: Option<std::time::Instant>,
     pub(crate) reload_due: bool,
     pub(crate) last_full_reload: std::time::Instant,
     pub(crate) startup_trim_done: bool,
@@ -744,6 +758,7 @@ impl VpnApp {
             groups_tab: GroupsTab::default(),
             override_editor_tab: OverrideEditorTab::default(),
             rhai_syntax_status: None,
+            vp_dsl_preview: None,
             connections_tab: ConnectionsTab::default(),
             dns_records: std::collections::VecDeque::new(),
             connections_process_filter: String::new(),
@@ -854,6 +869,18 @@ impl VpnApp {
             ip_risk_egress_error: None,
             ip_risk_auto_for: None,
             ip_risk_failed_for: None,
+            show_route_trace_dialog: false,
+            route_trace_target: "github.com:443".to_string(),
+            route_trace_node: None,
+            route_trace_is_active: false,
+            route_trace_report: None,
+            route_trace_expand_rules: false,
+            route_trace_only_hit: false,
+            route_trace_live_probing: false,
+            route_trace_live_result: None,
+            route_trace_copied_notice: None,
+            route_trace_selected_step: 1,
+            route_trace_last_diagnosed: None,
             reload_due: false,
             last_full_reload: std::time::Instant::now(),
             startup_trim_done: false,
@@ -3493,6 +3520,31 @@ impl VpnApp {
         });
     }
 
+    /// 基于当前配置与选中的代理节点生成 VP-Core 原生 DSL 预览脚本
+    pub(crate) fn generate_vp_dsl_preview(&mut self) {
+        let node_id = self
+            .proxy_status
+            .node_id
+            .clone()
+            .or_else(|| self.selected_proxy_node_id.clone());
+        let db = self.db.clone();
+        let options = self.prepare_proxy_config_options();
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            let node = if let Some(id) = node_id {
+                db.get_node(&id).await.ok().flatten()
+            } else {
+                None
+            };
+            let plan = crate::proxy::ir::lower_options_to_ir(&options, node.as_ref());
+            let dsl = match crate::proxy::compiler::VpCoreCompiler.compile_vp_dsl(&plan) {
+                Ok(code) => code,
+                Err(e) => format!("// 编译 VP-Core 原生 DSL 出错: {e}"),
+            };
+            let _ = tx.send(BgMsg::VpDslPreviewGenerated(dsl));
+        });
+    }
+
     /// 启动之前先算清楚"真会用的那个内核装没装"，没装就返回该下载哪个内核。
     ///
     /// 以前不拦：照样往下走，`ProxyManager` 里 `find_kernel_executable` 拿不到文件 →
@@ -4627,7 +4679,7 @@ impl VpnApp {
         let url = format!("http://127.0.0.1:{}", self.proxy_status.mixed_port);
         let tx = self.tx.clone();
         self.rt.spawn(async move {
-            let client = reqwest::Client::new();
+            let client = crate::ip_risk::direct_client();
             let mut egress = crate::ip_risk::lookup_egress(&client, &url).await;
             if egress.is_err() {
                 tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
@@ -4721,6 +4773,13 @@ impl VpnApp {
         let db = self.db.clone();
         let tx = self.tx.clone();
         let id = node_id.to_owned();
+        let proxy_url = if matches!(self.proxy_status.state, ProxyState::Running | ProxyState::Degraded)
+            && self.proxy_status.local_proxy_active()
+        {
+            Some(format!("http://127.0.0.1:{}", self.proxy_status.mixed_port))
+        } else {
+            None
+        };
         self.rt.spawn(async move {
             let server = match db.get_node(&id).await {
                 Ok(Some(node)) if !node.server.is_empty() => node.server,
@@ -4729,8 +4788,7 @@ impl VpnApp {
             let front = if server.is_empty() {
                 Err("库里也没有这颗节点的服务器地址".to_string())
             } else {
-                let client = reqwest::Client::new();
-                crate::ip_risk::lookup(&client, &server)
+                crate::ip_risk::lookup_smart(&server, proxy_url.as_deref())
                     .await
                     .map_err(|error| error.to_string())
             };
@@ -4781,9 +4839,15 @@ impl VpnApp {
             self.status = format!("正在查询 {server} 的归属...");
         }
         let tx = self.tx.clone();
+        let proxy_url = if matches!(self.proxy_status.state, ProxyState::Running | ProxyState::Degraded)
+            && self.proxy_status.local_proxy_active()
+        {
+            Some(format!("http://127.0.0.1:{}", self.proxy_status.mixed_port))
+        } else {
+            None
+        };
         self.rt.spawn(async move {
-            let client = reqwest::Client::new();
-            let front = crate::ip_risk::lookup(&client, &server)
+            let front = crate::ip_risk::lookup_smart(&server, proxy_url.as_deref())
                 .await
                 .map_err(|error| error.to_string());
             let _ = tx.send(BgMsg::IpRisk(front, manual));
@@ -4809,11 +4873,11 @@ impl VpnApp {
         let tx = self.tx.clone();
         let id = node_id.to_owned();
         self.rt.spawn(async move {
-            let client = reqwest::Client::new();
-            let mut egress = crate::ip_risk::lookup_egress(&client, &url).await;
+            let direct = crate::ip_risk::direct_client();
+            let mut egress = crate::ip_risk::lookup_egress(&direct, &url).await;
             if egress.is_err() {
                 tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-                egress = crate::ip_risk::lookup_egress(&client, &url).await;
+                egress = crate::ip_risk::lookup_egress(&direct, &url).await;
             }
             let _ = tx.send(BgMsg::IpEgress(
                 id,
@@ -4929,8 +4993,107 @@ impl VpnApp {
             NodeCardAction::SpeedtestDownload(id) => self.speedtest_one_download(id),
             NodeCardAction::ShowDetail(id) => self.show_node(id),
             NodeCardAction::CheckIpRisk(id) => self.check_ip_risk_for(&id),
+            NodeCardAction::RouteTrace(id) => self.open_route_trace_dialog(&id),
             NodeCardAction::Delete(id) => self.delete_node(id),
         }
+    }
+
+    pub(crate) fn open_route_trace_dialog(&mut self, node_id: &str) {
+        let node = self
+            .proxy_nodes
+            .iter()
+            .chain(self.nodes.iter())
+            .find(|n| n.id == node_id)
+            .cloned();
+
+        let is_active = self.selected_proxy_node_id.as_deref() == Some(node_id);
+
+        if self.route_trace_target.trim().is_empty() {
+            self.route_trace_target = "github.com:443".to_string();
+        }
+
+        self.show_route_trace_dialog = true;
+        self.route_trace_is_active = is_active;
+        self.route_trace_expand_rules = false;
+        self.route_trace_only_hit = false;
+        self.route_trace_live_probing = false;
+        self.route_trace_live_result = None;
+        self.route_trace_copied_notice = None;
+        self.route_trace_selected_step = 1;
+        self.route_trace_last_diagnosed = None;
+
+        let trace_node = node.as_ref().map(crate::proxy::tracer::TraceNodeInfo::from_summary);
+        let mixed_port = self.proxy_status.mixed_port;
+        let rules = &self.proxy_config.rules;
+        let group = if !self.proxy_selected_group.is_empty() && self.proxy_selected_group != "全部" {
+            self.proxy_selected_group.as_str()
+        } else {
+            "🎯 PROXY"
+        };
+        let report = crate::proxy::tracer::simulate_route_trace(
+            &self.route_trace_target,
+            "TCP",
+            mixed_port,
+            rules,
+            trace_node.as_ref(),
+            Some(group),
+            is_active,
+        );
+        self.route_trace_report = Some(report);
+        self.route_trace_node = node;
+
+        let running = matches!(
+            self.proxy_status.state,
+            ProxyState::Running | ProxyState::Degraded
+        );
+        if running {
+            self.start_live_route_probe();
+        }
+    }
+
+    pub(crate) fn start_live_route_probe(&mut self) {
+        if self.route_trace_live_probing {
+            return;
+        }
+        self.route_trace_live_probing = true;
+        self.route_trace_live_result = None;
+        let target = self.route_trace_target.clone();
+        let port = if self.proxy_status.mixed_port > 0 {
+            self.proxy_status.mixed_port
+        } else {
+            7890
+        };
+        let is_vpcore = self.proxy_status.kernel == Some(crate::kernel::KernelKind::VpCore);
+        let controller_port = self.proxy_status.controller_port;
+        let controller_secret = self.proxy_status.controller_secret.clone();
+        let trace_node = self
+            .route_trace_node
+            .as_ref()
+            .map(crate::proxy::tracer::TraceNodeInfo::from_summary);
+
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            let res = crate::proxy::tracer::probe_live_target(&target, port).await;
+            let vpcore_report = if is_vpcore && controller_port > 0 {
+                match crate::proxy::tracer::fetch_vpcore_explain(
+                    controller_port,
+                    Some(controller_secret.as_str()),
+                    &target,
+                    Some("tcp"),
+                )
+                .await
+                {
+                    Ok(trace) => Some(trace.into_report(&target, trace_node.as_ref())),
+                    Err(e) => {
+                        tracing::warn!("调用 vpcore explain 失败，回退本地白盒推导: {e}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let _ = tx.send(BgMsg::RouteTraceProbeDone(res, vpcore_report));
+        });
     }
 
     pub(crate) fn open_source_nodes_modal(&mut self, source_id: &str, source_name: &str) {
@@ -5861,6 +6024,7 @@ impl eframe::App for VpnApp {
         self.ui_detail(ctx);
         self.ui_homogeneity_dialog(ctx);
         self.ui_ip_risk_dialog(ctx);
+        self.ui_route_trace_dialog(ctx);
         self.ui_speedtest_dialog(ctx);
         self.ui_kernel_dialog(ctx);
         self.ui_network_doctor_dialog(ctx);
@@ -5946,6 +6110,9 @@ impl eframe::App for VpnApp {
             }
             if self.show_ip_risk_dialog {
                 dialogs.push("IP检测");
+            }
+            if self.show_route_trace_dialog {
+                dialogs.push("路由追踪");
             }
             if self.paste_outcome.is_some() {
                 dialogs.push("剪贴板识别");

@@ -1504,6 +1504,16 @@ impl VpnApp {
                             // 修复后立即自动重新扫描
                             self.run_network_doctor();
                         }
+                        BgMsg::RouteTraceProbeDone(res, maybe_report) => {
+                            self.route_trace_live_probing = false;
+                            self.route_trace_live_result = Some(res);
+                            if let Some(rep) = maybe_report {
+                                self.route_trace_report = Some(rep);
+                            }
+                        }
+                        BgMsg::VpDslPreviewGenerated(dsl) => {
+                            self.vp_dsl_preview = Some(dsl);
+                        }
                     }
                 }
                 Err(TryRecvError::Empty) => break,

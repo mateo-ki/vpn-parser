@@ -77,6 +77,7 @@ pub fn router(state: AppState, api_token: Option<String>) -> Router {
         .route("/api/export/json", get(export_json))
         .route("/api/export/clash", get(export_clash))
         .route("/api/export/uri", get(export_uri))
+        .route("/api/export/vp", get(export_vp))
         .layer(middleware::from_fn(move |request, next: Next| {
             let expected = api_token.clone();
             async move { authenticate_request(request, next, expected.as_deref()).await }
@@ -885,6 +886,32 @@ async fn export_uri(
                 body,
             )
                 .into_response()
+        }
+        Err(e) => error_resp(e),
+    }
+}
+
+async fn export_vp(
+    State(st): State<Arc<AppState>>,
+    Query(q): Query<ExportQuery>,
+) -> impl IntoResponse {
+    let (_quality_only, _max_lat, _min_dl, _limit) = quality_params(&q);
+    match load_export_nodes(st.as_ref(), &q).await {
+        Ok(nodes) => {
+            let proxies = nodes_to_clash_proxies(&nodes);
+            let first_node = nodes.first();
+            let mut options = st.proxy_manager.config().await;
+            options.url_test_nodes = proxies;
+            let plan = crate::proxy::ir::lower_options_to_ir(&options, first_node);
+            match crate::proxy::compiler::VpCoreCompiler.compile_vp_dsl(&plan) {
+                Ok(dsl) => (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                    dsl,
+                )
+                    .into_response(),
+                Err(e) => error_resp(e),
+            }
         }
         Err(e) => error_resp(e),
     }

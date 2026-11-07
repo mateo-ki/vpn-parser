@@ -129,6 +129,7 @@ impl VpnApp {
             ApiItem { method: "POST", path: "/api/nodes/dedupe", desc: "去除重复节点（同协议/地址/端口/认证）", openable: false },
             ApiItem { method: "GET", path: "/api/export/json?quality_only=true&max_latency_ms=500&min_download_kbps=0&limit=50", desc: "导出 TopN TCP 可用节点 JSON", openable: true },
             ApiItem { method: "GET", path: "/api/export/clash?quality_only=true&max_latency_ms=500&min_download_kbps=0&limit=50", desc: "导出 TopN Clash 配置", openable: true },
+            ApiItem { method: "GET", path: "/api/export/vp?quality_only=true&max_latency_ms=500&min_download_kbps=0&limit=50", desc: "导出 TopN 原生 VP-Core (.vp DSL) 声明式配置", openable: true },
             ApiItem { method: "GET", path: "/api/export/uri?quality_only=true&max_latency_ms=500&min_download_kbps=0&limit=50&base64=true", desc: "导出 TopN 订阅（Base64，v2rayN 用）", openable: true },
             ApiItem { method: "GET", path: "/api/export/uri?quality_only=true&max_latency_ms=300&limit=30&base64=true", desc: "更严格：Top30 + 延迟≤300ms（v2rayN）", openable: true },
             ApiItem { method: "GET", path: "/api/export/clash?quality_only=false", desc: "导出全部节点 Clash（关闭过滤）", openable: true },

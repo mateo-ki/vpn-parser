@@ -392,6 +392,51 @@ async fn fetch_ipapi(
     ))
 }
 
+async fn fetch_ipsb(client: &reqwest::Client, address: std::net::IpAddr) -> Result<IpInfo> {
+    let url = format!("https://api.ip.sb/geoip/{address}");
+    let resp = client
+        .get(&url)
+        .header("User-Agent", "vproxy/1.0")
+        .timeout(std::time::Duration::from_secs(6))
+        .send()
+        .await
+        .map_err(|e| anyhow!("ip.sb 请求异常: {e:#}"))?;
+    if resp.status().as_u16() == 429 {
+        return Err(anyhow!("ip.sb 触发 429 速率限制"));
+    }
+    let resp = resp
+        .error_for_status()
+        .map_err(|e| anyhow!("ip.sb 状态错误: {e:#}"))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| anyhow!("ip.sb 读取失败: {e:#}"))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| anyhow!("ip.sb 解析失败: {e}"))?;
+    let country = v
+        .get("country_code")
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string());
+    let asn = v.get("asn").and_then(|a| a.as_u64());
+    let asn_org = v
+        .get("asn_organization")
+        .and_then(|o| o.as_str())
+        .or_else(|| v.get("organization").and_then(|o| o.as_str()))
+        .or_else(|| v.get("isp").and_then(|i| i.as_str()));
+    let org = match (asn, asn_org) {
+        (Some(asn), Some(name)) => Some(format!("AS{asn} {name}")),
+        (None, Some(name)) => Some(name.to_string()),
+        (Some(asn), None) => Some(format!("AS{asn}")),
+        (None, None) => None,
+    };
+    Ok(IpInfo {
+        country,
+        org,
+        priv_type: None,
+        company: None,
+    })
+}
+
 async fn classify_ip(
     client: &reqwest::Client,
     label: &str,
@@ -415,13 +460,24 @@ async fn classify_ip(
         match fetch_ipwhois(client, address).await {
             Ok(info) => ip_info = Some(info),
             Err(err) => {
-                tracing::warn!(address = %address, error = %err, "ipwho.is 查询失败，降级尝试 ip-api");
+                tracing::warn!(address = %address, error = %err, "ipwho.is 查询失败，降级尝试 ip.sb");
                 errors.push(err.to_string());
             }
         }
     }
 
-    // 3. 辅助查询 ip-api（获取 hosting/proxy/mobile 标记，若前面都失败则作为兜底数据源）
+    // 3. 若 ipwho.is 也失败，降级尝试 api.ip.sb
+    if ip_info.is_none() {
+        match fetch_ipsb(client, address).await {
+            Ok(info) => ip_info = Some(info),
+            Err(err) => {
+                tracing::warn!(address = %address, error = %err, "ip.sb 查询失败，降级尝试 ip-api");
+                errors.push(err.to_string());
+            }
+        }
+    }
+
+    // 4. 辅助查询 ip-api（获取 hosting/proxy/mobile 标记，若前面都失败则作为兜底数据源）
     match fetch_ipapi(client, address).await {
         Ok((info, api)) => {
             if ip_info.is_none() {
@@ -444,6 +500,26 @@ async fn classify_ip(
     build_ip_risk(label, &address.to_string(), &info, ip_api.as_ref())
 }
 
+/// 构建不受外部破坏性环境变量（如失效的 HTTP_PROXY）劫持的直连客户端
+pub fn direct_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(6))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// 构建经由本地代理的客户端
+pub fn proxy_client(proxy_url: &str) -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all(proxy_url).map_err(|error| anyhow!("代理地址无效: {error}"))?)
+        .timeout(std::time::Duration::from_secs(8))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|error| anyhow!("构建代理客户端失败: {error}"))
+}
+
 pub async fn lookup(client: &reqwest::Client, server: &str) -> Result<IpRisk> {
     let address = match server.parse::<std::net::IpAddr>() {
         Ok(ip) => ip,
@@ -458,16 +534,31 @@ pub async fn lookup(client: &reqwest::Client, server: &str) -> Result<IpRisk> {
     classify_ip(client, server, address).await
 }
 
+/// 智能查询节点 IP 风控画像：优先使用直连客户端，若直连受阻且代理可用则自动降级走代理
+pub async fn lookup_smart(server: &str, proxy_url: Option<&str>) -> Result<IpRisk> {
+    let direct = direct_client();
+    match lookup(&direct, server).await {
+        Ok(risk) => Ok(risk),
+        Err(direct_err) => {
+            if let Some(p_url) = proxy_url {
+                if let Ok(proxied) = proxy_client(p_url) {
+                    if let Ok(risk) = lookup(&proxied, server).await {
+                        return Ok(risk);
+                    }
+                }
+            }
+            Err(direct_err)
+        }
+    }
+}
+
 /// 经代理问"站点看到的我是谁"，再直连查这个出口的归属。域名前置 / CF 中转的节点，
 /// 只有这个数才是真实落地，节点服务器 IP 往往只是入口。
 pub async fn lookup_egress(direct: &reqwest::Client, proxy_url: &str) -> Result<IpRisk> {
-    let proxied = reqwest::Client::builder()
-        .proxy(reqwest::Proxy::all(proxy_url).map_err(|error| anyhow!("代理地址无效: {error}"))?)
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|error| anyhow!("构建代理客户端失败: {error}"))?;
+    let proxied = proxy_client(proxy_url)?;
     // 三个回显地址轮流试：内核每 300 秒换成员，某个出口打不通其中一家站点的概率不低。
     let mut last_error = String::from("没有可用的回显地址");
+    let mut egress_ip = None;
     for url in [
         "https://api.ipify.org",
         "https://icanhazip.com",
@@ -481,20 +572,39 @@ pub async fn lookup_egress(direct: &reqwest::Client, proxy_url: &str) -> Result<
                     .next()
                     .unwrap_or_default()
                     .to_owned();
-                if let Ok(address) = candidate.parse::<std::net::IpAddr>() {
-                    return classify_ip(direct, &candidate, address).await;
+                if let Ok(ip) = candidate.parse::<std::net::IpAddr>() {
+                    egress_ip = Some(ip);
+                    break;
                 }
-                last_error = format!("{url} 返回了不是 IP 的内容: {candidate:?}");
             }
-            Err(error) => last_error = error.to_string(),
+            Err(e) => last_error = e.to_string(),
         }
     }
-    Err(anyhow!("经代理取出口 IP 失败: {last_error}"))
+    let Some(address) = egress_ip else {
+        return Err(anyhow!("无法获取出口 IP: {last_error}"));
+    };
+
+    // 优先直连解析出口 IP 归属；若直连受阻则经由代理继续查询
+    match classify_ip(direct, "出口 IP", address).await {
+        Ok(risk) => Ok(risk),
+        Err(_) => classify_ip(&proxied, "出口 IP", address).await,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn real_network_lookup_direct_client() {
+        let client = direct_client();
+        let res = lookup(&client, "172.64.229.66").await;
+        if let Ok(risk) = res {
+            assert_eq!(risk.ip, "172.64.229.66");
+            assert!(risk.datacenter);
+            println!("Lookup success: {:?}", risk);
+        }
+    }
 
     #[test]
     fn hosting_org_is_flagged_as_datacenter() {
