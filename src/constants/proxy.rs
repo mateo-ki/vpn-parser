@@ -35,7 +35,11 @@ pub const XRAY_TAG: &str = "v24.12.31";
 pub const MEOW_TAG: &str = "v0.26.1";
 
 /// 默认内置锁定的 Shoes 资产版本
-pub const SHOES_TAG: &str = "v0.3.4";
+///
+/// v0.3.5 是破坏性变更：client 组字段 `strategy` 更名为 `type` 且无兼容别名
+/// （含 `strategy` 的配置直接被拒绝），编译器已随之改发 `type: selector`，
+/// 锁定版本必须同步跟上，否则新配置喂给旧内核必挂。
+pub const SHOES_TAG: &str = "v0.3.5";
 
 /// 默认内置锁定的 VP-Core 资产版本
 pub const VPCORE_TAG: &str = "v1.6.2";

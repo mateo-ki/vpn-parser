@@ -1559,7 +1559,8 @@ use std::time::Duration;
 
         // 测试场景 5：Shoes + Shadowsocks / Trojan / VMess / VLESS 编译与校验
         let shoes_ss_artifact = ShoesCompiler::new().compile(&plan_china).unwrap();
-        assert!(KernelValidator::validate_artifact(KernelKind::Shoes, &shoes_ss_artifact).is_ok());
+        KernelValidator::validate_artifact(KernelKind::Shoes, &shoes_ss_artifact)
+            .expect("shoes ss validation failed");
 
         let shoes_trojan_artifact = ShoesCompiler::new().compile(&plan_trojan).unwrap();
         assert!(KernelValidator::validate_artifact(KernelKind::Shoes, &shoes_trojan_artifact).is_ok());

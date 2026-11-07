@@ -1255,18 +1255,18 @@ fn fallback_release(kind: KernelKind) -> Option<GithubRelease> {
         let (name, digest, size) = match KernelPlatform::current() {
             KernelPlatform::Windows => (
                 "shoes-x86_64-pc-windows-msvc.zip",
-                "sha256:1de2f7e8d724930f55706a42f321018a9fe1e846960037e7bd0c7290b13e9dd7",
-                8_228_104_u64,
+                "sha256:95cd4e23ce3fba5c3d897a4855afa203c02174842da7fc62e045860bf5f56ade",
+                8_962_632_u64,
             ),
             KernelPlatform::Linux => (
                 "shoes-x86_64-unknown-linux-gnu.tar.gz",
-                "sha256:1381a48f7b69e63ea718fb50120ad059e20ed626838bd50aecdbc1b221fe3d79",
-                9_172_862_u64,
+                "sha256:b9b4a6ff966b1e2fa3401c262c491d3f77083241ae804863b93d1da2f69d5ca8",
+                9_858_226_u64,
             ),
             KernelPlatform::MacOS => (
                 "shoes-x86_64-apple-darwin.tar.gz",
-                "sha256:c8977e83503912984248897bae29e90064d61206fb68c9536e1ff6a4cf758020",
-                8_947_237_u64,
+                "sha256:8894d2de642dfa8f4d51ddc0365e7e687cb39ac4bb028423fb2ccfea4bd82eaf",
+                9_602_068_u64,
             ),
         };
         return Some(GithubRelease {
