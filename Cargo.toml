@@ -1,6 +1,6 @@
 [package]
 name = "vproxy"
-version = "1.16.4"
+version = "1.16.5"
 edition = "2021"
 description = "VProxy: A modern cross-platform proxy workstation with desktop GUI, multi-core compilers and HTTP API"
 license = "MIT"
