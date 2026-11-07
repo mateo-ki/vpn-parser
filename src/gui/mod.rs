@@ -346,9 +346,6 @@ pub struct VpnApp {
     /// 本轮检测的发起时刻：超过 35 秒没回结果就允许重新发起（自愈，避免永久"检测中"）。
     pub(crate) service_check_started: Option<std::time::Instant>,
     pub(crate) last_service_check: std::time::Instant,
-    /// 上次「登录自启动」注册对账时刻：外部软件会整条删除 HKCU Run 键值，
-    /// 而本应用只在启动与改设置时写入，被删后只能等下次开机才静默失效。
-    pub(crate) last_startup_sync_check: std::time::Instant,
     /// 本机局域网 IP（UDP 探测主网卡出口地址，不发包），局域网代理开/关的文案用。
     pub(crate) lan_ip: String,
     pub(crate) last_lan_ip_check: std::time::Instant,
@@ -639,8 +636,6 @@ impl VpnApp {
             service_check_started: None,
             // 置成"已过期"，首帧就立即开始第一轮服务连通性检测
             last_service_check: std::time::Instant::now() - std::time::Duration::from_secs(61),
-            // 自启动注册对账从"刚同步过"起步（main() 启动时已写入一次），30 分钟后再巡检
-            last_startup_sync_check: std::time::Instant::now(),
             lan_ip: String::new(),
             // 置成"已过期"，首帧就把局域网 IP 探测出来
             last_lan_ip_check: std::time::Instant::now() - std::time::Duration::from_secs(61),
